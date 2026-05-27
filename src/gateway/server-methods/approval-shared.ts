@@ -280,6 +280,8 @@ export async function handlePendingApprovalRequest<
   requestEventName: string;
   requestEvent: RequestedApprovalEvent<TPayload>;
   twoPhase: boolean;
+  approvalKind?: "exec" | "plugin";
+  keepPendingWithoutRoute?: boolean;
   deliverRequest: () => boolean | Promise<boolean>;
   afterDecision?: (
     decision: ExecApprovalDecision | null,
@@ -317,9 +319,10 @@ export async function handlePendingApprovalRequest<
     hasApprovalTurnSourceRoute({
       turnSourceChannel: params.record.request.turnSourceChannel,
       turnSourceAccountId: params.record.request.turnSourceAccountId,
+      approvalKind: params.approvalKind ?? "exec",
     });
 
-  if (!hasApprovalClients && !hasTurnSourceRoute && !delivered) {
+  if (!hasApprovalClients && !hasTurnSourceRoute && !delivered && !params.keepPendingWithoutRoute) {
     params.manager.expire(params.record.id, "no-approval-route");
     params.respond(
       true,

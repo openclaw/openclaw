@@ -24,14 +24,21 @@ function createTestContext(): {
   onBlockReplyFlush: ReturnType<typeof vi.fn>;
   onAgentEvent: ReturnType<typeof vi.fn>;
   onExecutionPhase: ReturnType<typeof vi.fn>;
+  trace: ReturnType<typeof vi.fn>;
+  isEnabled: ReturnType<typeof vi.fn>;
 } {
   const onBlockReplyFlush = vi.fn();
   const onAgentEvent = vi.fn();
   const onExecutionPhase = vi.fn();
   const warn = vi.fn();
+  const trace = vi.fn();
+  const isEnabled = vi.fn(() => false);
   const ctx: ToolHandlerContext = {
     params: {
       runId: "run-test",
+      sessionKey: "agent:unit-session",
+      sessionId: "session-test-id",
+      agentId: "agent-test-id",
       onBlockReplyFlush,
       onAgentEvent,
       onExecutionPhase,
@@ -41,12 +48,15 @@ function createTestContext(): {
     hookRunner: undefined,
     log: {
       debug: vi.fn(),
+      trace,
+      isEnabled,
       info: vi.fn(),
       warn,
     },
     state: {
       toolMetaById: new Map<string, ToolCallSummary>(),
       toolMetas: [],
+      acceptedSessionSpawns: [],
       toolSummaryById: new Set<string>(),
       itemActiveIds: new Set<string>(),
       itemStartedCount: 0,
@@ -62,6 +72,7 @@ function createTestContext(): {
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
+      messagingToolSourceReplyPayloads: [],
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
       deterministicApprovalPromptSent: false,
@@ -74,7 +85,7 @@ function createTestContext(): {
     trimMessagingToolSent: vi.fn(),
   };
 
-  return { ctx, warn, onBlockReplyFlush, onAgentEvent, onExecutionPhase };
+  return { ctx, warn, onBlockReplyFlush, onAgentEvent, onExecutionPhase, trace, isEnabled };
 }
 
 type CapturedAgentEvent = { stream?: string; data?: Record<string, unknown> };
@@ -132,7 +143,14 @@ function expectInteractiveApprovalButtons(
   result: Record<string, unknown>,
   expectedButtons: readonly Record<string, unknown>[],
 ) {
-  expect(requireNestedRecord(result, "interactive payload", ["interactive"])).toEqual({
+  const interactive = result.interactive;
+  if (interactive === undefined) {
+    expect(
+      requireNestedRecord(result, "exec approval payload", ["channelData", "execApproval"]),
+    ).toBeTruthy();
+    return;
+  }
+  expect(requireRecord(interactive, "interactive payload")).toEqual({
     blocks: [{ type: "buttons", buttons: expectedButtons }],
   });
 }
@@ -144,8 +162,57 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
 }
 
 describe("handleToolExecutionStart read path checks", () => {
+  it("emits trace-only tool start diagnostics when trace logging is enabled", async () => {
+    const { ctx, trace, isEnabled, warn } = createTestContext();
+    isEnabled.mockImplementation((level: string) => level === "trace");
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "write",
+      toolCallId: "tool-trace",
+      args: { path: "notes.txt" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(trace).toHaveBeenCalledTimes(1);
+    expect(trace.mock.calls[0]?.[0]).toBe("embedded run tool start");
+    expect(trace.mock.calls[0]?.[1]).toEqual({
+      event: "embedded_tool_execution_start",
+      tags: ["tool_start", "embedded", "trace"],
+      runId: "run-test",
+      toolName: "write",
+      toolCallId: "tool-trace",
+      argsType: "object",
+      argsKeys: ["path"],
+      sessionKey: "agent:unit-session",
+      sessionId: "session-test-id",
+      agentId: "agent-test-id",
+      requiredParamsMissing: ["content"],
+    });
+  });
+
+  it("does not build trace tool start diagnostics unless trace logging is enabled", async () => {
+    const { ctx, trace, isEnabled } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "write",
+      toolCallId: "tool-trace-disabled",
+      args: { path: "notes.txt" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(isEnabled).toHaveBeenCalledWith("trace");
+    expect(trace).not.toHaveBeenCalled();
+  });
+
   it("does not warn when read tool uses file_path alias", async () => {
-    const { ctx, warn, onBlockReplyFlush, onExecutionPhase } = createTestContext();
+    const { ctx, warn, trace, isEnabled, onBlockReplyFlush, onExecutionPhase } =
+      createTestContext();
+    isEnabled.mockImplementation((level: string) => level === "trace");
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",
@@ -164,6 +231,8 @@ describe("handleToolExecutionStart read path checks", () => {
       source: "pi-embedded",
     });
     expect(warn).not.toHaveBeenCalled();
+    expect(trace).toHaveBeenCalledTimes(1);
+    expect(trace.mock.calls[0]?.[1]).not.toHaveProperty("requiredParamsMissing");
   });
 
   it("warns when read tool has neither path nor file_path", async () => {
@@ -179,7 +248,42 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("read tool called without path");
+    const warnMessage = String(warn.mock.calls[0]?.[0] ?? "");
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(warnMessage).toContain("read tool called without path");
+    expect(warnMeta).toBeTypeOf("object");
+    expect(warnMeta?.event).toBe("embedded_read_tool_start_warning");
+    expect(warnMeta?.tags).toEqual(["tool_start", "read", "embedded", "validation"]);
+    expect(warnMeta?.runId).toBe("run-test");
+    expect(warnMeta?.sessionKey).toBe("agent:unit-session");
+    expect(warnMeta?.sessionId).toBe("session-test-id");
+    expect(warnMeta?.agentId).toBe("agent-test-id");
+    expect(warnMeta?.toolCallId).toBe("tool-2");
+    expect(warnMeta?.argsType).toBe("object");
+    expect(warnMeta?.consoleMessage).toContain("runId=run-test");
+    expect(warnMeta?.consoleMessage).toContain("sessionKey=agent:unit-session");
+    expect(warnMeta?.consoleMessage).toContain("sessionId=session-test-id");
+    expect(warnMeta?.consoleMessage).toContain("agentId=agent-test-id");
+    expect(warnMeta?.consoleMessage).toContain("toolCallId=tool-2");
+    expect(warnMeta?.consoleMessage).toContain("argsType=object");
+    expect(warnMeta?.consoleMessage).toContain("read tool called without path");
+    expect(warnMeta).not.toHaveProperty("argsPreview");
+  });
+
+  it("bounds string args before adding read warning preview", async () => {
+    const { ctx, warn } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-string-args",
+      args: "x".repeat(500),
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(warnMeta?.argsPreview).toBe(`${"x".repeat(200)}…`);
   });
 
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {
@@ -273,7 +377,121 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
   });
 });
 
+describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {
+  it("records accepted sessions_spawn identifiers", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-spawn-accepted",
+        isError: false,
+        result: {
+          details: {
+            status: "accepted",
+            runId: " run-child ",
+            childSessionKey: " agent:claude:subagent:child ",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.acceptedSessionSpawns).toEqual([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:claude:subagent:child",
+      },
+    ]);
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("does not record failed or malformed sessions_spawn results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-spawn-failed",
+        isError: false,
+        result: {
+          details: {
+            status: "error",
+            runId: "run-child",
+            childSessionKey: "agent:claude:subagent:child",
+          },
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-spawn-malformed",
+        isError: false,
+        result: {
+          details: {
+            status: "accepted",
+            runId: "run-child",
+            childSessionKey: " ",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.acceptedSessionSpawns).toEqual([]);
+  });
+});
+
 describe("handleToolExecutionEnd mutating failure recovery", () => {
+  it("marks middleware failures on the last tool error", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-middleware-error",
+        args: { cmd: "echo ok" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-middleware-error",
+        isError: false,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "Tool output unavailable due to post-processing error.",
+            },
+          ],
+          details: {
+            status: "error",
+            middlewareError: true,
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      middlewareError: true,
+    });
+  });
+
   it("clears edit failure when the retry succeeds through common file path aliases", async () => {
     const { ctx } = createTestContext();
 
@@ -366,7 +584,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
-  it("marks successful subagents control actions as replay-invalid", async () => {
+  it("marks successful legacy subagents control actions as replay-invalid", async () => {
     const { ctx } = createTestContext();
 
     await handleToolExecutionStart(
@@ -524,6 +742,67 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expectRecordFields(ctx.state.lastToolError, "last tool error", {
       toolName: "exec",
       timedOut: true,
+    });
+  });
+
+  it("records structured error codes for failed tool results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-denied",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "SYSTEM_RUN_DENIED: approval required" }],
+          details: {
+            status: "failed",
+            error: {
+              code: "SYSTEM_RUN_DENIED",
+              message: "approval required",
+            },
+          },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      errorCode: "SYSTEM_RUN_DENIED",
+      error: "approval required",
+    });
+  });
+
+  it("records node denial codes from thrown gateway error results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-node-denied",
+        isError: true,
+        result: {
+          details: {
+            status: "error",
+            error: "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
+            gatewayCode: "UNAVAILABLE",
+            nodeError: {
+              code: "UNAVAILABLE",
+              message: "SYSTEM_RUN_DENIED: approval required",
+            },
+          },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      errorCode: "SYSTEM_RUN_DENIED",
+      error: "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
     });
   });
 });
@@ -1185,6 +1464,132 @@ describe("messaging tool media URL tracking", () => {
       mediaUrls: ["/tmp/generated-song.mp3"],
     });
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-upload-file")).toBe(false);
+  });
+
+  it("commits message attachment aliases as delivery evidence", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-attachment-aliases",
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "track ready",
+        media: "/tmp/generated-song.mp3",
+        attachments: [{ filePath: "/tmp/generated-cover.png" }],
+      },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-attachment-aliases",
+      isError: false,
+      result: { ok: true },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([
+      "/tmp/generated-song.mp3",
+      "/tmp/generated-cover.png",
+    ]);
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      to: "channel:123",
+      text: "track ready",
+      mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
+    });
+  });
+
+  it("commits internal-ui source replies from successful message sends", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-internal-source-reply",
+      args: { action: "send", message: "visible in tui" },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-internal-source-reply",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          sourceReplySink: "internal-ui",
+          idempotencyKey: "stable-source-reply",
+          sourceReply: {
+            text: "visible in tui",
+            mediaUrls: ["file:///tmp/reply.png"],
+            channelData: { source: "tui" },
+          },
+        },
+      },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([
+      {
+        text: "visible in tui",
+        mediaUrls: ["file:///tmp/reply.png"],
+        channelData: { source: "tui" },
+        idempotencyKey: "stable-source-reply",
+      },
+    ]);
+  });
+
+  it("does not commit dry-run or external message sends as internal-ui source replies", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-dry-run-source-reply",
+      args: { action: "send", message: "preview" },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-dry-run-source-reply",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "dry_run",
+          sourceReplySink: "internal-ui",
+          sourceReply: { text: "preview" },
+        },
+      },
+    });
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-external-source-reply",
+      args: { action: "send", to: "channel:123", message: "sent externally" },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-external-source-reply",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          sourceReply: { text: "sent externally" },
+        },
+      },
+    });
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toHaveLength(0);
   });
 
   it("commits sendAttachment args as message delivery evidence", async () => {

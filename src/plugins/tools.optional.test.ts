@@ -224,6 +224,7 @@ function resolveAutoEnabledOptionalDemoTools() {
   const { rawContext, autoEnabledConfig } = createAutoEnabledOptionalContext();
   installToolManifestSnapshot({
     config: autoEnabledConfig,
+    compatibleConfigs: [rawContext.config],
     plugin: {
       id: "optional-demo",
       origin: "bundled",
@@ -273,11 +274,13 @@ function createOptionalDemoActiveRegistry() {
 
 function installToolManifestSnapshot(params: {
   config: ReturnType<typeof createContext>["config"];
+  compatibleConfigs?: ReturnType<typeof createContext>["config"][];
   env?: NodeJS.ProcessEnv;
   plugin: Record<string, unknown>;
 }) {
   installToolManifestSnapshots({
     config: params.config,
+    compatibleConfigs: params.compatibleConfigs,
     env: params.env,
     plugins: [params.plugin],
   });
@@ -285,6 +288,7 @@ function installToolManifestSnapshot(params: {
 
 function installToolManifestSnapshots(params: {
   config: ReturnType<typeof createContext>["config"];
+  compatibleConfigs?: ReturnType<typeof createContext>["config"][];
   env?: NodeJS.ProcessEnv;
   plugins: Record<string, unknown>[];
 }) {
@@ -341,7 +345,12 @@ function installToolManifestSnapshots(params: {
         manifestPluginCount: plugins.length,
       },
     } as never,
-    { config: params.config, env: params.env ?? process.env, workspaceDir: "/tmp" },
+    {
+      config: params.config,
+      compatibleConfigs: params.compatibleConfigs,
+      env: params.env ?? process.env,
+      workspaceDir: "/tmp",
+    },
   );
 }
 
@@ -1355,8 +1364,11 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(first, ["other_tool", "optional_tool"]);
     expectResolvedToolNames(second, ["other_tool", "optional_tool"]);
     expect(getPluginToolMeta(first[0])?.optional).toBe(false);
+    expect(getPluginToolMeta(first[0])?.trustedLocalMedia).toBe(true);
     expect(getPluginToolMeta(first[1])?.optional).toBe(true);
+    expect(getPluginToolMeta(first[1])?.trustedLocalMedia).toBe(true);
     expect(getPluginToolMeta(second[1])?.optional).toBe(true);
+    expect(getPluginToolMeta(second[1])?.trustedLocalMedia).toBe(true);
     expect(factory).toHaveBeenCalledTimes(1);
   });
 

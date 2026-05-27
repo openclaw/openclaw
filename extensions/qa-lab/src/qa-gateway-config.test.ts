@@ -55,11 +55,18 @@ describe("buildQaGatewayConfig", () => {
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.5");
     expect(cfg.models?.providers?.["mock-openai"]?.baseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(cfg.models?.providers?.["mock-openai"]?.request).toEqual({ allowPrivateNetwork: true });
+    expect(cfg.models?.providers?.["mock-openai"]?.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "gpt-5.5", reasoning: true }),
+        expect.objectContaining({ id: "gpt-5.5-alt", reasoning: true }),
+      ]),
+    );
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(cfg.models?.providers?.openai?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
     expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-channel"]);
+    expect(cfg.plugins?.slots?.memory).toBe("memory-core");
     expect(cfg.plugins?.entries?.acpx).toEqual({
       enabled: true,
       config: {
@@ -89,7 +96,7 @@ describe("buildQaGatewayConfig", () => {
       workspaceDir: "/tmp/qa-workspace",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-6",
+      alternateModel: "anthropic/claude-opus-4-7",
     });
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.5");
@@ -100,7 +107,7 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
     expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.models?.providers?.anthropic?.models.map((model) => model.id)).toContain(
-      "claude-opus-4-6",
+      "claude-opus-4-7",
     );
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core"]);
   });

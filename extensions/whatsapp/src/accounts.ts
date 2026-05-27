@@ -16,7 +16,7 @@ import {
   resolveDefaultWhatsAppAccountId,
 } from "./account-ids.js";
 import type { WhatsAppAccountConfig } from "./account-types.js";
-import { hasWebCredsSync } from "./creds-files.js";
+import { hasWebCredsRegularFileSync, hasWebCredsSync } from "./creds-files.js";
 
 export { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
 
@@ -88,11 +88,7 @@ function resolveLegacyAuthDir(): string {
 }
 
 function legacyAuthExists(authDir: string): boolean {
-  try {
-    return fs.existsSync(path.join(authDir, "creds.json"));
-  } catch {
-    return false;
-  }
+  return hasWebCredsRegularFileSync(authDir);
 }
 
 export function resolveWhatsAppAuthDir(params: { cfg: OpenClawConfig; accountId: string }): {
@@ -166,7 +162,7 @@ export function resolveWhatsAppMediaMaxBytes(
     typeof account.mediaMaxMb === "number" && account.mediaMaxMb > 0
       ? account.mediaMaxMb
       : DEFAULT_WHATSAPP_MEDIA_MAX_MB;
-  return mediaMaxMb * 1024 * 1024;
+  return Math.floor(mediaMaxMb * 1024 * 1024);
 }
 
 export function listEnabledWhatsAppAccounts(cfg: OpenClawConfig): ResolvedWhatsAppAccount[] {

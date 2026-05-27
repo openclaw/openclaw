@@ -66,6 +66,10 @@ fallback. Pin an exact version only when you need a reproducible install.
 openclaw channels login --channel whatsapp
 ```
 
+    Current login is QR-based. In remote or headless environments, make sure you
+    have a reliable path to deliver the live QR code to the phone that will scan
+    it before starting login.
+
     For a specific account:
 
 ```bash
@@ -104,6 +108,13 @@ openclaw pairing approve whatsapp <CODE>
 <Note>
 OpenClaw recommends running WhatsApp on a separate number when possible. (The channel metadata and setup flow are optimized for that setup, but personal-number setups are also supported.)
 </Note>
+
+<Warning>
+The current WhatsApp setup flow is QR-only. Terminal-rendered QRs, screenshots,
+PDFs, or chat attachments can expire or become unreadable while being relayed
+from a remote machine. For remote/headless hosts, prefer a direct QR image
+handoff path over manual terminal capture.
+</Warning>
 
 ## Deployment patterns
 
@@ -163,6 +174,38 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 - WhatsApp Channels/Newsletters can be explicit outbound targets with their native `@newsletter` JID. Outbound newsletter sends use channel session metadata (`agent:<agentId>:whatsapp:channel:<jid>`) rather than DM session semantics.
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` / lowercase variants). Prefer host-level proxy config over channel-specific WhatsApp proxy settings.
 - When `messages.removeAckAfterReply` is enabled, OpenClaw clears the WhatsApp ack reaction after a visible reply is delivered.
+
+## Approval prompts
+
+WhatsApp can render exec and plugin approval prompts with `👍` / `👎` reactions. Delivery is
+controlled by the top-level approval forwarding config:
+
+```json5
+{
+  approvals: {
+    exec: {
+      enabled: true,
+      mode: "session",
+    },
+    plugin: {
+      enabled: true,
+      mode: "targets",
+      targets: [{ channel: "whatsapp", to: "+15551234567" }],
+    },
+  },
+}
+```
+
+`approvals.exec` and `approvals.plugin` are independent. Enabling WhatsApp as a channel only links
+the transport; it does not send approval prompts unless the matching approval family is enabled
+and routes to WhatsApp. Session mode delivers native emoji approvals only for approvals that
+originate from WhatsApp. Target mode uses the shared forwarding pipeline for explicit WhatsApp
+targets and does not create separate approver-DM fanout.
+
+WhatsApp approval reactions require explicit WhatsApp approvers from `allowFrom` or `"*"`.
+`defaultTo` controls ordinary default message targets; it is not an approval approver. Manual
+`/approve` commands still pass through the normal WhatsApp sender authorization path before
+approval resolution.
 
 ## Plugin hooks and privacy
 
@@ -393,6 +436,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - non-Ogg audio, including Microsoft Edge TTS MP3/WebM output, is transcoded with `ffmpeg` to 48 kHz mono Ogg/Opus before PTT delivery
     - `/tts latest` sends the latest assistant reply as one voice note and suppresses repeat sends for the same reply; `/tts chat on|off|default` controls auto-TTS for the current WhatsApp chat
     - animated GIF playback is supported via `gifPlayback: true` on video sends
+    - `forceDocument` / `asDocument` sends outbound images, GIFs, and videos through the Baileys document payload to avoid WhatsApp media compression while preserving the resolved filename and MIME type
     - captions are applied to the first media item when sending multi-media reply payloads, except PTT voice notes send the audio first and visible text separately because WhatsApp clients do not render voice-note captions consistently
     - media source can be HTTP(S), `file://`, or local paths
 
@@ -402,7 +446,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - inbound media save cap: `channels.whatsapp.mediaMaxMb` (default `50`)
     - outbound media send cap: `channels.whatsapp.mediaMaxMb` (default `50`)
     - per-account overrides use `channels.whatsapp.accounts.<accountId>.mediaMaxMb`
-    - images are auto-optimized (resize/quality sweep) to fit limits
+    - images are auto-optimized (resize/quality sweep) to fit limits unless `forceDocument` / `asDocument` requests document delivery
     - on media send failure, first-item fallback sends text warning instead of dropping the response silently
 
   </Accordion>
@@ -478,6 +522,7 @@ Ack reactions are gated by `reactionLevel` — they are suppressed when `reactio
 Behavior notes:
 
 - sent immediately after inbound is accepted (pre-reply)
+- if `ackReaction` is present without `emoji`, WhatsApp uses the routed agent's identity emoji, falling back to "👀"; omit `ackReaction` or set `emoji: ""` to send no ack reaction
 - failures are logged but do not block normal reply delivery
 - group mode `mentions` reacts on mention-triggered turns; group activation `always` acts as bypass for this check
 - WhatsApp uses `channels.whatsapp.ackReaction` (legacy `messages.ackReaction` is not used here)
@@ -504,6 +549,7 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
 Behavior notes:
 
 - `channels.whatsapp.ackReaction` still controls whether status reactions are eligible for direct messages and groups.
+- The queued status reaction uses the same effective ack emoji as plain ack reactions.
 - WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place.
 - `messages.removeAckAfterReply: true` clears the final status reaction after the configured done/error hold.
 - Tool emoji categories include `tool`, `coding`, `web`, `deploy`, `build`, and `concierge`.
@@ -585,8 +631,20 @@ Behavior notes:
     Fix:
 
     ```bash
+    openclaw channels status --probe
     openclaw doctor
     openclaw logs --follow
+    openclaw gateway status
+    ```
+
+    If the loop persists after host connectivity and timing are fixed, back up
+    the account auth directory and re-link that account:
+
+    ```bash
+    cp -a ~/.openclaw/credentials/whatsapp/<accountId> \
+      ~/.openclaw/credentials/whatsapp/<accountId>.bak
+    openclaw channels logout --channel whatsapp --account <accountId>
+    openclaw channels login --channel whatsapp --account <accountId>
     ```
 
     If `~/.openclaw/logs/whatsapp-health.log` says `Gateway inactive` but
@@ -632,6 +690,8 @@ Behavior notes:
     - `groups` allowlist entries
     - mention gating (`requireMention` + mention patterns)
     - duplicate keys in `openclaw.json` (JSON5): later entries override earlier ones, so keep a single `groupPolicy` per scope
+
+    If `channels.whatsapp.groups` is present, WhatsApp can still observe messages from other groups, but OpenClaw drops them before session routing. Add the group JID to `channels.whatsapp.groups` or add `groups["*"]` to admit all groups while keeping sender authorization under `groupPolicy` and `groupAllowFrom`.
 
   </Accordion>
 

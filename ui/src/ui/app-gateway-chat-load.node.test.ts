@@ -58,7 +58,8 @@ vi.mock("./gateway.ts", async (importOriginal) => {
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 60,
-  CHAT_SESSIONS_REFRESH_LIMIT: 100,
+  CHAT_SESSIONS_REFRESH_LIMIT: 50,
+  createChatSessionsLoadOverrides: () => ({ activeMinutes: 60, limit: 50 }),
   clearPendingQueueItemsForRun: vi.fn(),
   flushChatQueueForEvent: vi.fn(),
   refreshChatAvatar: refreshChatAvatarMock,
@@ -89,6 +90,8 @@ vi.mock("./controllers/devices.ts", () => ({
 
 vi.mock("./controllers/exec-approval.ts", () => ({
   addExecApproval: vi.fn((queue, entry) => [...queue, entry]),
+  clearResolvedExecApprovalPrompt: vi.fn(),
+  enqueueExecApprovalPrompt: vi.fn(),
   parseExecApprovalRequested: vi.fn(() => null),
   parseExecApprovalResolved: vi.fn(() => null),
   parsePluginApprovalRequested: vi.fn(() => null),
@@ -108,6 +111,7 @@ vi.mock("./controllers/sessions.ts", () => ({
   applySessionsChangedEvent: vi.fn(() => ({ applied: false })),
   loadSessions: vi.fn(async () => undefined),
   subscribeSessions: subscribeSessionsMock,
+  syncSelectedSessionMessageSubscription: vi.fn(),
 }));
 
 afterAll(() => {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import "./agent-command.test-mocks.js";
-import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
+import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
@@ -11,6 +11,7 @@ import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -23,7 +24,7 @@ import type { PluginProviderRegistration } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { agentCommand, agentCommandFromIngress } from "./agent.js";
+import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
@@ -103,7 +104,6 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         agentAccountId: runContext.accountId,
         messageTo: opts.replyTo ?? opts.to,
         messageThreadId: opts.threadId,
-        senderIsOwner: opts.senderIsOwner,
         sessionFile: params.sessionFile,
         workspaceDir: params.workspaceDir,
         config: params.cfg,
@@ -260,7 +260,7 @@ function mockConfig(
   storePath: string,
   agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>,
   telegramOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>,
-  agentsList?: Array<{ id: string; default?: boolean }>,
+  agentsList?: NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>,
 ) {
   const cfg = {
     agents: {
@@ -366,7 +366,7 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
-  it("enables the Codex runtime plugin for one-shot OpenAI model overrides", async () => {
+  it("enables the Codex runtime plugin and provider owner for one-shot OpenAI model overrides", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
       mockConfig(home, storePath, { models: undefined });
@@ -381,13 +381,14 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledOnce();
-      const registryLoad = pluginRegistryMocks.ensurePluginRegistryLoaded.mock.calls[0]?.[0];
-      expect(registryLoad?.scope).toBe("all");
-      expect(registryLoad?.config).toBeTypeOf("object");
-      expect(registryLoad?.activationSourceConfig).toBeTypeOf("object");
-      expect(registryLoad?.workspaceDir).toBe(path.join(home, "openclaw"));
-      expect(registryLoad?.onlyPluginIds).toEqual(["codex"]);
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledTimes(1);
+      for (const [registryLoad] of pluginRegistryMocks.ensurePluginRegistryLoaded.mock.calls) {
+        expect(registryLoad?.scope).toBe("all");
+        expect(registryLoad?.config).toBeTypeOf("object");
+        expect(registryLoad?.activationSourceConfig).toBeTypeOf("object");
+        expect(registryLoad?.workspaceDir).toBe(path.join(home, "openclaw"));
+        expect(registryLoad?.onlyPluginIds).toEqual(["codex", "openai"]);
+      }
       expectLastRunProviderModel("openai", "gpt-5.2");
     });
   });
@@ -421,23 +422,63 @@ describe("agentCommand", () => {
     });
   });
 
-  it("enforces ingress trust flags", async () => {
-    await expect(
-      // Runtime guard for non-TS callers; TS callsites are statically typed.
-      agentCommandFromIngress({ message: "hi", to: "+1555" } as never, runtime),
-    ).rejects.toThrow("senderIsOwner must be explicitly set for ingress agent runs.");
-
+  it("enforces ingress model override authorization", async () => {
     await expect(
       // Runtime guard for non-TS callers; TS callsites are statically typed.
       agentCommandFromIngress(
         {
           message: "hi",
           to: "+1555",
-          senderIsOwner: false,
         } as never,
         runtime,
       ),
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
+  });
+
+  it("uses the selected agent thinkingDefault for fresh ingress runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(
+        home,
+        store,
+        {
+          thinkingDefault: "high",
+        },
+        undefined,
+        [{ id: "main", default: true, thinkingDefault: "off" }],
+      );
+
+      await agentCommandFromIngress(
+        {
+          message: "ping",
+          agentId: "main",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(getLastEmbeddedCall()?.thinkLevel).toBe("off");
+    });
+  });
+
+  it("installs a local gateway request scope for embedded agent dispatch", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const { getPluginRuntimeGatewayRequestScope } =
+        await import("../plugins/runtime/gateway-request-scope.js");
+      vi.mocked(attemptExecutionRuntime.runAgentAttempt).mockImplementationOnce(async () => {
+        const scope = getPluginRuntimeGatewayRequestScope();
+        expect(scope?.context?.getRuntimeConfig()).toMatchObject({
+          session: { store },
+        });
+        return createDefaultAgentResult();
+      });
+
+      await agentCommand({ message: "ping", agentId: "main" }, runtime);
+
+      expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+    });
   });
 
   it("persists local overrides", async () => {
@@ -474,7 +515,6 @@ describe("agentCommand", () => {
       const callArgs = getLastEmbeddedCall();
       expect(callArgs?.thinkLevel).toBe("high");
       expect(callArgs?.verboseLevel).toBe("on");
-      expect(callArgs?.senderIsOwner).toBe(true);
       expect(callArgs?.prompt).toBe("ping");
       expect(callArgs?.agentAccountId).toBe("kev");
 
@@ -536,7 +576,6 @@ describe("agentCommand", () => {
           channel: "telegram",
           messageChannel: "telegram",
           deliver: true,
-          senderIsOwner: false,
           allowModelOverride: false,
         },
         runtime,
@@ -669,6 +708,39 @@ describe("agentCommand", () => {
       expect(callArgs?.modelRun).toBe(true);
       expect(callArgs?.promptMode).toBe("none");
       expect(callArgs?.disableTools).toBe(true);
+    });
+  });
+
+  it("borrows session lookup data without returning cached mutable store objects", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:cache-borrow";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-cache-borrow",
+          updatedAt: Date.now(),
+          thinkingLevel: "low",
+        },
+        "agent:main:other": {
+          sessionId: "session-other",
+          updatedAt: Date.now(),
+        },
+      });
+      mockConfig(home, store, { models: {} });
+
+      const prepared = await agentCommandTesting.prepareAgentCommandExecution(
+        {
+          message: "prepare only",
+          sessionKey,
+        },
+        runtime,
+      );
+      const cached = loadSessionStore(store, { clone: false });
+
+      expect(prepared.sessionStore).not.toBe(cached);
+      expect(prepared.sessionEntry).not.toBe(cached[sessionKey]);
+      expect(prepared.sessionStore?.[sessionKey]).toBe(prepared.sessionEntry);
+      expect(prepared.sessionStore?.["agent:main:other"]).toBeUndefined();
     });
   });
 
@@ -1111,6 +1183,59 @@ describe("agentCommand", () => {
       await expect(agentCommand({ message: "hi", agentId: "ghost" }, runtime)).rejects.toThrow(
         'Unknown agent id "ghost"',
       );
+    });
+  });
+
+  it("uses explicit session keys for embedded runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, undefined, undefined, [{ id: "main" }, { id: "ops" }]);
+
+      await agentCommand({ message: "hi", sessionKey: "agent:ops:incident-42" }, runtime);
+
+      let callArgs = getLastEmbeddedCall();
+      expect(callArgs?.agentId).toBe("ops");
+      expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
+      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+
+      await agentCommand({ message: "hi", agentId: "ops", sessionKey: "incident-42" }, runtime);
+
+      callArgs = getLastEmbeddedCall();
+      expect(callArgs?.agentId).toBe("ops");
+      expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
+
+      await agentCommand({ message: "hi", agentId: "ops", sessionKey: "global" }, runtime);
+
+      callArgs = getLastEmbeddedCall();
+      expect(callArgs?.agentId).toBe("ops");
+      expect(callArgs?.sessionKey).toBe("agent:ops:global");
+    });
+  });
+
+  it("scopes bare explicit session keys to the default agent for embedded runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, undefined, undefined, [{ id: "ops", default: true }, { id: "main" }]);
+
+      await agentCommand({ message: "hi", sessionKey: "incident-42" }, runtime);
+
+      let callArgs = getLastEmbeddedCall();
+      expect(callArgs?.agentId).toBe("ops");
+      expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
+
+      await agentCommand({ message: "hi", sessionKey: "global" }, runtime);
+
+      callArgs = getLastEmbeddedCall();
+      expect(callArgs?.agentId).toBe("ops");
+      expect(callArgs?.sessionKey).toBe("global");
+      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+
+      await agentCommand({ message: "hi", sessionKey: "unknown" }, runtime);
+
+      callArgs = getLastEmbeddedCall();
+      expect(callArgs?.agentId).toBe("ops");
+      expect(callArgs?.sessionKey).toBe("unknown");
+      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
     });
   });
 });

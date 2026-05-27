@@ -4,13 +4,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
+import { normalizeOptionalString as normalizeOptionalPathInput } from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import {
-  resolveProviderEnvApiKeyCandidates,
-  resolveProviderEnvAuthEvidence,
-} from "./model-auth-env-vars.js";
+import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { normalizeProviderIdForAuth } from "./provider-id.js";
 
 export type EnvApiKeyResult = {
@@ -18,12 +15,13 @@ export type EnvApiKeyResult = {
   source: string;
 };
 
-type EnvApiKeyLookupOptions = {
+export type EnvApiKeyLookupOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   aliasMap?: Readonly<Record<string, string>>;
   candidateMap?: Readonly<Record<string, readonly string[]>>;
   authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+  skipSetupProviderFallback?: boolean;
 };
 
 function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string | undefined {
@@ -37,14 +35,6 @@ function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string
     return undefined;
   }
   return trimmed.replaceAll("${HOME}", homeDir).replaceAll("${APPDATA}", appDataDir ?? "");
-}
-
-function normalizeOptionalPathInput(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 function hasRequiredAuthEvidenceEnv(
@@ -107,11 +97,14 @@ export function resolveEnvApiKey(
     workspaceDir: options.workspaceDir,
     env,
   };
-  const normalized = options.aliasMap
-    ? (options.aliasMap[normalizedProvider] ?? normalizedProvider)
-    : resolveProviderIdForAuth(provider, lookupParams);
-  const candidateMap = options.candidateMap ?? resolveProviderEnvApiKeyCandidates(lookupParams);
-  const authEvidenceMap = options.authEvidenceMap ?? resolveProviderEnvAuthEvidence(lookupParams);
+  const lookupMaps =
+    !options.aliasMap || !options.candidateMap || !options.authEvidenceMap
+      ? resolveProviderEnvAuthLookupMaps(lookupParams)
+      : undefined;
+  const aliasMap = options.aliasMap ?? lookupMaps?.aliasMap ?? {};
+  const normalized = aliasMap[normalizedProvider] ?? normalizedProvider;
+  const candidateMap = options.candidateMap ?? lookupMaps?.envCandidateMap ?? {};
+  const authEvidenceMap = options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {};
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);
@@ -141,6 +134,9 @@ export function resolveEnvApiKey(
   }
 
   if (Array.isArray(candidates)) {
+    return null;
+  }
+  if (options.skipSetupProviderFallback === true) {
     return null;
   }
 

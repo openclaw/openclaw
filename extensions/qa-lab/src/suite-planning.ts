@@ -33,12 +33,16 @@ function scenarioMatchesLiveLane(params: {
   providerMode: QaProviderMode;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
+  const provider = getQaProvider(params.providerMode);
+  if (params.scenario.runtimeParityTier === "live-only" && provider.kind !== "live") {
+    return false;
+  }
   const config = params.scenario.execution.config ?? {};
   const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
     return false;
   }
-  if (getQaProvider(params.providerMode).kind !== "live") {
+  if (provider.kind !== "live") {
     return true;
   }
   const selected = splitModelRef(params.primaryModel);
@@ -66,20 +70,17 @@ function selectQaSuiteScenarios(params: {
 }) {
   const requestedScenarioIds =
     params.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
-  const requestedScenarios = requestedScenarioIds
-    ? params.scenarios.filter((scenario) => requestedScenarioIds.has(scenario.id))
-    : params.scenarios;
   if (requestedScenarioIds) {
-    const foundScenarioIds = new Set(requestedScenarios.map((scenario) => scenario.id));
+    const scenarioById = new Map(params.scenarios.map((scenario) => [scenario.id, scenario]));
     const missingScenarioIds = [...requestedScenarioIds].filter(
-      (scenarioId) => !foundScenarioIds.has(scenarioId),
+      (scenarioId) => !scenarioById.has(scenarioId),
     );
     if (missingScenarioIds.length > 0) {
       throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
     }
-    return requestedScenarios;
+    return [...requestedScenarioIds].map((scenarioId) => scenarioById.get(scenarioId)!);
   }
-  return requestedScenarios.filter((scenario) =>
+  return params.scenarios.filter((scenario) =>
     scenarioMatchesLiveLane({
       scenario,
       providerMode: params.providerMode,
@@ -153,6 +154,17 @@ function collectQaSuiteGatewayRuntimeOptions(
     }
   }
   return forwardHostHome ? { forwardHostHome: true } : undefined;
+}
+
+function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+  concurrency: number;
+}) {
+  return (
+    params.scenarios.length > 1 &&
+    (params.concurrency > 1 ||
+      params.scenarios.some((scenario) => isQaPlainObject(scenario.gatewayConfigPatch)))
+  );
 }
 
 function scenarioRequiresControlUi(scenario: QaSeedScenario) {
@@ -271,5 +283,6 @@ export {
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   selectQaSuiteScenarios,
+  shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 };

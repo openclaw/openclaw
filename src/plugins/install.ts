@@ -6,6 +6,7 @@ import { packageNameMatchesId } from "../infra/install-safe-path.js";
 import {
   resolveNpmPackArchiveMetadata,
   resolveNpmSpecMetadata,
+  createNpmMetadataEnv,
   type NpmIntegrityDrift,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
@@ -171,6 +172,13 @@ function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
       code: PLUGIN_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_EXTENSIONS,
     };
   }
+  if (resolved.status === "invalid") {
+    return {
+      ok: false,
+      error: resolved.error,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS,
+    };
+  }
   return {
     ok: true,
     entries: resolved.entries,
@@ -211,10 +219,7 @@ async function resolveTrustedOfficialPrereleaseResolution(params: {
     ["npm", "view", params.spec.name, "versions", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs, 60_000),
-      env: {
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      },
+      env: createNpmMetadataEnv(),
     },
   );
   if (versions.code !== 0) {
@@ -350,6 +355,7 @@ async function rollbackManagedNpmPluginInstall(params: {
         timeoutMs: Math.max(params.timeoutMs, 300_000),
         env: createSafeNpmInstallEnv(process.env, {
           legacyPeerDeps: true,
+          npmConfigCwd: params.npmRoot,
           packageLock: true,
           quiet: true,
         }),
@@ -410,6 +416,7 @@ async function rollbackManagedNpmPluginInstall(params: {
           timeoutMs: Math.max(params.timeoutMs, 300_000),
           env: createSafeNpmInstallEnv(process.env, {
             legacyPeerDeps: true,
+            npmConfigCwd: params.npmRoot,
             packageLock: true,
             quiet: true,
           }),
@@ -692,6 +699,7 @@ async function installPluginFromManagedNpmRoot(
     timeoutMs: Math.max(timeoutMs, 300_000),
     env: createSafeNpmInstallEnv(process.env, {
       legacyPeerDeps: true,
+      npmConfigCwd: npmRoot,
       packageLock: true,
       quiet: true,
     }),
@@ -937,6 +945,7 @@ type PackageInstallCommonParams = InstallSafetyOverrides & {
   dryRun?: boolean;
   expectedPluginId?: string;
   requirePluginManifest?: boolean;
+  allowSourceTypeScriptEntries?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
 };
 
@@ -965,6 +974,7 @@ function pickPackageInstallCommonParams(
     dryRun: params.dryRun,
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
+    allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     installPolicyRequest: params.installPolicyRequest,
   };
 }
@@ -1059,6 +1069,7 @@ async function installPluginDirectoryIntoExtensions(params: {
   dryRun: boolean;
   copyErrorPrefix: string;
   hasDeps: boolean;
+  sourceHardlinks?: "package-manager" | "reject";
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => Promise<void>;
   afterInstall?: (
@@ -1107,6 +1118,7 @@ async function installPluginDirectoryIntoExtensions(params: {
     logger: params.logger,
     copyErrorPrefix: params.copyErrorPrefix,
     hasDeps: params.hasDeps,
+    sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
     afterCopy: params.afterCopy,
     afterInstall: async (installedDir) => {
@@ -1305,6 +1317,7 @@ async function validatePackagePluginInstallSource(params: {
   packageDir: string;
   expectedPluginId?: string;
   requirePluginManifest?: boolean;
+  allowSourceTypeScriptEntries?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
   trustedSourceLinkedOfficialInstall?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
@@ -1414,6 +1427,7 @@ async function validatePackagePluginInstallSource(params: {
     packageDir: params.packageDir,
     extensions,
     manifest,
+    allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
   });
   if (!extensionValidation.ok) {
     return {
@@ -1523,6 +1537,7 @@ export async function installPluginFromInstalledPackageDir(
     packageDir: params.packageDir,
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
+    allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     installPolicyRequest: params.installPolicyRequest,
@@ -1590,6 +1605,7 @@ async function installPluginFromPackageDir(
     packageDir: params.packageDir,
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
+    allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     installPolicyRequest: params.installPolicyRequest,
@@ -1605,6 +1621,10 @@ async function installPluginFromPackageDir(
 
   preparedTarget = await resolvePreparedTargetForPluginId(plugin.pluginId);
   const hasBundleManifest = Boolean(runtime.detectBundleManifestFormat(params.packageDir));
+  const shouldInstallRuntimeDeps =
+    plugin.hasRuntimeDependencies &&
+    !hasBundleManifest &&
+    params.installPolicyRequest?.kind === "plugin-archive";
 
   return await installPluginDirectoryIntoExtensions({
     sourceDir: params.packageDir,
@@ -1619,10 +1639,8 @@ async function installPluginFromPackageDir(
     mode: preparedTarget.effectiveMode,
     dryRun,
     copyErrorPrefix: "failed to copy plugin",
-    hasDeps:
-      plugin.hasRuntimeDependencies &&
-      !hasBundleManifest &&
-      params.installPolicyRequest?.kind === "plugin-archive",
+    hasDeps: shouldInstallRuntimeDeps,
+    sourceHardlinks: shouldInstallRuntimeDeps ? "package-manager" : "reject",
     depsLogMessage: "Installing plugin dependencies…",
     nameEncoder: encodePluginInstallDirName,
     afterInstall: async (installedDir) => {

@@ -102,11 +102,35 @@ describe("unit vitest config", () => {
     const unitConfig = createUnitVitestConfigWithOptions(
       {},
       {
+        argv: ["node", "vitest", "run", "src/commitments/store.test.ts"],
+      },
+    );
+    const testConfig = requireTestConfig(unitConfig);
+    expect(testConfig.include).toEqual(["src/commitments/store.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("lets root Vitest project runs skip unit files owned by excluded projects", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
         argv: ["node", "vitest", "run", "src/config/channel-configured.test.ts"],
       },
     );
     const testConfig = requireTestConfig(unitConfig);
     expect(testConfig.include).toEqual(["src/config/channel-configured.test.ts"]);
+    expect(testConfig.passWithNoTests).toBe(true);
+  });
+
+  it("lets unrelated root Vitest projects skip when CLI filters match no unit files", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
+        argv: ["node", "vitest", "run", "extensions/browser/index.test.ts"],
+      },
+    );
+    const testConfig = requireTestConfig(unitConfig);
+    expect(testConfig.include).toEqual([]);
     expect(testConfig.passWithNoTests).toBe(true);
   });
 
@@ -132,8 +156,20 @@ describe("unit vitest config", () => {
     expect(testConfig.exclude).toContain("src/security/**");
   });
 
-  it("scopes default coverage to source files owned by the unit lane", () => {
+  it("skips default coverage source discovery when coverage is disabled", () => {
     const unitConfig = createUnitVitestConfig({});
+    const testConfig = requireTestConfig(unitConfig);
+
+    expect(testConfig.coverage?.include).toBeUndefined();
+  });
+
+  it("scopes default coverage to source files owned by the unit lane", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
+        argv: ["node", "vitest", "run", "--coverage"],
+      },
+    );
     const testConfig = requireTestConfig(unitConfig);
     const coverageInclude = testConfig.coverage?.include;
     expect(coverageInclude).toContain("src/commitments/runtime.ts");

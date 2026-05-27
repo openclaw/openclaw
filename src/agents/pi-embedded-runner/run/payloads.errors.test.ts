@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { formatBillingErrorMessage } from "../../pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import {
@@ -344,7 +345,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
-  it("adds tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
+  it("adds compact tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         stopReason: "toolUse",
@@ -364,7 +365,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
-      detail: "code 1",
+      absentDetail: "code 1",
     });
   });
 
@@ -416,13 +417,14 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it.each([
     {
-      name: "still shows mutating tool errors when messages.suppressToolErrors is enabled",
+      name: "suppresses mutating tool errors when messages.suppressToolErrors is enabled",
       payload: {
         lastToolError: { toolName: "write", error: "connection timeout" },
         config: { messages: { suppressToolErrors: true } },
       },
       title: "Write",
       absentDetail: "connection timeout",
+      suppressed: true,
     },
     {
       name: "shows recoverable tool errors for mutating tools",
@@ -440,8 +442,12 @@ describe("buildEmbeddedRunPayloads", () => {
       title: "Browser",
       absentDetail: "connection timeout",
     },
-  ])("$name", ({ payload, title, absentDetail }) => {
+  ])("$name", ({ payload, title, absentDetail, suppressed }) => {
     const payloads = buildPayloads(payload);
+    if (suppressed) {
+      expect(payloads).toEqual([]);
+      return;
+    }
     expectSingleToolErrorPayload(payloads, { title, absentDetail });
   });
 
@@ -457,6 +463,67 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[1]?.isError).toBe(true);
     expect(payloads[1]?.text).toContain("Write");
     expect(payloads[1]?.text).not.toContain("missing");
+    expect(getReplyPayloadMetadata(payloads[1] as object)?.nonTerminalToolErrorWarning).toBe(
+      undefined,
+    );
+  });
+
+  it("still shows write tool errors when timedOut is true but no fileTarget was recorded", () => {
+    // Without `fileTarget` we cannot distinguish a confirmed file write from
+    // an unrelated mutating-tool timeout, so the default-visible warning is
+    // preserved to avoid hiding real failures.
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "write",
+        error: "invoke timed out",
+        timedOut: true,
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Write");
+  });
+
+  it("still shows write tool errors when timedOut and fileTarget only prove the attempted path", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "write",
+        error: "invoke timed out",
+        timedOut: true,
+        mutatingAction: true,
+        fileTarget: { path: "/tmp/openclaw/output.md" },
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Write");
+  });
+
+  it("still shows exec tool errors when timedOut is true (no file-write boundary)", () => {
+    // Exec timeouts never set `fileTarget`, so the new file-write boundary
+    // never matches. Exec/message/cron/gateway tools keep the visible
+    // warning because the disk-write idempotency reasoning does not apply.
+    const payloads = buildPayloads({
+      assistantTexts: ["The script is ready."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "exec",
+        error: "command timed out",
+        timedOut: true,
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Exec");
   });
 
   it("shows exec tool errors when assistant output claims success", () => {
@@ -474,6 +541,9 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[1]?.isError).toBe(true);
     expect(payloads[1]?.text).toContain("Exec");
     expect(payloads[1]?.text).not.toContain("python: command not found");
+    expect(getReplyPayloadMetadata(payloads[1] as object)?.nonTerminalToolErrorWarning).toBe(
+      undefined,
+    );
   });
 
   it("shows mutating tool errors when assistant output does not acknowledge the failure", () => {
@@ -582,10 +652,22 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadSummary(payloads, { text: warningText ?? "" });
   });
 
-  it("includes non-recoverable tool error details when verbose mode is on", () => {
+  it("keeps non-recoverable tool errors compact when verbose mode is on", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "connection timeout" },
       verboseLevel: "on",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Browser",
+      absentDetail: "connection timeout",
+    });
+  });
+
+  it("includes non-recoverable tool error details when verbose mode is full", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "browser", error: "connection timeout" },
+      verboseLevel: "full",
     });
 
     expectSingleToolErrorPayload(payloads, {

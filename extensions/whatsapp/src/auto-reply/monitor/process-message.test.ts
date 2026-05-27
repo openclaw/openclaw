@@ -294,7 +294,12 @@ describe("processMessage group system prompt wiring", () => {
     expect(buildContextMock.mock.calls[0][0]).toMatchObject({
       commandBody: "/status",
       commandAuthorized: true,
-      commandSource: "text",
+      commandTurn: {
+        kind: "text-slash",
+        source: "text",
+        authorized: true,
+        body: "/status",
+      },
       rawBody: "/status",
     });
   });
@@ -314,6 +319,12 @@ describe("processMessage group system prompt wiring", () => {
     expect(buildContextMock.mock.calls[0][0]).toMatchObject({
       commandBody: "please inspect `/tmp/foo`",
       commandAuthorized: true,
+      commandTurn: {
+        kind: "normal",
+        source: "message",
+        authorized: false,
+        body: "please inspect `/tmp/foo`",
+      },
       rawBody: "please inspect `/tmp/foo`",
     });
     expect(buildContextMock.mock.calls[0][0].commandSource).toBeUndefined();

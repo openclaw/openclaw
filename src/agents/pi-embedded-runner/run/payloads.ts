@@ -101,7 +101,7 @@ function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
-  return level === "on" || level === "full";
+  return level === "full";
 }
 
 function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefined): string {
@@ -136,26 +136,45 @@ function shouldIncludeToolErrorDetails(params: {
   );
 }
 
+function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary): boolean {
+  return lastToolError.middlewareError === true;
+}
+
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
   hasUserFacingErrorReply: boolean;
   hasUserFacingFailureAcknowledgement: boolean;
   suppressToolErrors: boolean;
-  suppressToolErrorWarnings?: boolean;
+  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   isCronTrigger?: boolean;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
   const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
-  const includeDetails = shouldIncludeToolErrorDetails(params);
-  if (params.suppressToolErrorWarnings) {
+  let toolErrorWarningOverride: boolean | undefined;
+  let dynamicToolErrorWarningsDisabled = false;
+  if (typeof params.suppressToolErrorWarnings === "function") {
+    toolErrorWarningOverride = params.suppressToolErrorWarnings();
+    dynamicToolErrorWarningsDisabled = toolErrorWarningOverride === false;
+  } else {
+    toolErrorWarningOverride = params.suppressToolErrorWarnings;
+  }
+  const includeDetails = shouldIncludeToolErrorDetails({
+    ...params,
+    verboseLevel: dynamicToolErrorWarningsDisabled ? "off" : params.verboseLevel,
+  });
+  const suppressToolErrorWarnings = toolErrorWarningOverride === true;
+  if (suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
   }
   // sessions_send timeouts and errors are transient inter-session communication
   // issues — the message may still have been delivered. Suppress warnings to
   // prevent raw error text from leaking into the chat surface (#23989).
   if (normalizedToolName === "sessions_send") {
+    return { showWarning: false, includeDetails };
+  }
+  if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
   }
   const isMutatingToolError =
@@ -169,9 +188,6 @@ function resolveToolErrorWarningPolicy(params: {
   if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
     return { showWarning: false, includeDetails };
   }
-  if (params.suppressToolErrors) {
-    return { showWarning: false, includeDetails };
-  }
   return {
     showWarning: !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error),
     includeDetails,
@@ -182,6 +198,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
+  currentAssistant?: AssistantMessage | null;
   lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
   isCronTrigger?: boolean;
@@ -192,7 +209,7 @@ export function buildEmbeddedRunPayloads(params: {
   reasoningLevel?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
-  suppressToolErrorWarnings?: boolean;
+  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
@@ -220,6 +237,7 @@ export function buildEmbeddedRunPayloads(params: {
     presentation?: ReplyPayload["presentation"];
     interactive?: ReplyPayload["interactive"];
     channelData?: Record<string, unknown>;
+    nonTerminalToolErrorWarning?: boolean;
     sourceReplyMirror?: {
       idempotencyKey?: string;
     };
@@ -264,16 +282,20 @@ export function buildEmbeddedRunPayloads(params: {
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts =
     params.didSendDeterministicApprovalPrompt === true || hasSourceReplyPayload;
-  const lastAssistantStopReason = params.lastAssistant?.stopReason;
+  const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
+  const currentAssistant = params.currentAssistant ?? undefined;
+  const assistantForPayload =
+    currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : params.lastAssistant);
+  const lastAssistantStopReason = assistantForPayload?.stopReason;
   const lastAssistantErrored = lastAssistantStopReason === "error";
   const lastAssistantAborted = lastAssistantStopReason === "aborted";
   const runAborted = params.runAborted === true || lastAssistantAborted;
   const lastAssistantNeedsErrorSurface = lastAssistantErrored || lastAssistantAborted;
   const errorText =
-    params.lastAssistant && lastAssistantNeedsErrorSurface
+    assistantForPayload && lastAssistantNeedsErrorSurface
       ? suppressAssistantArtifacts
         ? undefined
-        : formatAssistantErrorText(params.lastAssistant, {
+        : formatAssistantErrorText(assistantForPayload, {
             cfg: params.config,
             sessionKey: params.sessionKey,
             provider: params.provider,
@@ -281,7 +303,7 @@ export function buildEmbeddedRunPayloads(params: {
           })
       : undefined;
   const rawErrorMessage = lastAssistantNeedsErrorSurface
-    ? normalizeOptionalString(params.lastAssistant?.errorMessage)
+    ? normalizeOptionalString(assistantForPayload?.errorMessage)
     : undefined;
   const rawErrorFingerprint = rawErrorMessage
     ? getApiErrorPayloadFingerprint(rawErrorMessage)
@@ -333,17 +355,17 @@ export function buildEmbeddedRunPayloads(params: {
   const reasoningText =
     suppressAssistantArtifacts || runAborted
       ? ""
-      : params.lastAssistant && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
-        ? extractAssistantThinking(params.lastAssistant)
+      : assistantForPayload && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
+        ? extractAssistantThinking(assistantForPayload)
         : "";
   if (reasoningText) {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant
-    ? extractAssistantVisibleText(params.lastAssistant)
+  const fallbackAnswerText = assistantForPayload
+    ? extractAssistantVisibleText(assistantForPayload)
     : "";
-  const fallbackRawAnswerText = resolveRawAssistantAnswerText(params.lastAssistant);
+  const fallbackRawAnswerText = resolveRawAssistantAnswerText(assistantForPayload);
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantNeedsErrorSurface) {
       return false;
@@ -403,7 +425,6 @@ export function buildEmbeddedRunPayloads(params: {
     const parsed = parseReplyDirectives(text);
     return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
   });
-  const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
   const normalizedAssistantTexts = normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"));
   const normalizedRawAnswerText = normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "");
   const shouldPreferRawAnswerText =
@@ -418,7 +439,7 @@ export function buildEmbeddedRunPayloads(params: {
     ? normalizeReplyTextForComparison(fallbackAnswerSourceText)
     : "";
   const shouldUseCanonicalFinalAnswer =
-    nonEmptyAssistantTexts.length > 1 &&
+    !lastAssistantNeedsErrorSurface &&
     fallbackAnswerSourceText.length > 0 &&
     normalizedFallbackAnswerSourceText.length > 0;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
@@ -505,6 +526,9 @@ export function buildEmbeddedRunPayloads(params: {
         replyItems.push({
           text: warningText,
           isError: true,
+          nonTerminalToolErrorWarning:
+            hasUserFacingAssistantReply &&
+            shouldMarkNonTerminalToolErrorWarning(params.lastToolError),
         });
       }
     }
@@ -525,6 +549,11 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.isError !== undefined) {
         payload.isError = item.isError;
+      }
+      if (item.nonTerminalToolErrorWarning) {
+        setReplyPayloadMetadata(payload, {
+          nonTerminalToolErrorWarning: true,
+        });
       }
       if (item.replyToId) {
         payload.replyToId = item.replyToId;

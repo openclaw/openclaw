@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
+import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 
 export type NpmSpecResolution = {
@@ -34,6 +36,17 @@ export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmRes
     shasum: resolution?.shasum,
     resolvedAt: resolution?.resolvedAt,
   };
+}
+
+export function createNpmMetadataEnv(
+  scope: Pick<NpmProjectInstallEnvOptions, "npmConfigCwd"> = {},
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+    NPM_CONFIG_IGNORE_SCRIPTS: "true",
+  };
+  applyNpmFreshnessBypassEnv(env, new Date(), scope);
+  return env;
 }
 
 function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
@@ -69,10 +82,7 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
     ["npm", "view", params.spec, "name", "version", "dist.integrity", "dist.shasum", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
-      env: {
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      },
+      env: createNpmMetadataEnv(),
     },
   );
   if (res.code !== 0) {
@@ -224,10 +234,7 @@ function parseNpmPackJsonOutput(
 }
 
 function parsePackedArchiveFromStdout(stdout: string): string | undefined {
-  const lines = stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(stdout.split(/\r?\n/));
 
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index];
@@ -279,10 +286,7 @@ export async function packNpmSpecToArchive(params: {
     {
       timeoutMs: Math.max(params.timeoutMs, 300_000),
       cwd: params.cwd,
-      env: {
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      },
+      env: createNpmMetadataEnv({ npmConfigCwd: params.cwd }),
     },
   );
   if (res.code !== 0) {
@@ -342,14 +346,14 @@ export async function resolveNpmPackArchiveMetadata(params: {
     return archivePathResult;
   }
   const archivePath = archivePathResult.path;
+  const archiveStat = await fs.stat(archivePath).catch(() => null);
+  const archiveMetadataTimeoutMs =
+    archiveStat && archiveStat.size > 100 * 1024 * 1024 ? 300_000 : 60_000;
   const res = await runCommandWithTimeout(
     ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"],
     {
-      timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
-      env: {
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      },
+      timeoutMs: Math.max(params.timeoutMs ?? archiveMetadataTimeoutMs, archiveMetadataTimeoutMs),
+      env: createNpmMetadataEnv(),
     },
   );
   if (res.code !== 0) {

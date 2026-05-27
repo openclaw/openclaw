@@ -40,7 +40,12 @@ export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../agents/pi-embedded-runner/run/types.js";
-export type { ContextEngine as HarnessContextEngine } from "../context-engine/types.js";
+export type {
+  ContextEngine as HarnessContextEngine,
+  ContextEngineHostCapability,
+  ContextEngineOperation,
+  ContextEngineProjection,
+} from "../context-engine/types.js";
 export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runner/compact.js";
 export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
@@ -71,6 +76,7 @@ export type {
 } from "../plugins/codex-app-server-extension-types.js";
 export type {
   NativeHookRelayEvent,
+  NativeHookRelayProcessResponse,
   NativeHookRelayProvider,
   NativeHookRelayRegistrationHandle,
 } from "../agents/harness/native-hook-relay.js";
@@ -78,6 +84,7 @@ export type {
 export { VERSION as OPENCLAW_VERSION } from "../version.js";
 export { formatErrorMessage } from "../infra/errors.js";
 export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
+export { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
 export { log as embeddedAgentLog } from "../agents/pi-embedded-runner/logger.js";
@@ -138,6 +145,13 @@ export {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";
+export {
+  inspectRuntimeToolInputSchemas,
+  projectRuntimeToolInputSchema,
+  type RuntimeToolInputSchemaJson,
+  type RuntimeToolInputSchemaProjection,
+  type RuntimeToolSchemaDiagnostic,
+} from "../agents/tool-schema-projection.js";
 export type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
@@ -151,19 +165,30 @@ export async function loadCodexBundleMcpThreadConfig(
   return load(params);
 }
 export { resolveSandboxContext } from "../agents/sandbox.js";
+export {
+  hasSandboxBindContainerPathAliases,
+  hasSandboxBindReadonlyHostShadows,
+  resolveWritableSandboxBindHostRoots,
+} from "../agents/sandbox/fs-paths.js";
 export { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 export type { EmbeddedContextFile } from "../agents/pi-embedded-helpers/types.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export {
   acquireSessionWriteLock,
   resolveSessionWriteLockAcquireTimeoutMs,
+  resolveSessionWriteLockOptions,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
+  getBeforeToolCallPolicyDiagnosticState,
+  hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
+  runBeforeToolCallHook,
+  setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
+  type BeforeToolCallPolicyDiagnosticState,
 } from "../agents/pi-tools.before-tool-call.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,
@@ -173,6 +198,10 @@ export {
 export { createCodexAppServerToolResultExtensionRunner } from "../agents/harness/codex-app-server-extensions.js";
 export { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
 export {
+  assertContextEngineHostSupport,
+  CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+} from "../context-engine/host-compat.js";
+export {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
   buildHarnessContextEngineRuntimeContext,
@@ -181,11 +210,30 @@ export {
   isActiveHarnessContextEngine,
   runHarnessContextEngineMaintenance,
 } from "../agents/harness/context-engine-lifecycle.js";
+// Plugin-owned (`ownsCompaction`) compaction safety timeout. Exposed on the
+// agent-harness-runtime surface so plugin harnesses such as Codex bound their
+// own `ContextEngine.compact()` calls with the exact same finite, host-resolved
+// timeout the built-in pi-embedded runner uses — one shared implementation, no
+// copy-pasted watchdog.
+export {
+  compactContextEngineWithSafetyTimeout,
+  resolveCompactionTimeoutMs,
+} from "../agents/pi-embedded-runner/compaction-safety-timeout.js";
+export {
+  estimateRenderedLlmBoundaryTokenPressure,
+  formatPrePromptPrecheckLog,
+  PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+  shouldPreemptivelyCompactBeforePrompt,
+  type LlmBoundaryTokenPressure,
+  type PreemptiveCompactionDecision,
+} from "../agents/pi-embedded-runner/run/preemptive-compaction.js";
+export { resolveContextEngineOwnerPluginId } from "../context-engine/registry.js";
 export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";
 export {
+  awaitAgentHarnessAgentEndHook,
   runAgentHarnessBeforeAgentFinalizeHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
@@ -193,7 +241,9 @@ export {
 } from "../agents/harness/lifecycle-hook-helpers.js";
 export {
   buildNativeHookRelayCommand,
-  __testing as nativeHookRelayTesting,
+  hasNativeHookRelayInvocation,
+  invokeNativeHookRelay,
+  testing as nativeHookRelayTesting,
   registerNativeHookRelay,
 } from "../agents/harness/native-hook-relay.js";
 

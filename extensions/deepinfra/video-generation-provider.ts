@@ -1,4 +1,5 @@
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -6,7 +7,10 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber as coerceProviderNumber,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -67,19 +71,15 @@ function parseVideoDataUrl(url: string): GeneratedVideoAsset | undefined {
   }
   const mimeType = match[1] ?? "video/mp4";
   const ext = extensionForMime(mimeType)?.slice(1) ?? "mp4";
+  const canonicalBase64 = canonicalizeBase64(match[2] ?? "");
+  if (!canonicalBase64) {
+    throw new Error("DeepInfra video response returned malformed data URL base64");
+  }
   return {
-    buffer: Buffer.from(match[2] ?? "", "base64"),
+    buffer: Buffer.from(canonicalBase64, "base64"),
     mimeType,
     fileName: `video-1.${ext}`,
   };
-}
-
-function coerceProviderNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function coerceProviderString(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
 }
 
 function resolveDurationSeconds(value: number | undefined): number | undefined {
@@ -110,11 +110,12 @@ function buildDeepInfraVideoBody(
     body.seed = seed;
   }
   const negativePrompt =
-    coerceProviderString(options.negative_prompt) ?? coerceProviderString(options.negativePrompt);
+    normalizeOptionalString(options.negative_prompt) ??
+    normalizeOptionalString(options.negativePrompt);
   if (negativePrompt) {
     body.negative_prompt = negativePrompt;
   }
-  const style = coerceProviderString(options.style);
+  const style = normalizeOptionalString(options.style);
   if (style) {
     body.style = style;
   }

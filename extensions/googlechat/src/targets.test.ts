@@ -77,7 +77,7 @@ vi.mock("./auth.js", async () => {
 });
 
 const authActual = await vi.importActual<typeof import("./auth.js")>("./auth.js");
-const { __testing: authTesting, getGoogleChatAccessToken, verifyGoogleChatRequest } = authActual;
+const { testing: authTesting, getGoogleChatAccessToken, verifyGoogleChatRequest } = authActual;
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
@@ -444,7 +444,10 @@ describe("verifyGoogleChatRequest", () => {
         audienceType: "project-number",
         audience: "123456789",
       }),
-    ).rejects.toThrow("Google Chat cert fetch failed: malformed JSON response");
+    ).resolves.toEqual({
+      ok: false,
+      reason: "Google Chat cert fetch failed: malformed JSON response",
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 });

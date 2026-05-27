@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  resolveMemoryDreamingConfig,
+  resolveMemoryRemDreamingConfig,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
@@ -46,6 +49,7 @@ import {
 } from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
 import {
@@ -1146,17 +1150,34 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
           if (qmdIndexSummary) {
             defaultRuntime.log(qmdIndexSummary);
           }
-          const postIndexStatus = manager.status();
+          let postIndexStatus = manager.status();
+          let semanticVectorAvailable = postIndexStatus.vector?.semanticAvailable;
+          const vectorStoreAvailable =
+            postIndexStatus.vector?.storeAvailable ?? postIndexStatus.vector?.available;
+          if (
+            postIndexStatus.backend === "builtin" &&
+            (postIndexStatus.vector?.enabled ?? false) &&
+            semanticVectorAvailable === undefined &&
+            vectorStoreAvailable !== false &&
+            typeof manager.probeVectorAvailability === "function"
+          ) {
+            semanticVectorAvailable = await manager.probeVectorAvailability();
+            postIndexStatus = manager.status();
+            semanticVectorAvailable =
+              postIndexStatus.vector?.semanticAvailable ?? semanticVectorAvailable;
+          }
           const vectorEnabled = postIndexStatus.vector?.enabled ?? false;
           const vectorAvailable =
-            postIndexStatus.vector?.storeAvailable ?? postIndexStatus.vector?.available;
+            semanticVectorAvailable ??
+            postIndexStatus.vector?.semanticAvailable ??
+            postIndexStatus.vector?.available ??
+            postIndexStatus.vector?.storeAvailable;
           const vectorLoadErr = postIndexStatus.vector?.loadError;
           if (vectorEnabled && vectorAvailable === false) {
-            const errDetail = vectorLoadErr ? `: ${vectorLoadErr}` : "";
             // Indexing still persisted chunks/FTS state; keep the command successful but
             // emit a stderr warning so operators and scripts can detect degraded recall.
             defaultRuntime.error(
-              `Memory index WARNING (${agentId}): chunks_vec not updated — sqlite-vec unavailable${errDetail}. Vector recall degraded.`,
+              `Memory index WARNING (${agentId}): chunks_vec not updated — ${formatMemoryVectorDegradedWriteReason(vectorLoadErr)}. Vector recall degraded.`,
             );
           } else {
             defaultRuntime.log(`Memory index updated (${agentId}).`);
@@ -1184,8 +1205,13 @@ export async function runMemorySearch(
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory search");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
+  const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
+  const dreamingEnabled = resolveMemoryDreamingConfig({
+    pluginConfig: memoryPluginConfig,
+    cfg,
+  }).enabled;
   const dreaming = resolveShortTermPromotionDreamingConfig({
-    pluginConfig: resolveMemoryPluginConfig(cfg),
+    pluginConfig: memoryPluginConfig,
     cfg,
   });
   await withMemoryManagerForAgent({
@@ -1211,14 +1237,16 @@ export async function runMemorySearch(
         typeof (manager as { status?: () => { workspaceDir?: string } }).status === "function"
           ? manager.status().workspaceDir
           : undefined;
-      void recordShortTermRecalls({
-        workspaceDir,
-        query,
-        results,
-        timezone: dreaming.timezone,
-      }).catch(() => {
-        // Recall tracking is best-effort and must not block normal search results.
-      });
+      if (dreamingEnabled) {
+        void recordShortTermRecalls({
+          workspaceDir,
+          query,
+          results,
+          timezone: dreaming.timezone,
+        }).catch(() => {
+          // Recall tracking is best-effort and must not block normal search results.
+        });
+      }
       if (opts.json) {
         defaultRuntime.writeJson({ results });
         return;

@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-utils.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "./string-utils.js";
+export { splitShellArgs } from "./openclaw-runtime-io.js";
 
 export type ChatType = "direct" | "group" | "channel";
 export type MemoryBackend = "builtin" | "qmd";
@@ -313,12 +319,13 @@ export function resolveMemorySearchConfig(
   if (!enabled) {
     return null;
   }
-  const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const rawPaths = normalizeStringEntries([
+    ...(defaults?.extraPaths ?? []),
+    ...(overrides?.extraPaths ?? []),
+  ]);
   return {
     enabled,
-    extraPaths: Array.from(new Set(rawPaths)),
+    extraPaths: uniqueStrings(rawPaths),
   };
 }
 
@@ -361,68 +368,4 @@ export function parseDurationMs(
     throw new Error(`invalid duration: ${raw}`);
   }
   return Math.round(totalMs);
-}
-
-const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`", "\n", "\r"]);
-
-export function splitShellArgs(raw: string): string[] | null {
-  const tokens: string[] = [];
-  let buf = "";
-  let inSingle = false;
-  let inDouble = false;
-  let escaped = false;
-  const pushToken = () => {
-    if (buf.length > 0) {
-      tokens.push(buf);
-      buf = "";
-    }
-  };
-  for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i];
-    if (escaped) {
-      buf += ch;
-      escaped = false;
-      continue;
-    }
-    if (!inSingle && !inDouble && ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (inSingle) {
-      if (ch === "'") {
-        inSingle = false;
-      } else {
-        buf += ch;
-      }
-      continue;
-    }
-    if (inDouble) {
-      const next = raw[i + 1];
-      if (ch === "\\" && next && DOUBLE_QUOTE_ESCAPES.has(next)) {
-        buf += next;
-        i += 1;
-      } else if (ch === '"') {
-        inDouble = false;
-      } else {
-        buf += ch;
-      }
-      continue;
-    }
-    if (ch === "'") {
-      inSingle = true;
-    } else if (ch === '"') {
-      inDouble = true;
-    } else if (ch === "#" && buf.length === 0) {
-      break;
-    } else if (/\s/.test(ch)) {
-      pushToken();
-    } else {
-      buf += ch;
-    }
-  }
-  if (escaped || inSingle || inDouble) {
-    return null;
-  }
-  pushToken();
-  return tokens;
 }

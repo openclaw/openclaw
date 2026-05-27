@@ -10,6 +10,7 @@ import {
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
@@ -23,7 +24,7 @@ import type { InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import {
   isPluginMetadataSnapshotCompatible,
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import {
@@ -44,10 +45,6 @@ type GenerationProviderContractKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 type ConfiguredGenerationProviderIds = Record<GenerationProviderContractKey, ReadonlySet<string>>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function isConfigActivationValueEnabled(value: unknown): boolean {
   if (value === false) {
@@ -211,6 +208,28 @@ function manifestOwnsConfiguredSpeechProvider(params: {
   return (params.manifest?.contracts?.speechProviders ?? []).some((providerId) => {
     const normalized = normalizeConfiguredSpeechProviderIdForStartup(providerId);
     return normalized ? params.configuredSpeechProviderIds.has(normalized) : false;
+  });
+}
+
+function collectConfiguredWebSearchProviderIds(config: OpenClawConfig): ReadonlySet<string> {
+  const search = config.tools?.web?.search;
+  if (search?.enabled === false || typeof search?.provider !== "string") {
+    return new Set();
+  }
+  const providerId = normalizeOptionalLowercaseString(search.provider);
+  return providerId ? new Set([providerId]) : new Set();
+}
+
+function manifestOwnsConfiguredWebSearchProvider(params: {
+  manifest: PluginManifestRecord | undefined;
+  configuredWebSearchProviderIds: ReadonlySet<string>;
+}): boolean {
+  if (params.configuredWebSearchProviderIds.size === 0) {
+    return false;
+  }
+  return (params.manifest?.contracts?.webSearchProviders ?? []).some((providerId) => {
+    const normalized = normalizeOptionalLowercaseString(providerId);
+    return normalized ? params.configuredWebSearchProviderIds.has(normalized) : false;
   });
 }
 
@@ -433,6 +452,52 @@ function canStartConfiguredSpeechProviderPlugin(params: {
   return activationState.enabled && activationState.explicitlyEnabled;
 }
 
+function canStartConfiguredWebSearchProviderPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  configuredWebSearchProviderIds: ReadonlySet<string>;
+  platform?: NodeJS.Platform;
+}): boolean {
+  if (
+    !manifestOwnsConfiguredWebSearchProvider({
+      manifest: params.manifest,
+      configuredWebSearchProviderIds: params.configuredWebSearchProviderIds,
+    })
+  ) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled;
+}
+
 function canStartConfiguredRootPlugin(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
@@ -622,21 +687,47 @@ export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
     rootConfig: params.config,
   };
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
+  return resolveConfiguredDeferredChannelPluginIdsFromPrepared({
+    config: params.config,
+    index: params.index,
+    configuredChannelIds,
+    pluginsConfig,
+    activationSource,
+    manifestLookup,
+  });
+}
+
+function resolveConfiguredDeferredChannelPluginIdsFromPrepared(params: {
+  config: OpenClawConfig;
+  index: PluginRegistrySnapshot;
+  configuredChannelIds: ReadonlySet<string>;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  manifestLookup: ManifestRegistryLookup;
+  platform?: NodeJS.Platform;
+}): string[] {
+  if (params.configuredChannelIds.size === 0) {
+    return [];
+  }
   return params.index.plugins
     .filter(
       (plugin) =>
         hasConfiguredStartupChannel({
           plugin,
-          manifestLookup,
-          configuredChannelIds,
+          manifestLookup: params.manifestLookup,
+          configuredChannelIds: params.configuredChannelIds,
         }) &&
         plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen &&
         canStartConfiguredChannelPlugin({
           plugin,
           config: params.config,
-          pluginsConfig,
-          activationSource,
-          manifestLookup,
+          pluginsConfig: params.pluginsConfig,
+          activationSource: params.activationSource,
+          manifestLookup: params.manifestLookup,
+          platform: params.platform,
         }),
     )
     .map((plugin) => plugin.pluginId);
@@ -661,12 +752,6 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const channelPluginIds = resolveChannelPluginIdsFromRegistry({
     manifestRegistry: params.manifestRegistry,
   });
-  const configuredDeferredChannelPluginIds = resolveConfiguredDeferredChannelPluginIdsFromRegistry({
-    config: params.config,
-    env: params.env,
-    index: params.index,
-    manifestRegistry: params.manifestRegistry,
-  });
   const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
   const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, params.index, {
     manifestRegistry: params.manifestRegistry,
@@ -684,6 +769,19 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     plugins: activationSourcePlugins,
     rootConfig: activationSourceConfig,
   };
+  const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
+  const configuredDeferredChannelPluginIds = resolveConfiguredDeferredChannelPluginIdsFromPrepared({
+    config: params.config,
+    index: params.index,
+    configuredChannelIds,
+    pluginsConfig,
+    activationSource: {
+      plugins: pluginsConfig,
+      rootConfig: params.config,
+    },
+    manifestLookup,
+    platform: params.platform,
+  });
   const requiredAgentHarnessRuntimes = new Set(
     collectConfiguredAgentHarnessRuntimes(activationSourceConfig, params.env, {
       includeEnvRuntime: false,
@@ -691,8 +789,9 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     }),
   );
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
-  const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
   const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
+  const configuredWebSearchProviderIds =
+    collectConfiguredWebSearchProviderIds(activationSourceConfig);
   const configuredGenerationProviderIds =
     collectConfiguredGenerationProviderIds(activationSourceConfig);
   const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {
@@ -758,6 +857,19 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           pluginsConfig,
           activationSource,
           configuredSpeechProviderIds,
+          platform: params.platform,
+        })
+      ) {
+        return true;
+      }
+      if (
+        canStartConfiguredWebSearchProviderPlugin({
+          plugin,
+          manifest,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+          configuredWebSearchProviderIds,
           platform: params.platform,
         })
       ) {
@@ -855,10 +967,11 @@ export function loadGatewayStartupPluginPlan(params: {
       index: params.index,
     })
       ? params.metadataSnapshot
-      : loadPluginMetadataSnapshot({
+      : resolvePluginMetadataSnapshot({
           config: snapshotConfig,
           workspaceDir: params.workspaceDir,
           env: params.env,
+          allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
           ...(params.index ? { index: params.index } : {}),
         });
   return resolveGatewayStartupPluginPlanFromRegistry({

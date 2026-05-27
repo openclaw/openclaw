@@ -1,5 +1,10 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { InteractiveReply, InteractiveReplyButton } from "../interactive/payload.js";
+import type {
+  InteractiveReply,
+  InteractiveReplyButton,
+  MessagePresentation,
+  MessagePresentationButton,
+} from "../interactive/payload.js";
 import { formatHumanList } from "../shared/human-list.js";
 import {
   normalizeOptionalLowercaseString,
@@ -29,13 +34,20 @@ export type ExecApprovalReplyMetadata = {
   approvalKind: "exec" | "plugin";
   agentId?: string;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  actions?: readonly ExecApprovalActionDescriptor[];
   sessionKey?: string;
+  title?: string;
+  description?: string;
+  severity?: "info" | "warning" | "critical";
+  toolName?: string;
+  pluginId?: string;
 };
 
 export type ExecApprovalActionDescriptor = {
-  decision: ExecApprovalReplyDecision;
+  kind?: "decision" | "command";
+  decision?: ExecApprovalReplyDecision;
   label: string;
-  style: NonNullable<InteractiveReplyButton["style"]>;
+  style: NonNullable<MessagePresentationButton["style"]>;
   command: string;
 };
 
@@ -118,6 +130,7 @@ export function buildExecApprovalActionDescriptors(params: {
   const descriptors: ExecApprovalActionDescriptor[] = [];
   if (allowedDecisions.includes("allow-once")) {
     descriptors.push({
+      kind: "decision",
       decision: "allow-once",
       label: "Allow Once",
       style: "success",
@@ -129,6 +142,7 @@ export function buildExecApprovalActionDescriptors(params: {
   }
   if (allowedDecisions.includes("allow-always")) {
     descriptors.push({
+      kind: "decision",
       decision: "allow-always",
       label: "Allow Always",
       style: "primary",
@@ -140,6 +154,7 @@ export function buildExecApprovalActionDescriptors(params: {
   }
   if (allowedDecisions.includes("deny")) {
     descriptors.push({
+      kind: "decision",
       decision: "deny",
       label: "Deny",
       style: "danger",
@@ -162,6 +177,55 @@ function buildApprovalInteractiveButtons(
   }));
 }
 
+function buildApprovalPresentationButtons(
+  descriptors: readonly ExecApprovalActionDescriptor[],
+): MessagePresentationButton[] {
+  return descriptors.map((descriptor) => ({
+    label: descriptor.label,
+    value: descriptor.command,
+    style: descriptor.style,
+  }));
+}
+
+/** Build the portable approval button presentation for already-resolved actions. */
+export function buildApprovalPresentationFromActionDescriptors(
+  actions: readonly ExecApprovalActionDescriptor[],
+): MessagePresentation | undefined {
+  const buttons = buildApprovalPresentationButtons(actions);
+  return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
+}
+
+/** Build the portable approval presentation for an approval id and decision allowlist. */
+export function buildApprovalPresentation(params: {
+  approvalId: string;
+  ask?: string | null;
+  allowedDecisions?: readonly ExecApprovalReplyDecision[];
+}): MessagePresentation | undefined {
+  return buildApprovalPresentationFromActionDescriptors(
+    buildExecApprovalActionDescriptors({
+      approvalCommandId: params.approvalId,
+      ask: params.ask,
+      allowedDecisions: params.allowedDecisions,
+    }),
+  );
+}
+
+/** Build the portable exec-approval presentation for command callback buttons. */
+export function buildExecApprovalPresentation(params: {
+  approvalCommandId: string;
+  ask?: string | null;
+  allowedDecisions?: readonly ExecApprovalReplyDecision[];
+}): MessagePresentation | undefined {
+  return buildApprovalPresentation({
+    approvalId: params.approvalCommandId,
+    ask: params.ask,
+    allowedDecisions: params.allowedDecisions,
+  });
+}
+
+/**
+ * @deprecated Use buildApprovalPresentationFromActionDescriptors.
+ */
 export function buildApprovalInteractiveReplyFromActionDescriptors(
   actions: readonly ExecApprovalActionDescriptor[],
 ): InteractiveReply | undefined {
@@ -169,6 +233,9 @@ export function buildApprovalInteractiveReplyFromActionDescriptors(
   return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
 }
 
+/**
+ * @deprecated Use buildApprovalPresentation.
+ */
 export function buildApprovalInteractiveReply(params: {
   approvalId: string;
   ask?: string | null;
@@ -183,6 +250,9 @@ export function buildApprovalInteractiveReply(params: {
   );
 }
 
+/**
+ * @deprecated Use buildExecApprovalPresentation.
+ */
 export function buildExecApprovalInteractiveReply(params: {
   approvalCommandId: string;
   ask?: string | null;
@@ -248,6 +318,45 @@ function buildFence(text: string, language?: string): string {
   return `${fence}${languagePrefix}\n${text}\n${fence}`;
 }
 
+function normalizeActionDescriptors(raw: unknown): ExecApprovalActionDescriptor[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const actions: ExecApprovalActionDescriptor[] = [];
+  for (const value of raw) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      continue;
+    }
+    const record = value as Record<string, unknown>;
+    const label = normalizeOptionalString(record.label);
+    const command = normalizeOptionalString(record.command);
+    const style =
+      record.style === "primary" ||
+      record.style === "secondary" ||
+      record.style === "success" ||
+      record.style === "danger"
+        ? record.style
+        : undefined;
+    if (!label || !command || !style) {
+      continue;
+    }
+    const decision =
+      record.decision === "allow-once" ||
+      record.decision === "allow-always" ||
+      record.decision === "deny"
+        ? record.decision
+        : undefined;
+    actions.push({
+      kind: record.kind === "command" ? "command" : "decision",
+      label,
+      style,
+      command,
+      ...(decision ? { decision } : {}),
+    });
+  }
+  return actions.length > 0 ? actions : undefined;
+}
+
 export function getExecApprovalReplyMetadata(
   payload: ReplyPayload,
 ): ExecApprovalReplyMetadata | null {
@@ -272,9 +381,18 @@ export function getExecApprovalReplyMetadata(
           value === "allow-once" || value === "allow-always" || value === "deny",
       )
     : undefined;
+  const actions = normalizeActionDescriptors(record.actions);
   const agentId = normalizeOptionalString(record.agentId);
   const sessionKey = normalizeOptionalString(record.sessionKey);
-  return {
+  const title = normalizeOptionalString(record.title);
+  const description = normalizeOptionalString(record.description);
+  const severity =
+    record.severity === "info" || record.severity === "warning" || record.severity === "critical"
+      ? record.severity
+      : undefined;
+  const toolName = normalizeOptionalString(record.toolName);
+  const pluginId = normalizeOptionalString(record.pluginId);
+  const metadata: ExecApprovalReplyMetadata = {
     approvalId,
     approvalSlug,
     approvalKind,
@@ -282,6 +400,25 @@ export function getExecApprovalReplyMetadata(
     allowedDecisions,
     sessionKey,
   };
+  if (actions) {
+    metadata.actions = actions;
+  }
+  if (title) {
+    metadata.title = title;
+  }
+  if (description) {
+    metadata.description = description;
+  }
+  if (severity) {
+    metadata.severity = severity;
+  }
+  if (toolName) {
+    metadata.toolName = toolName;
+  }
+  if (pluginId) {
+    metadata.pluginId = pluginId;
+  }
+  return metadata;
 }
 
 export function buildExecApprovalPendingReplyPayload(
@@ -335,7 +472,7 @@ export function buildExecApprovalPendingReplyPayload(
 
   return {
     text: lines.join("\n\n"),
-    interactive: buildApprovalInteractiveReply({
+    presentation: buildApprovalPresentation({
       approvalId: params.approvalId,
       allowedDecisions,
     }),

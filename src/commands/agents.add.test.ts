@@ -1,11 +1,12 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { legacyOAuthSidecarTestUtils } from "../agents/auth-profiles/legacy-oauth-sidecar.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveOAuthDir } from "../config/paths.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -77,14 +78,9 @@ vi.mock("../wizard/clack-prompter.js", () => ({
 }));
 
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { __testing } from "./agents.commands.add.js";
-import { agentsAddCommand } from "./agents.js";
+import { agentsAddCommand, testing } from "./agents.commands.add.js";
 
 const runtime = createTestRuntime();
-
-function oauthProfileSecretId(authStorePath: string, profileId: string): string {
-  return createHash("sha256").update(`${authStorePath}\0${profileId}`).digest("hex").slice(0, 32);
-}
 
 describe("agents add command", () => {
   beforeEach(() => {
@@ -180,7 +176,7 @@ describe("agents add command", () => {
         "utf8",
       );
 
-      const result = await __testing.copyPortableAuthProfiles({
+      const result = await testing.copyPortableAuthProfiles({
         sourceAgentDir,
         destAuthPath,
       });
@@ -198,7 +194,7 @@ describe("agents add command", () => {
     }
   });
 
-  it("copies portable Codex OAuth profiles without inline token material", async () => {
+  it("copies portable Codex OAuth profiles inline", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-oauth-copy-"));
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = root;
@@ -225,15 +221,15 @@ describe("agents add command", () => {
         sourceAgentDir,
       );
 
-      const result = await __testing.copyPortableAuthProfiles({
+      const result = await testing.copyPortableAuthProfiles({
         sourceAgentDir,
         destAuthPath,
       });
 
       expect(result).toEqual({ copied: 1, skipped: 0 });
       const copiedRaw = await fs.readFile(destAuthPath, "utf8");
-      expect(copiedRaw).not.toContain("codex-copy-access-token");
-      expect(copiedRaw).not.toContain("codex-copy-refresh-token");
+      expect(copiedRaw).toContain("codex-copy-access-token");
+      expect(copiedRaw).toContain("codex-copy-refresh-token");
       const copied = JSON.parse(copiedRaw) as {
         profiles: Record<string, Record<string, unknown>>;
       };
@@ -241,13 +237,10 @@ describe("agents add command", () => {
       expect(credential).toStrictEqual({
         type: "oauth",
         provider: "openai-codex",
+        access: "codex-copy-access-token",
+        refresh: "codex-copy-refresh-token",
         expires,
         copyToAgents: true,
-        oauthRef: {
-          source: "openclaw-credentials",
-          provider: "openai-codex",
-          id: oauthProfileSecretId(destAuthPath, "openai-codex:default"),
-        },
       });
     } finally {
       if (previousStateDir === undefined) {
@@ -259,9 +252,94 @@ describe("agents add command", () => {
     }
   });
 
+  it("skips legacy sidecar-backed Codex OAuth profiles when seeding a new agent store", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-oauth-ref-skip-"));
+    const previousOAuthDir = process.env.OPENCLAW_OAUTH_DIR;
+    const previousSecretKey = process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY;
+    process.env.OPENCLAW_OAUTH_DIR = path.join(root, "credentials");
+    process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY = "legacy-seed";
+    try {
+      const sourceAgentDir = path.join(root, "main", "agent");
+      const destAgentDir = path.join(root, "work", "agent");
+      const destAuthPath = path.join(destAgentDir, "auth-profiles.json");
+      const profileId = "openai-codex:default";
+      const ref = {
+        source: "openclaw-credentials" as const,
+        provider: "openai-codex" as const,
+        id: "0123456789abcdef0123456789abcdef",
+      };
+      await fs.mkdir(sourceAgentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sourceAgentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              [profileId]: {
+                type: "oauth",
+                provider: "openai-codex",
+                copyToAgents: true,
+                expires: Date.now() + 60_000,
+                oauthRef: ref,
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      const sidecarPath = path.join(resolveOAuthDir(), "auth-profiles", `${ref.id}.json`);
+      await fs.mkdir(path.dirname(sidecarPath), { recursive: true });
+      await fs.writeFile(
+        sidecarPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            profileId,
+            provider: "openai-codex",
+            encrypted: legacyOAuthSidecarTestUtils.encryptLegacyOAuthMaterial({
+              ref,
+              profileId,
+              provider: "openai-codex",
+              seed: "legacy-seed",
+              material: {
+                access: "legacy-sidecar-access-token",
+                refresh: "legacy-sidecar-refresh-token",
+              },
+            }),
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const result = await testing.copyPortableAuthProfiles({
+        sourceAgentDir,
+        destAuthPath,
+      });
+
+      expect(result).toEqual({ copied: 0, skipped: 1 });
+      await expect(fs.stat(destAuthPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      if (previousOAuthDir === undefined) {
+        delete process.env.OPENCLAW_OAUTH_DIR;
+      } else {
+        process.env.OPENCLAW_OAUTH_DIR = previousOAuthDir;
+      }
+      if (previousSecretKey === undefined) {
+        delete process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY;
+      } else {
+        process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY = previousSecretKey;
+      }
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not claim skipped OAuth profiles stay shared from a non-main source agent", () => {
     expect(
-      __testing.formatSkippedOAuthProfilesMessage({
+      testing.formatSkippedOAuthProfilesMessage({
         sourceAgentId: "default-work",
         sourceIsInheritedMain: false,
       }),
@@ -269,7 +347,7 @@ describe("agents add command", () => {
       'OAuth profiles were not copied from "default-work"; sign in separately for this agent.',
     );
     expect(
-      __testing.formatSkippedOAuthProfilesMessage({
+      testing.formatSkippedOAuthProfilesMessage({
         sourceAgentId: "main",
         sourceIsInheritedMain: true,
       }),

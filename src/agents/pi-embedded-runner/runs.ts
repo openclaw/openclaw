@@ -16,10 +16,12 @@ import {
   diagnosticLogger as diag,
   logMessageQueued,
   logSessionStateChange,
+  updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
   EMBEDDED_RUN_MODEL_SWITCH_REQUESTS,
@@ -31,9 +33,12 @@ import {
   type EmbeddedRunModelSwitchRequest,
   type EmbeddedRunWaiter,
 } from "./run-state.js";
+import { resolveEmbeddedSessionFileKey } from "./session-file-key.js";
 
 export {
   getActiveEmbeddedRunCount,
+  listActiveEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys,
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedPiQueueHandle,
   type EmbeddedPiQueueMessageOptions,
@@ -44,6 +49,8 @@ export type EmbeddedPiQueueFailureReason =
   | "no_active_run"
   | "not_streaming"
   | "compacting"
+  | "source_reply_delivery_mode_mismatch"
+  | "transcript_commit_wait_unsupported"
   | "runtime_rejected";
 
 export type EmbeddedPiQueueMessageOutcome =
@@ -52,6 +59,8 @@ export type EmbeddedPiQueueMessageOutcome =
       sessionId: string;
       target: "embedded_run" | "reply_run";
       gatewayHealth: "live";
+      deliveredAtMs?: number;
+      enqueuedAtMs?: number;
     }
   | {
       queued: false;
@@ -117,6 +126,31 @@ function clearActiveRunSessionKeys(sessionId: string, sessionKey?: string): void
   }
 }
 
+function setActiveRunSessionFile(sessionFile: string | undefined, sessionId: string): void {
+  if (!sessionFile?.trim()) {
+    return;
+  }
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(
+    resolveEmbeddedSessionFileKey(sessionFile),
+    sessionId,
+  );
+}
+
+function clearActiveRunSessionFiles(sessionId: string, sessionFile?: string): void {
+  const normalizedSessionFile = sessionFile?.trim();
+  if (normalizedSessionFile) {
+    const sessionFileKey = resolveEmbeddedSessionFileKey(normalizedSessionFile);
+    if (ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey) === sessionId) {
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
+    }
+  }
+  for (const [sessionFileKey, activeSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE) {
+    if (activeSessionId === sessionId) {
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
+    }
+  }
+}
+
 /**
  * @deprecated Use queueEmbeddedPiMessageWithOutcomeAsync for delivery decisions.
  * This boolean helper only reports immediate queue eligibility; it cannot surface
@@ -140,7 +174,7 @@ export function queueEmbeddedPiMessageWithOutcome(
   text: string,
   options?: EmbeddedPiQueueMessageOptions,
 ): EmbeddedPiQueueMessageOutcome {
-  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text);
+  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text, options);
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
@@ -157,6 +191,7 @@ export function queueEmbeddedPiMessageWithOutcome(
     sessionId,
     target: "embedded_run",
     gatewayHealth: "live",
+    enqueuedAtMs: Date.now(),
   };
 }
 
@@ -169,29 +204,34 @@ export async function queueEmbeddedPiMessageWithOutcomeAsync(
   text: string,
   options?: EmbeddedPiQueueMessageOptions,
 ): Promise<EmbeddedPiQueueMessageOutcome> {
-  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text);
+  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text, options);
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
   try {
+    const enqueuedAtMs = Date.now();
     await prepared.handle.queueMessage(text, options ?? { steeringMode: "all" });
+    const deliveredAtMs = options?.waitForTranscriptCommit ? Date.now() : undefined;
+    logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+    return {
+      queued: true,
+      sessionId,
+      target: "embedded_run",
+      gatewayHealth: "live",
+      ...(deliveredAtMs !== undefined ? { deliveredAtMs } : {}),
+      enqueuedAtMs,
+    };
   } catch (err) {
     const errorMessage = formatQueueError(err);
     diag.debug(`queue message rejected: sessionId=${sessionId} err=${errorMessage}`);
     return createQueueFailureOutcome(sessionId, "runtime_rejected", errorMessage);
   }
-  logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-  return {
-    queued: true,
-    sessionId,
-    target: "embedded_run",
-    gatewayHealth: "live",
-  };
 }
 
 function prepareEmbeddedPiQueueMessage(
   sessionId: string,
   text: string,
+  options?: EmbeddedPiQueueMessageOptions,
 ): PreparedEmbeddedPiQueueMessage {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
@@ -205,7 +245,17 @@ function prepareEmbeddedPiQueueMessage(
           sessionId,
           target: "reply_run",
           gatewayHealth: "live",
+          enqueuedAtMs: Date.now(),
         },
+      };
+    }
+    if (options?.waitForTranscriptCommit === true) {
+      diag.debug(
+        `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
+      );
+      return {
+        kind: "complete",
+        outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
       };
     }
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
@@ -218,6 +268,27 @@ function prepareEmbeddedPiQueueMessage(
   if (handle.isCompacting()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "compacting") };
+  }
+  if (options?.waitForTranscriptCommit === true && handle.supportsTranscriptCommitWait !== true) {
+    diag.debug(
+      `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
+    );
+    return {
+      kind: "complete",
+      outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
+    };
+  }
+  if (
+    options?.sourceReplyDeliveryMode === "message_tool_only" &&
+    handle.sourceReplyDeliveryMode !== "message_tool_only"
+  ) {
+    diag.debug(
+      `queue message failed: sessionId=${sessionId} reason=source_reply_delivery_mode_mismatch`,
+    );
+    return {
+      kind: "complete",
+      outcome: createQueueFailureOutcome(sessionId, "source_reply_delivery_mode_mismatch"),
+    };
   }
   return { kind: "embedded_run", handle };
 }
@@ -323,6 +394,18 @@ export function resolveActiveEmbeddedRunHandleSessionId(sessionKey: string): str
   return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey);
 }
 
+export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
+  sessionFile: string,
+): string | undefined {
+  const normalizedSessionFile = sessionFile.trim();
+  if (!normalizedSessionFile) {
+    return undefined;
+  }
+  return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(
+    resolveEmbeddedSessionFileKey(normalizedSessionFile),
+  );
+}
+
 export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | undefined {
   const normalizedSessionKey = sessionKey.trim();
   if (!normalizedSessionKey) {
@@ -332,6 +415,12 @@ export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | 
     resolveActiveReplyRunSessionId(normalizedSessionKey) ??
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
   );
+}
+
+export function resolveActiveEmbeddedRunSessionIdBySessionFile(
+  sessionFile: string,
+): string | undefined {
+  return resolveActiveEmbeddedRunHandleSessionIdBySessionFile(sessionFile);
 }
 
 export function getActiveEmbeddedRunSnapshot(
@@ -491,13 +580,17 @@ export function setActiveEmbeddedRun(
   sessionId: string,
   handle: EmbeddedPiQueueHandle,
   sessionKey?: string,
+  sessionFile?: string,
 ) {
   const wasActive = ACTIVE_EMBEDDED_RUNS.has(sessionId);
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
   setActiveRunSessionKey(sessionKey, sessionId);
+  clearActiveRunSessionFiles(sessionId);
+  setActiveRunSessionFile(sessionFile, sessionId);
   logSessionStateChange({
     sessionId,
     sessionKey,
+    sessionFile,
     state: "processing",
     reason: wasActive ? "run_replaced" : "run_started",
   });
@@ -517,17 +610,41 @@ export function updateActiveEmbeddedRunSnapshot(
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set(sessionId, snapshot);
 }
 
+export function updateActiveEmbeddedRunSessionFile(
+  sessionId: string,
+  sessionFile: string | undefined,
+): void {
+  if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+    return;
+  }
+  clearActiveRunSessionFiles(sessionId);
+  setActiveRunSessionFile(sessionFile, sessionId);
+  updateDiagnosticSessionFile({ sessionId, sessionFile });
+}
+
 export function clearActiveEmbeddedRun(
   sessionId: string,
   handle: EmbeddedPiQueueHandle,
   sessionKey?: string,
+  sessionFile?: string,
 ) {
-  if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
+  const activeHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (activeHandle === undefined) {
+    return;
+  }
+  if (activeHandle === handle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
-    logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
+    clearActiveRunSessionFiles(sessionId, sessionFile);
+    logSessionStateChange({
+      sessionId,
+      sessionKey,
+      sessionFile,
+      state: "idle",
+      reason: "run_completed",
+    });
     markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
@@ -549,6 +666,7 @@ export function forceClearEmbeddedPiRun(
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
+    clearActiveRunSessionFiles(sessionId);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason });
     markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     notifyEmbeddedRunEnded(sessionId);
@@ -558,7 +676,7 @@ export function forceClearEmbeddedPiRun(
   return forceClearReplyRunBySessionId(sessionId, cause) || cleared;
 }
 
-export const __testing = {
+export const testing = {
   resetActiveEmbeddedRuns() {
     for (const waiters of EMBEDDED_RUN_WAITERS.values()) {
       for (const waiter of waiters) {
@@ -570,6 +688,8 @@ export const __testing = {
     ACTIVE_EMBEDDED_RUNS.clear();
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.clear();
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.clear();
   },
 };
+export { testing as __testing };

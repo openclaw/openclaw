@@ -6,6 +6,10 @@ import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
+import {
+  mergePreparedUserTurnMessageForRuntime,
+  type PersistedUserTurnMessage,
+} from "../sessions/user-turn-transcript.js";
 import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
@@ -32,9 +36,16 @@ export function guardSessionManager(
     allowSyntheticToolResults?: boolean;
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
+    preparedUserTurnMessage?: PersistedUserTurnMessage;
     suppressNextUserMessagePersistence?: boolean;
+    suppressTranscriptOnlyAssistantPersistence?: boolean;
+    suppressAssistantErrorPersistence?: boolean;
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
+    ) => void | Promise<void>;
+    onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
+    onAssistantErrorMessagePersisted?: (
+      message: Extract<AgentMessage, { role: "assistant" }>,
     ) => void | Promise<void>;
   },
 ): GuardedSessionManager {
@@ -43,6 +54,7 @@ export function guardSessionManager(
   }
 
   const hookRunner = getGlobalHookRunner();
+  let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
   const beforeMessageWrite = (event: {
     message: import("@earendil-works/pi-agent-core").AgentMessage;
   }) => {
@@ -94,8 +106,18 @@ export function guardSessionManager(
 
   const guard = installSessionToolResultGuard(sessionManager, {
     sessionKey: opts?.sessionKey,
-    transformMessageForPersistence: (message) =>
-      applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
+    transformMessageForPersistence: (message) => {
+      const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
+      const prepared = pendingPreparedUserTurnMessage;
+      const merged = mergePreparedUserTurnMessageForRuntime({
+        runtimeMessage: withProvenance,
+        ...(prepared ? { preparedMessage: prepared } : {}),
+      });
+      if (merged !== withProvenance) {
+        pendingPreparedUserTurnMessage = undefined;
+      }
+      return merged;
+    },
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
     missingToolResultText: opts?.missingToolResultText,
@@ -111,7 +133,11 @@ export function guardSessionManager(
           })
         : undefined,
     suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
+    suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
+    suppressAssistantErrorPersistence: opts?.suppressAssistantErrorPersistence,
+    onMessagePersisted: opts?.onMessagePersisted,
     onUserMessagePersisted: opts?.onUserMessagePersisted,
+    onAssistantErrorMessagePersisted: opts?.onAssistantErrorMessagePersisted,
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;

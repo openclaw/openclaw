@@ -27,7 +27,12 @@ export type ResolvedDiscordAccount = {
   config: DiscordAccountConfig;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord");
+const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord", {
+  implicitDefaultAccount: {
+    channelKeys: ["token"],
+    envVars: ["DISCORD_BOT_TOKEN"],
+  },
+});
 export const listDiscordAccountIds = listAccountIds;
 export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 
@@ -48,7 +53,7 @@ export function mergeDiscordAccountConfig(
       | Record<string, Partial<DiscordAccountConfig>>
       | undefined,
     accountId,
-    nestedObjectKeys: ["botLoopProtection"],
+    nestedObjectKeys: ["agentComponents", "botLoopProtection"],
   });
   return merged;
 }

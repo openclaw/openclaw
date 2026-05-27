@@ -64,12 +64,15 @@ const CronDeliveryStatusSchema = Type.Union([
 ]);
 const CronFailoverReasonSchema = Type.Union([
   Type.Literal("auth"),
+  Type.Literal("auth_permanent"),
   Type.Literal("format"),
   Type.Literal("rate_limit"),
+  Type.Literal("overloaded"),
   Type.Literal("billing"),
   Type.Literal("server_error"),
   Type.Literal("timeout"),
   Type.Literal("model_not_found"),
+  Type.Literal("session_expired"),
   Type.Literal("empty_response"),
   Type.Literal("no_error_details"),
   Type.Literal("unclassified"),
@@ -271,6 +274,15 @@ export const CronDeliveryPatchSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const CronFailureNotificationDeliverySchema = Type.Object(
+  {
+    delivered: Type.Optional(Type.Boolean()),
+    status: CronDeliveryStatusSchema,
+    error: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const CronJobStateSchema = Type.Object(
   {
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -288,6 +300,9 @@ export const CronJobStateSchema = Type.Object(
     lastDelivered: Type.Optional(Type.Boolean()),
     lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
     lastDeliveryError: Type.Optional(Type.String()),
+    lastFailureNotificationDelivered: Type.Optional(Type.Boolean()),
+    lastFailureNotificationDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    lastFailureNotificationDeliveryError: Type.Optional(Type.String()),
     lastFailureAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
@@ -308,6 +323,9 @@ const CronJobStatePatchSchema = Type.Object(
     lastDelivered: Type.Optional(Type.Boolean()),
     lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
     lastDeliveryError: Type.Optional(Type.String()),
+    lastFailureNotificationDelivered: Type.Optional(Type.Boolean()),
+    lastFailureNotificationDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    lastFailureNotificationDeliveryError: Type.Optional(Type.String()),
     lastFailureAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
@@ -397,6 +415,7 @@ export const CronRunsParamsSchema = Type.Object(
     scope: Type.Optional(Type.Union([Type.Literal("job"), Type.Literal("all")])),
     id: Type.Optional(CronRunLogJobIdSchema),
     jobId: Type.Optional(CronRunLogJobIdSchema),
+    runId: Type.Optional(NonEmptyString),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
     statuses: Type.Optional(Type.Array(CronRunsStatusValueSchema, { minItems: 1, maxItems: 3 })),
@@ -418,11 +437,13 @@ export const CronRunLogEntrySchema = Type.Object(
     action: Type.Literal("finished"),
     status: Type.Optional(CronRunStatusSchema),
     error: Type.Optional(Type.String()),
+    errorReason: Type.Optional(CronFailoverReasonSchema),
     summary: Type.Optional(Type.String()),
     diagnostics: Type.Optional(CronRunDiagnosticsSchema),
     delivered: Type.Optional(Type.Boolean()),
     deliveryStatus: Type.Optional(CronDeliveryStatusSchema),
     deliveryError: Type.Optional(Type.String()),
+    failureNotificationDelivery: Type.Optional(CronFailureNotificationDeliverySchema),
     sessionId: Type.Optional(NonEmptyString),
     sessionKey: Type.Optional(NonEmptyString),
     runId: Type.Optional(NonEmptyString),

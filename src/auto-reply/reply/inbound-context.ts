@@ -1,6 +1,7 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { resolveCommandTurnContext } from "../command-turn-context.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 
@@ -18,6 +19,13 @@ function normalizeTextField(value: unknown): string | undefined {
     return undefined;
   }
   return sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
+}
+
+function normalizeTrustedTextField(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return normalizeInboundTextNewlines(value);
 }
 
 function normalizeMediaType(value: unknown): string | undefined {
@@ -49,6 +57,7 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   normalized.Transcript = normalizeTextField(normalized.Transcript);
   normalized.ThreadStarterBody = normalizeTextField(normalized.ThreadStarterBody);
   normalized.ThreadHistoryBody = normalizeTextField(normalized.ThreadHistoryBody);
+  normalized.GroupSystemPrompt = normalizeTrustedTextField(normalized.GroupSystemPrompt);
   if (Array.isArray(normalized.UntrustedContext)) {
     const normalizedUntrusted = normalized.UntrustedContext.map((entry) =>
       sanitizeInboundSystemTags(normalizeInboundTextNewlines(entry)),
@@ -94,6 +103,13 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
 
   // Always set. Default-deny when upstream forgets to populate it.
   normalized.CommandAuthorized = normalized.CommandAuthorized === true;
+  normalized.CommandTurn = resolveCommandTurnContext(normalized);
+  if (normalized.CommandTurn.source === "native" || normalized.CommandTurn.source === "text") {
+    normalized.CommandSource = normalized.CommandTurn.source;
+    normalized.CommandAuthorized = normalized.CommandTurn.authorized;
+  } else {
+    normalized.CommandSource = undefined;
+  }
 
   // MediaType/MediaTypes alignment:
   // - No media: do not inject defaults.

@@ -1,4 +1,5 @@
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -11,6 +12,7 @@ import {
   failTaskRunByRunId,
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
   AcpRuntimeError,
@@ -71,7 +73,8 @@ import {
   resolveMissingMetaError,
   resolveRuntimeIdleTtlMs,
 } from "./manager.utils.js";
-import { CachedRuntimeState, RuntimeCache } from "./runtime-cache.js";
+import { RuntimeCache } from "./runtime-cache.js";
+import type { CachedRuntimeState } from "./runtime-cache.js";
 import {
   inferRuntimeOptionPatchFromConfigOption,
   mergeRuntimeOptions,
@@ -124,6 +127,10 @@ function resolveBackgroundTaskTerminalResult(progressSummary: string): {
   terminalOutcome?: "blocked";
   terminalSummary?: string;
 } {
+  const requiredCompletionResult = resolveRequiredCompletionTerminalResult(progressSummary);
+  if (requiredCompletionResult.terminalOutcome) {
+    return requiredCompletionResult;
+  }
   const normalized = normalizeText(progressSummary)?.replace(/\s+/g, " ").trim();
   if (!normalized) {
     return {};
@@ -173,8 +180,11 @@ export class AcpSessionManager {
   private readonly errorCountsByCode = new Map<string, number>();
   private evictedRuntimeCount = 0;
   private lastEvictedAt: number | undefined;
+  private readonly deps: AcpSessionManagerDeps;
 
-  constructor(private readonly deps: AcpSessionManagerDeps = DEFAULT_DEPS) {}
+  constructor(deps: AcpSessionManagerDeps = DEFAULT_DEPS) {
+    this.deps = deps;
+  }
 
   resolveSession(params: { cfg: OpenClawConfig; sessionKey: string }): AcpSessionResolution {
     const sessionKey = canonicalizeAcpSessionKey(params);
@@ -187,6 +197,7 @@ export class AcpSessionManager {
     const acp = this.deps.readSessionEntry({
       cfg: params.cfg,
       sessionKey,
+      clone: false,
     })?.acp;
     if (acp) {
       return {
@@ -424,6 +435,7 @@ export class AcpSessionManager {
         agent,
         mode: input.mode,
         cwd: effectiveCwd,
+        configSignature: resolveRuntimeConfigCacheKey(input.cfg),
       });
       return {
         runtime,
@@ -894,6 +906,10 @@ export class AcpSessionManager {
                   ? AbortSignal.any([input.signal, internalAbortController.signal])
                   : internalAbortController.signal;
               const eventGate = { open: true };
+              await input.onLifecycle?.({
+                type: "prompt_submitted",
+                at: Date.now(),
+              });
               const turnPromise = consumeAcpTurnStream({
                 runtime,
                 turn: {
@@ -1469,12 +1485,14 @@ export class AcpSessionManager {
     const model = normalizeText(runtimeOptions.model);
     const thinking = normalizeText(runtimeOptions.thinking);
     const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
+    const configSignature = resolveRuntimeConfigCacheKey(params.cfg);
     const cached = this.getCachedRuntimeState(params.sessionKey);
     if (cached) {
       const backendMatches = !configuredBackend || cached.backend === configuredBackend;
       const agentMatches = cached.agent === agent;
       const modeMatches = cached.mode === mode;
       const cwdMatches = (cached.cwd ?? "") === (cwd ?? "");
+      const configMatches = cached.configSignature === configSignature;
       const handleMatchesMeta = this.runtimeHandleMatchesMeta({
         handle: cached.handle,
         meta: params.meta,
@@ -1484,6 +1502,7 @@ export class AcpSessionManager {
         agentMatches &&
         modeMatches &&
         cwdMatches &&
+        configMatches &&
         handleMatchesMeta &&
         (await this.isCachedRuntimeHandleReusable({
           sessionKey: params.sessionKey,
@@ -1638,6 +1657,7 @@ export class AcpSessionManager {
       agent,
       mode,
       cwd: effectiveCwd,
+      configSignature,
       appliedControlSignature: undefined,
     });
     return {
@@ -2003,6 +2023,8 @@ export class AcpSessionManager {
     await this.writeSessionMeta({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      skipMaintenance: true,
+      takeCacheOwnership: true,
       mutate: (current, entry) => {
         if (!entry) {
           return null;
@@ -2067,12 +2089,16 @@ export class AcpSessionManager {
       entry: SessionEntry | undefined,
     ) => SessionAcpMeta | null | undefined;
     failOnError?: boolean;
+    skipMaintenance?: boolean;
+    takeCacheOwnership?: boolean;
   }): Promise<SessionEntry | null> {
     try {
       return await this.deps.upsertSessionMeta({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         mutate: params.mutate,
+        ...(params.skipMaintenance === true ? { skipMaintenance: true } : {}),
+        ...(params.takeCacheOwnership === true ? { takeCacheOwnership: true } : {}),
       });
     } catch (error) {
       if (params.failOnError) {

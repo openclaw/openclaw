@@ -13,6 +13,7 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
+import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import { formatReasoningMessage } from "../agents/pi-embedded-utils.js";
@@ -33,10 +34,16 @@ import {
   stripHeartbeatToken,
   type HeartbeatTask,
 } from "../auto-reply/heartbeat.js";
+import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
+import {
+  listActiveReplyRunSessionKeys,
+  replyRunRegistry,
+} from "../auto-reply/reply/reply-run-registry.js";
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type {
@@ -89,6 +96,7 @@ import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
 import { isWithinActiveHours, resolveActiveHoursTimezone } from "./heartbeat-active-hours.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
@@ -126,7 +134,7 @@ import {
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import {
-  resolveHeartbeatDeliveryTarget,
+  resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import {
@@ -142,6 +150,8 @@ export type HeartbeatDeps = OutboundSendDeps &
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
     getCommandLaneSnapshots?: () => readonly CommandLaneSnapshot[];
+    isReplyRunActive?: (sessionKey: string) => boolean;
+    listActiveReplyRunSessionKeys?: () => readonly string[];
     nowMs?: () => number;
   };
 
@@ -213,6 +223,17 @@ function hasAgentOptInBusyLaneWork(
   getSnapshots: () => readonly CommandLaneSnapshot[],
 ): boolean {
   return hasQueuedWorkInLaneSnapshots(getSnapshots(), (lane) => laneBelongsToAgent(lane, agentId));
+}
+
+function hasActiveReplyRunForAgent(
+  agentId: string,
+  listSessionKeys: () => readonly string[],
+): boolean {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  return listSessionKeys().some((sessionKey) => {
+    const parsed = parseAgentSessionKey(sessionKey);
+    return parsed ? normalizeAgentId(parsed.agentId) === normalizedAgentId : false;
+  });
 }
 
 function resolveHeartbeatChannelPlugin(channel: string): ChannelPlugin | undefined {
@@ -447,6 +468,7 @@ function usesCodexHarness(params: {
     normalizeHeartbeatRuntimeId(process.env.OPENCLAW_AGENT_RUNTIME) ||
     normalizeHeartbeatRuntimeId(agentEntry?.agentRuntime?.id) ||
     normalizeHeartbeatRuntimeId(agentEntry?.embeddedHarness?.runtime) ||
+    resolveConfiguredHeartbeatModelRuntimeId(params) ||
     normalizeHeartbeatRuntimeId(params.cfg.agents?.defaults?.agentRuntime?.id) ||
     normalizeHeartbeatRuntimeId(params.cfg.agents?.defaults?.embeddedHarness?.runtime);
   if (runtimeId === "codex") {
@@ -458,13 +480,38 @@ function usesCodexHarness(params: {
   return normalizeLowercaseStringOrEmpty(resolveHeartbeatModelRef(params).provider) === "codex";
 }
 
+function resolveConfiguredHeartbeatModelRuntimeId(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  heartbeat?: HeartbeatConfig;
+  entry?: SessionEntry;
+}): string {
+  const modelRef = resolveHeartbeatModelRef(params);
+  const policy = resolveAgentHarnessPolicy({
+    config: params.cfg,
+    provider: modelRef.provider,
+    modelId: modelRef.model,
+    agentId: params.agentId,
+  });
+  if (policy.runtimeSource === "implicit") {
+    return "";
+  }
+  const runtime = normalizeHeartbeatRuntimeId(policy.runtime);
+  return runtime === "auto" ? "" : runtime;
+}
+
 function shouldUseHeartbeatResponseToolPrompt(params: {
   cfg: OpenClawConfig;
   agentId: string;
   heartbeat?: HeartbeatConfig;
   entry?: SessionEntry;
+  chatType?: ChatType;
 }): boolean {
-  const visibleReplies = params.cfg.messages?.visibleReplies;
+  const chatType = normalizeChatType(params.chatType);
+  const visibleReplies =
+    chatType === "group" || chatType === "channel"
+      ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
+      : params.cfg.messages?.visibleReplies;
   if (visibleReplies === "message_tool") {
     return true;
   }
@@ -553,11 +600,17 @@ function resolveHeartbeatSession(
       if (forcedCanonical !== "global" && !isSubagentSessionKey(forcedCanonical)) {
         const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
         if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+          const routedSessionKey =
+            resolveMainScopedEventSessionKey({
+              cfg,
+              sessionKey: forcedCanonical,
+              agentId: resolvedAgentId,
+            }) ?? forcedCanonical;
           return {
-            sessionKey: forcedCanonical,
+            sessionKey: routedSessionKey,
             storePath,
             store,
-            entry: store[forcedCanonical],
+            entry: store[routedSessionKey],
             suppressOriginatingContext: false,
           };
         }
@@ -697,12 +750,14 @@ function resolveHeartbeatReasoningPayloads(
   const reasoningPayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
     const text = typeof payload.text === "string" ? payload.text : "";
-    const hasLegacyReasoningPrefix = text.trimStart().startsWith("Reasoning:");
-    if (payload.isReasoning !== true && !hasLegacyReasoningPrefix) {
+    const hasFormattedReasoningPrefix = /^(?:Reasoning:|Thinking\.{0,3}(?=\s*_))/u.test(
+      text.trimStart(),
+    );
+    if (payload.isReasoning !== true && !hasFormattedReasoningPrefix) {
       continue;
     }
 
-    const formattedText = hasLegacyReasoningPrefix ? text : formatReasoningMessage(text);
+    const formattedText = hasFormattedReasoningPrefix ? text : formatReasoningMessage(text);
     if (!formattedText.trim()) {
       continue;
     }
@@ -1305,6 +1360,21 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY };
   }
 
+  const shouldHonorActiveReplyRuns = opts.intent !== "immediate" && opts.intent !== "manual";
+  const listActiveReplyRuns =
+    opts.deps?.listActiveReplyRunSessionKeys ?? listActiveReplyRunSessionKeys;
+  // Scheduled heartbeats are background work, so defer them when any session on
+  // the same agent is already replying; immediate/manual wakes keep their
+  // existing semantics for explicit user/system actions.
+  if (shouldHonorActiveReplyRuns && hasActiveReplyRunForAgent(agentId, listActiveReplyRuns)) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+  }
+
   // Phase 2: Stronger heartbeat deferral while a final delivery replay is pending.
   // Plain `updatedAt` changes are normal for heartbeat sessions and should not
   // suppress heartbeat runs; only defer when final delivery recovery is active.
@@ -1350,6 +1420,16 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath, suppressOriginatingContext } = preflight.session;
+  const isReplyRunActive =
+    opts.deps?.isReplyRunActive ?? ((key: string) => replyRunRegistry.isActive(key));
+  if (isReplyRunActive(sessionKey)) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+  }
 
   // Check the resolved session lane — if it is busy, skip to avoid interrupting
   // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
@@ -1388,10 +1468,12 @@ export async function runHeartbeatOnce(opts: {
   const heartbeatForDelivery = commitmentDeliveryContext
     ? { ...heartbeat, target: "last", to: undefined, accountId: undefined }
     : heartbeat;
-  const delivery = resolveHeartbeatDeliveryTarget({
+  const delivery = await resolveHeartbeatDeliveryTargetWithSessionRoute({
     cfg,
+    agentId,
     entry,
     heartbeat: heartbeatForDelivery,
+    currentSessionKey: sessionKey,
     // Isolated heartbeat runs drain system events from their dedicated
     // `:heartbeat` session, not from the base session we peek during preflight.
     // Reusing base-session turnSource routing here can pin later isolated runs
@@ -1440,6 +1522,7 @@ export async function runHeartbeatOnce(opts: {
     agentId,
     heartbeat,
     entry,
+    chatType: delivery.chatType,
   });
   const {
     prompt,
@@ -1543,18 +1626,6 @@ export async function runHeartbeatOnce(opts: {
     }
     runSessionKey = isolatedSessionKey;
   }
-  const activeSessionPendingEventEntries =
-    runSessionKey === sessionKey
-      ? preflight.pendingEventEntries
-      : peekSystemEventEntries(runSessionKey);
-  const hasUntrustedInspectedEvents =
-    preflight.shouldInspectPendingEvents &&
-    preflight.pendingEventEntries.some((event) => event.trusted === false);
-  const hasUntrustedActiveSessionEvents = activeSessionPendingEventEntries.some(
-    (event) => event.trusted === false,
-  );
-  const hasUntrustedPendingEvents = hasUntrustedInspectedEvents || hasUntrustedActiveSessionEvents;
-
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
     if (!preflight.tasks || preflight.tasks.length === 0) {
@@ -1604,7 +1675,6 @@ export async function runHeartbeatOnce(opts: {
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
-    ForceSenderIsOwnerFalse: hasExecCompletion || hasUntrustedPendingEvents,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
@@ -1809,6 +1879,14 @@ export async function runHeartbeatOnce(opts: {
       normalized.text = execFallbackText;
       normalized.shouldSkip = false;
     }
+    const replacement = !heartbeatToolResponse
+      ? replaceGenericExternalRunFailureText(normalized.text)
+      : { text: normalized.text, replaced: false };
+    const deliveredAgentRunFailure = replacement.replaced;
+    if (deliveredAgentRunFailure) {
+      normalized.text = replacement.text;
+      normalized.shouldSkip = false;
+    }
     const shouldSkipMain =
       normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
@@ -1999,15 +2077,17 @@ export async function runHeartbeatOnce(opts: {
       });
     }
 
+    const sentStatus = deliveredAgentRunFailure ? "failed" : "sent";
     emitHeartbeatEvent({
-      status: "sent",
+      status: sentStatus,
       to: delivery.to,
+      ...(deliveredAgentRunFailure ? { reason: "agent-runner-failure" } : {}),
       preview: previewText?.slice(0, 200),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
       channel: delivery.channel,
       accountId: delivery.accountId,
-      indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+      indicatorType: visibility.useIndicator ? resolveIndicatorType(sentStatus) : undefined,
     });
     await updateTaskTimestamps();
     consumeInspectedSystemEvents();

@@ -5,7 +5,6 @@ type MockGatewayTool = {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
-  ownerOnly?: boolean;
   execute: (...args: unknown[]) => Promise<{ content: Array<{ type: string; text: string }> }>;
 };
 
@@ -22,6 +21,8 @@ type ScopedToolsCall = {
   sessionKey?: string;
   accountId?: string;
   messageProvider?: string;
+  inboundEventKind?: string;
+  sourceReplyDeliveryMode?: string;
   senderIsOwner?: boolean;
   surface?: string;
   excludeToolNames?: Iterable<string>;
@@ -85,7 +86,6 @@ import {
   createMcpLoopbackServerConfig,
   closeMcpLoopbackServer,
   getActiveMcpLoopbackRuntime,
-  resolveMcpLoopbackBearerToken,
   ensureMcpLoopbackServer,
   startMcpLoopbackServer,
 } from "./mcp-http.js";
@@ -154,7 +154,7 @@ afterEach(async () => {
 });
 
 describe("mcp loopback server", () => {
-  it("passes session, account, and message channel headers into shared tool resolution", async () => {
+  it("passes session, account, message channel, and inbound event headers into shared tool resolution", async () => {
     const port = await getFreePortBlockWithPermissionFallback({
       offsets: [0],
       fallbackBase: 53_000,
@@ -164,12 +164,14 @@ describe("mcp loopback server", () => {
 
     const response = await sendRaw({
       port: server.port,
-      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      token: runtime?.nonOwnerToken,
       headers: {
         "content-type": "application/json",
         "x-session-key": "agent:main:telegram:group:chat123",
         "x-openclaw-account-id": "work",
         "x-openclaw-message-channel": "telegram",
+        "x-openclaw-inbound-event-kind": "room_event",
+        "x-openclaw-source-reply-delivery-mode": "message_tool_only",
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
@@ -179,7 +181,8 @@ describe("mcp loopback server", () => {
     expect(call.sessionKey).toBe("agent:main:telegram:group:chat123");
     expect(call.accountId).toBe("work");
     expect(call.messageProvider).toBe("telegram");
-    expect(call.senderIsOwner).toBe(false);
+    expect(call.inboundEventKind).toBe("room_event");
+    expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call.surface).toBe("loopback");
     expect(Array.from(call.excludeToolNames ?? [])).toEqual([
       "read",
@@ -189,6 +192,35 @@ describe("mcp loopback server", () => {
       "exec",
       "process",
     ]);
+  });
+
+  it("keeps loopback tool cache entries separate by inbound event kind and delivery mode", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const sendToolsList = async (inboundEventKind: string, sourceReplyDeliveryMode?: string) =>
+      await sendRaw({
+        port: server?.port ?? 0,
+        token: runtime?.ownerToken,
+        headers: {
+          "content-type": "application/json",
+          "x-session-key": "agent:main:telegram:group:chat123",
+          "x-openclaw-message-channel": "telegram",
+          "x-openclaw-inbound-event-kind": inboundEventKind,
+          ...(sourceReplyDeliveryMode
+            ? { "x-openclaw-source-reply-delivery-mode": sourceReplyDeliveryMode }
+            : {}),
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+
+    expect((await sendToolsList("user_request")).status).toBe(200);
+    expect((await sendToolsList("room_event")).status).toBe(200);
+    expect((await sendToolsList("room_event", "message_tool_only")).status).toBe(200);
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(3);
+    expect(getScopedToolsCall(0).inboundEventKind).toBe("user_request");
+    expect(getScopedToolsCall(1).inboundEventKind).toBe("room_event");
+    expect(getScopedToolsCall(2).sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
   it("adds empty properties for object schemas that omit properties", async () => {
@@ -210,7 +242,7 @@ describe("mcp loopback server", () => {
 
     const response = await sendRaw({
       port: server.port,
-      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      token: runtime?.nonOwnerToken,
       headers: {
         "content-type": "application/json",
         "x-session-key": "agent:main:main",
@@ -228,17 +260,14 @@ describe("mcp loopback server", () => {
     });
   });
 
-  it("derives senderIsOwner from the loopback bearer token", async () => {
+  it("derives sender owner identity from the loopback bearer token", async () => {
     server = await startMcpLoopbackServer(0);
-    const activeServer = server;
     const runtime = getActiveMcpLoopbackRuntime();
 
-    const sendToolsList = async (senderIsOwner: "true" | "false") =>
+    const sendToolsList = async (token?: string) =>
       await sendRaw({
-        port: activeServer.port,
-        token: runtime
-          ? resolveMcpLoopbackBearerToken(runtime, senderIsOwner === "true")
-          : undefined,
+        port: server?.port ?? 0,
+        token,
         headers: {
           "content-type": "application/json",
           "x-session-key": "agent:main:matrix:dm:test",
@@ -247,30 +276,21 @@ describe("mcp loopback server", () => {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
       });
 
-    expect((await sendToolsList("true")).status).toBe(200);
-    expect((await sendToolsList("false")).status).toBe(200);
+    expect((await sendToolsList(runtime?.ownerToken)).status).toBe(200);
+    expect((await sendToolsList(runtime?.nonOwnerToken)).status).toBe(200);
 
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
-    const ownerCall = getScopedToolsCall(0);
-    expect(ownerCall.sessionKey).toBe("agent:main:matrix:dm:test");
-    expect(ownerCall.messageProvider).toBe("matrix");
-    expect(ownerCall.senderIsOwner).toBe(true);
-    expect(ownerCall.surface).toBe("loopback");
-
-    const nonOwnerCall = getScopedToolsCall(1);
-    expect(nonOwnerCall.sessionKey).toBe("agent:main:matrix:dm:test");
-    expect(nonOwnerCall.messageProvider).toBe("matrix");
-    expect(nonOwnerCall.senderIsOwner).toBe(false);
-    expect(nonOwnerCall.surface).toBe("loopback");
+    expect(getScopedToolsCall(0).senderIsOwner).toBe(true);
+    expect(getScopedToolsCall(1).senderIsOwner).toBe(false);
   });
 
-  it("ignores spoofed owner headers when the bearer token is non-owner scoped", async () => {
+  it("ignores spoofed owner headers on loopback requests", async () => {
     server = await startMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
 
     const response = await sendRaw({
       port: server.port,
-      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      token: runtime?.nonOwnerToken,
       headers: {
         "content-type": "application/json",
         "x-session-key": "agent:main:matrix:dm:test",
@@ -288,7 +308,7 @@ describe("mcp loopback server", () => {
     expect(call.surface).toBe("loopback");
   });
 
-  it("filters owner-only tools from non-owner tool lists", async () => {
+  it("keeps all tools in loopback tool lists", async () => {
     resolveGatewayScopedToolsMock.mockReturnValue({
       agentId: "main",
       tools: [
@@ -310,9 +330,8 @@ describe("mcp loopback server", () => {
         },
         {
           name: "owner_probe",
-          description: "owner-only by flag",
+          description: "owner probe",
           parameters: { type: "object", properties: {} },
-          ownerOnly: true,
           execute: async () => ({
             content: [{ type: "text", text: "owner" }],
           }),
@@ -324,7 +343,7 @@ describe("mcp loopback server", () => {
 
     const response = await sendRaw({
       port: server.port,
-      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      token: runtime?.ownerToken,
       headers: {
         "content-type": "application/json",
         "x-session-key": "agent:main:main",
@@ -338,11 +357,11 @@ describe("mcp loopback server", () => {
 
     expect(response.status).toBe(200);
     expect(names).toContain("message");
-    expect(names).not.toContain("cron");
-    expect(names).not.toContain("owner_probe");
+    expect(names).toContain("cron");
+    expect(names).toContain("owner_probe");
   });
 
-  it("keeps owner-only tools available to owner loopback callers", async () => {
+  it("keeps tools available to loopback callers", async () => {
     resolveGatewayScopedToolsMock.mockReturnValue({
       agentId: "main",
       tools: [
@@ -369,7 +388,7 @@ describe("mcp loopback server", () => {
 
     const response = await sendRaw({
       port: server.port,
-      token: runtime ? resolveMcpLoopbackBearerToken(runtime, true) : undefined,
+      token: runtime?.ownerToken,
       headers: {
         "content-type": "application/json",
         "x-session-key": "agent:main:main",
@@ -386,7 +405,7 @@ describe("mcp loopback server", () => {
     expect(names).toContain("cron");
   });
 
-  it("does not execute owner-only tools for non-owner callers", async () => {
+  it("executes tools for loopback callers", async () => {
     const cronExecute = vi.fn(async () => ({
       content: [{ type: "text", text: "CRON_EXECUTED" }],
     }));
@@ -414,7 +433,7 @@ describe("mcp loopback server", () => {
 
     const response = await sendRaw({
       port: server.port,
-      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      token: runtime?.ownerToken,
       headers: {
         "content-type": "application/json",
         "x-session-key": "agent:main:main",
@@ -431,9 +450,9 @@ describe("mcp loopback server", () => {
     };
 
     expect(response.status).toBe(200);
-    expect(cronExecute).not.toHaveBeenCalled();
-    expect(payload.result?.isError).toBe(true);
-    expect(payload.result?.content?.[0]?.text).toBe("Tool not available: cron");
+    expect(cronExecute).toHaveBeenCalledTimes(1);
+    expect(payload.result?.isError).not.toBe(true);
+    expect(payload.result?.content?.[0]?.text).toBe("CRON_EXECUTED");
   });
 
   it("honors before-tool-call hook blocks before loopback tool execution", async () => {
@@ -460,7 +479,7 @@ describe("mcp loopback server", () => {
 
     const response = await sendRaw({
       port: server.port,
-      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      token: runtime?.ownerToken,
       headers: {
         "content-type": "application/json",
         "x-session-key": "agent:main:main",
@@ -509,7 +528,7 @@ describe("mcp loopback server", () => {
 
     const response = await sendRaw({
       port: server.port,
-      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      token: runtime?.ownerToken,
       headers: {
         "content-type": "application/json",
         "x-session-key": "agent:main:main",
@@ -540,6 +559,7 @@ describe("mcp loopback server", () => {
     expect(active?.port).toBe(server.port);
     expect(active?.ownerToken).toMatch(/^[0-9a-f]{64}$/);
     expect(active?.nonOwnerToken).toMatch(/^[0-9a-f]{64}$/);
+    expect(active?.nonOwnerToken).not.toBe(active?.ownerToken);
 
     await server.close();
     server = undefined;
@@ -574,7 +594,7 @@ describe("mcp loopback server", () => {
     const runtime = getActiveMcpLoopbackRuntime();
     const response = await sendRaw({
       port: server.port,
-      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      token: runtime?.ownerToken,
       headers: { "content-type": "text/plain" },
       body: "{}",
     });
@@ -615,7 +635,7 @@ describe("mcp loopback server", () => {
     const runtime = getActiveMcpLoopbackRuntime();
     const response = await sendRaw({
       port: server.port,
-      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      token: runtime?.ownerToken,
       headers: {
         "content-type": "application/json",
         origin: "http://127.0.0.1:43123",
@@ -631,7 +651,7 @@ describe("mcp loopback server", () => {
     const runtime = getActiveMcpLoopbackRuntime();
     const response = await sendRaw({
       port: server.port,
-      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      token: runtime?.ownerToken,
       headers: {
         "content-type": "application/json",
         origin: `http://127.0.0.1:${server.port}`,
@@ -654,7 +674,7 @@ describe("mcp loopback server", () => {
     const runtime = getActiveMcpLoopbackRuntime();
     const response = await sendRaw({
       port: server.port,
-      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      token: runtime?.ownerToken,
       headers: {
         "content-type": "application/json",
         origin: "http://localhost:43123",
@@ -679,6 +699,9 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
     );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-sender-is-owner"]).toBeUndefined();
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-source-reply-delivery-mode"]).toBe(
+      "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
+    );
+    expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-is-owner");
   });
 });

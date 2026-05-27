@@ -3,7 +3,9 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
+import { loadModelCatalogForBrowse } from "../../agents/model-catalog-browse.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
@@ -19,7 +21,11 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import {
+  RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+  createModelVisibilityPolicy,
+} from "../../agents/model-visibility-policy.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -28,6 +34,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -79,6 +86,63 @@ function usesUnfilteredCatalogModels(provider: string): boolean {
   return isCliRuntimeProvider(provider);
 }
 
+function normalizeRuntimeChoiceId(runtime: string | undefined): string {
+  const normalized = normalizeLowercaseStringOrEmpty(runtime);
+  if (!normalized || normalized === "auto" || normalized === "default") {
+    return "pi";
+  }
+  return normalized;
+}
+
+function buildRuntimeChoice(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  runtime: string;
+  cli?: boolean;
+}): ModelsRuntimeChoice {
+  const id = normalizeRuntimeChoiceId(params.runtime);
+  const label = resolveAgentRuntimeLabel({ config: params.cfg, resolvedHarness: id });
+  return {
+    id,
+    label,
+    description:
+      id === "pi"
+        ? "Use the built-in OpenClaw Pi runtime."
+        : params.cli
+          ? `Run ${params.provider} models through ${label}.`
+          : `Use the ${label} runtime selected by the effective harness policy.`,
+  };
+}
+
+function buildDefaultRuntimeChoice(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  provider: string;
+  modelId?: string;
+}): ModelsRuntimeChoice {
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    config: params.cfg,
+    provider: params.provider,
+    modelId: params.modelId,
+    agentId: params.agentId,
+  });
+  return buildRuntimeChoice({
+    cfg: params.cfg,
+    provider: params.provider,
+    runtime: harnessPolicy.runtime,
+  });
+}
+
+function addRuntimeChoice(
+  choices: ModelsRuntimeChoice[],
+  choice: ModelsRuntimeChoice,
+): ModelsRuntimeChoice[] {
+  if (!choices.some((existing) => existing.id === choice.id)) {
+    choices.push(choice);
+  }
+  return choices;
+}
+
 export async function buildModelsProviderData(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -89,15 +153,20 @@ export async function buildModelsProviderData(
     agentId,
   });
 
-  const catalog = await loadModelCatalog({ config: cfg });
+  const catalog = await loadModelCatalogForBrowse({
+    cfg,
+    view: options.view ?? "default",
+    loadCatalog: ({ readOnly }) => loadModelCatalog({ config: cfg, readOnly }),
+  });
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
     agentId,
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   });
-  const visibleCatalog = resolveVisibleModelCatalog({
+  const visibleCatalog = await resolveVisibleModelCatalog({
     cfg,
     catalog,
     defaultProvider: resolvedDefault.provider,
@@ -108,6 +177,7 @@ export async function buildModelsProviderData(
       (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
       resolveDefaultAgentWorkspaceDir(),
     view: options.view,
+    runtimeAuthDiscovery: false,
   });
 
   const aliasIndex = buildModelAliasIndex({
@@ -185,20 +255,20 @@ export async function buildModelsProviderData(
     add(entry.provider, entry.id);
   }
 
-  const hasAuth =
+  const hasAuth: (provider: string) => Promise<boolean> =
     options.view === "all"
-      ? () => true
+      ? async () => true
       : createProviderAuthChecker({
           cfg,
           workspaceDir:
             options.workspaceDir ??
             (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
             resolveDefaultAgentWorkspaceDir(),
-          agentDir: agentId ? resolveAgentDir(cfg, agentId) : undefined,
+          agentId,
         });
 
   for (const entry of catalog) {
-    if (usesUnfilteredCatalogModels(entry.provider) && hasAuth(entry.provider)) {
+    if (usesUnfilteredCatalogModels(entry.provider) && (await hasAuth(entry.provider))) {
       add(entry.provider, entry.id);
     }
   }
@@ -222,20 +292,28 @@ export async function buildModelsProviderData(
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
   for (const alias of listLegacyRuntimeModelProviderAliases()) {
     const provider = normalizeProviderId(alias.provider);
+    const defaultModelId =
+      provider === normalizeProviderId(resolvedDefault.provider)
+        ? resolvedDefault.model
+        : undefined;
     const choices = runtimeChoicesByProvider.get(provider) ?? [
-      {
-        id: "pi",
-        label: "OpenClaw Pi Default",
-        description: "Use the built-in OpenClaw Pi runtime.",
-      },
+      buildDefaultRuntimeChoice({
+        cfg,
+        agentId,
+        provider,
+        modelId: defaultModelId,
+      }),
     ];
-    choices.push({
-      id: alias.runtime,
-      label: alias.runtime,
-      description: alias.cli
-        ? `Run ${provider} models through ${alias.runtime}.`
-        : `Run ${provider} models through the ${alias.runtime} harness.`,
-    });
+    addRuntimeChoice(choices, buildRuntimeChoice({ cfg, provider, runtime: "pi" }));
+    addRuntimeChoice(
+      choices,
+      buildRuntimeChoice({
+        cfg,
+        provider,
+        runtime: alias.runtime,
+        cli: alias.cli,
+      }),
+    );
     runtimeChoicesByProvider.set(provider, choices);
   }
 
@@ -320,12 +398,24 @@ function parseModelsArgs(raw: string): ParsedModelsCommand {
 function resolveProviderLabel(params: {
   provider: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
 }): string {
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    config: params.cfg,
+    provider: params.provider,
+    agentId: params.agentId,
+  });
+  const acceptedProviderIds = listOpenAIAuthProfileProvidersForAgentRuntime({
+    provider: params.provider,
+    harnessRuntime: harnessPolicy.runtime,
+    config: params.cfg,
+  });
   const authLabel = resolveModelAuthLabel({
     provider: params.provider,
+    acceptedProviderIds,
     cfg: params.cfg,
     sessionEntry: params.sessionEntry,
     agentDir: params.agentDir,
@@ -341,6 +431,7 @@ export function formatModelsAvailableHeader(params: {
   provider: string;
   total: number;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
@@ -348,6 +439,7 @@ export function formatModelsAvailableHeader(params: {
   const providerLabel = resolveProviderLabel({
     provider: params.provider,
     cfg: params.cfg,
+    agentId: params.agentId,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     sessionEntry: params.sessionEntry,
@@ -472,6 +564,7 @@ export async function resolveModelsCommandReply(params: {
     const emptyProviderLabel = resolveProviderLabel({
       provider,
       cfg: params.cfg,
+      agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       sessionEntry: params.sessionEntry,
@@ -504,6 +597,7 @@ export async function resolveModelsCommandReply(params: {
         provider,
         total,
         cfg: params.cfg,
+        agentId: params.agentId,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         sessionEntry: params.sessionEntry,
@@ -533,6 +627,7 @@ export async function resolveModelsCommandReply(params: {
   const providerLabel = resolveProviderLabel({
     provider,
     cfg: params.cfg,
+    agentId: params.agentId,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     sessionEntry: params.sessionEntry,

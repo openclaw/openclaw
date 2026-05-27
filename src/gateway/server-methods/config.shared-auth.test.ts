@@ -53,8 +53,11 @@ vi.mock("../../config/runtime-schema.js", () => ({
 }));
 
 vi.mock("../../secrets/runtime.js", () => ({
-  getActiveSecretsRuntimeSnapshot: () => null,
   prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotMock,
+}));
+
+vi.mock("../../secrets/runtime-state.js", () => ({
+  getActiveSecretsRuntimeSnapshot: () => null,
 }));
 
 vi.mock("../../infra/restart.js", () => ({
@@ -72,6 +75,12 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
 });
 
 const { configHandlers } = await import("./config.js");
+
+const GATEWAY_CONFIG_WRITE_OPTIONS = {
+  runtimeRefresh: {
+    includeAuthStoreRefs: false,
+  },
+};
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -125,7 +134,7 @@ describe("config shared auth disconnects", () => {
     await configHandlers["config.set"](options);
     await flushConfigHandlerMicrotasks();
 
-    expect(writeConfigFileMock).toHaveBeenCalledWith(submittedConfig, {});
+    expect(writeConfigFileMock).toHaveBeenCalledWith(submittedConfig, GATEWAY_CONFIG_WRITE_OPTIONS);
     expect(respond).toHaveBeenCalledWith(
       true,
       {
@@ -167,7 +176,7 @@ describe("config shared auth disconnects", () => {
     await configHandlers["config.set"](options);
     await flushConfigHandlerMicrotasks();
 
-    expect(writeConfigFileMock).toHaveBeenCalledWith(nextConfig, {});
+    expect(writeConfigFileMock).toHaveBeenCalledWith(nextConfig, GATEWAY_CONFIG_WRITE_OPTIONS);
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
   });

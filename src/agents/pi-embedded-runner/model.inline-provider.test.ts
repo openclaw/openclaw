@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildInlineProviderModels } from "./model.inline-provider.js";
+import { buildInlineProviderModels, resolveProviderModelInput } from "./model.inline-provider.js";
 import { makeModel } from "./model.test-harness.js";
 
 describe("buildInlineProviderModels", () => {
@@ -66,6 +66,24 @@ describe("buildInlineProviderModels", () => {
         api: "anthropic-messages",
       },
     ]);
+  });
+
+  it("preserves google-vertex api inherited from provider config", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      google: {
+        baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
+        api: "google-vertex",
+        models: [makeModel("gemini-2.5-pro")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].provider).toBe("google");
+    expect(result[0].baseUrl).toBe("https://us-central1-aiplatform.googleapis.com/v1");
+    expect(result[0].api).toBe("google-vertex");
+    expect(result[0].id).toBe("gemini-2.5-pro");
   });
 
   it("model-level api takes precedence over provider-level api", () => {
@@ -259,5 +277,18 @@ describe("buildInlineProviderModels", () => {
     expect(result[0].headers).toEqual({
       "X-Static": "tenant-a",
     });
+  });
+});
+
+describe("resolveProviderModelInput", () => {
+  it("keeps configured Anthropic model input unchanged before provider-owned normalization", () => {
+    expect(
+      resolveProviderModelInput({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-5",
+        modelName: "Claude Sonnet 4.5",
+        input: ["text"],
+      }),
+    ).toEqual(["text"]);
   });
 });

@@ -1,4 +1,5 @@
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
+import { stripPlainTextToolCallBlocks } from "../../plugin-sdk/tool-payload.js";
 import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -18,6 +19,7 @@ import {
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "../../shared/text/assistant-visible-text.js";
+import { stripFinalTags } from "../../shared/text/final-tags.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -46,7 +48,6 @@ const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
-const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \t]*$/i;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
@@ -336,7 +337,7 @@ function stripFinalTagsFromText(text: unknown): string {
   if (!normalized) {
     return normalized;
   }
-  return normalized.replace(FINAL_TAG_RE, "");
+  return stripFinalTags(normalized);
 }
 
 function stripToolCallsOmittedPlaceholderLines(text: string): string {
@@ -413,7 +414,9 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   // It is internal scaffolding, so drop standalone placeholder lines before delivery
   // while preserving ordinary inline mentions a user may be discussing.
   const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
-  const withoutToolCallBlocks = stripLegacyBracketToolCallBlocks(withoutPlaceholder);
+  const withoutToolCallBlocks = stripPlainTextToolCallBlocks(
+    stripLegacyBracketToolCallBlocks(withoutPlaceholder),
+  );
   const trimmed = withoutToolCallBlocks.trim();
   if (!trimmed) {
     return "";

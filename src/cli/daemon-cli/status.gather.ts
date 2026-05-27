@@ -14,6 +14,7 @@ import type {
 } from "../../config/types.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -25,7 +26,9 @@ import {
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import {
   formatPortDiagnostics,
+  inspectPortConnections,
   inspectPortUsage,
+  type PortConnection,
   type PortListener,
   type PortUsageStatus,
 } from "../../infra/ports.js";
@@ -35,6 +38,7 @@ import {
 } from "../../infra/restart-handoff.js";
 import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { VERSION } from "../../version.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
@@ -57,6 +61,7 @@ type GatewayStatusSummary = {
   portSource: "service args" | "env/config";
   probeUrl: string;
   probeNote?: string;
+  version?: string | null;
 };
 
 type PortStatusSummary = {
@@ -97,6 +102,7 @@ const gatewayProbeAuthModuleLoader = createLazyImportLoader(
   () => import("../../gateway/probe-auth.js"),
 );
 const daemonInspectModuleLoader = createLazyImportLoader(() => import("../../daemon/inspect.js"));
+const launchdModuleLoader = createLazyImportLoader(() => import("../../daemon/launchd.js"));
 const serviceAuditModuleLoader = createLazyImportLoader(
   () => import("../../daemon/service-audit.js"),
 );
@@ -110,6 +116,10 @@ function loadGatewayProbeAuthModule() {
 
 function loadDaemonInspectModule() {
   return daemonInspectModuleLoader.load();
+}
+
+function loadLaunchdModule() {
+  return launchdModuleLoader.load();
 }
 
 function loadServiceAuditModule() {
@@ -249,7 +259,7 @@ function appendProbeNote(
   if (values.length === 0) {
     return undefined;
   }
-  return [...new Set(values)].join(" ");
+  return uniqueStrings(values).join(" ");
 }
 export type DaemonStatus = {
   cli?: CliStatusSummary;
@@ -268,6 +278,7 @@ export type DaemonStatus = {
     runtime?: GatewayServiceRuntime;
     configAudit?: ServiceConfigAudit;
     restartHandoff?: GatewayRestartHandoff;
+    staleUpdateLaunchdJobs?: StaleOpenClawUpdateLaunchdJob[];
   };
   config?: {
     cli: ConfigSummary;
@@ -287,6 +298,10 @@ export type DaemonStatus = {
     listeners: PortListener[];
     hints: string[];
   };
+  connections?: {
+    port: number;
+    established: PortConnection[];
+  };
   lastError?: string;
   rpc?: {
     ok: boolean;
@@ -301,6 +316,7 @@ export type DaemonStatus = {
       version?: string | null;
       connId?: string | null;
     };
+    version?: string | null;
     error?: string;
     url?: string;
     authWarning?: string;
@@ -453,6 +469,27 @@ async function inspectDaemonPortStatuses(params: {
   };
 }
 
+async function inspectEstablishedGatewayClients(params: {
+  daemonPort: number;
+  deep?: boolean;
+  gatewayMode?: string;
+}): Promise<DaemonStatus["connections"] | undefined> {
+  if (params.deep !== true || params.gatewayMode === "remote") {
+    return undefined;
+  }
+  const result = await inspectPortConnections(params.daemonPort).catch(() => null);
+  const establishedClients = result?.connections.filter(
+    (connection) => connection.direction !== "server",
+  );
+  if (!result || !establishedClients || establishedClients.length === 0) {
+    return undefined;
+  }
+  return {
+    port: result.port,
+    established: establishedClients,
+  };
+}
+
 export async function gatherDaemonStatus(
   opts: {
     rpc: GatewayRpcOpts;
@@ -501,6 +538,11 @@ export async function gatherDaemonStatus(
     daemonPort,
     cliPort,
   });
+  const establishedClients = await inspectEstablishedGatewayClients({
+    daemonPort,
+    deep: opts.deep,
+    gatewayMode: daemonCfg.gateway?.mode,
+  });
 
   const extraServices = opts.deep
     ? await loadDaemonInspectModule()
@@ -511,6 +553,12 @@ export async function gatherDaemonStatus(
         )
         .catch(() => [])
     : [];
+  const staleUpdateLaunchdJobs =
+    opts.deep && process.platform === "darwin"
+      ? await loadLaunchdModule()
+          .then(({ findStaleOpenClawUpdateLaunchdJobs }) => findStaleOpenClawUpdateLaunchdJobs())
+          .catch(() => [])
+      : [];
 
   const timeoutMs =
     parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ??
@@ -577,6 +625,11 @@ export async function gatherDaemonStatus(
           )
           .catch(() => undefined)
       : undefined;
+  const gatewayVersion = opts.probe
+    ? ((rpc && "server" in rpc ? rpc.server?.version : undefined) ??
+      (rpc && "version" in rpc ? rpc.version : undefined) ??
+      null)
+    : undefined;
 
   let lastError: string | undefined;
   if (loaded && runtime?.status === "running" && portStatus && portStatus.status !== "busy") {
@@ -595,15 +648,24 @@ export async function gatherDaemonStatus(
       runtime,
       configAudit,
       ...(restartHandoff ? { restartHandoff } : {}),
+      ...(staleUpdateLaunchdJobs.length > 0 ? { staleUpdateLaunchdJobs } : {}),
     },
     config: {
       cli: cliConfigSummary,
       daemon: daemonConfigSummary,
       ...(configMismatch ? { mismatch: true } : {}),
     },
-    gateway,
+    gateway: {
+      ...gateway,
+      ...(opts.probe
+        ? {
+            version: gatewayVersion,
+          }
+        : {}),
+    },
     port: portStatus,
     ...(portCliStatus ? { portCli: portCliStatus } : {}),
+    ...(establishedClients ? { connections: establishedClients } : {}),
     lastError,
     ...(rpc
       ? {

@@ -179,7 +179,32 @@ requests`, `ThrottlingException`, `concurrency limit reached`, or
 - Non-rate-limit errors are not retried with alternate keys.
 - If all keys fail, the final error from the last attempt is returned.
 
+## Removing provider auth while the gateway is running
+
+When provider auth is removed through the Gateway control plane, OpenClaw deletes
+the saved auth profiles for that provider and aborts active chat or agent runs
+whose selected model provider matches the removed provider. The aborted runs emit
+the normal chat cancellation and lifecycle events with
+`stopReason: "auth-revoked"`, so connected clients can show that the run was
+stopped because credentials were removed.
+
+Removing saved auth does not revoke keys at the provider. Rotate or revoke the
+key in the provider dashboard when you need provider-side invalidation.
+
 ## Controlling which credential is used
+
+### During login (CLI)
+
+Use `openclaw models auth login --provider <id> --profile-id <profileId>` for
+providers that support named auth profiles during login.
+
+```bash
+openclaw models auth login --provider openai-codex --profile-id openai-codex:ritsuko
+openclaw models auth login --provider openai-codex --profile-id openai-codex:lain
+```
+
+This is the easiest way to keep multiple OAuth logins for the same provider
+separate inside one agent.
 
 ### Per-session (chat command)
 
@@ -202,6 +227,10 @@ When you debug order issues, `openclaw models status --probe` shows omitted
 stored profiles as `excluded_by_auth_order` instead of silently skipping them.
 When you debug cooldown issues, remember that rate-limit cooldowns can be tied
 to one model id rather than the whole provider profile.
+
+If you change auth order or profile pinning for a chat that is already running,
+send `/new` or `/reset` in that chat to start a fresh session. Existing
+sessions can keep their current model/profile selection until reset.
 
 ## Troubleshooting
 

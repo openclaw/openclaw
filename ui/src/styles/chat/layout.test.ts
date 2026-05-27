@@ -46,4 +46,53 @@ describe("chat layout styles", () => {
     expect(css).toContain("@media (display-mode: standalone) and (max-width: 768px)");
     expect(css).toContain("margin-bottom: calc(14px + max(var(--safe-area-bottom), 34px));");
   });
+
+  it("keeps desktop chat header controls on a compact aligned rhythm", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain("min-height: 36px;");
+    expect(css).toContain("height: 36px;");
+    expect(css).toContain(".chat-controls .btn--icon {");
+    expect(css).toContain("width: 36px;");
+    expect(css).toContain(".chat-controls__separator {");
+    expect(css).toContain("height: 22px;");
+  });
+
+  it("keeps chat session picker search icon buttons fixed size", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain(".chat-session-picker .chat-session-picker__icon-button.btn--icon {");
+    expect(css).toContain("flex: 0 0 36px;");
+    expect(css).toContain("width: 36px;");
+    expect(css).toContain("min-width: 36px;");
+  });
+
+  it("keeps composer controls labeled and large enough without shrinking mobile taps", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain(".agent-chat__control-label");
+    expect(css).toContain("min-width: 36px;");
+    expect(css).toContain("height: 36px;");
+    expect(css).toContain("@media (max-width: 860px)");
+    expect(css).toContain("width: 44px;");
+  });
+
+  it("keeps the initial chat loading skeleton wide enough to read as message bubbles", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain(".chat-loading-skeleton .chat-msg");
+    expect(css).toContain("width: min(560px, 82%);");
+    expect(css).toContain(".chat-loading-skeleton .chat-line.user .chat-msg");
+    expect(css).toContain("width: min(360px, 70%);");
+    expect(css).toContain(".chat-loading-skeleton .chat-bubble");
+    expect(css).toContain("width: 100%;");
+  });
+
+  it("lets realtime Talk turns flow in the chat thread", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain(".agent-chat__voice-turns");
+    expect(css).toContain("background: transparent;");
+    expect(css).not.toContain("max-height: min(28vh, 220px);");
+  });
 });

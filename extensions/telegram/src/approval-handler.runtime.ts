@@ -6,10 +6,14 @@ import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/a
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
-  buildApprovalInteractiveReplyFromActionDescriptors,
+  buildApprovalPresentationFromActionDescriptors,
   buildExecApprovalPendingReplyPayload,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type { ExecApprovalPendingReplyParams } from "openclaw/plugin-sdk/approval-reply-runtime";
+import type {
+  ExecApprovalActionDescriptor,
+  ExecApprovalPendingReplyParams,
+  ExecApprovalReplyDecision,
+} from "openclaw/plugin-sdk/approval-reply-runtime";
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
@@ -59,6 +63,36 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
   return { accountId, context };
 }
 
+function listDecisionActions(view: PendingApprovalView): ExecApprovalReplyDecision[] {
+  return view.actions.flatMap((action) => (action.kind === "decision" ? [action.decision] : []));
+}
+
+function buildTelegramApprovalCommandText(params: {
+  approvalCommandId: string;
+  decision: ExecApprovalReplyDecision;
+}): string {
+  return `/approve ${params.approvalCommandId} ${params.decision}`;
+}
+
+function listNativeButtonActions(view: PendingApprovalView): ExecApprovalActionDescriptor[] {
+  return view.actions.flatMap((action) =>
+    action.kind === "decision"
+      ? [
+          {
+            kind: "decision",
+            decision: action.decision,
+            label: action.label,
+            style: action.style,
+            command: buildTelegramApprovalCommandText({
+              approvalCommandId: view.approvalId,
+              decision: action.decision,
+            }),
+          },
+        ]
+      : [],
+  );
+}
+
 function buildPendingPayload(params: {
   request: ApprovalRequest;
   approvalKind: "exec" | "plugin";
@@ -85,14 +119,16 @@ function buildPendingPayload(params: {
             params.view.approvalKind === "exec" && params.view.host === "node" ? "node" : "gateway",
           nodeId:
             params.view.approvalKind === "exec" ? (params.view.nodeId ?? undefined) : undefined,
-          allowedDecisions: params.view.actions.map((action) => action.decision),
+          allowedDecisions: listDecisionActions(params.view),
           expiresAtMs: params.request.expiresAtMs,
           nowMs: params.nowMs,
         } satisfies ExecApprovalPendingReplyParams);
   return {
     text: payload.text ?? "",
     buttons: resolveTelegramInlineButtons({
-      interactive: buildApprovalInteractiveReplyFromActionDescriptors(params.view.actions),
+      presentation: buildApprovalPresentationFromActionDescriptors(
+        listNativeButtonActions(params.view),
+      ),
     }),
   };
 }

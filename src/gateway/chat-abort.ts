@@ -12,6 +12,9 @@ export type ChatAbortControllerEntry = {
   expiresAtMs: number;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  providerId?: string;
+  authProviderId?: string;
+  abortStopReason?: string;
   /**
    * Which RPC owns this registration. Absent (undefined) is treated as
    * `"chat-send"` so pre-existing callers that constructed entries without
@@ -30,6 +33,15 @@ type RegisteredChatAbortController = {
 
 export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
+}
+
+function createChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
+  if (stopReason !== "timeout") {
+    return undefined;
+  }
+  const reason = new Error("chat run timed out");
+  reason.name = "TimeoutError";
+  return reason;
 }
 
 function resolveChatRunExpiresAtMs(params: {
@@ -76,6 +88,8 @@ export function registerChatAbortController(params: {
   timeoutMs: number;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  providerId?: string;
+  authProviderId?: string;
   kind?: ChatAbortControllerEntry["kind"];
   now?: number;
   expiresAtMs?: number;
@@ -102,10 +116,17 @@ export function registerChatAbortController(params: {
       params.expiresAtMs ?? resolveChatRunExpiresAtMs({ now, timeoutMs: params.timeoutMs }),
     ownerConnId: params.ownerConnId,
     ownerDeviceId: params.ownerDeviceId,
+    providerId: normalizeProviderIdForActiveRun(params.providerId),
+    authProviderId: normalizeProviderIdForActiveRun(params.authProviderId),
     kind: params.kind,
   };
   params.chatAbortControllers.set(params.runId, entry);
   return { controller, registered: true, entry, cleanup };
+}
+
+function normalizeProviderIdForActiveRun(providerId: string | undefined): string | undefined {
+  const trimmed = providerId?.trim().toLowerCase();
+  return trimmed || undefined;
 }
 
 export type ChatAbortOps = {
@@ -175,7 +196,10 @@ export function abortChatRunById(
   const bufferedText = ops.chatRunBuffers.get(runId);
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatAbortedRuns.set(runId, Date.now());
-  active.controller.abort();
+  if (stopReason) {
+    active.abortStopReason = stopReason;
+  }
+  active.controller.abort(createChatAbortSignalReason(stopReason));
   ops.chatAbortControllers.delete(runId);
   ops.chatRunBuffers.delete(runId);
   ops.chatDeltaSentAt.delete(runId);
@@ -207,4 +231,51 @@ export function abortChatRunById(
     ops.agentRunSeq.delete(removed.clientRunId);
   }
   return { aborted: true };
+}
+
+export function updateChatRunProvider(
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>,
+  params: {
+    runId: string;
+    providerId?: string;
+    authProviderId?: string;
+  },
+): boolean {
+  const entry = chatAbortControllers.get(params.runId);
+  if (!entry) {
+    return false;
+  }
+  entry.providerId = normalizeProviderIdForActiveRun(params.providerId);
+  entry.authProviderId = normalizeProviderIdForActiveRun(params.authProviderId);
+  return true;
+}
+
+export function abortChatRunsForProvider(
+  ops: ChatAbortOps,
+  params: {
+    providerId: string;
+    stopReason?: string;
+  },
+): { runIds: string[] } {
+  const providerId = normalizeProviderIdForActiveRun(params.providerId);
+  if (!providerId) {
+    return { runIds: [] };
+  }
+  const matches = [...ops.chatAbortControllers.entries()].filter(
+    ([, entry]) =>
+      normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
+      normalizeProviderIdForActiveRun(entry.providerId) === providerId,
+  );
+  const runIds: string[] = [];
+  for (const [runId, entry] of matches) {
+    const result = abortChatRunById(ops, {
+      runId,
+      sessionKey: entry.sessionKey,
+      stopReason: params.stopReason,
+    });
+    if (result.aborted) {
+      runIds.push(runId);
+    }
+  }
+  return { runIds };
 }

@@ -1,5 +1,5 @@
 import type { Model } from "@earendil-works/pi-ai";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -28,6 +28,10 @@ vi.mock("./simple-completion-transport.js", () => ({
 }));
 
 vi.mock("./model-auth.js", () => ({
+  formatMissingAuthError: vi.fn(
+    (auth: { source: string; mode: string }, provider: string) =>
+      `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
+  ),
   getApiKeyForModel: hoisted.getApiKeyForModelMock,
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
@@ -40,17 +44,11 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
   prepareProviderRuntimeAuth: hoisted.prepareProviderRuntimeAuthMock,
 }));
 
-let completeWithPreparedSimpleCompletionModel: typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel;
-let prepareSimpleCompletionModel: typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModel;
-let prepareSimpleCompletionModelForAgent: typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent;
-
-beforeAll(async () => {
-  ({
-    completeWithPreparedSimpleCompletionModel,
-    prepareSimpleCompletionModel,
-    prepareSimpleCompletionModelForAgent,
-  } = await import("./simple-completion-runtime.js"));
-});
+import {
+  completeWithPreparedSimpleCompletionModel,
+  prepareSimpleCompletionModel,
+  prepareSimpleCompletionModelForAgent,
+} from "./simple-completion-runtime.js";
 
 beforeEach(() => {
   hoisted.resolveModelMock.mockReset();
@@ -170,7 +168,8 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     expect(result).toEqual({
-      error: 'No API key resolved for provider "anthropic" (auth mode: api-key).',
+      error:
+        'No API key resolved for provider "anthropic" (auth mode: api-key, checked: models.providers.anthropic).',
       auth: {
         source: "models.providers.anthropic",
         mode: "api-key",
@@ -456,6 +455,7 @@ describe("prepareSimpleCompletionModel", () => {
       provider: "ollama",
       modelId: "llama3.2:latest",
       skipPiDiscovery: true,
+      modelResolver: hoisted.resolveModelAsyncMock,
     });
 
     expect(result).not.toHaveProperty("error");
@@ -489,6 +489,7 @@ describe("prepareSimpleCompletionModel", () => {
       modelId: "mistral-medium-3-5",
       allowBundledStaticCatalogFallback: true,
       skipPiDiscovery: true,
+      modelResolver: hoisted.resolveModelAsyncMock,
     });
 
     expect(result).not.toHaveProperty("error");
@@ -517,7 +518,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
         },
       },
     } as OpenClawConfig;
-    hoisted.resolveModelMock.mockReturnValueOnce({
+    hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
       model: {
         provider: "openai-codex",
         id: "gpt-5.4-mini",
@@ -531,17 +532,22 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     const result = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId: "main",
+      skipPiDiscovery: true,
+      modelResolver: hoisted.resolveModelAsyncMock,
     });
 
     expectPreparedModelResult(result);
     expect(result.selection.provider).toBe("openai");
     expect(result.selection.modelId).toBe("gpt-5.4-mini");
     expect(result.selection.runtimeProvider).toBe("openai-codex");
-    expect(hoisted.resolveModelMock).toHaveBeenCalledWith(
+    expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
       "openai-codex",
       "gpt-5.4-mini",
       expect.any(String),
       cfg,
+      {
+        skipPiDiscovery: true,
+      },
     );
     expect(
       (callArg(hoisted.getApiKeyForModelMock) as { model?: { provider?: string } }).model?.provider,

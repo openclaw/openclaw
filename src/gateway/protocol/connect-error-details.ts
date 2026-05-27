@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeArrayBackedTrimmedStringList } from "../../shared/string-normalization.js";
 
 export const ConnectErrorDetailCodes = {
   AUTH_REQUIRED: "AUTH_REQUIRED",
@@ -18,6 +19,7 @@ export const ConnectErrorDetailCodes = {
   AUTH_TAILSCALE_WHOIS_FAILED: "AUTH_TAILSCALE_WHOIS_FAILED",
   AUTH_TAILSCALE_IDENTITY_MISMATCH: "AUTH_TAILSCALE_IDENTITY_MISMATCH",
   CONTROL_UI_ORIGIN_NOT_ALLOWED: "CONTROL_UI_ORIGIN_NOT_ALLOWED",
+  PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH",
   CONTROL_UI_DEVICE_IDENTITY_REQUIRED: "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
   DEVICE_IDENTITY_REQUIRED: "DEVICE_IDENTITY_REQUIRED",
   DEVICE_AUTH_INVALID: "DEVICE_AUTH_INVALID",
@@ -28,6 +30,7 @@ export const ConnectErrorDetailCodes = {
   DEVICE_AUTH_SIGNATURE_INVALID: "DEVICE_AUTH_SIGNATURE_INVALID",
   DEVICE_AUTH_PUBLIC_KEY_INVALID: "DEVICE_AUTH_PUBLIC_KEY_INVALID",
   PAIRING_REQUIRED: "PAIRING_REQUIRED",
+  CLIENT_VERSION_MISMATCH: "CLIENT_VERSION_MISMATCH",
 } as const;
 
 export type ConnectErrorDetailCode =
@@ -235,13 +238,7 @@ export function normalizePairingConnectRequestId(value: unknown): string | undef
 }
 
 function normalizeStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized = value
-    .map((item) => normalizeOptionalString(item))
-    .filter((item): item is string => Boolean(item));
-  return normalized.length > 0 ? normalized : [];
+  return normalizeArrayBackedTrimmedStringList(value);
 }
 
 function createPairingConnectErrorDetails(params: {
@@ -461,5 +458,41 @@ export function formatConnectErrorMessage(params: { message?: string; details?: 
   if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
     return formatConnectPairingRequiredMessage(params.details);
   }
+  if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+    return formatProtocolMismatchMessage(params.message, params.details);
+  }
   return normalizeOptionalString(params.message) ?? "gateway request failed";
+}
+
+function formatProtocolMismatchMessage(message: string | undefined, details: unknown): string {
+  const raw = details as {
+    clientMinProtocol?: unknown;
+    clientMaxProtocol?: unknown;
+    expectedProtocol?: unknown;
+    minimumProbeProtocol?: unknown;
+  };
+  const clientMin = normalizeProtocolNumber(raw.clientMinProtocol);
+  const clientMax = normalizeProtocolNumber(raw.clientMaxProtocol);
+  const expected = normalizeProtocolNumber(raw.expectedProtocol);
+  const probeMin = normalizeProtocolNumber(raw.minimumProbeProtocol);
+  const parts: string[] = [];
+  if (clientMin !== undefined && clientMax !== undefined) {
+    parts.push(
+      clientMin === clientMax
+        ? `Control UI v${clientMin}`
+        : `Control UI v${clientMin}-v${clientMax}`,
+    );
+  }
+  if (expected !== undefined) {
+    parts.push(`Gateway v${expected}`);
+  }
+  if (probeMin !== undefined) {
+    parts.push(`probe min v${probeMin}`);
+  }
+  const normalized = normalizeOptionalString(message) ?? "protocol mismatch";
+  return parts.length > 0 ? `${normalized}: ${parts.join(", ")}` : normalized;
+}
+
+function normalizeProtocolNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }

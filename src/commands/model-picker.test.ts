@@ -83,7 +83,18 @@ const hasRuntimeAvailableProviderAuth = vi.hoisted(() =>
     },
   ),
 );
+const createRuntimeProviderAuthLookup = vi.hoisted(() =>
+  vi.fn(() => ({
+    envApiKey: {
+      aliasMap: {},
+      candidateMap: {},
+      authEvidenceMap: {},
+    },
+    syntheticAuthProviderRefs: [],
+  })),
+);
 vi.mock("../agents/model-auth.js", () => ({
+  createRuntimeProviderAuthLookup,
   resolveEnvApiKey,
   hasUsableCustomProviderApiKey,
   hasRuntimeAvailableProviderAuth,
@@ -218,6 +229,7 @@ function providerCallProviders() {
 }
 
 beforeEach(() => {
+  delete process.env.OPENCLAW_LOCALE;
   vi.clearAllMocks();
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
   listProfilesForProvider.mockReturnValue([]);
@@ -573,6 +585,39 @@ describe("promptDefaultModel", () => {
     ]);
   });
 
+  it("keeps the full catalog cold until browsing when no provider is preferred", async () => {
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "fleet-router/qwen3.6:latest",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: true,
+      includeManual: true,
+      ignoreAllowlist: true,
+      browseCatalogOnDemand: true,
+      loadCatalog: true,
+    });
+
+    expect(result).toStrictEqual({});
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    const params = pickerParams(select as MockCallSource);
+    expect(params.searchable).toBe(false);
+    expect(params.initialValue).toBe("__keep__");
+    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "__keep__",
+      "__manual__",
+      "__browse__",
+    ]);
+  });
+
   it("loads the full model catalog when the user chooses to browse", async () => {
     loadModelCatalog.mockResolvedValue([
       {
@@ -860,6 +905,25 @@ describe("promptModelAllowlist", () => {
     const options = pickerOptions(multiselect as MockCallSource);
     expect(optionValues(options)).toEqual(["anthropic/claude-opus-4-6"]);
     expect(result.scopeKeys).toEqual(["anthropic/claude-opus-4-6"]);
+  });
+
+  it("localizes the model allowlist picker", async () => {
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+    ]);
+
+    const multiselect = createSelectAllMultiselect();
+    const prompter = makePrompter({ multiselect });
+    const config = { agents: { defaults: {} } } as OpenClawConfig;
+
+    await promptModelAllowlist({ config, prompter });
+
+    expect(multiselect.mock.calls[0]?.[0]?.message).toBe("/model 选择器中的模型（多选）");
   });
 
   it("uses static manifest catalog rows for a preferred provider without loading runtime catalog", async () => {
@@ -1393,6 +1457,16 @@ describe("applyModelAllowlist", () => {
       "google/gemini-3.1-pro-preview": { alias: "gemini" },
       "google-gemini-cli/gemini-3.1-pro-preview": {},
       "openrouter/google/gemini-3.1-pro-preview": {},
+    });
+  });
+
+  it("keeps non-Google provider Gemini-looking refs unchanged while writing selected models", () => {
+    const config = {} as OpenClawConfig;
+
+    const next = applyModelAllowlist(config, ["litellm/gemini-3-flash", "litellm/gemini-3.1-pro"]);
+    expect(next.agents?.defaults?.models).toEqual({
+      "litellm/gemini-3-flash": {},
+      "litellm/gemini-3.1-pro": {},
     });
   });
 

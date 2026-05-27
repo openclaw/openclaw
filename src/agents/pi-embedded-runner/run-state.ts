@@ -1,5 +1,7 @@
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import {
   getActiveReplyRunCount,
+  listActiveReplyRunSessionKeys,
   listActiveReplyRunSessionIds,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -9,13 +11,18 @@ export type EmbeddedPiQueueHandle = {
   queueMessage: (text: string, options?: EmbeddedPiQueueMessageOptions) => Promise<void>;
   isStreaming: () => boolean;
   isCompacting: () => boolean;
+  supportsTranscriptCommitWait?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: () => void;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
 export type EmbeddedPiQueueMessageOptions = {
   steeringMode?: "all";
   debounceMs?: number;
+  deliveryTimeoutMs?: number;
+  waitForTranscriptCommit?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
 export type ActiveEmbeddedRunSnapshot = {
@@ -42,6 +49,7 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedPiQueueHandle>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
   sessionIdsByKey: new Map<string, string>(),
+  sessionIdsByFile: new Map<string, string>(),
   waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
   modelSwitchRequests: new Map<string, EmbeddedRunModelSwitchRequest>(),
 }));
@@ -55,6 +63,9 @@ export const ACTIVE_EMBEDDED_RUN_SNAPSHOTS =
 export const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY =
   embeddedRunState.sessionIdsByKey ??
   (embeddedRunState.sessionIdsByKey = new Map<string, string>());
+export const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE =
+  embeddedRunState.sessionIdsByFile ??
+  (embeddedRunState.sessionIdsByFile = new Map<string, string>());
 export const EMBEDDED_RUN_WAITERS =
   embeddedRunState.waiters ??
   (embeddedRunState.waiters = new Map<string, Set<EmbeddedRunWaiter>>());
@@ -70,4 +81,24 @@ export function getActiveEmbeddedRunCount(): number {
     }
   }
   return Math.max(activeCount, getActiveReplyRunCount());
+}
+
+export function listActiveEmbeddedRunSessionKeys(): string[] {
+  return [
+    ...new Set([
+      ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.keys(),
+      ...listActiveReplyRunSessionKeys(),
+    ]),
+  ].toSorted((a, b) => a.localeCompare(b));
+}
+
+export function listActiveEmbeddedRunSessionIds(): string[] {
+  return [
+    ...new Set([
+      ...ACTIVE_EMBEDDED_RUNS.keys(),
+      ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.values(),
+      ...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.values(),
+      ...listActiveReplyRunSessionIds(),
+    ]),
+  ].toSorted((a, b) => a.localeCompare(b));
 }

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import {
+  hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
   resolveAgentConfig,
   resolveSessionAgentId,
@@ -34,6 +35,7 @@ import {
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -48,6 +50,7 @@ import {
 } from "../fallback-state.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import {
+  isReplyPayloadStatusNotice,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -80,6 +83,7 @@ import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
@@ -91,13 +95,9 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
-import {
-  createReplyOperation,
-  ReplyRunAlreadyActiveError,
-  replyRunRegistry,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
+import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
+import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -185,7 +185,12 @@ function resolveConfiguredFallbackModel(params: {
   fallbackStateEntry?: SessionEntry;
 }): { provider: string; model: string; persistedAutoFallback: boolean } {
   const entry = params.fallbackStateEntry;
-  if (entry?.modelOverrideSource === "auto") {
+  const isAutoFallbackOverride =
+    entry?.modelOverrideSource === "auto" ||
+    (entry !== undefined &&
+      entry.modelOverrideSource === undefined &&
+      hasSessionAutoModelFallbackProvenance(entry));
+  if (isAutoFallbackOverride && entry !== undefined) {
     const originProvider = normalizeOptionalString(entry.modelOverrideFallbackOriginProvider);
     const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
     if (originProvider && originModel) {
@@ -914,7 +919,9 @@ function buildInlineRawTracePayload(params: {
 
 function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
   return payloads
-    .filter((payload) => !payload.isError && !payload.isReasoning && !payload.isCompactionNotice)
+    .filter(
+      (payload) => !payload.isError && !payload.isReasoning && !isReplyPayloadStatusNotice(payload),
+    )
     .map((payload) => payload.text?.trim())
     .filter((text): text is string => Boolean(text))
     .join("\n")
@@ -922,11 +929,12 @@ function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
 }
 
 function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
-  return payloads
+  const text = payloads
     .filter((payload) => payload.isReasoning !== true)
     .map((payload) => payload.text)
     .filter((text): text is string => Boolean(text))
     .join("\n\n");
+  return sanitizePendingFinalDeliveryText(text);
 }
 
 function enqueueCommitmentExtractionForTurn(params: {
@@ -1179,6 +1187,7 @@ export async function runReplyAgent(params: {
     storePath,
     defaultModel,
     agentCfgContextTokens,
+    toolProgressDetail,
   });
 
   if (activeRunQueueAction === "drop") {
@@ -1264,23 +1273,45 @@ export async function runReplyAgent(params: {
 
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
   let replyOperation: ReplyOperation;
-  try {
-    replyOperation =
-      providedReplyOperation ??
-      createReplyOperation({
-        sessionId: followupRun.run.sessionId,
-        sessionKey: replySessionKey ?? "",
-        resetTriggered: effectiveResetTriggered,
-        upstreamAbortSignal: opts?.abortSignal,
-      });
-  } catch (error) {
-    if (error instanceof ReplyRunAlreadyActiveError) {
+  if (providedReplyOperation) {
+    replyOperation = providedReplyOperation;
+  } else {
+    const replyTurnKind = resolveReplyTurnKind(opts);
+    const admission = await admitReplyTurn({
+      sessionId: followupRun.run.sessionId,
+      sessionKey: replySessionKey ?? "",
+      kind: replyTurnKind,
+      resetTriggered: effectiveResetTriggered,
+      upstreamAbortSignal: opts?.abortSignal,
+    });
+    if (admission.status === "skipped") {
       typing.cleanup();
+      if (admission.reason !== "active-run" || replyTurnKind !== "visible") {
+        return undefined;
+      }
       return markReplyPayloadForSourceSuppressionDelivery({
         text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
       });
     }
-    throw error;
+    replyOperation = admission.operation;
+    const previousRunSessionId = followupRun.run.sessionId;
+    followupRun.run.sessionId = replyOperation.sessionId;
+    if (replyOperation.sessionId !== previousRunSessionId) {
+      const admittedSessionEntry = refreshSessionEntryFromStore({
+        storePath,
+        sessionKey: replySessionKey,
+        fallbackEntry: replySessionKey
+          ? (activeSessionStore?.[replySessionKey] ?? activeSessionEntry)
+          : activeSessionEntry,
+        activeSessionStore,
+      });
+      if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
+        activeSessionEntry = admittedSessionEntry;
+        if (admittedSessionEntry.sessionFile) {
+          followupRun.run.sessionFile = admittedSessionEntry.sessionFile;
+        }
+      }
+    }
   }
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;
@@ -1387,6 +1418,7 @@ export async function runReplyAgent(params: {
       storePath,
       defaultModel,
       agentCfgContextTokens,
+      toolProgressDetail,
     });
 
     let responseUsageLine: string | undefined;
@@ -1421,12 +1453,6 @@ export async function runReplyAgent(params: {
           activeIsNewSession = true;
         },
       });
-    const resetSessionAfterCompactionFailure = async (reason: string): Promise<boolean> =>
-      resetSession({
-        failureLabel: "compaction failure",
-        buildLogMessage: (nextSessionId) =>
-          `Auto-compaction failed (${reason}). Restarting session ${sessionKey} -> ${nextSessionId} and retrying.`,
-      });
     const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
       resetSession({
         failureLabel: "role ordering conflict",
@@ -1455,7 +1481,6 @@ export async function runReplyAgent(params: {
         shouldEmitToolResult,
         shouldEmitToolOutput,
         pendingToolTasks,
-        resetSessionAfterCompactionFailure,
         resetSessionAfterRoleOrderingConflict,
         isHeartbeat,
         sessionKey,
@@ -1528,6 +1553,9 @@ export async function runReplyAgent(params: {
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
     const verboseEnabled = resolvedVerboseLevel !== "off";
+    const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
+      followupRun.run.inputProvenance,
+    );
     const fallbackStateEntry =
       activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
     const configuredFallbackModel = resolveConfiguredFallbackModel({
@@ -1544,7 +1572,7 @@ export async function runReplyAgent(params: {
       attempts: fallbackAttempts,
       state: fallbackStateEntry,
     });
-    if (fallbackTransition.stateChanged) {
+    if (fallbackTransition.stateChanged && !preserveUserFacingSessionState) {
       if (fallbackStateEntry) {
         fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
         fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
@@ -1600,29 +1628,33 @@ export async function runReplyAgent(params: {
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
       usageIsContextSnapshot: usedCliProvider ? true : undefined,
+      isHeartbeat,
+      preserveUserFacingSessionModelState: preserveUserFacingSessionState,
       modelUsed,
       providerUsed,
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
       cliSessionBinding,
+      preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
 
+    const successfulSideEffectDelivery = hasSuccessfulSideEffectDelivery({
+      blockReplyPipeline,
+      directlySentBlockKeys,
+      messagingToolSentTexts: runResult.messagingToolSentTexts,
+      messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+      messagingToolSentTargets: runResult.messagingToolSentTargets,
+      successfulCronAdds: runResult.successfulCronAdds,
+      didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
+    });
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
         fallbackTransition,
         fallbackFailureKnown:
           fallbackAttempts.length > 0 || configuredFallbackModel.persistedAutoFallback,
         isHeartbeat,
-        hasSuccessfulSideEffectDelivery: hasSuccessfulSideEffectDelivery({
-          blockReplyPipeline,
-          directlySentBlockKeys,
-          messagingToolSentTexts: runResult.messagingToolSentTexts,
-          messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-          messagingToolSentTargets: runResult.messagingToolSentTargets,
-          successfulCronAdds: runResult.successfulCronAdds,
-          didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
-        }),
+        hasSuccessfulSideEffectDelivery: successfulSideEffectDelivery,
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
         silentExpected: followupRun.run.silentExpected,
       });
@@ -1639,10 +1671,69 @@ export async function runReplyAgent(params: {
       return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
     };
 
+    const fallbackNoticePayloads: ReplyPayload[] = [];
+    if (!preserveUserFacingSessionState && fallbackTransition.fallbackTransitioned) {
+      emitAgentEvent({
+        runId,
+        sessionKey,
+        stream: "lifecycle",
+        data: {
+          phase: "fallback",
+          selectedProvider,
+          selectedModel,
+          activeProvider: providerUsed,
+          activeModel: modelUsed,
+          reasonSummary: fallbackTransition.reasonSummary,
+          attemptSummaries: fallbackTransition.attemptSummaries,
+          attempts: fallbackAttempts,
+        },
+      });
+      const fallbackNotice = buildFallbackNotice({
+        selectedProvider,
+        selectedModel,
+        activeProvider: providerUsed,
+        activeModel: modelUsed,
+        attempts: fallbackAttempts,
+      });
+      if (fallbackNotice) {
+        fallbackNoticePayloads.push(
+          markReplyPayloadForSourceSuppressionDelivery({
+            text: fallbackNotice,
+            isFallbackNotice: true,
+          }),
+        );
+      }
+    }
+    if (!preserveUserFacingSessionState && fallbackTransition.fallbackCleared) {
+      emitAgentEvent({
+        runId,
+        sessionKey,
+        stream: "lifecycle",
+        data: {
+          phase: "fallback_cleared",
+          selectedProvider,
+          selectedModel,
+          activeProvider: providerUsed,
+          activeModel: modelUsed,
+          previousActiveModel: fallbackTransition.previousState.activeModel,
+        },
+      });
+      fallbackNoticePayloads.push(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: buildFallbackClearedNotice({
+            selectedProvider,
+            selectedModel,
+            previousActiveModel: fallbackTransition.previousState.activeModel,
+          }),
+          isFallbackNotice: true,
+        }),
+      );
+    }
+
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
-    if (payloadArray.length === 0) {
+    if (payloadArray.length === 0 && fallbackNoticePayloads.length === 0) {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
@@ -1652,7 +1743,10 @@ export async function runReplyAgent(params: {
 
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
     const payloadResult = await buildReplyPayloads({
-      payloads: payloadArray,
+      payloads:
+        fallbackNoticePayloads.length > 0
+          ? [...fallbackNoticePayloads, ...payloadArray]
+          : payloadArray,
       isHeartbeat,
       didLogHeartbeatStrip,
       silentExpected: followupRun.run.silentExpected,
@@ -1678,7 +1772,18 @@ export async function runReplyAgent(params: {
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
-    if (replyPayloads.length === 0) {
+    const hasReplyPayloadBeyondFallbackNotice = replyPayloads.some(
+      (payload) => !isReplyPayloadStatusNotice(payload),
+    );
+    const hasDeliveredBlockStream = Boolean(
+      blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
+    );
+    const canDeliverStandaloneFallbackNotice =
+      hasDeliveredBlockStream || successfulSideEffectDelivery;
+    if (
+      replyPayloads.length === 0 ||
+      (!hasReplyPayloadBeyondFallbackNotice && !canDeliverStandaloneFallbackNotice)
+    ) {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
@@ -1690,6 +1795,7 @@ export async function runReplyAgent(params: {
     const hasReminderCommitment = replyPayloads.some(
       (payload) =>
         !payload.isError &&
+        !isReplyPayloadStatusNotice(payload) &&
         typeof payload.text === "string" &&
         hasUnbackedReminderCommitment(payload.text),
     );
@@ -1776,18 +1882,14 @@ export async function runReplyAgent(params: {
       activeSessionEntry?.responseUsage ??
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
-    if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
-      const authMode = resolveModelAuthMode(providerUsed, cfg, undefined, {
-        workspaceDir: followupRun.run.workspaceDir,
+    if (responseUsageMode !== "off" && hasNonzeroUsage(usage) && !preserveUserFacingSessionState) {
+      const costConfig = resolveModelCostConfig({
+        provider: providerUsed,
+        model: modelUsed,
+        config: cfg,
+        allowPluginNormalization: false,
       });
-      const showCost = authMode === "api-key";
-      const costConfig = showCost
-        ? resolveModelCostConfig({
-            provider: providerUsed,
-            model: modelUsed,
-            config: cfg,
-          })
-        : undefined;
+      const showCost = responseUsageMode === "full" && costConfig !== undefined;
       let formatted = formatResponseUsageLine({
         usage,
         showCost,
@@ -1810,66 +1912,13 @@ export async function runReplyAgent(params: {
       });
     }
 
-    // If verbose is enabled, prepend operational run notices.
+    // Prepend verbose operational notices. Model fallback notices are prepared
+    // earlier so they pass through normal reply threading and stream-dedupe.
     let finalPayloads = guardedReplyPayloads;
-    const verboseNotices: ReplyPayload[] = [];
+    const prefixNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {
-      verboseNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
-    }
-
-    if (fallbackTransition.fallbackTransitioned) {
-      emitAgentEvent({
-        runId,
-        sessionKey,
-        stream: "lifecycle",
-        data: {
-          phase: "fallback",
-          selectedProvider,
-          selectedModel,
-          activeProvider: providerUsed,
-          activeModel: modelUsed,
-          reasonSummary: fallbackTransition.reasonSummary,
-          attemptSummaries: fallbackTransition.attemptSummaries,
-          attempts: fallbackAttempts,
-        },
-      });
-      if (verboseEnabled) {
-        const fallbackNotice = buildFallbackNotice({
-          selectedProvider,
-          selectedModel,
-          activeProvider: providerUsed,
-          activeModel: modelUsed,
-          attempts: fallbackAttempts,
-        });
-        if (fallbackNotice) {
-          verboseNotices.push({ text: fallbackNotice });
-        }
-      }
-    }
-    if (fallbackTransition.fallbackCleared) {
-      emitAgentEvent({
-        runId,
-        sessionKey,
-        stream: "lifecycle",
-        data: {
-          phase: "fallback_cleared",
-          selectedProvider,
-          selectedModel,
-          activeProvider: providerUsed,
-          activeModel: modelUsed,
-          previousActiveModel: fallbackTransition.previousState.activeModel,
-        },
-      });
-      if (verboseEnabled) {
-        verboseNotices.push({
-          text: buildFallbackClearedNotice({
-            selectedProvider,
-            selectedModel,
-            previousActiveModel: fallbackTransition.previousState.activeModel,
-          }),
-        });
-      }
+      prefixNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
     }
 
     if (autoCompactionCount > 0) {
@@ -1907,7 +1956,7 @@ export async function runReplyAgent(params: {
         })
           .then((contextContent) => {
             if (contextContent) {
-              enqueueSystemEvent(contextContent, { sessionKey, trusted: true });
+              enqueueSystemEvent(contextContent, { sessionKey });
             }
           })
           .catch(() => {
@@ -1917,10 +1966,10 @@ export async function runReplyAgent(params: {
 
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
-        verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
+        prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
       }
     }
-    const prefixPayloads = [...verboseNotices];
+    const prefixPayloads = [...prefixNotices];
     const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
     const rawUserText = isHookBlockedRun
       ? runResult.meta?.finalPromptText
@@ -2112,6 +2161,8 @@ export async function runReplyAgent(params: {
         await updateSessionStoreEntry({
           storePath,
           sessionKey,
+          skipMaintenance: true,
+          takeCacheOwnership: true,
           update: async () => ({
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: resolvedPendingText,
@@ -2161,6 +2212,7 @@ export async function runReplyAgent(params: {
       err: error,
       sessionCtx,
       resolvedVerboseLevel,
+      cfg,
     });
     if (knownFailurePayload) {
       replyOperation.fail("run_failed", error);

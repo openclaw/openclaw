@@ -15,6 +15,7 @@ import {
 } from "../../gateway/session-utils.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   describeSessionsListTool,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
@@ -201,10 +202,7 @@ export function createSessionsListTool(opts?: {
             : undefined;
         const originChannel =
           typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
-        const deliveryContext =
-          entry.deliveryContext && typeof entry.deliveryContext === "object"
-            ? (entry.deliveryContext as Record<string, unknown>)
-            : undefined;
+        const deliveryContext = deliveryContextFromSession(entry);
         const deliveryChannel = readStringValue(deliveryContext?.channel);
         const deliveryTo = readStringValue(deliveryContext?.to);
         const deliveryAccountId = readStringValue(deliveryContext?.accountId);
@@ -419,9 +417,19 @@ export function createSessionsListTool(opts?: {
         await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
       }
 
+      const visibilityMetadata =
+        visibility === "all"
+          ? undefined
+          : {
+              mode: visibility,
+              restricted: true,
+              warning: `Session visibility is restricted (effective tools.sessions.visibility=${visibility}). Results may omit sessions outside the current scope. The count field reflects only sessions within the current scope.`,
+            };
+
       return jsonResult({
         count: rows.length,
         sessions: rows,
+        ...(visibilityMetadata ? { visibility: visibilityMetadata } : {}),
       });
     },
   };

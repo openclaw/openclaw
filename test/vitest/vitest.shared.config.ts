@@ -132,6 +132,28 @@ export const sharedVitestConfig = {
   resolve: {
     alias: [
       {
+        find: "discord-api-types/v10",
+        replacement: path.join(repoRoot, "test", "vitest", "discord-api-types-v10-runtime.ts"),
+      },
+      {
+        find: "discord-api-types/gateway/v10",
+        replacement: path.join(
+          repoRoot,
+          "test",
+          "vitest",
+          "discord-api-types-gateway-v10-runtime.ts",
+        ),
+      },
+      {
+        find: "discord-api-types/payloads/v10",
+        replacement: path.join(
+          repoRoot,
+          "test",
+          "vitest",
+          "discord-api-types-payloads-v10-runtime.ts",
+        ),
+      },
+      {
         find: "openclaw/extension-api",
         replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
       },
@@ -212,6 +234,10 @@ export const sharedVitestConfig = {
       "test/vitest/vitest.extension-diffs-paths.mjs",
       "test/vitest/vitest.extension-diffs.config.ts",
       "test/vitest/vitest.extension-discord.config.ts",
+      "test/vitest/vitest.extension-active-memory-paths.mjs",
+      "test/vitest/vitest.extension-active-memory.config.ts",
+      "test/vitest/vitest.extension-codex-paths.mjs",
+      "test/vitest/vitest.extension-codex.config.ts",
       "test/vitest/vitest.extension-feishu-paths.mjs",
       "test/vitest/vitest.extension-feishu.config.ts",
       "test/vitest/vitest.extension-imessage.config.ts",

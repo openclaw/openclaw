@@ -1,5 +1,5 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
@@ -75,18 +75,14 @@ export function buildProvenanceIndex(params: {
   }
 
   const installRules = new Map<string, InstallTrackingRule>();
-  const installs = {
-    ...loadInstalledPluginIndexInstallRecordsSync({ env: params.env }),
-    ...params.installRecords,
-  };
+  const installs =
+    params.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
   for (const [pluginId, install] of Object.entries(installs)) {
     const rule: InstallTrackingRule = {
       trackedWithoutPaths: false,
       matcher: createPathMatcher(),
     };
-    const trackedPaths = [install.installPath, install.sourcePath]
-      .map((entry) => normalizeOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry));
+    const trackedPaths = normalizeTrimmedStringList([install.installPath, install.sourcePath]);
     if (trackedPaths.length === 0) {
       rule.trackedWithoutPaths = true;
     } else {

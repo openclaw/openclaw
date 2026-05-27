@@ -17,7 +17,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
-import { resolveAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
+import { resolveAvailableAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,
   type ImageSanitizationLimits,
@@ -29,6 +29,7 @@ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-blo
 import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./pi-embedded-runner/runs.js";
 import { streamWithPayloadPatch } from "./pi-embedded-runner/stream-payload-utils.js";
+import { resolveEmbeddedAgentStreamFn } from "./pi-embedded-runner/stream-resolution.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
@@ -249,13 +250,14 @@ async function resolveRuntimeModel(params: {
     provider: params.provider,
     acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
       provider: params.provider,
-      harnessRuntime: resolveAgentHarnessPolicy({
+      harnessRuntime: resolveAvailableAgentHarnessPolicy({
         provider: params.provider,
         modelId: params.model,
         config: params.cfg,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
       }).runtime,
+      config: params.cfg,
     }),
     agentDir: params.agentDir,
     sessionEntry: params.sessionEntry,
@@ -287,6 +289,9 @@ type RunBtwSideQuestionParams = {
   resolvedBlockStreamingBreak?: "text_end" | "message_end";
   opts?: GetReplyOptions;
   isNewSession: boolean;
+  messageChannel?: string;
+  messageProvider?: string;
+  currentChannelId?: string;
 };
 
 export async function runBtwSideQuestion(
@@ -443,6 +448,15 @@ export async function runBtwSideQuestion(
     workspaceDir,
     env: process.env,
   });
+  const streamFn = resolveEmbeddedAgentStreamFn({
+    currentStreamFn: streamSimple,
+    providerStreamFn,
+    sessionId,
+    signal: params.opts?.abortSignal,
+    model: runtimeModel,
+    resolvedApiKey: apiKey,
+    authProfileId,
+  });
 
   const chunker =
     params.opts?.onBlockReply && params.blockReplyChunking
@@ -471,7 +485,7 @@ export async function runBtwSideQuestion(
   };
 
   const stream = await streamWithPayloadPatch(
-    providerStreamFn ?? streamSimple,
+    streamFn,
     runtimeModel,
     {
       systemPrompt: buildBtwSystemPrompt(),

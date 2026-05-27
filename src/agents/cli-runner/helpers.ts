@@ -15,6 +15,7 @@ import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { extensionForMime } from "../../media/mime.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -116,6 +117,10 @@ export function buildCliAgentSystemPrompt(params: {
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     acpEnabled: isAcpRuntimeSpawnAvailable({ config: params.config }),
+    promptSurface: "cli_backend",
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+      surface: "cli_backend",
+    }),
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
     skillsPrompt: params.skillsPrompt,
@@ -374,14 +379,14 @@ export function buildCliArgs(params: {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (
-    !params.useResume &&
+    (!params.useResume || params.backend.systemPromptWhen === "always") &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileArg
   ) {
     args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
   } else if (
-    !params.useResume &&
+    (!params.useResume || params.backend.systemPromptWhen === "always") &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileConfigKey
@@ -393,7 +398,7 @@ export function buildCliArgs(params: {
         params.systemPromptFilePath,
       ),
     );
-  } else if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
+  } else if ((!params.useResume || params.backend.systemPromptWhen === "always") && params.systemPrompt && params.backend.systemPromptArg) {
     args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
   }
   if (!params.useResume && params.sessionId) {

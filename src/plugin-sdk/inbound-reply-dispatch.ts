@@ -13,6 +13,7 @@ import {
   deliverInboundReplyWithMessageSendContext,
   isDurableInboundReplyDeliveryHandled,
   resolveChannelTurnDispatchCounts,
+  recordDroppedChannelTurnHistory,
   runChannelTurn,
   runPreparedChannelTurn,
   throwIfDurableInboundReplyDeliveryFailed,
@@ -23,7 +24,10 @@ import type {
   DurableInboundReplyDeliveryOptions,
 } from "../channels/turn/kernel.js";
 import type { PreparedChannelTurn, RunChannelTurnParams } from "../channels/turn/types.js";
-export type { ChannelTurnRecordOptions } from "../channels/turn/types.js";
+export type {
+  ChannelTurnDroppedHistoryOptions,
+  ChannelTurnRecordOptions,
+} from "../channels/turn/types.js";
 export type { DurableInboundReplyDeliveryParams } from "../channels/turn/kernel.js";
 export type { ChannelBotLoopProtectionFacts } from "../channels/turn/kernel.js";
 export { recordChannelBotPairLoopAndCheckSuppression } from "../channels/turn/kernel.js";
@@ -83,6 +87,7 @@ export {
   hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch,
   deliverInboundReplyWithMessageSendContext as deliverDurableInboundReplyPayload,
   deliverInboundReplyWithMessageSendContext,
+  recordDroppedChannelTurnHistory,
   resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
 };
 
@@ -238,10 +243,10 @@ export async function recordChannelMessageReplyDispatch(
       });
       throwIfDurableInboundReplyDeliveryFailed(durable);
       if (isDurableInboundReplyDeliveryHandled(durable)) {
-        return;
+        return durable.delivery;
       }
     }
-    await params.deliver(normalized);
+    return await params.deliver(normalized);
   };
 
   await runPreparedChannelTurn({

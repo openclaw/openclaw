@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
@@ -22,17 +23,16 @@ vi.mock("../config/paths.js", async () => {
   };
 });
 
-let __testing: typeof import("./restart-stale-pids.js").__testing;
+let testing: typeof import("./restart-stale-pids.js").testing;
 let cleanStaleGatewayProcessesSync: typeof import("./restart-stale-pids.js").cleanStaleGatewayProcessesSync;
 let findGatewayPidsOnPortSync: typeof import("./restart-stale-pids.js").findGatewayPidsOnPortSync;
 let triggerOpenClawRestart: typeof import("./restart.js").triggerOpenClawRestart;
 
 let currentTimeMs = 0;
 const envSnapshot = captureFullEnv();
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
 beforeAll(async () => {
-  ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
+  ({ testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
     await import("./restart-stale-pids.js"));
   ({ triggerOpenClawRestart } = await import("./restart.js"));
 });
@@ -45,30 +45,21 @@ beforeEach(() => {
   currentTimeMs = 0;
   resolveLsofCommandSyncMock.mockReturnValue("/usr/sbin/lsof");
   resolveGatewayPortMock.mockReturnValue(18789);
-  __testing.setSleepSyncOverride((ms) => {
+  testing.setSleepSyncOverride((ms) => {
     currentTimeMs += ms;
   });
-  __testing.setDateNowOverride(() => currentTimeMs);
+  testing.setDateNowOverride(() => currentTimeMs);
 });
 
 afterEach(() => {
   envSnapshot.restore();
-  __testing.setSleepSyncOverride(null);
-  __testing.setDateNowOverride(null);
-  if (originalPlatformDescriptor) {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
-  }
+  testing.setSleepSyncOverride(null);
+  testing.setDateNowOverride(null);
   vi.restoreAllMocks();
 });
 
 function setPlatform(platform: NodeJS.Platform): void {
-  if (!originalPlatformDescriptor) {
-    return;
-  }
-  Object.defineProperty(process, "platform", {
-    ...originalPlatformDescriptor,
-    value: platform,
-  });
+  mockProcessPlatform(platform);
 }
 
 function requireFirstSpawnSyncCall(): [unknown, unknown, unknown] {
@@ -175,7 +166,8 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
 
     expect(killed).toEqual([stalePid]);
     expect(resolveGatewayPortMock).not.toHaveBeenCalled();
-    expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+    const lsofCalls = spawnSyncMock.mock.calls.filter((call) => call[0] === "/usr/sbin/lsof");
+    expect(lsofCalls).toHaveLength(2);
     const [command, args, options] = requireFirstSpawnSyncCall();
     expect(command).toBe("/usr/sbin/lsof");
     expect(args).toEqual(["-nP", "-iTCP:19999", "-sTCP:LISTEN", "-Fpc"]);

@@ -7,12 +7,14 @@ import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
 import {
   resolveDiscordMessageSnapshots,
   resolveDiscordMessageStickers,
   resolveDiscordReferencedForwardMessage,
+  resolveDiscordReferencedReplyMessage,
   resolveDiscordSnapshotStickers,
 } from "./message-forwarded.js";
 import { mergeAbortSignals } from "./timeouts.js";
@@ -80,7 +82,7 @@ function mergeHostnameList(...lists: Array<string[] | undefined>): string[] | un
   if (merged.length === 0) {
     return undefined;
   }
-  return Array.from(new Set(merged));
+  return uniqueStrings(merged);
 }
 
 function resolveDiscordMediaSsrFPolicy(policy?: SsrFPolicy): SsrFPolicy {
@@ -193,6 +195,42 @@ export async function resolveForwardedMediaList(
     maxBytes,
     out,
     errorPrefix: "discord: failed to download forwarded sticker",
+    fetchImpl: options?.fetchImpl,
+    ssrfPolicy: resolvedSsrFPolicy,
+    readIdleTimeoutMs: options?.readIdleTimeoutMs,
+    totalTimeoutMs: options?.totalTimeoutMs,
+    abortSignal: options?.abortSignal,
+  });
+  return out;
+}
+
+export async function resolveReferencedReplyMediaList(
+  message: Message,
+  maxBytes: number,
+  options?: DiscordMediaResolveOptions,
+): Promise<DiscordMediaInfo[]> {
+  const referencedReply = resolveDiscordReferencedReplyMessage(message);
+  const out: DiscordMediaInfo[] = [];
+  if (!referencedReply) {
+    return out;
+  }
+  const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(options?.ssrfPolicy);
+  await appendResolvedMediaFromAttachments({
+    attachments: referencedReply.attachments,
+    maxBytes,
+    out,
+    errorPrefix: "discord: failed to download referenced reply attachment",
+    fetchImpl: options?.fetchImpl,
+    ssrfPolicy: resolvedSsrFPolicy,
+    readIdleTimeoutMs: options?.readIdleTimeoutMs,
+    totalTimeoutMs: options?.totalTimeoutMs,
+    abortSignal: options?.abortSignal,
+  });
+  await appendResolvedMediaFromStickers({
+    stickers: resolveDiscordMessageStickers(referencedReply),
+    maxBytes,
+    out,
+    errorPrefix: "discord: failed to download referenced reply sticker",
     fetchImpl: options?.fetchImpl,
     ssrfPolicy: resolvedSsrFPolicy,
     readIdleTimeoutMs: options?.readIdleTimeoutMs,
