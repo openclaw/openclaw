@@ -122,11 +122,13 @@ function hasPlainReasoningFinalSilentToken(text: string, token: string): boolean
     .filter(Boolean);
   const finalLine = lines.at(-1);
   const previousLines = lines.slice(0, -1).join("\n");
-  return Boolean(
-    finalLine &&
-    silentIntentTextRe.test(finalLine) &&
-    previousLines &&
-    !substantiveAnswerCueRe.test(previousLines),
+  return (
+    Boolean(
+      finalLine &&
+      silentIntentTextRe.test(finalLine) &&
+      previousLines &&
+      !substantiveAnswerCueRe.test(previousLines),
+    ) || !substantiveAnswerCueRe.test(withoutToken)
   );
 }
 
