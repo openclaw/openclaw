@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MediaFileType, type UploadMediaResponse } from "../types.js";
-import { QQBOT_MEDIA_SSRF_POLICY } from "../utils/file-utils.js";
 import type { ApiClient } from "./api-client.js";
 import { MediaApi } from "./media.js";
 import type { TokenManager } from "./token.js";
@@ -10,6 +9,15 @@ const resolvePinnedHostnameWithPolicyMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock,
 }));
+
+async function useRealSsrfResolverOnce(): Promise<void> {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  resolvePinnedHostnameWithPolicyMock.mockImplementationOnce(
+    actual.resolvePinnedHostnameWithPolicy,
+  );
+}
 
 const UPLOAD_RESPONSE: UploadMediaResponse = {
   file_uuid: "uuid-1",
@@ -33,14 +41,14 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
   beforeEach(() => {
     resolvePinnedHostnameWithPolicyMock.mockReset();
     resolvePinnedHostnameWithPolicyMock.mockResolvedValue({
-      hostname: "media.qq.com",
+      hostname: "cdn.example.com",
       addresses: ["203.0.113.10"],
       lookup: vi.fn(),
     });
   });
 
   it.each([MediaFileType.IMAGE, MediaFileType.VIDEO, MediaFileType.FILE])(
-    "validates %s URL uploads with the QQBot media SSRF policy",
+    "preserves public HTTPS %s URL uploads with the generic SSRF guard",
     async (fileType) => {
       const client = mockApiClient();
       const tokenManager = mockTokenManager();
@@ -51,13 +59,11 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
         "user-openid",
         fileType,
         { appId: "app-id", clientSecret: "client-secret" },
-        { url: "https://media.qq.com/assets/photo.png" },
+        { url: "https://cdn.example.com/assets/photo.png" },
       );
 
       expect(result).toBe(UPLOAD_RESPONSE);
-      expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("media.qq.com", {
-        policy: QQBOT_MEDIA_SSRF_POLICY,
-      });
+      expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("cdn.example.com");
       expect(tokenManager.getAccessToken).toHaveBeenCalledWith("app-id", "client-secret");
       expect(client.request).toHaveBeenCalledWith(
         "token-1",
@@ -66,7 +72,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
         {
           file_type: fileType,
           srv_send_msg: false,
-          url: "https://media.qq.com/assets/photo.png",
+          url: "https://cdn.example.com/assets/photo.png",
         },
         {
           redactBodyKeys: ["file_data"],
@@ -75,6 +81,26 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       );
     },
   );
+
+  it("rejects invalid direct-upload URLs before calling the QQ API", async () => {
+    const client = mockApiClient();
+    const tokenManager = mockTokenManager();
+    const api = new MediaApi(client, tokenManager);
+
+    await expect(
+      api.uploadMedia(
+        "c2c",
+        "user-openid",
+        MediaFileType.IMAGE,
+        { appId: "app-id", clientSecret: "client-secret" },
+        { url: "not a url" },
+      ),
+    ).rejects.toThrow("Direct-upload media URL must be a valid URL");
+
+    expect(resolvePinnedHostnameWithPolicyMock).not.toHaveBeenCalled();
+    expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalled();
+  });
 
   it("rejects non-HTTPS direct-upload URLs before calling the QQ API", async () => {
     const client = mockApiClient();
@@ -96,9 +122,86 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
-  it("does not forward direct-upload URLs rejected by the SSRF policy", async () => {
+  it.each(["127.0.0.1", "169.254.169.254", "10.0.0.1", "192.168.1.1"])(
+    "does not forward direct-upload URLs rejected by the SSRF guard: %s",
+    async (host) => {
+      resolvePinnedHostnameWithPolicyMock.mockRejectedValueOnce(
+        new Error("Blocked hostname or private/internal/special-use IP address"),
+      );
+      const client = mockApiClient();
+      const tokenManager = mockTokenManager();
+      const api = new MediaApi(client, tokenManager);
+
+      await expect(
+        api.uploadMedia(
+          "group",
+          "group-openid",
+          MediaFileType.IMAGE,
+          { appId: "app-id", clientSecret: "client-secret" },
+          { url: `https://${host}/latest/meta-data/` },
+        ),
+      ).rejects.toThrow("Blocked hostname");
+
+      expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith(host);
+      expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
+      expect(client.request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows public direct-upload addresses under the real SSRF resolver", async () => {
+    await useRealSsrfResolverOnce();
+    const client = mockApiClient();
+    const tokenManager = mockTokenManager();
+    const api = new MediaApi(client, tokenManager);
+
+    const result = await api.uploadMedia(
+      "c2c",
+      "user-openid",
+      MediaFileType.IMAGE,
+      { appId: "app-id", clientSecret: "client-secret" },
+      { url: "https://93.184.216.34/assets/photo.png" },
+    );
+
+    expect(result).toBe(UPLOAD_RESPONSE);
+    expect(client.request).toHaveBeenCalledWith(
+      "token-1",
+      "POST",
+      expect.any(String),
+      {
+        file_type: MediaFileType.IMAGE,
+        srv_send_msg: false,
+        url: "https://93.184.216.34/assets/photo.png",
+      },
+      {
+        redactBodyKeys: ["file_data"],
+        uploadRequest: true,
+      },
+    );
+  });
+
+  it("blocks private direct-upload addresses under the real SSRF resolver", async () => {
+    await useRealSsrfResolverOnce();
+    const client = mockApiClient();
+    const tokenManager = mockTokenManager();
+    const api = new MediaApi(client, tokenManager);
+
+    await expect(
+      api.uploadMedia(
+        "group",
+        "group-openid",
+        MediaFileType.IMAGE,
+        { appId: "app-id", clientSecret: "client-secret" },
+        { url: "https://127.0.0.1/latest/meta-data/" },
+      ),
+    ).rejects.toThrow("Blocked hostname");
+
+    expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("does not forward direct-upload hostnames rejected by the SSRF guard", async () => {
     resolvePinnedHostnameWithPolicyMock.mockRejectedValueOnce(
-      new Error("Blocked hostname (not in allowlist): 169.254.169.254"),
+      new Error("Blocked: resolves to private/internal/special-use IP address"),
     );
     const client = mockApiClient();
     const tokenManager = mockTokenManager();
@@ -110,13 +213,11 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
         "group-openid",
         MediaFileType.IMAGE,
         { appId: "app-id", clientSecret: "client-secret" },
-        { url: "https://169.254.169.254/latest/meta-data/" },
+        { url: "https://attacker.example/latest/meta-data/" },
       ),
-    ).rejects.toThrow("Blocked hostname");
+    ).rejects.toThrow("resolves to private");
 
-    expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("169.254.169.254", {
-      policy: QQBOT_MEDIA_SSRF_POLICY,
-    });
+    expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("attacker.example");
     expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
     expect(client.request).not.toHaveBeenCalled();
   });

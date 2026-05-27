@@ -20,7 +20,6 @@ import {
   type MessageResponse,
   type EngineLogger,
 } from "../types.js";
-import { QQBOT_MEDIA_SSRF_POLICY } from "../utils/file-utils.js";
 import { ApiClient } from "./api-client.js";
 import { withRetry, UPLOAD_RETRY_POLICY } from "./retry.js";
 import { mediaUploadPath, messagePath, getNextMsgSeq } from "./routes.js";
@@ -64,9 +63,9 @@ async function assertDirectUploadUrlAllowed(url: string): Promise<string> {
     throw new Error("Direct-upload media URL must use HTTPS");
   }
 
-  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
-    policy: QQBOT_MEDIA_SSRF_POLICY,
-  });
+  // urlDirectUpload is documented as public-URL support. Use the generic
+  // SSRF guard here; the QQ/Tencent host allowlist belongs to fallback downloads.
+  await resolvePinnedHostnameWithPolicy(parsed.hostname);
   return parsed.toString();
 }
 
