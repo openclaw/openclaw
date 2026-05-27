@@ -359,7 +359,13 @@ export function createSessionsSendTool(opts?: {
         });
       }
       const reply = result.replyText;
-      startA2AFlow(reply ?? undefined);
+      // Only run A2A announce for cross-session (peer) waited sends.
+      // When the requester and target are the same session (self/owned-child),
+      // the inline reply is already delivered to the caller; running A2A would
+      // announce the same reply again, causing a duplicate.
+      if (requesterSessionKey !== resolvedKey) {
+        startA2AFlow(reply ?? undefined);
+      }
 
       return jsonResult({
         runId,
