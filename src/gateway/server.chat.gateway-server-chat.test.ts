@@ -152,6 +152,14 @@ describe("gateway server chat", () => {
     expect(res.payload?.status).toBe("timeout");
   };
 
+  const expectAgentWaitError = (res: Awaited<ReturnType<typeof rpcReq>>, error?: string) => {
+    expect(res.ok).toBe(true);
+    expect(res.payload?.status).toBe("error");
+    if (error !== undefined) {
+      expect(res.payload?.error).toBe(error);
+    }
+  };
+
   const expectAgentWaitStartedAt = (res: Awaited<ReturnType<typeof rpcReq>>, startedAt: number) => {
     expect(res.ok).toBe(true);
     expect(res.payload?.status).toBe("ok");
@@ -1665,7 +1673,7 @@ describe("gateway server chat", () => {
         });
 
         const res = await waitP;
-        expectAgentWaitTimeout(res);
+        expectAgentWaitError(res, "boom");
       }
 
       {

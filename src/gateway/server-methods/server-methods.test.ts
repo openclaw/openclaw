@@ -336,6 +336,40 @@ describe("waitForAgentJob", () => {
     expect(fresh?.startedAt).toBe(200);
     expect(fresh?.endedAt).toBe(210);
   });
+
+  it("surfaces pending error snapshot when outer timeout fires before error grace period", async () => {
+    // Regression: when a lifecycle `error` event arrives but the outer waitForAgentJob
+    // timeout fires before the error's grace period elapses, the pending error snapshot
+    // was discarded and the caller received null (generic timeout) instead of the actual
+    // error. This test exercises the race condition with fake timers.
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      // Start waiting with a 5s outer timeout (shorter than the 15s error grace period).
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      // Emit a lifecycle error — the global listener queues it in pendingAgentRunErrors
+      // and the local listener arms an inner grace-period timer.
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", error: "transient-auth-failure" },
+      });
+
+      // Advance past the outer timeout (5s) but not past the grace period (15s).
+      // With the fix the outer timer reads pendingAgentRunErrors and surfaces the
+      // error snapshot; without the fix it calls finish(null) and discards it.
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe("error");
+      expect(result?.error).toBe("transient-auth-failure");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {
