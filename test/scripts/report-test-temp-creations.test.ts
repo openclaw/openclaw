@@ -20,6 +20,7 @@ describe("report-test-temp-creations", () => {
       'Sync(path.join(os.tmpdir(), "case-"));',
     ].join("");
     const mkdtempSource = ["const tempRoot = fs.", "mkdtemp", 'Sync("case-");'].join("");
+    const tmpDirSource = ["const tempRoot = tmp.", "dir", 'Sync({ prefix: "case-" });'].join("");
     const diff = [
       "diff --git a/src/example.test.ts b/src/example.test.ts",
       "--- a/src/example.test.ts",
@@ -37,7 +38,7 @@ describe("report-test-temp-creations", () => {
       "--- a/src/helper.test-utils.ts",
       "+++ b/src/helper.test-utils.ts",
       "@@ -1,0 +2,2 @@",
-      '+const tempRoot = tmp.dirSync({ prefix: "case-" });',
+      `+${tmpDirSource}`,
       "+const tempParent = os.tmpdir();",
       "diff --git a/test/helper.test-support.mjs b/test/helper.test-support.mjs",
       "--- a/test/helper.test-support.mjs",
@@ -82,43 +83,43 @@ describe("report-test-temp-creations", () => {
         file: "src/helper.test-utils.ts",
         line: 2,
         reason: "new tmp.dir temp directory creation",
-        source: 'const tempRoot = tmp.dirSync({ prefix: "case-" });',
+        source: tmpDirSource,
       },
       {
         file: "test/helper.test-support.mjs",
         line: 2,
         reason: "new mkdtemp temp directory creation",
-        source: 'const tempRoot = fs.mkdtempSync("case-");',
+        source: mkdtempSource,
       },
       {
         file: "test/helpers/temp-fixture.ts",
         line: 2,
         reason: "new mkdtemp temp directory creation",
-        source: 'const tempRoot = fs.mkdtempSync("case-");',
+        source: mkdtempSource,
       },
       {
         file: "src/test-utils/temp-fixture.ts",
         line: 2,
         reason: "new mkdtemp temp directory creation",
-        source: 'const tempRoot = fs.mkdtempSync("case-");',
+        source: mkdtempSource,
       },
       {
         file: "packages/foo/__tests__/helper.ts",
         line: 2,
         reason: "new mkdtemp temp directory creation",
-        source: 'const tempRoot = fs.mkdtempSync("case-");',
+        source: mkdtempSource,
       },
       {
         file: "packages/foo/tests/helper.ts",
         line: 2,
         reason: "new mkdtemp temp directory creation",
-        source: 'const tempRoot = fs.mkdtempSync("case-");',
+        source: mkdtempSource,
       },
       {
         file: "extensions/discord/src/monitor/test-http-helpers.ts",
         line: 2,
         reason: "new mkdtemp temp directory creation",
-        source: 'const tempRoot = fs.mkdtempSync("case-");',
+        source: mkdtempSource,
       },
     ]);
   });
