@@ -32,6 +32,36 @@
     "!dist/.runtime-postbuildstamp",
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
+    "!dist/plugin-sdk/agent-runtime-test-contracts.js",
+    "!dist/plugin-sdk/agent-runtime-test-contracts.d.ts",
+    "!dist/plugin-sdk/channel-contract-testing.js",
+    "!dist/plugin-sdk/channel-contract-testing.d.ts",
+    "!dist/plugin-sdk/channel-target-testing.js",
+    "!dist/plugin-sdk/channel-target-testing.d.ts",
+    "!dist/plugin-sdk/channel-test-helpers.js",
+    "!dist/plugin-sdk/channel-test-helpers.d.ts",
+    "!dist/plugin-sdk/plugin-test-api.js",
+    "!dist/plugin-sdk/plugin-test-api.d.ts",
+    "!dist/plugin-sdk/plugin-test-contracts.js",
+    "!dist/plugin-sdk/plugin-test-contracts.d.ts",
+    "!dist/plugin-sdk/plugin-test-runtime.js",
+    "!dist/plugin-sdk/plugin-test-runtime.d.ts",
+    "!dist/plugin-sdk/provider-http-test-mocks.js",
+    "!dist/plugin-sdk/provider-http-test-mocks.d.ts",
+    "!dist/plugin-sdk/provider-test-contracts.js",
+    "!dist/plugin-sdk/provider-test-contracts.d.ts",
+    "!dist/plugin-sdk/test-env.js",
+    "!dist/plugin-sdk/test-env.d.ts",
+    "!dist/plugin-sdk/test-fixtures.js",
+    "!dist/plugin-sdk/test-fixtures.d.ts",
+    "!dist/plugin-sdk/test-node-mocks.js",
+    "!dist/plugin-sdk/test-node-mocks.d.ts",
+    "!dist/plugin-sdk/testing.js",
+    "!dist/plugin-sdk/testing.d.ts",
+    "!dist/plugin-sdk/src/agents/test-helpers/**",
+    "!dist/plugin-sdk/src/test-helpers/**",
+    "!dist/plugin-sdk/src/test-utils/**",
+    "!dist/plugin-sdk/src/plugin-sdk/test-helpers/**",
     "!dist/extensions/acpx/**",
     "!dist/extensions/amazon-bedrock/**",
     "!dist/extensions/amazon-bedrock-mantle/**",
@@ -570,54 +600,6 @@
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
       "default": "./dist/plugin-sdk/lazy-runtime.js"
     },
-    "./plugin-sdk/agent-runtime-test-contracts": {
-      "types": "./dist/plugin-sdk/agent-runtime-test-contracts.d.ts",
-      "default": "./dist/plugin-sdk/agent-runtime-test-contracts.js"
-    },
-    "./plugin-sdk/channel-target-testing": {
-      "types": "./dist/plugin-sdk/channel-target-testing.d.ts",
-      "default": "./dist/plugin-sdk/channel-target-testing.js"
-    },
-    "./plugin-sdk/channel-test-helpers": {
-      "types": "./dist/plugin-sdk/channel-test-helpers.d.ts",
-      "default": "./dist/plugin-sdk/channel-test-helpers.js"
-    },
-    "./plugin-sdk/plugin-test-api": {
-      "types": "./dist/plugin-sdk/plugin-test-api.d.ts",
-      "default": "./dist/plugin-sdk/plugin-test-api.js"
-    },
-    "./plugin-sdk/plugin-test-contracts": {
-      "types": "./dist/plugin-sdk/plugin-test-contracts.d.ts",
-      "default": "./dist/plugin-sdk/plugin-test-contracts.js"
-    },
-    "./plugin-sdk/plugin-test-runtime": {
-      "types": "./dist/plugin-sdk/plugin-test-runtime.d.ts",
-      "default": "./dist/plugin-sdk/plugin-test-runtime.js"
-    },
-    "./plugin-sdk/provider-http-test-mocks": {
-      "types": "./dist/plugin-sdk/provider-http-test-mocks.d.ts",
-      "default": "./dist/plugin-sdk/provider-http-test-mocks.js"
-    },
-    "./plugin-sdk/provider-test-contracts": {
-      "types": "./dist/plugin-sdk/provider-test-contracts.d.ts",
-      "default": "./dist/plugin-sdk/provider-test-contracts.js"
-    },
-    "./plugin-sdk/test-env": {
-      "types": "./dist/plugin-sdk/test-env.d.ts",
-      "default": "./dist/plugin-sdk/test-env.js"
-    },
-    "./plugin-sdk/test-fixtures": {
-      "types": "./dist/plugin-sdk/test-fixtures.d.ts",
-      "default": "./dist/plugin-sdk/test-fixtures.js"
-    },
-    "./plugin-sdk/test-node-mocks": {
-      "types": "./dist/plugin-sdk/test-node-mocks.d.ts",
-      "default": "./dist/plugin-sdk/test-node-mocks.js"
-    },
-    "./plugin-sdk/testing": {
-      "types": "./dist/plugin-sdk/testing.d.ts",
-      "default": "./dist/plugin-sdk/testing.js"
-    },
     "./plugin-sdk/temp-path": {
       "types": "./dist/plugin-sdk/temp-path.d.ts",
       "default": "./dist/plugin-sdk/temp-path.js"
@@ -685,10 +667,6 @@
     "./plugin-sdk/boolean-param": {
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"
-    },
-    "./plugin-sdk/channel-contract-testing": {
-      "types": "./dist/plugin-sdk/channel-contract-testing.d.ts",
-      "default": "./dist/plugin-sdk/channel-contract-testing.js"
     },
     "./plugin-sdk/dangerous-name-runtime": {
       "types": "./dist/plugin-sdk/dangerous-name-runtime.d.ts",

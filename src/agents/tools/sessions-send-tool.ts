@@ -231,7 +231,9 @@ async function startAgentRun(params: {
       } catch (err) {
         const queueSummary =
           formatEmbeddedPiQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
-        throw new Error(`${queueSummary}; fallback_failed error=${formatErrorMessage(err)}`);
+        throw new Error(`${queueSummary}; fallback_failed error=${formatErrorMessage(err)}`, {
+          cause: err,
+        });
       }
     }
     const response = await params.callGateway<{ runId: string }>({
