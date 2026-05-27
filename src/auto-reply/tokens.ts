@@ -107,6 +107,8 @@ function hasSilentIntentFinalSilentToken(text: string, token: string): boolean {
 
 const substantiveAnswerCueRe =
   /\b(?:answer|here(?:'s|\s+is)|tell\s+them|you\s+(?:should|can|could|need|must)|please|try|use|send|service\s+is|resolved|retry|yes|no,|sure)\b/i;
+const bareReasoningPlaceholderRe =
+  /^\s*(?:(?:internal|private)\s+)?(?:reasoning|thinking|thoughts?|analysis)(?:\s+notes?)?\s*$/i;
 
 function hasPlainReasoningFinalSilentToken(text: string, token: string): boolean {
   const withoutToken = stripFinalSilentToken(text, token);
@@ -128,7 +130,7 @@ function hasPlainReasoningFinalSilentToken(text: string, token: string): boolean
       silentIntentTextRe.test(finalLine) &&
       previousLines &&
       !substantiveAnswerCueRe.test(previousLines),
-    ) || !substantiveAnswerCueRe.test(withoutToken)
+    ) || bareReasoningPlaceholderRe.test(withoutToken)
   );
 }
 
