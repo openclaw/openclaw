@@ -29,6 +29,7 @@ import {
 } from "../pi-embedded-runner/runs.js";
 import {
   type AgentWaitResult,
+  compensateAfterWaitTimeout,
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "../run-wait.js";
@@ -620,13 +621,30 @@ export function createSessionsSendTool(opts?: {
       });
 
       if (result.status === "timeout") {
+        const compensation = await compensateAfterWaitTimeout({
+          sessionKey: resolvedKey,
+          baseline: baselineReply,
+          limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+          callGateway: gatewayCall,
+        });
+
+        if (compensation.newReply) {
+          startA2AFlow(compensation.newReply);
+          return jsonResult({
+            runId,
+            status: "ok",
+            reply: compensation.newReply,
+            sessionKey: displayKey,
+            delivery: compensation.delivery,
+          });
+        }
         if (!isTerminalAgentWaitTimeout(result)) {
           startA2AFlow(undefined, runId);
           return jsonResult({
             runId,
             status: "accepted",
             sessionKey: displayKey,
-            delivery,
+            delivery: compensation.delivery,
           });
         }
         return jsonResult({
