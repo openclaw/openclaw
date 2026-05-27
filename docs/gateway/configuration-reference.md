@@ -653,6 +653,7 @@ See [Multiple Gateways](/gateway/multiple-gateways).
       certPath: "/etc/openclaw/tls/server.crt",
       keyPath: "/etc/openclaw/tls/server.key",
       caPath: "/etc/openclaw/tls/ca-bundle.crt",
+      extraCaCerts: "/etc/openclaw/tls/node-extra-ca-bundle.crt",
     },
   },
 }
@@ -663,6 +664,7 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 - `certPath`: filesystem path to the TLS certificate file.
 - `keyPath`: filesystem path to the TLS private key file; keep permission-restricted.
 - `caPath`: optional CA bundle path for client verification or custom trust chains.
+- `extraCaCerts`: optional CA bundle path injected into `NODE_EXTRA_CA_CERTS` for the managed gateway service. Use this when the gateway process must trust a private CA or self-signed local gateway certificate after reinstall.
 
 ### `gateway.reload`
 
