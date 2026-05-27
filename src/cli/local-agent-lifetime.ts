@@ -26,8 +26,11 @@ const AGENT_VALUE_FLAGS = new Set([
 type LocalAgentHardTimeoutDeps = {
   argv?: string[];
   setTimeout?: typeof globalThis.setTimeout;
-  stderr?: Pick<NodeJS.WriteStream, "write">;
+  clearTimeout?: typeof globalThis.clearTimeout;
+  stderr?: Pick<NodeJS.WriteStream, "write"> &
+    Partial<Pick<NodeJS.WriteStream, "destroyed" | "writableEnded">>;
   exit?: (code?: number) => never | void;
+  drainTimeoutMs?: number;
 };
 
 type CliCompletionExitDeps = {
@@ -51,6 +54,12 @@ type ParsedLocalAgentArgs = {
   hasHelpOrVersion: boolean;
   hasLocal: boolean;
   timeoutRaw: string | undefined;
+};
+
+type StreamFlushDeps = Required<
+  Pick<CliCompletionExitDeps, "setTimeout" | "clearTimeout" | "drainTimeoutMs">
+> & {
+  unrefTimeout?: boolean;
 };
 
 function parseTimeoutSeconds(raw: string | undefined): number | undefined {
@@ -176,24 +185,32 @@ export function armLocalAgentHardTimeout(deps: LocalAgentHardTimeoutDeps = {}): 
     return;
   }
   const setTimer = deps.setTimeout ?? globalThis.setTimeout;
+  const clearTimer = deps.clearTimeout ?? globalThis.clearTimeout;
   const stderr = deps.stderr ?? process.stderr;
   const exit = deps.exit ?? process.exit.bind(process);
   const timer = setTimer(() => {
-    try {
-      stderr.write(
-        `local agent command timed out after ${plan.timeoutSeconds}s plus ${LOCAL_AGENT_HARD_TIMEOUT_GRACE_SECONDS}s grace\n`,
-      );
-    } catch {}
-    try {
-      exit(124);
-    } catch {}
+    void writeAndFlushStream(
+      stderr,
+      `local agent command timed out after ${plan.timeoutSeconds}s plus ${LOCAL_AGENT_HARD_TIMEOUT_GRACE_SECONDS}s grace\n`,
+      {
+        setTimeout: setTimer,
+        clearTimeout: clearTimer,
+        drainTimeoutMs: deps.drainTimeoutMs ?? CLI_COMPLETION_STREAM_DRAIN_TIMEOUT_MS,
+        unrefTimeout: false,
+      },
+    ).then(() => {
+      try {
+        exit(124);
+      } catch {}
+    });
   }, plan.timeoutMs);
   timer.unref?.();
 }
 
-function waitForStreamFlush(
+function writeAndFlushStream(
   stream: CliCompletionExitDeps["stdout"],
-  deps: Required<Pick<CliCompletionExitDeps, "setTimeout" | "clearTimeout" | "drainTimeoutMs">>,
+  chunk: string,
+  deps: StreamFlushDeps,
 ): Promise<void> {
   if (!stream || stream.destroyed || stream.writableEnded) {
     return Promise.resolve();
@@ -213,13 +230,22 @@ function waitForStreamFlush(
       resolve();
     };
     timer = deps.setTimeout(finish, deps.drainTimeoutMs);
-    timer.unref?.();
+    if (deps.unrefTimeout !== false) {
+      timer.unref?.();
+    }
     try {
-      stream.write("", finish);
+      stream.write(chunk, finish);
     } catch {
       finish();
     }
   });
+}
+
+function waitForStreamFlush(
+  stream: CliCompletionExitDeps["stdout"],
+  deps: StreamFlushDeps,
+): Promise<void> {
+  return writeAndFlushStream(stream, "", deps);
 }
 
 export async function exitAfterLocalAgentCompletion(

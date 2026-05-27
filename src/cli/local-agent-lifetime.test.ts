@@ -4,6 +4,7 @@ import {
   exitAfterLocalAgentCompletion,
   resolveLocalAgentHardTimeoutPlan,
 } from "./local-agent-lifetime.js";
+import { normalizeWindowsArgv } from "./windows-argv.js";
 
 const agentLocalArgv = (...args: string[]) => ["node", "openclaw", "agent", "--local", ...args];
 
@@ -42,6 +43,25 @@ describe("resolveLocalAgentHardTimeoutPlan", () => {
     expect(
       resolveLocalAgentHardTimeoutPlan({
         argv: ["node", "openclaw", "--profile", "dev", "agent", "--local", "--timeout", "2"],
+      }),
+    ).toEqual({
+      timeoutMs: 32_000,
+      timeoutSeconds: 2,
+    });
+    expect(
+      resolveLocalAgentHardTimeoutPlan({
+        argv: normalizeWindowsArgv(
+          [
+            "openclaw",
+            "C:\\Program Files\\nodejs\\node.exe",
+            "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
+            "agent",
+            "--local",
+            "--timeout",
+            "2",
+          ],
+          { platform: "win32", execPath: "C:\\Program Files\\nodejs\\node.exe" },
+        ),
       }),
     ).toEqual({
       timeoutMs: 32_000,
@@ -107,20 +127,28 @@ describe("resolveLocalAgentHardTimeoutPlan", () => {
 });
 
 describe("armLocalAgentHardTimeout", () => {
-  it("exits 124 and reports the resolved timeout when the hard timer fires", () => {
+  it("exits 124 and reports the resolved timeout when the hard timer fires", async () => {
     const unref = vi.fn();
     let callback: (() => void) | undefined;
+    let flushCallback: (() => void) | undefined;
     const setTimeout = vi.fn((cb: () => void, timeoutMs: number) => {
-      callback = cb;
-      expect(timeoutMs).toBe(31_000);
+      if (timeoutMs === 31_000) {
+        callback = cb;
+      } else {
+        expect(timeoutMs).toBe(250);
+      }
       return { unref };
     });
-    const write = vi.fn();
+    const clearTimeout = vi.fn();
+    const write = vi.fn((_chunk: string, cb: () => void) => {
+      flushCallback = cb;
+    });
     const exit = vi.fn();
 
     armLocalAgentHardTimeout({
       argv: agentLocalArgv("--timeout=1"),
       setTimeout: setTimeout as never,
+      clearTimeout: clearTimeout as never,
       stderr: { write } as never,
       exit,
     });
@@ -130,8 +158,16 @@ describe("armLocalAgentHardTimeout", () => {
 
     callback?.();
 
-    expect(write).toHaveBeenCalledWith("local agent command timed out after 1s plus 30s grace\n");
+    expect(write).toHaveBeenCalledWith(
+      "local agent command timed out after 1s plus 30s grace\n",
+      expect.any(Function),
+    );
+    expect(exit).not.toHaveBeenCalled();
+    flushCallback?.();
+    await Promise.resolve();
+
     expect(exit).toHaveBeenCalledWith(124);
+    expect(clearTimeout).toHaveBeenCalledOnce();
   });
 });
 

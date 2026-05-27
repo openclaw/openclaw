@@ -6,6 +6,7 @@ import {
   armLocalAgentHardTimeout,
   exitAfterLocalAgentCompletion,
 } from "./cli/local-agent-lifetime.js";
+import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -89,6 +90,7 @@ if (!isMain) {
 
 if (isMain) {
   const { restoreTerminalState } = await import("./terminal/restore.js");
+  const cliArgv = normalizeWindowsArgv(process.argv);
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
@@ -119,11 +121,11 @@ if (isMain) {
     process.exit(1);
   });
 
-  armLocalAgentHardTimeout();
+  armLocalAgentHardTimeout({ argv: cliArgv });
 
-  void runLegacyCliEntry(process.argv)
+  void runLegacyCliEntry(cliArgv)
     .then(() => {
-      return exitAfterLocalAgentCompletion();
+      return exitAfterLocalAgentCompletion({ argv: cliArgv });
     })
     .catch((err) => {
       for (const line of formatCliFailureLines({
