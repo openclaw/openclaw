@@ -2,9 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import type { UsageProps } from "./views/usageTypes.ts";
 
 const loadUsageMock = vi.hoisted(() => vi.fn(async () => {}));
-const renderUsageMock = vi.hoisted(() => vi.fn(() => null));
+const renderUsageMock = vi.hoisted(() => vi.fn((_props: UsageProps) => null));
 
 vi.mock("./controllers/usage.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./controllers/usage.ts")>();
@@ -63,7 +64,12 @@ describe("renderUsageTab", () => {
     const state = createState({ usageQuery: "", usageQueryDraft: "agent:research " });
 
     renderUsageTab(state);
-    renderUsageMock.mock.calls[0]?.[0].callbacks.filters.onApplyQuery();
+    expect(renderUsageMock).toHaveBeenCalled();
+    const props = renderUsageMock.mock.calls[0]?.[0];
+    if (!props) {
+      throw new Error("expected renderUsage props");
+    }
+    props.callbacks.filters.onApplyQuery();
 
     expect(state.usageQuery).toBe("agent:research ");
     expect(loadUsageMock).toHaveBeenCalledWith(state);

@@ -34,15 +34,18 @@ export type UsageState = {
 
 const LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY = "openclaw.control.usage.date-params.v1";
 const LEGACY_USAGE_SCOPE_PARAMS_STORAGE_KEY = "openclaw.control.usage.scope-params.v1";
+const LEGACY_USAGE_AGENT_PARAMS_STORAGE_KEY = "openclaw.control.usage.agent-params.v1";
 const LEGACY_USAGE_DATE_PARAMS_MODE_RE = /unexpected property ['"]mode['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_OFFSET_RE = /unexpected property ['"]utcoffset['"]/i;
 const LEGACY_USAGE_SCOPE_PARAMS_GROUP_BY_RE = /unexpected property ['"]groupby['"]/i;
 const LEGACY_USAGE_SCOPE_PARAMS_INCLUDE_HISTORICAL_RE =
   /unexpected property ['"]includehistorical['"]/i;
+const LEGACY_USAGE_AGENT_PARAMS_AGENT_ID_RE = /unexpected property ['"]agentid['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_INVALID_RE = /invalid sessions\.usage params/i;
 
 let legacyUsageDateParamsCache: Set<string> | null = null;
 let legacyUsageScopeParamsCache: Set<string> | null = null;
+let legacyUsageAgentParamsCache: Set<string> | null = null;
 
 function loadLegacyGatewayParamCache(storageKey: string): Set<string> {
   const raw = getSafeLocalStorage()?.getItem(storageKey);
@@ -93,6 +96,15 @@ function getLegacyUsageScopeParamsCache(): Set<string> {
   return legacyUsageScopeParamsCache;
 }
 
+function getLegacyUsageAgentParamsCache(): Set<string> {
+  if (!legacyUsageAgentParamsCache) {
+    legacyUsageAgentParamsCache = loadLegacyGatewayParamCache(
+      LEGACY_USAGE_AGENT_PARAMS_STORAGE_KEY,
+    );
+  }
+  return legacyUsageAgentParamsCache;
+}
+
 function normalizeGatewayCompatibilityKey(gatewayUrl?: string): string {
   const trimmed = gatewayUrl?.trim();
   if (!trimmed) {
@@ -131,6 +143,18 @@ function rememberLegacyUsageScopeParams(state: UsageState) {
   persistLegacyGatewayParamCache(LEGACY_USAGE_SCOPE_PARAMS_STORAGE_KEY, cache);
 }
 
+function shouldSendLegacyUsageAgentParams(state: UsageState): boolean {
+  return !getLegacyUsageAgentParamsCache().has(
+    normalizeGatewayCompatibilityKey(state.settings?.gatewayUrl),
+  );
+}
+
+function rememberLegacyUsageAgentParams(state: UsageState) {
+  const cache = getLegacyUsageAgentParamsCache();
+  cache.add(normalizeGatewayCompatibilityKey(state.settings?.gatewayUrl));
+  persistLegacyGatewayParamCache(LEGACY_USAGE_AGENT_PARAMS_STORAGE_KEY, cache);
+}
+
 function isLegacyDateInterpretationUnsupportedError(err: unknown): boolean {
   const message = toErrorMessage(err);
   return (
@@ -146,6 +170,14 @@ function isLegacyUsageScopeUnsupportedError(err: unknown): boolean {
     LEGACY_USAGE_DATE_PARAMS_INVALID_RE.test(message) &&
     (LEGACY_USAGE_SCOPE_PARAMS_GROUP_BY_RE.test(message) ||
       LEGACY_USAGE_SCOPE_PARAMS_INCLUDE_HISTORICAL_RE.test(message))
+  );
+}
+
+function isLegacyUsageAgentUnsupportedError(err: unknown): boolean {
+  const message = toErrorMessage(err);
+  return (
+    LEGACY_USAGE_DATE_PARAMS_INVALID_RE.test(message) &&
+    LEGACY_USAGE_AGENT_PARAMS_AGENT_ID_RE.test(message)
   );
 }
 
@@ -224,7 +256,11 @@ export async function loadUsage(
     const startDate = overrides?.startDate ?? state.usageStartDate;
     const endDate = overrides?.endDate ?? state.usageEndDate;
     const agentId = resolveUsageAgentIdFromQuery(state.usageQuery);
-    const runUsageRequests = (includeDateInterpretation: boolean, includeUsageScope: boolean) => {
+    const runUsageRequests = (
+      includeDateInterpretation: boolean,
+      includeUsageScope: boolean,
+      includeAgentScope: boolean,
+    ) => {
       const dateInterpretation = includeDateInterpretation
         ? buildDateInterpretationParams(state.usageTimeZone)
         : undefined;
@@ -238,7 +274,7 @@ export async function loadUsage(
         client.request("sessions.usage", {
           startDate,
           endDate,
-          ...(agentId ? { agentId } : undefined),
+          ...(includeAgentScope && agentId ? { agentId } : undefined),
           ...dateInterpretation,
           ...usageScopeParams,
           limit: 1000, // Cap at 1000 sessions
@@ -254,15 +290,24 @@ export async function loadUsage(
 
     let includeDateInterpretation = shouldSendLegacyDateInterpretation(state);
     let includeUsageScope = shouldSendLegacyUsageScopeParams(state);
+    let includeAgentScope = Boolean(agentId) && shouldSendLegacyUsageAgentParams(state);
     while (true) {
       try {
         const [sessionsRes, costRes] = await runUsageRequests(
           includeDateInterpretation,
           includeUsageScope,
+          includeAgentScope,
         );
         applyUsageResults(state, sessionsRes, costRes);
         break;
       } catch (err) {
+        if (includeAgentScope && isLegacyUsageAgentUnsupportedError(err)) {
+          // Older gateways reject `agentId` in `sessions.usage`.
+          // Remember this per gateway and retry with client-side filtering only.
+          rememberLegacyUsageAgentParams(state);
+          includeAgentScope = false;
+          continue;
+        }
         if (includeUsageScope && isLegacyUsageScopeUnsupportedError(err)) {
           // Older gateways reject `groupBy`/`includeHistorical` in `sessions.usage`.
           // Remember this per gateway and retry with instance-compatible params.
@@ -299,15 +344,19 @@ export const testApi = {
   toErrorMessage,
   isLegacyDateInterpretationUnsupportedError,
   isLegacyUsageScopeUnsupportedError,
+  isLegacyUsageAgentUnsupportedError,
   resolveUsageAgentIdFromQuery,
   normalizeGatewayCompatibilityKey,
   shouldSendLegacyDateInterpretation,
   rememberLegacyDateInterpretation,
   shouldSendLegacyUsageScopeParams,
   rememberLegacyUsageScopeParams,
+  shouldSendLegacyUsageAgentParams,
+  rememberLegacyUsageAgentParams,
   resetLegacyUsageDateParamsCache: () => {
     legacyUsageDateParamsCache = null;
     legacyUsageScopeParamsCache = null;
+    legacyUsageAgentParamsCache = null;
   },
 };
 export { testApi as __test };

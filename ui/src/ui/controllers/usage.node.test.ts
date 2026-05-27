@@ -267,6 +267,67 @@ describe("usage controller date interpretation params", () => {
     vi.unstubAllGlobals();
   });
 
+  it("falls back and remembers compatibility when sessions.usage rejects agentId", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage as unknown as Storage);
+
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.usage") {
+        const record = (params ?? {}) as Record<string, unknown>;
+        if ("agentId" in record) {
+          throw new Error("invalid sessions.usage params: at root: unexpected property 'agentId'");
+        }
+        return { sessions: [] };
+      }
+      return {};
+    });
+
+    const state = createState(request, {
+      settings: { gatewayUrl: "ws://127.0.0.1:18789" },
+      usageQuery: "agent:research",
+      usageTimeZone: "utc",
+    });
+
+    await loadUsage(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      agentId: "research",
+      mode: "utc",
+      groupBy: "family",
+      includeHistorical: true,
+      limit: 1000,
+      includeContextWeight: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.usage", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      mode: "utc",
+      groupBy: "family",
+      includeHistorical: true,
+      limit: 1000,
+      includeContextWeight: true,
+    });
+
+    await loadUsage(state);
+
+    expect(request).toHaveBeenNthCalledWith(5, "sessions.usage", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      mode: "utc",
+      groupBy: "family",
+      includeHistorical: true,
+      limit: 1000,
+      includeContextWeight: true,
+    });
+
+    testApi.resetLegacyUsageDateParamsCache();
+    expect(testApi.shouldSendLegacyUsageAgentParams(state)).toBe(false);
+
+    vi.unstubAllGlobals();
+  });
+
   it("keeps optional loaders resilient when requests fail", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.usage.timeseries" || method === "sessions.usage.logs") {
