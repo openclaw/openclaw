@@ -61,6 +61,7 @@ const hasRuntimeAvailableProviderAuth = vi.hoisted(() =>
     }: {
       provider: string;
       cfg?: OpenClawConfig;
+      workspaceDir?: string;
       env?: NodeJS.ProcessEnv;
     }) => {
       if (provider === "amazon-bedrock") {
