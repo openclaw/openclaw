@@ -755,18 +755,18 @@ describe("policy commands", () => {
     );
   });
 
-  it("normalizes model provider aliases during policy file conformance", async () => {
+  it("normalizes model provider casing during policy file conformance", async () => {
     await fs.writeFile(
       join(workspaceDir, "baseline.policy.jsonc"),
       JSON.stringify({
-        models: { providers: { allow: ["aws-bedrock"], deny: ["bedrock"] } },
+        models: { providers: { allow: ["OpenAI"], deny: ["OpenRouter"] } },
       }),
       "utf-8",
     );
     await fs.writeFile(
       join(workspaceDir, "policy.jsonc"),
       JSON.stringify({
-        models: { providers: { allow: ["amazon-bedrock"], deny: ["amazon-bedrock"] } },
+        models: { providers: { allow: ["openai"], deny: ["openrouter"] } },
       }),
       "utf-8",
     );
