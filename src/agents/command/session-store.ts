@@ -23,6 +23,17 @@ type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["run
 const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
 const contextModuleLoader = createLazyImportLoader(() => import("../context.js"));
 
+/**
+ * Normalize internal provider IDs to user-facing route names for session persistence.
+ * e.g., "openai-codex" → "openai" so doctor --fix doesn't report false legacy warnings.
+ */
+function normalizeSessionRouteProvider(provider: string | undefined): string | undefined {
+  if (provider === "openai-codex") {
+    return "openai";
+  }
+  return provider;
+}
+
 async function getUsageFormatModule() {
   return await usageFormatModuleLoader.load();
 }
@@ -99,7 +110,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
       : undefined;
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
-  const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
+  const providerUsed = normalizeSessionRouteProvider(
+    result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider,
+  );
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;

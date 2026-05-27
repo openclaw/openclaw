@@ -141,6 +141,17 @@ function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
 }
 
+/**
+ * Normalize internal provider IDs to user-facing route names for session persistence.
+ * e.g., "openai-codex" → "openai" so doctor --fix doesn't report false legacy warnings.
+ */
+function normalizeSessionRouteProvider(provider: string | undefined): string | undefined {
+  if (provider === "openai-codex") {
+    return "openai";
+  }
+  return provider;
+}
+
 function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
   if (!Array.isArray(value)) {
     return false;
@@ -1550,8 +1561,9 @@ export async function runReplyAgent(params: {
     const usage = runResult.meta?.agentMeta?.usage;
     const promptTokens = runResult.meta?.agentMeta?.promptTokens;
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
-    const providerUsed =
-      runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+    const providerUsed = normalizeSessionRouteProvider(
+      runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider,
+    );
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
       followupRun.run.inputProvenance,

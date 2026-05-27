@@ -71,6 +71,17 @@ function filterStringArray(value: unknown): string[] | undefined {
     : undefined;
 }
 
+/**
+ * Normalize internal provider IDs to user-facing route names for session persistence.
+ * e.g., "openai-codex" → "openai" so doctor --fix doesn't report false legacy warnings.
+ */
+function normalizeSessionRouteProvider(provider: string | undefined): string | undefined {
+  if (provider === "openai-codex") {
+    return "openai";
+  }
+  return provider;
+}
+
 function hasFailedFollowupProgressEvent(evt: FollowupAgentEvent): boolean {
   if (evt.stream !== "item" && evt.stream !== "command_output") {
     return false;
@@ -968,8 +979,9 @@ export function createFollowupRunner(params: {
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
-      const providerUsed =
-        runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
+      const providerUsed = normalizeSessionRouteProvider(
+        runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider,
+      );
       const contextTokensUsed =
         resolveContextTokensForModel({
           cfg: queued.run.config,
