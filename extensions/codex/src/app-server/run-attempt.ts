@@ -1980,6 +1980,8 @@ export async function runCodexAppServerAttempt(
   };
 
   const fireTurnAttemptIdleTimeout = () => {
+    // terminalTurnNotificationQueued only suppresses short idle guards; a
+    // wedged notification queue still needs the full attempt timeout backstop.
     if (completed || runAbortController.signal.aborted || !turnAttemptIdleWatchArmed) {
       return;
     }
