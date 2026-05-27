@@ -28,16 +28,12 @@ function mergeUnsetPaths(
   return merged.length > 0 ? merged : undefined;
 }
 
-export function hasPluginInstallRecordsUnsetPath(
-  writeOptions: Pick<ConfigWriteOptions, "unsetPaths"> | undefined,
-): boolean {
-  return (
-    writeOptions?.unsetPaths?.some(
-      (path) =>
-        path.length === PLUGIN_INSTALLS_CONFIG_PATH.length &&
-        path.every((part, index) => part === PLUGIN_INSTALLS_CONFIG_PATH[index]),
-    ) === true
-  );
+export function hasPendingPluginInstallRecords(config: OpenClawConfig): boolean {
+  return Object.keys(config.plugins?.installs ?? {}).length > 0;
+}
+
+export function stripPendingPluginInstallRecords(config: OpenClawConfig): OpenClawConfig {
+  return withoutPluginInstallRecords(config);
 }
 
 type ConfigCommit = (
@@ -125,8 +121,7 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
   movedInstallRecords: boolean;
   persistedHash: string | null;
 }> {
-  const pendingInstallRecords = params.nextConfig.plugins?.installs ?? {};
-  if (Object.keys(pendingInstallRecords).length === 0) {
+  if (!hasPendingPluginInstallRecords(params.nextConfig)) {
     const committed = params.writeOptions
       ? await params.commit(params.nextConfig, params.writeOptions)
       : await params.commit(params.nextConfig);
@@ -138,6 +133,7 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
     };
   }
 
+  const pendingInstallRecords = params.nextConfig.plugins?.installs ?? {};
   const previousInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const nextInstallRecords = {
     ...previousInstallRecords,

@@ -1,7 +1,8 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
-  hasPluginInstallRecordsUnsetPath,
+  hasPendingPluginInstallRecords,
+  stripPendingPluginInstallRecords,
 } from "../../cli/plugins-install-record-commit.js";
 import { replaceConfigFile, resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -211,18 +212,30 @@ export async function runNonInteractiveLocalSetup(params: {
   // Ordinary onboard reruns must preserve existing agents.list / bindings.
   // Only explicit --reset is allowed to shrink the config — see openclaw#84692.
   const allowConfigSizeDrop = opts.reset === true;
+  let writeBaseHash = baseHash;
+  if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(baseConfig)) {
+    const migrated = await commitConfigWriteWithPendingPluginInstalls({
+      nextConfig: baseConfig,
+      writeOptions: { allowConfigSizeDrop: true },
+      commit: async (config, writeOptions) => {
+        return await replaceConfigFile({
+          nextConfig: config,
+          ...(writeBaseHash !== undefined ? { baseHash: writeBaseHash } : {}),
+          ...(writeOptions ? { writeOptions } : {}),
+        });
+      },
+    });
+    writeBaseHash = migrated.persistedHash ?? undefined;
+    nextConfig = stripPendingPluginInstallRecords(nextConfig);
+  }
   const committed = await commitConfigWriteWithPendingPluginInstalls({
     nextConfig,
     writeOptions: { allowConfigSizeDrop },
     commit: async (config, writeOptions) => {
       return await replaceConfigFile({
         nextConfig: config,
-        ...(baseHash !== undefined ? { baseHash } : {}),
-        writeOptions: {
-          ...writeOptions,
-          allowConfigSizeDrop:
-            allowConfigSizeDrop || hasPluginInstallRecordsUnsetPath(writeOptions),
-        },
+        ...(writeBaseHash !== undefined ? { baseHash: writeBaseHash } : {}),
+        ...(writeOptions ? { writeOptions } : {}),
       });
     },
   });

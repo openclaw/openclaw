@@ -485,10 +485,15 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
+      const migrationWrite = capturedReplaceConfigFileCalls.at(-2);
+      expect(migrationWrite?.nextConfig.plugins?.installs).toBeUndefined();
+      expect(migrationWrite?.writeOptions?.unsetPaths).toEqual([["plugins", "installs"]]);
+      expect(migrationWrite?.writeOptions?.allowConfigSizeDrop).toBe(true);
+
       const onboardWrite = capturedReplaceConfigFileCalls.at(-1);
       expect(onboardWrite?.nextConfig.plugins?.installs).toBeUndefined();
-      expect(onboardWrite?.writeOptions?.unsetPaths).toEqual([["plugins", "installs"]]);
-      expect(onboardWrite?.writeOptions?.allowConfigSizeDrop).toBe(true);
+      expect(onboardWrite?.writeOptions?.unsetPaths).toBeUndefined();
+      expect(onboardWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
     });
   }, 60_000);
 
@@ -743,10 +748,15 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
+      const migrationWrite = capturedReplaceConfigFileCalls.at(-2);
+      expect(migrationWrite?.nextConfig.plugins?.installs).toBeUndefined();
+      expect(migrationWrite?.writeOptions?.unsetPaths).toEqual([["plugins", "installs"]]);
+      expect(migrationWrite?.writeOptions?.allowConfigSizeDrop).toBe(true);
+
       const remoteWrite = capturedReplaceConfigFileCalls.at(-1);
       expect(remoteWrite?.nextConfig.plugins?.installs).toBeUndefined();
-      expect(remoteWrite?.writeOptions?.unsetPaths).toEqual([["plugins", "installs"]]);
-      expect(remoteWrite?.writeOptions?.allowConfigSizeDrop).toBe(true);
+      expect(remoteWrite?.writeOptions?.unsetPaths).toBeUndefined();
+      expect(remoteWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
     });
   }, 60_000);
 

@@ -1,7 +1,8 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
-  hasPluginInstallRecordsUnsetPath,
+  hasPendingPluginInstallRecords,
+  stripPendingPluginInstallRecords,
 } from "../../cli/plugins-install-record-commit.js";
 import { replaceConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -48,18 +49,30 @@ export async function runNonInteractiveRemoteSetup(params: {
   // Ordinary remote onboard reruns must preserve existing agents.list /
   // bindings the same way the local writer does — see openclaw#84692.
   const allowConfigSizeDrop = opts.reset === true;
+  let writeBaseHash = baseHash;
+  if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(baseConfig)) {
+    const migrated = await commitConfigWriteWithPendingPluginInstalls({
+      nextConfig: baseConfig,
+      writeOptions: { allowConfigSizeDrop: true },
+      commit: async (config, writeOptions) => {
+        return await replaceConfigFile({
+          nextConfig: config,
+          ...(writeBaseHash !== undefined ? { baseHash: writeBaseHash } : {}),
+          ...(writeOptions ? { writeOptions } : {}),
+        });
+      },
+    });
+    writeBaseHash = migrated.persistedHash ?? undefined;
+    nextConfig = stripPendingPluginInstallRecords(nextConfig);
+  }
   await commitConfigWriteWithPendingPluginInstalls({
     nextConfig,
     writeOptions: { allowConfigSizeDrop },
     commit: async (config, writeOptions) => {
       return await replaceConfigFile({
         nextConfig: config,
-        ...(baseHash !== undefined ? { baseHash } : {}),
-        writeOptions: {
-          ...writeOptions,
-          allowConfigSizeDrop:
-            allowConfigSizeDrop || hasPluginInstallRecordsUnsetPath(writeOptions),
-        },
+        ...(writeBaseHash !== undefined ? { baseHash: writeBaseHash } : {}),
+        ...(writeOptions ? { writeOptions } : {}),
       });
     },
   });

@@ -2,7 +2,8 @@ import { normalizeProviderId } from "../agents/provider-id.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
-  hasPluginInstallRecordsUnsetPath,
+  hasPendingPluginInstallRecords,
+  stripPendingPluginInstallRecords,
 } from "../cli/plugins-install-record-commit.js";
 import type {
   AuthChoice,
@@ -60,19 +61,33 @@ function loadModelPickerModule(): Promise<ModelPickerModule> {
 
 async function writeWizardConfigFile(
   config: OpenClawConfig,
-  opts: { allowConfigSizeDrop?: boolean } = {},
+  opts: { allowConfigSizeDrop?: boolean; migrationBaseConfig?: OpenClawConfig } = {},
 ): Promise<OpenClawConfig> {
   const allowConfigSizeDrop = opts.allowConfigSizeDrop === true;
+  if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(config)) {
+    const migrationBaseConfig = opts.migrationBaseConfig;
+    if (migrationBaseConfig && hasPendingPluginInstallRecords(migrationBaseConfig)) {
+      await commitConfigWriteWithPendingPluginInstalls({
+        nextConfig: migrationBaseConfig,
+        writeOptions: { allowConfigSizeDrop: true },
+        commit: async (nextConfig, writeOptions) => {
+          return await replaceConfigFile({
+            nextConfig,
+            ...(writeOptions ? { writeOptions } : {}),
+            afterWrite: { mode: "auto" },
+          });
+        },
+      });
+      config = stripPendingPluginInstallRecords(config);
+    }
+  }
   const committed = await commitConfigWriteWithPendingPluginInstalls({
     nextConfig: config,
+    writeOptions: { allowConfigSizeDrop },
     commit: async (nextConfig, writeOptions) => {
       return await replaceConfigFile({
         nextConfig,
-        writeOptions: {
-          ...writeOptions,
-          allowConfigSizeDrop:
-            allowConfigSizeDrop || hasPluginInstallRecordsUnsetPath(writeOptions),
-        },
+        ...(writeOptions ? { writeOptions } : {}),
         afterWrite: { mode: "auto" },
       });
     },
@@ -579,6 +594,7 @@ export async function runSetupWizard(
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
     nextConfig = await writeWizardConfigFile(nextConfig, {
       allowConfigSizeDrop: configResetPerformed,
+      migrationBaseConfig: baseConfig,
     });
     logConfigUpdated(runtime);
     await prompter.outro(t("wizard.setup.remoteConfigured"));
@@ -767,6 +783,7 @@ export async function runSetupWizard(
 
   nextConfig = await writeWizardConfigFile(nextConfig, {
     allowConfigSizeDrop: configResetPerformed,
+    migrationBaseConfig: baseConfig,
   });
   const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime);
@@ -818,6 +835,7 @@ export async function runSetupWizard(
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
   nextConfig = await writeWizardConfigFile(nextConfig, {
     allowConfigSizeDrop: configResetPerformed,
+    migrationBaseConfig: baseConfig,
   });
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
