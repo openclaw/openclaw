@@ -498,7 +498,7 @@ function formatChatSessionPickerMeta(row: SessionsListResult["sessions"][number]
   if (typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt)) {
     parts.push(new Date(row.updatedAt).toLocaleString());
   }
-  return parts.join(" 路 ");
+  return parts.join(" · ");
 }
 
 function renderChatSessionPicker(params: {
@@ -946,7 +946,9 @@ function renderChatModelSelect(state: AppViewState) {
       </div>
     </div>
   `;
-}type ChatThinkingSelectOption = {
+};
+
+type ChatThinkingSelectOption = {
   value: string;
   label: string;
 };
