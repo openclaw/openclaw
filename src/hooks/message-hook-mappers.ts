@@ -42,6 +42,8 @@ export type CanonicalInboundMessageHookContext = {
   mediaType?: string;
   mediaPaths?: string[];
   mediaTypes?: string[];
+  mediaUrl?: string;
+  mediaUrls?: string[];
   originatingChannel?: string;
   originatingTo?: string;
   guildId?: string;
@@ -125,6 +127,12 @@ export function deriveInboundMessageHookContext(
     mediaType: ctx.MediaType ?? mediaTypes?.[0],
     mediaPaths,
     mediaTypes,
+    mediaUrl: ctx.MediaUrl,
+    mediaUrls: Array.isArray(ctx.MediaUrls)
+      ? ctx.MediaUrls.filter(
+          (value): value is string => typeof value === "string" && value.length > 0,
+        )
+      : undefined,
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
     guildId: ctx.GroupSpace,
@@ -263,6 +271,8 @@ export function toPluginInboundClaimEvent(
       mediaType: canonical.mediaType,
       mediaPaths: canonical.mediaPaths,
       mediaTypes: canonical.mediaTypes,
+      mediaUrl: canonical.mediaUrl,
+      mediaUrls: canonical.mediaUrls,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       groupId: canonical.groupId,
@@ -289,6 +299,12 @@ export function toPluginMessageReceivedEvent(
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
+      mediaPath: canonical.mediaPath,
+      mediaType: canonical.mediaType,
+      mediaPaths: canonical.mediaPaths,
+      mediaTypes: canonical.mediaTypes,
+      mediaUrl: canonical.mediaUrl,
+      mediaUrls: canonical.mediaUrls,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
     },
