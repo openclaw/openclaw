@@ -16,7 +16,6 @@ vi.mock("node:child_process", async () => {
 
 import {
   checkQmdBinaryAvailability,
-  isCliCommandError,
   resolveCliSpawnInvocation,
   resolveQmdBinaryUnavailableReason,
   runCliCommand,
@@ -224,14 +223,17 @@ describe("runCliCommand", () => {
       });
       throw new Error("expected runCliCommand to reject");
     } catch (err) {
-      expect(isCliCommandError(err)).toBe(true);
-      if (!isCliCommandError(err)) {
+      expect(err).toBeInstanceOf(Error);
+      if (!(err instanceof Error)) {
         throw err;
       }
-      expect(err.code).toBe(134);
-      expect(err.signal).toBeNull();
-      expect(err.stdout).toBe('[{"docid":"abc","score":0.93}]');
-      expect(err.stderr).toBe("ggml-metal-device.m:612");
+      expect(err.name).toBe("CliCommandError");
+      expect(err).toMatchObject({
+        code: 134,
+        signal: null,
+        stdout: '[{"docid":"abc","score":0.93}]',
+        stderr: "ggml-metal-device.m:612",
+      });
       expect(err.message).toContain("qmd query test failed (code 134)");
     }
   });

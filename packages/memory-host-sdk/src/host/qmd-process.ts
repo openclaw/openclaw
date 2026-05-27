@@ -219,7 +219,7 @@ export async function runCliCommand(params: {
   });
 }
 
-export class CliCommandError extends Error {
+class CliCommandError extends Error {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly stdout: string;
@@ -241,7 +241,7 @@ export class CliCommandError extends Error {
   }
 }
 
-export function isCliCommandError(err: unknown): err is CliCommandError {
+function isCliCommandError(err: unknown): err is CliCommandError {
   return err instanceof CliCommandError;
 }
 
