@@ -195,6 +195,8 @@ jobs:
 
           $installArgs = @(
             "install",
+            "--filter",
+            "openclaw",
             "--prefer-offline",
             "--ignore-scripts=false",
             "--config.engine-strict=false",

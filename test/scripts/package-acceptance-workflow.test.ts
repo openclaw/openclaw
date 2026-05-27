@@ -141,6 +141,8 @@ describe("package acceptance workflow", () => {
     );
     expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_PACKAGE_IMPORT_METHOD = "copy"');
     expect(hydrateWindowsPnpm.run).toContain("--config.side-effects-cache=false");
+    expect(hydrateWindowsPnpm.run).toContain('"--filter",');
+    expect(hydrateWindowsPnpm.run).toContain('"openclaw",');
     expect(hydrateWindowsPnpm.run).toContain(
       "Remove-Item -Recurse -Force $env:PNPM_CONFIG_MODULES_DIR",
     );
