@@ -451,6 +451,10 @@ function abortReason(signal: AbortSignal): unknown {
   return "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
 }
 
+function abortOwnerWaitReason(signal: AbortSignal): unknown {
+  return abortReason(signal) ?? new Error("operation aborted", { cause: signal });
+}
+
 function waitForSessionFileOwnerRelease(params: {
   sessionFile: string;
   entry: SessionFileOwnerEntry;
@@ -458,7 +462,7 @@ function waitForSessionFileOwnerRelease(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   if (params.signal?.aborted) {
-    return Promise.reject(abortReason(params.signal) ?? new Error("operation aborted"));
+    return Promise.reject(abortOwnerWaitReason(params.signal));
   }
   return new Promise<void>((resolve, reject) => {
     const waiter: SessionFileOwnerWaiter = {
@@ -499,7 +503,7 @@ function waitForSessionFileOwnerRelease(params: {
     }
     if (params.signal) {
       waiter.abortListener = () => {
-        waiter.reject(abortReason(params.signal!) ?? new Error("operation aborted"));
+        waiter.reject(abortOwnerWaitReason(params.signal!));
       };
       params.signal.addEventListener("abort", waiter.abortListener, { once: true });
     }
@@ -516,7 +520,7 @@ export async function acquireEmbeddedAttemptSessionFileOwner(params: {
   const ownerId = Symbol(sessionFileKey);
   while (true) {
     if (params.signal?.aborted) {
-      throw abortReason(params.signal) ?? new Error("operation aborted");
+      throw abortOwnerWaitReason(params.signal);
     }
     const entry = sessionFileOwnerState.owners.get(sessionFileKey);
     if (!entry) {
@@ -550,7 +554,11 @@ export async function acquireEmbeddedAttemptSessionFileOwner(params: {
 export function resetEmbeddedAttemptSessionFileOwnersForTest(): void {
   for (const entry of sessionFileOwnerState.owners.values()) {
     for (const waiter of entry.waiters) {
-      waiter.reject(new Error("embedded attempt session file owners reset"));
+      waiter.reject(
+        new Error("embedded attempt session file owners reset", {
+          cause: "resetEmbeddedAttemptSessionFileOwnersForTest",
+        }),
+      );
     }
   }
   sessionFileOwnerState.owners.clear();
