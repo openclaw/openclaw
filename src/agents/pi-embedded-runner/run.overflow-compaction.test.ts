@@ -974,29 +974,17 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       runAttempt: pluginRunAttempt,
     });
     mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValueOnce(codexAuthStore);
-    mockedResolveModelAsync
-      .mockResolvedValueOnce({
-        model: {
-          id: "gpt-5.5",
-          provider: "openai",
-          contextWindow: 200000,
-          api: "openai-responses",
-        },
-        error: null,
-        authStorage: { setRuntimeApiKey: vi.fn() },
-        modelRegistry: {},
-      })
-      .mockResolvedValueOnce({
-        model: {
-          id: "gpt-5.5",
-          provider: "openai-codex",
-          contextWindow: 200000,
-          api: "openai-codex-responses",
-        },
-        error: null,
-        authStorage: codexAuthStorage,
-        modelRegistry: {},
-      });
+    mockedResolveModelAsync.mockResolvedValueOnce({
+      model: {
+        id: "gpt-5.5",
+        provider: "openai-codex",
+        contextWindow: 200000,
+        api: "openai-codex-responses",
+      },
+      error: null,
+      authStorage: codexAuthStorage,
+      modelRegistry: {},
+    });
     mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
 
     try {
@@ -1101,29 +1089,17 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         ? ["openai-codex:default"]
         : [];
     });
-    mockedResolveModelAsync
-      .mockResolvedValueOnce({
-        model: {
-          id: "gpt-5.5",
-          provider: "openai",
-          contextWindow: 200000,
-          api: "openai-responses",
-        },
-        error: null,
-        authStorage: { setRuntimeApiKey: vi.fn() },
-        modelRegistry: {},
-      })
-      .mockResolvedValueOnce({
-        model: {
-          id: "gpt-5.5",
-          provider: "openai-codex",
-          contextWindow: 200000,
-          api: "openai-codex-responses",
-        },
-        error: null,
-        authStorage: codexAuthStorage,
-        modelRegistry: {},
-      });
+    mockedResolveModelAsync.mockResolvedValueOnce({
+      model: {
+        id: "gpt-5.5",
+        provider: "openai-codex",
+        contextWindow: 200000,
+        api: "openai-codex-responses",
+      },
+      error: null,
+      authStorage: codexAuthStorage,
+      modelRegistry: {},
+    });
     mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
     mockedGetApiKeyForModel.mockImplementation(
       async ({ profileId }: { profileId?: string } = {}) => {
@@ -1280,29 +1256,17 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     });
     mockedEnsureAuthProfileStore.mockReturnValueOnce(codexAuthStore);
     mockedResolveAuthProfileOrder.mockReturnValueOnce(["openai-codex:sub", "openai-codex:backup"]);
-    mockedResolveModelAsync
-      .mockResolvedValueOnce({
-        model: {
-          id: "gpt-5.5",
-          provider: "openai",
-          contextWindow: 200000,
-          api: "openai-responses",
-        },
-        error: null,
-        authStorage: { setRuntimeApiKey: vi.fn() },
-        modelRegistry: {},
-      })
-      .mockResolvedValueOnce({
-        model: {
-          id: "gpt-5.5",
-          provider: "openai-codex",
-          contextWindow: 200000,
-          api: "openai-codex-responses",
-        },
-        error: null,
-        authStorage: codexAuthStorage,
-        modelRegistry: {},
-      });
+    mockedResolveModelAsync.mockResolvedValueOnce({
+      model: {
+        id: "gpt-5.5",
+        provider: "openai-codex",
+        contextWindow: 200000,
+        api: "openai-codex-responses",
+      },
+      error: null,
+      authStorage: codexAuthStorage,
+      modelRegistry: {},
+    });
     mockedBuildAgentRuntimePlan
       .mockReturnValueOnce(firstRuntimePlan)
       .mockReturnValueOnce(secondRuntimePlan);

@@ -639,46 +639,68 @@ export async function runEmbeddedPiAgent(
         config: params.config,
         workspaceDir: resolvedWorkspace,
       });
-      const dynamicModelResolution = await resolveModelAsync(
-        provider,
-        modelId,
-        agentDir,
-        params.config,
-        {
-          // Plugin dynamic model hooks can resolve explicit model refs without
-          // first generating PI models.json. This keeps one-shot model runs from
-          // blocking on unrelated provider discovery.
-          skipPiDiscovery: true,
-          workspaceDir: resolvedWorkspace,
-        },
-      );
-      let modelResolution =
-        dynamicModelResolution.model || pluginHarnessOwnsTransport
-          ? dynamicModelResolution
-          : await (async () => {
-              await ensureOpenClawModelsJson(params.config, agentDir, {
-                workspaceDir: resolvedWorkspace,
-              });
-              return await resolveModelAsync(provider, modelId, agentDir, params.config, {
-                workspaceDir: resolvedWorkspace,
-              });
-            })();
-      if (selectedPiRuntimeProvider !== provider && modelResolution.model) {
-        const runtimeModelResolution = await resolveModelAsync(
-          selectedPiRuntimeProvider,
+      const modelResolutionProviders =
+        selectedPiRuntimeProvider !== provider ? [selectedPiRuntimeProvider, provider] : [provider];
+      let resolvedModelProvider = provider;
+      let firstModelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
+      let modelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
+      for (const candidateProvider of modelResolutionProviders) {
+        const candidateResolution = await resolveModelAsync(
+          candidateProvider,
           modelId,
           agentDir,
           params.config,
           {
+            // Plugin dynamic model hooks can resolve explicit model refs without
+            // first generating PI models.json. This keeps one-shot model runs from
+            // blocking on unrelated provider discovery.
             skipPiDiscovery: true,
             workspaceDir: resolvedWorkspace,
           },
         );
-        if (runtimeModelResolution.model) {
-          provider = selectedPiRuntimeProvider;
-          modelResolution = runtimeModelResolution;
+        firstModelResolution ??= candidateResolution;
+        if (candidateResolution.model) {
+          resolvedModelProvider = candidateProvider;
+          modelResolution = candidateResolution;
+          break;
         }
       }
+      if (!modelResolution && pluginHarnessOwnsTransport) {
+        modelResolution = firstModelResolution;
+      }
+      if (!modelResolution) {
+        await ensureOpenClawModelsJson(params.config, agentDir, {
+          workspaceDir: resolvedWorkspace,
+        });
+        for (const candidateProvider of modelResolutionProviders) {
+          const candidateResolution = await resolveModelAsync(
+            candidateProvider,
+            modelId,
+            agentDir,
+            params.config,
+            {
+              workspaceDir: resolvedWorkspace,
+            },
+          );
+          firstModelResolution ??= candidateResolution;
+          if (candidateResolution.model) {
+            resolvedModelProvider = candidateProvider;
+            modelResolution = candidateResolution;
+            break;
+          }
+        }
+      }
+      modelResolution ??= firstModelResolution;
+      if (!modelResolution) {
+        throw new FailoverError(`Unknown model: ${provider}/${modelId}`, {
+          reason: "model_not_found",
+          provider,
+          model: modelId,
+          sessionId: params.sessionId,
+          lane: globalLane,
+        });
+      }
+      provider = resolvedModelProvider;
       const { model, error, authStorage, modelRegistry } = modelResolution;
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
