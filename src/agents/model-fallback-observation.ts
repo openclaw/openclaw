@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getCommandLaneSnapshots, isGatewayDraining } from "../process/command-queue.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 import { buildTextObservationFields } from "./pi-embedded-error-observation.js";
@@ -37,6 +38,9 @@ export type ModelFallbackStepFields = {
   fallbackStepFromFailureDetail?: string;
   fallbackStepChainPosition?: number;
   fallbackStepFinalOutcome: FallbackStepOutcome;
+  fallbackStepQueueActive?: number;
+  fallbackStepQueueQueued?: number;
+  fallbackStepQueueDraining?: boolean;
 };
 
 export type ModelFallbackDecisionParams = {
@@ -68,6 +72,18 @@ function formatModelRef(candidate: ModelCandidate): string {
   return `${candidate.provider}/${candidate.model}`;
 }
 
+function buildQueueObservationFields(): Pick<
+  ModelFallbackStepFields,
+  "fallbackStepQueueActive" | "fallbackStepQueueQueued" | "fallbackStepQueueDraining"
+> {
+  const snapshots = getCommandLaneSnapshots();
+  return {
+    fallbackStepQueueActive: snapshots.reduce((total, lane) => total + lane.activeCount, 0),
+    fallbackStepQueueQueued: snapshots.reduce((total, lane) => total + lane.queuedCount, 0),
+    fallbackStepQueueDraining: isGatewayDraining(),
+  };
+}
+
 function buildFallbackStepFields(params: {
   decision: "skip_candidate" | "candidate_failed" | "candidate_succeeded";
   candidate: ModelCandidate;
@@ -94,6 +110,7 @@ function buildFallbackStepFields(params: {
         : {}),
       ...(typeof params.attempt === "number" ? { fallbackStepChainPosition: params.attempt } : {}),
       fallbackStepFinalOutcome: "succeeded",
+      ...buildQueueObservationFields(),
     };
   }
 
@@ -111,6 +128,7 @@ function buildFallbackStepFields(params: {
       : {}),
     ...(typeof params.attempt === "number" ? { fallbackStepChainPosition: params.attempt } : {}),
     fallbackStepFinalOutcome: params.nextCandidate ? "next_fallback" : "chain_exhausted",
+    ...buildQueueObservationFields(),
   };
 }
 

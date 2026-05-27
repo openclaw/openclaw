@@ -1,8 +1,11 @@
+import type { ModelFallbackStepFields } from "../../agents/model-fallback-observation.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import { normalizeToolList } from "../../agents/tool-policy.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getCommandLaneSnapshots, isGatewayDraining } from "../../process/command-queue.js";
+import { recordTaskRunProgressByRunId } from "../../tasks/detached-task-runtime.js";
 import type { CronJob } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
@@ -55,6 +58,66 @@ function resolveCronOwnerOnlyToolAllowlist(toolsAllow: string[] | undefined): st
   return ["cron"];
 }
 
+function formatQueueStateForTaskStatus(params: {
+  active?: number;
+  queued?: number;
+  draining?: boolean;
+}): string {
+  const currentSnapshots = getCommandLaneSnapshots();
+  const active =
+    params.active ?? currentSnapshots.reduce((total, lane) => total + lane.activeCount, 0);
+  const queued =
+    params.queued ?? currentSnapshots.reduce((total, lane) => total + lane.queuedCount, 0);
+  const draining = (params.draining ?? isGatewayDraining()) === true ? "yes" : "no";
+  return `queue active=${active} queued=${queued} draining=${draining}`;
+}
+
+function formatCronModelProgress(params: {
+  provider: string;
+  model: string;
+  step?: ModelFallbackStepFields;
+}): string {
+  if (!params.step) {
+    return `model primary=${params.provider}/${params.model}`;
+  }
+  const target = params.step.fallbackStepToModel ? ` -> ${params.step.fallbackStepToModel}` : "";
+  const reason = params.step.fallbackStepFromFailureReason
+    ? ` reason=${params.step.fallbackStepFromFailureReason}`
+    : "";
+  const detail = params.step.fallbackStepFromFailureDetail
+    ? ` detail=${params.step.fallbackStepFromFailureDetail}`
+    : "";
+  return `model fallback: ${params.step.fallbackStepFromModel}${target}${reason} outcome=${params.step.fallbackStepFinalOutcome}${detail}`;
+}
+
+function recordCronModelProgress(params: {
+  taskRunId?: string;
+  provider: string;
+  model: string;
+  step?: ModelFallbackStepFields;
+}): void {
+  const taskRunId = params.taskRunId?.trim();
+  if (!taskRunId) {
+    return;
+  }
+  const progress = formatCronModelProgress(params);
+  const queue = formatQueueStateForTaskStatus({
+    active: params.step?.fallbackStepQueueActive,
+    queued: params.step?.fallbackStepQueueQueued,
+    draining: params.step?.fallbackStepQueueDraining,
+  });
+  try {
+    recordTaskRunProgressByRunId({
+      runId: taskRunId,
+      runtime: "cron",
+      lastEventAt: Date.now(),
+      progressSummary: `${progress}; ${queue}`,
+    });
+  } catch (err) {
+    logWarn(`[cron] failed to record model fallback task progress: ${String(err)}`);
+  }
+}
+
 export type CronExecutionResult = {
   runResult: CronPromptRunResult;
   fallbackProvider: string;
@@ -96,6 +159,7 @@ export function createCronPromptExecutor(params: {
   abortSignal?: AbortSignal;
   abortReason: () => string;
   onExecutionStarted?: () => void;
+  taskRunId?: string;
 }) {
   const sessionFile =
     params.cronSession.sessionEntry.sessionFile?.trim() ||
@@ -118,6 +182,11 @@ export function createCronPromptExecutor(params: {
   );
 
   const runPrompt = async (promptText: string) => {
+    recordCronModelProgress({
+      taskRunId: params.taskRunId,
+      provider: params.liveSelection.provider,
+      model: params.liveSelection.model,
+    });
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfgWithAgentDefaults,
       provider: params.liveSelection.provider,
@@ -125,6 +194,14 @@ export function createCronPromptExecutor(params: {
       runId: params.cronSession.sessionEntry.sessionId,
       agentDir: params.agentDir,
       fallbacksOverride: cronFallbacksOverride,
+      onFallbackStep: (step) => {
+        recordCronModelProgress({
+          taskRunId: params.taskRunId,
+          provider: params.liveSelection.provider,
+          model: params.liveSelection.model,
+          step,
+        });
+      },
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
@@ -284,6 +361,7 @@ export async function executeCronRun(params: {
   cronSession: MutableCronSession;
   commandBody: string;
   persistSessionEntry: PersistCronSessionEntry;
+  taskRunId?: string;
   abortSignal?: AbortSignal;
   abortReason: () => string;
   isAborted: () => boolean;
@@ -325,6 +403,7 @@ export async function executeCronRun(params: {
     abortSignal: params.abortSignal,
     abortReason: params.abortReason,
     onExecutionStarted: params.onExecutionStarted,
+    taskRunId: params.taskRunId,
   });
 
   const runStartedAt = params.runStartedAt ?? Date.now();

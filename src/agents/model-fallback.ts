@@ -5,6 +5,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { GatewayDrainingError, isGatewayDraining } from "../process/command-queue.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
@@ -94,6 +95,12 @@ function isFallbackAbortError(err: unknown): boolean {
 
 function shouldRethrowAbort(err: unknown): boolean {
   return isFallbackAbortError(err) && !isTimeoutError(err);
+}
+
+function throwIfGatewayDraining(): void {
+  if (isGatewayDraining()) {
+    throw new GatewayDrainingError();
+  }
 }
 
 function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
@@ -796,6 +803,7 @@ export async function runWithModelFallback<T>(params: {
   const requestedCandidate = candidates[0];
 
   for (let i = 0; i < candidates.length; i += 1) {
+    throwIfGatewayDraining();
     const candidate = candidates[i];
     const isPrimary = i === 0;
     const requestedModel = requestedCandidate
