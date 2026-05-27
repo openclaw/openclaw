@@ -818,6 +818,11 @@ canonical replacement.
     ranked level list. OpenClaw downgrades stale stored values by profile
     rank automatically.
 
+    The context includes `provider`, `modelId`, optional merged `reasoning`,
+    and optional merged model `compat` facts. Provider plugins can use those
+    catalog facts to expose a model-specific profile only when the configured
+    request contract supports it.
+
     Implement one hook instead of three. The legacy hooks keep working during
     the deprecation window but are not composed with the profile result.
 
@@ -863,9 +868,23 @@ canonical replacement.
     **New**: one call on the memory-state API -
     `registerMemoryCapability(pluginId, { promptBuilder, flushPlanResolver, runtime })`.
 
-    Same slots, single registration call. Additive memory helpers
-    (`registerMemoryPromptSupplement`, `registerMemoryCorpusSupplement`,
-    `registerMemoryEmbeddingProvider`) are not affected.
+    Same slots, single registration call. Additive prompt and corpus helpers
+    (`registerMemoryPromptSupplement`, `registerMemoryCorpusSupplement`) are
+    not affected.
+
+  </Accordion>
+
+  <Accordion title="Memory embedding provider API">
+    **Old**: `api.registerMemoryEmbeddingProvider(...)` plus
+    `contracts.memoryEmbeddingProviders`.
+
+    **New**: `api.registerEmbeddingProvider(...)` plus
+    `contracts.embeddingProviders`.
+
+    The generic embedding provider contract is reusable outside memory and is
+    the supported path for new providers. The memory-specific registration API
+    remains wired as deprecated compatibility while existing providers migrate.
+    Plugin inspection reports non-bundled usage as compatibility debt.
 
   </Accordion>
 

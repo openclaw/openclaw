@@ -635,6 +635,14 @@ function readTargetFromPrompt(prompt: string) {
   return "repo/package.json";
 }
 
+function execCommandFromToolProgressPrompt(prompt: string) {
+  return (
+    /call the exec tool exactly once with this exact command before answering:\s*`([^`]+)`/i
+      .exec(prompt)?.[1]
+      ?.trim() || null
+  );
+}
+
 function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>): StreamEvent[] {
   const serialized = JSON.stringify(args);
   const callSuffix = createHash("sha1")
@@ -1626,6 +1634,11 @@ async function buildResponsesPayload(
       path: readTargetFromPrompt(toolProgressPrompt || prompt || allInputText),
     });
   };
+  const buildToolProgressExecEvents = (pattern: RegExp) => {
+    const toolProgressPrompt = extractLastMatchingUserText(extractAllUserTexts(input), pattern);
+    const command = execCommandFromToolProgressPrompt(toolProgressPrompt || prompt || allInputText);
+    return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
+  };
   if (
     (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
       QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText)) &&
@@ -1812,7 +1825,10 @@ async function buildResponsesPayload(
   }
   if (QA_TOOL_PROGRESS_PROMPT_RE.test(allInputText) && toolProgressReplyDirective) {
     if (!toolOutput) {
-      return buildToolProgressReadEvents(QA_TOOL_PROGRESS_PROMPT_RE);
+      return (
+        buildToolProgressExecEvents(QA_TOOL_PROGRESS_PROMPT_RE) ??
+        buildToolProgressReadEvents(QA_TOOL_PROGRESS_PROMPT_RE)
+      );
     }
     return buildAssistantEvents(toolProgressReplyDirective);
   }

@@ -828,6 +828,59 @@ describe("model-selection", () => {
       expect(model?.id).toBe("google/gemini-3.1-pro-preview");
       expect(model?.name).toBe("Gemini 3 Pro");
     });
+
+    it("carries configured model compat into catalog entries for provider policy", () => {
+      const cfg = {
+        models: {
+          providers: {
+            vllm: {
+              models: [
+                {
+                  id: "Qwen/Qwen3-8B",
+                  name: "Qwen 3 8B",
+                  reasoning: true,
+                  compat: {
+                    thinkingFormat: "qwen-chat-template",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "vllm" && entry.id === "Qwen/Qwen3-8B",
+      );
+      expect(model?.compat).toEqual({ thinkingFormat: "qwen-chat-template" });
+      expect(model?.reasoning).toBe(true);
+    });
+
+    it("does not infer reasoning from non-vLLM thinking compat", () => {
+      const cfg = {
+        models: {
+          providers: {
+            custom: {
+              models: [
+                {
+                  id: "custom-reasoning",
+                  name: "Custom Reasoning",
+                  compat: {
+                    thinkingFormat: "together",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "custom" && entry.id === "custom-reasoning",
+      );
+      expect(model?.compat).toEqual({ thinkingFormat: "together" });
+      expect(model?.reasoning).toBeUndefined();
+    });
   });
 
   describe("buildModelAliasIndex", () => {
@@ -949,6 +1002,43 @@ describe("model-selection", () => {
           alias: "GPT Test Z Alias",
           contextWindow: 64_000,
           compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+        },
+      ]);
+    });
+
+    it("overlays configured provider metadata after manifest model normalization", () => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            nvidia: {
+              models: [
+                {
+                  id: "llama-fast",
+                  name: "Configured Llama Fast",
+                  contextWindow: 128_000,
+                  reasoning: true,
+                  compat: { thinkingFormat: "qwen" },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [{ provider: "nvidia", id: "nvidia/llama-fast", name: "Runtime Llama Fast" }],
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowedCatalog).toEqual([
+        {
+          provider: "nvidia",
+          id: "nvidia/llama-fast",
+          name: "Configured Llama Fast",
+          contextWindow: 128_000,
+          reasoning: true,
+          compat: { thinkingFormat: "qwen" },
         },
       ]);
     });

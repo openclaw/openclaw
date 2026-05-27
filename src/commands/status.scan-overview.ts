@@ -135,6 +135,9 @@ export async function collectStatusScanOverview(params: {
   showSecrets: boolean;
   runtime?: RuntimeEnv;
   allowMissingConfigFastPath?: boolean;
+  skipUpdateCheck?: boolean;
+  fetchGitUpdate?: boolean;
+  includeRegistryUpdate?: boolean;
   resolveHasConfiguredChannels?: (
     cfg: OpenClawConfig,
     sourceConfig: OpenClawConfig,
@@ -142,6 +145,7 @@ export async function collectStatusScanOverview(params: {
   includeChannelsData?: boolean;
   includeLiveChannelStatus?: boolean;
   includeChannelSetupRuntimeFallback?: boolean;
+  channelCredentialResolutionSkipped?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
   includeChannelSecretTargets?: boolean;
   skipConfigPluginValidation?: boolean;
@@ -206,6 +210,9 @@ export async function collectStatusScanOverview(params: {
     cfg,
     hasConfiguredChannels,
     opts: params.opts,
+    skipUpdateCheck: params.skipUpdateCheck,
+    fetchGitUpdate: params.fetchGitUpdate,
+    includeRegistryUpdate: params.includeRegistryUpdate,
     getTailnetHostname: async (runner) =>
       await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
         getTailnetHostname(runner),
@@ -273,6 +280,9 @@ export async function collectStatusScanOverview(params: {
           sourceConfig,
           includeSetupFallbackPlugins: params.includeChannelSetupRuntimeFallback !== false,
           liveChannelStatus: channelsStatus,
+          ...(params.channelCredentialResolutionSkipped === true
+            ? { credentialResolutionSkipped: true }
+            : {}),
         });
         params.progress?.tick();
         return { channelsStatus, channelIssues, channels };

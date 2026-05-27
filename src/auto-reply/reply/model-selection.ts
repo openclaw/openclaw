@@ -97,10 +97,8 @@ function findSelectedCatalogEntry(params: {
   model: string;
 }): ModelCatalogEntry | undefined {
   const normalizedProvider = normalizeProviderId(params.provider);
-  return params.catalog?.find(
-    (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider && entry.id === params.model,
-  );
+  const selectedKey = modelKey(normalizedProvider, params.model);
+  return params.catalog?.find((entry) => modelKey(entry.provider, entry.id) === selectedKey);
 }
 
 export async function createModelSelectionState(params: {
@@ -360,6 +358,15 @@ export async function createModelSelectionState(params: {
 
   let thinkingCatalog: ModelCatalog | undefined;
   let manifestModelCatalog: ModelCatalog | null = null;
+  const buildThinkingCatalog = (catalog: ModelCatalog): ModelCatalog =>
+    createModelVisibilityPolicy({
+      cfg,
+      catalog,
+      defaultProvider,
+      defaultModel,
+      agentId: params.agentId,
+      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    }).allowedCatalog;
   const loadManifestCatalogForThinking = async () => {
     if (manifestModelCatalog) {
       return manifestModelCatalog;
@@ -377,7 +384,11 @@ export async function createModelSelectionState(params: {
       return thinkingCatalog;
     }
     let catalogForThinking =
-      modelCatalog && modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
+      allowedModelCatalog.length > 0
+        ? allowedModelCatalog
+        : modelCatalog && modelCatalog.length > 0
+          ? buildThinkingCatalog(modelCatalog)
+          : [];
     let selectedCatalogEntry = findSelectedCatalogEntry({
       catalog: catalogForThinking,
       provider,
@@ -387,7 +398,7 @@ export async function createModelSelectionState(params: {
     // allowlist rows know only provider/id; manifest rows can prove reasoning
     // support without opening the Pi auth-backed model registry.
     if (!modelCatalog && selectedCatalogEntry?.reasoning === undefined) {
-      const manifestCatalog = await loadManifestCatalogForThinking();
+      const manifestCatalog = buildThinkingCatalog(await loadManifestCatalogForThinking());
       const manifestSelectedEntry = findSelectedCatalogEntry({
         catalog: manifestCatalog,
         provider,
@@ -403,13 +414,16 @@ export async function createModelSelectionState(params: {
     if (shouldHydrateRuntimeCatalog) {
       modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
       logStage("catalog-loaded-for-thinking", `entries=${modelCatalog.length}`);
-      const runtimeSelectedEntry = modelCatalog.find(
-        (entry) => entry.provider === provider && entry.id === model,
-      );
+      const runtimeCatalog = buildThinkingCatalog(modelCatalog);
+      const runtimeSelectedEntry = findSelectedCatalogEntry({
+        catalog: runtimeCatalog,
+        provider,
+        model,
+      });
       catalogForThinking =
         runtimeSelectedEntry || !catalogForThinking || catalogForThinking.length === 0
-          ? modelCatalog.length > 0
-            ? modelCatalog
+          ? runtimeCatalog.length > 0
+            ? runtimeCatalog
             : allowedModelCatalog
           : allowedModelCatalog;
     }

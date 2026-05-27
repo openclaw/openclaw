@@ -397,6 +397,29 @@ describe("qa mock openai server", () => {
     expect(final.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_MARKER_OK");
   });
 
+  it("plans deterministic tool-progress exec commands from exact command prompts", async () => {
+    const server = await startMockServer();
+    const command =
+      "rg -n 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt' . ; sleep 2";
+    const prompt = `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${command}\`. After that exec command completes or fails, reply exactly \`TOOL_PROGRESS_EXEC_OK\`.`;
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [makeUserInput(prompt)],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('"name":"exec"');
+    expect(body).toContain(command);
+  });
+
   it("honors exact replies after QA kickoff reads without marker wording", async () => {
     const server = await startMockServer();
     const prompt =

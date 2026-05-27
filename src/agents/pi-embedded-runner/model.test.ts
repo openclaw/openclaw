@@ -1499,6 +1499,101 @@ describe("resolveModel", () => {
     expect(result.model?.reasoning).toBe(true);
   });
 
+  it("propagates compat from matching configured fallback model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("Qwen/Qwen3-8B"),
+                compat: { thinkingFormat: "qwen-chat-template" },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("vllm", "Qwen/Qwen3-8B", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.compat).toEqual(
+      expect.objectContaining({ thinkingFormat: "qwen-chat-template" }),
+    );
+    expect(result.model?.reasoning).toBe(false);
+  });
+
+  it("lets configured vLLM Qwen compat override stale discovered reasoning", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "vllm",
+      modelId: "Qwen/Qwen3-8B",
+      templateModel: {
+        ...makeModel("Qwen/Qwen3-8B"),
+        provider: "vllm",
+        api: "openai-completions",
+        baseUrl: "http://localhost:9000",
+        reasoning: false,
+        compat: { supportsStrictMode: false },
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                id: "Qwen/Qwen3-8B",
+                name: "Qwen/Qwen3-8B",
+                compat: { thinkingFormat: "qwen-chat-template" },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("vllm", "Qwen/Qwen3-8B", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.reasoning).toBe(true);
+    expect(result.model?.compat).toEqual(
+      expect.objectContaining({
+        supportsStrictMode: false,
+        thinkingFormat: "qwen-chat-template",
+      }),
+    );
+  });
+
+  it("infers reasoning for matching vLLM Qwen compat fallback models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                id: "Qwen/Qwen3-8B",
+                name: "Qwen/Qwen3-8B",
+                compat: { thinkingFormat: "qwen-chat-template" },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("vllm", "Qwen/Qwen3-8B", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.reasoning).toBe(true);
+  });
+
   it("propagates image input capability from matching configured fallback model", () => {
     const cfg = {
       models: {

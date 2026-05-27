@@ -3,7 +3,13 @@ import { streamSimple } from "@earendil-works/pi-ai";
 import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../../shared/string-normalization.js";
-import { validateAnthropicTurns, validateGeminiTurns } from "../../pi-embedded-helpers.js";
+import {
+  downgradeOpenAIFunctionCallReasoningPairs,
+  downgradeOpenAIReasoningBlocks,
+  normalizeOpenAIResponsesToolCallIds,
+  validateAnthropicTurns,
+  validateGeminiTurns,
+} from "../../pi-embedded-helpers.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import {
   extractToolCallsFromAssistant,
@@ -949,6 +955,12 @@ export function sanitizeReplayToolCallIdsForStream(params: {
     return sanitized;
   }
   return sanitizeToolUseResultPairing(sanitized);
+}
+
+export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
+  return downgradeOpenAIFunctionCallReasoningPairs(
+    normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(messages)),
+  );
 }
 
 export function wrapStreamFnSanitizeMalformedToolCalls(

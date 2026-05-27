@@ -2,6 +2,17 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+- Memory: add a core OpenAI-compatible embedding provider for local and hosted OpenAI-style endpoints, with config, doctor, and docs support. (#85269) Thanks @dutifulbob.
+- Plugin SDK: mark memory-specific embedding provider registration as deprecated compatibility and surface non-bundled usage in plugin compatibility diagnostics. (#85072) Thanks @mbelinky.
+
+### Fixes
+
+- Telegram: route `sendMessage` action replies through durable outbound delivery so completed agent responses remain retryable when the gateway send path times out. (#87261) Thanks @mbelinky.
+
 ## 2026.5.26
 
 ### Highlights

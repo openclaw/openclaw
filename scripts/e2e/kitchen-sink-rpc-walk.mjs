@@ -37,6 +37,21 @@ const OUTPUT_CAPTURE_CHARS = readPositiveInt(
 );
 const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
+const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
+const LOG_TAIL_BYTES = 256 * 1024;
+const ERROR_LOG_DENY_PATTERNS = [
+  /\buncaught exception\b/iu,
+  /\bunhandled rejection\b/iu,
+  /\bfatal\b/iu,
+  /\bpanic\b/iu,
+  /\blevel["']?\s*:\s*["']error["']/iu,
+  /\[(?:error|ERROR)\]/u,
+];
+const ERROR_LOG_ALLOW_PATTERNS = [
+  /0 errors?/iu,
+  /expected no diagnostics errors?/iu,
+  /diagnostics errors?:\s*$/iu,
+];
 
 let callGatewayModulePromise;
 
@@ -1138,37 +1153,109 @@ export function assertResourceCeiling(sample) {
   }
 }
 
+export function findErrorLogFindings(logPath) {
+  if (!fs.existsSync(logPath)) {
+    return [];
+  }
+  const scanBytes = fs.statSync(logPath).size;
+
+  const findings = [];
+  let currentLine = "";
+  let currentLineNumber = 1;
+  let currentLineHasFinding = false;
+  let currentLineTruncated = false;
+  const recordLine = (lineNumber, line) => {
+    if (currentLineHasFinding) {
+      return;
+    }
+    if (
+      ERROR_LOG_ALLOW_PATTERNS.some((pattern) => pattern.test(line)) ||
+      !ERROR_LOG_DENY_PATTERNS.some((pattern) => pattern.test(line))
+    ) {
+      return;
+    }
+    currentLineHasFinding = true;
+    findings.push({ line, lineNumber });
+    if (findings.length > 20) {
+      findings.shift();
+    }
+  };
+  const inspectCurrentLine = () => {
+    const normalizedLine = currentLine.replace(/\r$/u, "");
+    const line = currentLineTruncated ? `[truncated] ${normalizedLine}` : normalizedLine;
+    recordLine(currentLineNumber, line);
+  };
+  const appendLineFragment = (fragment) => {
+    currentLine += fragment;
+    if (currentLine.length <= LOG_SCAN_MAX_LINE_CHARS) {
+      return;
+    }
+    inspectCurrentLine();
+    currentLine = currentLine.slice(-LOG_SCAN_MAX_LINE_CHARS);
+    currentLineTruncated = true;
+  };
+  const finishLine = () => {
+    inspectCurrentLine();
+    currentLine = "";
+    currentLineNumber += 1;
+    currentLineHasFinding = false;
+    currentLineTruncated = false;
+  };
+
+  const fd = fs.openSync(logPath, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(LOG_SCAN_CHUNK_BYTES);
+    let offset = 0;
+    while (offset < scanBytes) {
+      const bytesToRead = Math.min(buffer.length, scanBytes - offset);
+      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      offset += bytesRead;
+      const lines = buffer.subarray(0, bytesRead).toString("utf8").split(/\n/u);
+      for (const [index, line] of lines.entries()) {
+        appendLineFragment(line);
+        if (index < lines.length - 1) {
+          finishLine();
+        }
+      }
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (currentLine) {
+    inspectCurrentLine();
+  }
+  return findings;
+}
+
 function assertNoErrorLogs(logPath) {
-  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  const deny = [
-    /\buncaught exception\b/iu,
-    /\bunhandled rejection\b/iu,
-    /\bfatal\b/iu,
-    /\bpanic\b/iu,
-    /\blevel["']?\s*:\s*["']error["']/iu,
-    /\[(?:error|ERROR)\]/u,
-  ];
-  const allow = [/0 errors?/iu, /expected no diagnostics errors?/iu, /diagnostics errors?:\s*$/iu];
-  const findings = log
-    .split(/\r?\n/u)
-    .map((line, index) => ({ line, lineNumber: index + 1 }))
-    .filter(({ line }) => !allow.some((pattern) => pattern.test(line)))
-    .filter(({ line }) => deny.some((pattern) => pattern.test(line)));
+  const findings = findErrorLogFindings(logPath);
   if (findings.length > 0) {
     throw new Error(
       `unexpected error-like gateway logs:\n${findings
-        .slice(-20)
         .map(({ line, lineNumber }) => `${logPath}:${lineNumber}: ${line}`)
         .join("\n")}`,
     );
   }
 }
 
-function tailFile(file) {
+export function tailFile(file, maxBytes = LOG_TAIL_BYTES) {
   if (!fs.existsSync(file)) {
     return "";
   }
-  return tailText(fs.readFileSync(file, "utf8"));
+  const stat = fs.statSync(file);
+  const start = Math.max(0, stat.size - Math.max(1, maxBytes));
+  const length = stat.size - start;
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(length);
+    fs.readSync(fd, buffer, 0, length, start);
+    return tailText(buffer.toString("utf8"));
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function tailText(text) {

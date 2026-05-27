@@ -361,6 +361,70 @@ describe("live model switch", () => {
     expect(state.piEmbeddedModuleImported).toBe(false);
   });
 
+  it("treats active openai-codex as an already-applied openai runtime promotion", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai-codex",
+          model: "gpt-5.5",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.5",
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("does not suppress explicit runtime provider switches with the same model", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai",
+          model: "gpt-5.5",
+        },
+        {
+          provider: "openai-codex",
+          model: "gpt-5.5",
+        },
+      ),
+    ).toBe(true);
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
+        {
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("does not suppress switch when model actually differs across runtime alias", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai-codex",
+          model: "gpt-5.5",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      ),
+    ).toBe(true);
+  });
+
   it("treats auth-profile-source changes as no-op when no auth profile is selected", async () => {
     const { hasDifferentLiveSessionModelSelection } = await loadModule();
 
@@ -482,6 +546,28 @@ describe("live model switch", () => {
       const { shouldSwitchToLiveModel } = await loadModule();
 
       const result = shouldSwitchToLiveModel(makeShouldSwitchParams({ sessionKey: undefined }));
+
+      expect(result).toBeUndefined();
+    });
+
+    it("does not trigger switch when runtime promotes openai to openai-codex", async () => {
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      };
+      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
+
+      const { shouldSwitchToLiveModel } = await loadModule();
+
+      const result = shouldSwitchToLiveModel(
+        makeShouldSwitchParams({
+          currentProvider: "openai-codex",
+          currentModel: "gpt-5.5",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.5",
+        }),
+      );
 
       expect(result).toBeUndefined();
     });
