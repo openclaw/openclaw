@@ -245,13 +245,13 @@ export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
   if (
     help?.value !== "help" ||
     !target ||
-    positionals.length !== 2 ||
-    (helpFlagIndex !== null && helpFlagIndex !== target.index + 1)
+    (helpFlagIndex !== null && helpFlagIndex !== positionals.at(-1)!.index + 1)
   ) {
     return argv;
   }
 
-  return [argv[0], argv[1], ...rootOptions, target.value, "--help"];
+  const targetPath = positionals.slice(1).map((positional) => positional.value);
+  return [argv[0], argv[1], ...rootOptions, ...targetPath, "--help"];
 }
 
 export function getFlagValue(argv: string[], name: string): string | null | undefined {

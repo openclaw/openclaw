@@ -151,6 +151,21 @@ describe("argv helpers", () => {
       argv: ["node", "openclaw", "help", "--help"],
       expected: ["node", "openclaw", "help", "--help"],
     },
+    {
+      name: "nested root help target",
+      argv: ["node", "openclaw", "help", "plugins", "list"],
+      expected: ["node", "openclaw", "plugins", "list", "--help"],
+    },
+    {
+      name: "nested root help target with help flag",
+      argv: ["node", "openclaw", "help", "plugins", "list", "--help"],
+      expected: ["node", "openclaw", "plugins", "list", "--help"],
+    },
+    {
+      name: "nested root help target with trailing root option",
+      argv: ["node", "openclaw", "help", "memory", "status", "--no-color"],
+      expected: ["node", "openclaw", "--no-color", "memory", "status", "--help"],
+    },
   ])("normalizes root help targets: $name", ({ argv, expected }) => {
     expect(normalizeRootHelpTargetArgv(argv)).toEqual(expected);
   });
