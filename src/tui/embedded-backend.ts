@@ -135,6 +135,11 @@ function resolveBtwQuestion(message: string): string | undefined {
   return question ? question : undefined;
 }
 
+function isSlashStopCommand(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
+}
+
 function payloadText(parts: unknown): string {
   if (!Array.isArray(parts)) {
     return "";
@@ -325,7 +330,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
     const runId = opts.runId ?? randomUUID();
     const question = resolveBtwQuestion(opts.message);
-    const stopCommand = isChatStopCommandText(opts.message);
+    const abortableSessionRun = this.hasAbortableSessionRun(opts.sessionKey);
+    const stopCommand =
+      isChatStopCommandText(opts.message) &&
+      (isSlashStopCommand(opts.message) || abortableSessionRun);
     const queuedAfter =
       question || stopCommand ? undefined : this.findQueuedSessionRunPromise(opts.sessionKey);
     if (stopCommand) {
@@ -543,6 +551,15 @@ export class EmbeddedTuiBackend implements TuiBackend {
         run.controller.abort();
       }
     }
+  }
+
+  private hasAbortableSessionRun(sessionKey: string): boolean {
+    for (const run of this.runs.values()) {
+      if (run.sessionKey === sessionKey && !run.isBtw && !run.lifecycleEnded) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private nextSeq() {

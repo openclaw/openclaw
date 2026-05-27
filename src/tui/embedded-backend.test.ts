@@ -741,6 +741,28 @@ describe("EmbeddedTuiBackend", () => {
     await flushMicrotasks();
   });
 
+  it("sends broad stop-like text as a normal prompt when idle", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "do not do that",
+      runId: "run-local-normal-stop-like-text",
+    });
+
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+
+    pending.resolve({ payloads: [{ text: "normal prompt" }], meta: {} });
+    await flushMicrotasks();
+  });
+
   it("queues same-session sends behind terminal local runs until maintenance settles", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const first = deferred<{
