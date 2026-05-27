@@ -228,6 +228,53 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     }
   });
 
+  it("forwards turn-source so embedded plugin approvals can be delivered back to the originating chat", async () => {
+    // Regression: a `before_tool_call` requireApproval from the embedded
+    // runner used to drop the turn-source, so the gateway had no route to
+    // deliver the approval to the chat (Telegram) and resolved it as
+    // `no-approval-route` (decision: null) — blocking the tool while the
+    // model often hallucinated a fake "/approve" instruction and a success.
+    // Bash exec approvals already carry these fields; plugin approvals must
+    // too. See pi-tools.ts (HookContext turnSource* wiring).
+    setEmbeddedMode(true);
+
+    runBeforeToolCallMock.mockResolvedValue({
+      requireApproval: {
+        pluginId: "pages",
+        title: "Delete site",
+        description: "Permanently delete the site",
+        severity: "critical",
+      },
+    });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "plugin:abc",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "pages_delete",
+      params: { slug: "padel-lead-magnet" },
+      toolCallId: "call-del",
+      ctx: {
+        turnSourceChannel: "telegram",
+        turnSourceTo: "172724380",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: "42",
+      },
+    });
+
+    expect(result.blocked).toBe(false);
+    const approvalCall = requireApprovalRequestCall("plugin approval request");
+    expect(approvalCall.request).toMatchObject({
+      pluginId: "pages",
+      toolName: "pages_delete",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "172724380",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "42",
+    });
+  });
+
   it("routes trusted policy approval through the same approval gate as before_tool_call hooks", async () => {
     setEmbeddedMode(true);
     const registry = createEmptyPluginRegistry();
