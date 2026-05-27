@@ -874,10 +874,6 @@ function readCurrentShrinkwrap(packageDir) {
   }
 }
 
-function packageNameForLockPath(lockPath, metadata) {
-  return metadata?.name ?? parseLockPackagePath(lockPath).at(-1)?.name ?? null;
-}
-
 function isStablePatchDrift(generatedVersion, currentVersion) {
   const generatedParts = stableVersionParts(generatedVersion);
   const currentParts = stableVersionParts(currentVersion);
@@ -913,13 +909,13 @@ function restoreCurrentPnpmLockedPackages(
     if (lockPath === "" || !metadata || typeof metadata !== "object" || !metadata.version) {
       continue;
     }
-    const packageName = packageNameForLockPath(lockPath, metadata);
+    const packageName = metadata.name ?? packageNameForLockPath(lockPath);
     if (!packageName || pnpmLockPackages.has(`${packageName}@${metadata.version}`)) {
       continue;
     }
 
     const currentMetadata = currentPackages[lockPath];
-    const currentPackageName = packageNameForLockPath(lockPath, currentMetadata);
+    const currentPackageName = currentMetadata?.name ?? packageNameForLockPath(lockPath);
     if (
       !currentMetadata ||
       typeof currentMetadata !== "object" ||
