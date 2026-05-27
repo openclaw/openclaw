@@ -1,13 +1,14 @@
+import type { RequestClient } from "@buape/carbon";
 import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
-import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-message";
 import type {
   MarkdownTableMode,
   OpenClawConfig,
   ReplyToMode,
-} from "openclaw/plugin-sdk/config-contracts";
+} from "openclaw/plugin-sdk/config-runtime";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildOutboundSessionContext,
+  deliverOutboundPayloads,
   type OutboundDeliveryFormattingOptions,
   type OutboundIdentity,
   type OutboundSendDeps,
@@ -15,10 +16,8 @@ import {
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { RequestClient } from "../internal/discord.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
-import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 
 export type DiscordThreadBindingLookupRecord = {
   accountId: string;
@@ -131,6 +130,7 @@ function resolveDiscordDeliveryOptions(params: {
   chunkMode?: ChunkMode;
   replyToMode?: ReplyToMode;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 }): DiscordDeliveryOptions {
   const binding = resolveBoundThreadBinding({
     threadBindings: params.threadBindings,
@@ -142,9 +142,13 @@ function resolveDiscordDeliveryOptions(params: {
     threadId: binding?.threadId,
     agentId: binding?.agentId,
     identity: resolveBindingIdentity(params.cfg, binding),
-    mediaAccess: params.mediaLocalRoots?.length
-      ? { localRoots: params.mediaLocalRoots }
-      : undefined,
+    mediaAccess:
+      params.mediaLocalRoots !== undefined || params.mediaReadFile
+        ? {
+            ...(params.mediaLocalRoots !== undefined ? { localRoots: params.mediaLocalRoots } : {}),
+            ...(params.mediaReadFile ? { readFile: params.mediaReadFile } : {}),
+          }
+        : undefined,
     replyToMode: params.replyToMode ?? "all",
     formatting: {
       textLimit: params.textLimit,
@@ -172,22 +176,18 @@ export async function deliverDiscordReply(params: {
   sessionKey?: string;
   threadBindings?: DiscordThreadBindingLookup;
   mediaLocalRoots?: readonly string[];
-  kind: "tool" | "block" | "final";
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 }) {
   void params.runtime;
 
   const delivery = resolveDiscordDeliveryOptions(params);
-  const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies, { kind: params.kind });
-  if (payloads.length === 0) {
-    return;
-  }
 
-  const send = await sendDurableMessageBatch({
+  await deliverOutboundPayloads({
     cfg: params.cfg,
     channel: "discord",
     to: delivery.to,
     accountId: params.accountId,
-    payloads,
+    payloads: params.replies,
     replyToId: normalizeOptionalString(params.replyToId),
     replyToMode: delivery.replyToMode,
     formatting: delivery.formatting,
@@ -206,11 +206,4 @@ export async function deliverDiscordReply(params: {
       requesterAccountId: params.accountId,
     }),
   });
-  if (send.status === "failed" || send.status === "partial_failed") {
-    throw send.error;
-  }
-  const results = send.status === "sent" ? send.results : [];
-  if (results.length === 0) {
-    throw new Error(`discord final reply produced no delivered message for ${delivery.to}`);
-  }
 }

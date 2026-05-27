@@ -1,18 +1,21 @@
 export { resolveIdentityNamePrefix } from "openclaw/plugin-sdk/agent-runtime";
-export { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-envelope";
+export {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "openclaw/plugin-sdk/channel-envelope";
 export { resolveInboundSessionEnvelopeContext } from "openclaw/plugin-sdk/channel-inbound";
 export { toLocationContext } from "openclaw/plugin-sdk/channel-location";
+export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-detection";
 export {
-  createChannelMessageReplyPipeline,
-  resolveChannelMessageSourceReplyDeliveryMode,
-} from "openclaw/plugin-sdk/channel-message";
+  recordSessionMetaFromInbound,
+  resolveChannelContextVisibilityMode,
+} from "../config.runtime.js";
 export {
-  isControlCommandMessage,
-  shouldComputeCommandAuthorized,
-} from "openclaw/plugin-sdk/command-detection";
-export { resolveChannelContextVisibilityMode } from "../config.runtime.js";
-export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-export type LoadConfigFn = typeof import("../config.runtime.js").getRuntimeConfig;
+  getAgentScopedMediaLocalRoots,
+  resolveAgentScopedOutboundMediaAccess,
+} from "openclaw/plugin-sdk/media-runtime";
+export type LoadConfigFn = typeof import("../config.runtime.js").loadConfig;
 export {
   buildHistoryContextFromEntries,
   type HistoryEntry,
@@ -31,6 +34,10 @@ export {
   type resolveAgentRoute,
 } from "openclaw/plugin-sdk/routing";
 export { logVerbose, shouldLogVerbose, type getChildLogger } from "openclaw/plugin-sdk/runtime-env";
-export { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+export {
+  readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithCommandGate,
+  resolvePinnedMainDmOwnerFromAllowlist,
+} from "openclaw/plugin-sdk/security-runtime";
 export { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 export { jidToE164, normalizeE164 } from "../../text-runtime.js";

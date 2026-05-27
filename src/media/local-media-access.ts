@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assertNoWindowsNetworkPath } from "../infra/local-file-access.js";
-import { isPathInside } from "../infra/path-guards.js";
-import { isInboundPathAllowed } from "./inbound-path-policy.js";
+import { type LocalMediaRoot, resolveLocalMediaRoot } from "./local-media-root.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveInboundMediaReference } from "./media-reference.js";
+
+export type { LocalMediaRoot } from "./local-media-root.js";
 
 export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
@@ -32,8 +33,7 @@ export function getDefaultLocalRoots(): readonly string[] {
 
 export async function assertLocalMediaAllowed(
   mediaPath: string,
-  localRoots: readonly string[] | "any" | undefined,
-  options?: { inboundRoots?: readonly string[] },
+  localRoots: readonly LocalMediaRoot[] | "any" | undefined,
 ): Promise<void> {
   if (localRoots === "any") {
     return;
@@ -49,12 +49,6 @@ export async function assertLocalMediaAllowed(
       cause: err,
     });
   }
-  if (
-    options?.inboundRoots?.length &&
-    isInboundPathAllowed({ filePath: mediaPath, roots: options.inboundRoots })
-  ) {
-    return;
-  }
   const roots = localRoots ?? getDefaultLocalRoots();
   let resolved: string;
   try {
@@ -64,11 +58,13 @@ export async function assertLocalMediaAllowed(
   }
 
   if (localRoots === undefined) {
-    const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
+    const workspaceRoot = roots.find(
+      (root) => path.basename(resolveLocalMediaRoot(root).path) === "workspace",
+    );
     if (workspaceRoot) {
-      const stateDir = path.dirname(workspaceRoot);
+      const stateDir = path.dirname(resolveLocalMediaRoot(workspaceRoot).path);
       const rel = path.relative(stateDir, resolved);
-      if (rel && isPathInside(stateDir, resolved)) {
+      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
         const firstSegment = rel.split(path.sep)[0] ?? "";
         if (firstSegment.startsWith("workspace-")) {
           throw new LocalMediaAccessError(
@@ -81,19 +77,23 @@ export async function assertLocalMediaAllowed(
   }
 
   for (const root of roots) {
+    const { path: rootPath, kind } = resolveLocalMediaRoot(root);
     let resolvedRoot: string;
     try {
-      resolvedRoot = await fs.realpath(root);
+      resolvedRoot = await fs.realpath(rootPath);
     } catch {
-      resolvedRoot = path.resolve(root);
+      resolvedRoot = path.resolve(rootPath);
     }
     if (resolvedRoot === path.parse(resolvedRoot).root) {
       throw new LocalMediaAccessError(
         "invalid-root",
-        `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
+        `Invalid localRoots entry (refuses filesystem root): ${rootPath}. Pass a narrower directory.`,
       );
     }
-    if (isPathInside(resolvedRoot, resolved)) {
+    if (
+      resolved === resolvedRoot ||
+      (kind === "dir" && resolved.startsWith(resolvedRoot + path.sep))
+    ) {
       return;
     }
   }

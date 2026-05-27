@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createApplyPatchTool } from "./apply-patch.js";
+import { createOpenClawCodingTools } from "./pi-tools.js";
 import {
   createSandboxedEditTool,
   createSandboxedReadTool,
@@ -99,6 +100,34 @@ describe("tools.fs.workspaceOnly", () => {
     });
   });
 
+  it("ignores host roots for sandboxed read/write/edit tools", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
+      await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
+
+      const cfg = {
+        tools: {
+          fs: {
+            roots: [{ path: agentRoot, kind: "dir", access: "rw" }],
+          },
+        },
+      } as OpenClawConfig;
+      const tools = createOpenClawCodingTools({ sandbox, workspaceDir: sandboxRoot, config: cfg });
+      const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+
+      const readResult = await readTool?.execute("t-roots-read", { path: "/agent/secret.txt" });
+      expect(getTextContent(readResult)).toContain("shh");
+
+      await writeTool?.execute("t-roots-write", { path: "/agent/owned.txt", content: "x" });
+      expect(await fs.readFile(path.join(agentRoot, "owned.txt"), "utf8")).toBe("x");
+
+      await editTool?.execute("t-roots-edit", {
+        path: "/agent/secret.txt",
+        edits: [{ oldText: "shh", newText: "ok" }],
+      });
+      expect(await fs.readFile(path.join(agentRoot, "secret.txt"), "utf8")).toBe("ok");
+    });
+  });
+
   it("rejects sandbox mounts outside the workspace root when enabled", async () => {
     await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
       await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
@@ -119,7 +148,10 @@ describe("tools.fs.workspaceOnly", () => {
       expect((missingOwnedFile as NodeJS.ErrnoException).code).toBe("ENOENT");
 
       await expect(
-        editTool?.execute("t3", { path: "/agent/secret.txt", oldText: "shh", newText: "nope" }),
+        editTool?.execute("t3", {
+          path: "/agent/secret.txt",
+          edits: [{ oldText: "shh", newText: "nope" }],
+        }),
       ).rejects.toThrow(/Path escapes sandbox root/i);
       expect(await fs.readFile(path.join(agentRoot, "secret.txt"), "utf8")).toBe("shh");
     });

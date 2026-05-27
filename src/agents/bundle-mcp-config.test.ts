@@ -1,49 +1,54 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createBundleMcpTempHarness,
+  createBundleProbePlugin,
+  withBundleHomeEnv,
+} from "../plugins/bundle-mcp.test-support.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "./bundle-mcp-config.js";
 
-const mocks = vi.hoisted(() => ({
-  bundleMcp: {
-    config: {
-      mcpServers: {
-        bundleProbe: {
-          command: "node",
-          args: ["./servers/probe.mjs"],
-        },
-      },
-    },
-    diagnostics: [],
-  },
-}));
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) =>
+  importOriginal<typeof import("../plugins/plugin-registry.js")>(),
+);
 
-vi.mock("../plugins/bundle-mcp.js", () => ({
-  loadEnabledBundleMcpConfig: () => mocks.bundleMcp,
-}));
+const tempHarness = createBundleMcpTempHarness();
+
+afterEach(async () => {
+  await tempHarness.cleanup();
+});
 
 describe("loadMergedBundleMcpConfig", () => {
-  it("lets OpenClaw mcp.servers override bundle defaults while preserving raw transport shape", () => {
-    const merged = loadMergedBundleMcpConfig({
-      workspaceDir: "/workspace",
-      cfg: {
-        plugins: {
-          entries: {
-            "bundle-probe": { enabled: true },
-          },
-        },
-        mcp: {
-          servers: {
-            bundleProbe: {
-              transport: "streamable-http",
-              url: "https://mcp.example.com/mcp",
+  it("lets OpenClaw mcp.servers override bundle defaults while preserving raw transport shape", async () => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-bundle-mcp-config",
+      async ({ homeDir, workspaceDir }) => {
+        await createBundleProbePlugin(homeDir);
+
+        const merged = loadMergedBundleMcpConfig({
+          workspaceDir,
+          cfg: {
+            plugins: {
+              entries: {
+                "bundle-probe": { enabled: true },
+              },
+            },
+            mcp: {
+              servers: {
+                bundleProbe: {
+                  transport: "streamable-http",
+                  url: "https://mcp.example.com/mcp",
+                },
+              },
             },
           },
-        },
-      },
-    });
+        });
 
-    expect(merged.config.mcpServers.bundleProbe).toEqual({
-      transport: "streamable-http",
-      url: "https://mcp.example.com/mcp",
-    });
+        expect(merged.config.mcpServers.bundleProbe).toEqual({
+          transport: "streamable-http",
+          url: "https://mcp.example.com/mcp",
+        });
+      },
+    );
   });
 
   it("maps OpenClaw transports to downstream CLI types when requested", () => {

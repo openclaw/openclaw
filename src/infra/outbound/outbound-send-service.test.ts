@@ -12,9 +12,14 @@ const dispatchChannelMessageActionMock = vi.hoisted(() => vi.fn());
 const sendMessageMock = vi.hoisted(() => vi.fn());
 const sendPollMock = vi.hoisted(() => vi.fn());
 const getAgentScopedMediaLocalRootsForSourcesMock = vi.hoisted(() =>
-  vi.fn<(params: { cfg: unknown; agentId?: string; mediaSources?: readonly string[] }) => string[]>(
-    () => ["/tmp/agent-roots"],
-  ),
+  vi.fn<
+    (params: {
+      cfg: unknown;
+      agentId?: string;
+      mediaSources?: readonly string[];
+      ignoreConfiguredRoots?: boolean;
+    }) => string[]
+  >(() => ["/tmp/agent-roots"]),
 );
 const createAgentScopedHostMediaReadFileMock = vi.hoisted(() =>
   vi.fn<(params: { cfg: unknown; agentId?: string }) => (filePath: string) => Promise<Buffer>>(
@@ -32,6 +37,7 @@ const resolveAgentScopedOutboundMediaAccessMock = vi.hoisted(() =>
       requesterSenderName?: string;
       requesterSenderUsername?: string;
       requesterSenderE164?: string;
+      ignoreConfiguredRoots?: boolean;
     }) => {
       localRoots: string[];
       readFile: (filePath: string) => Promise<Buffer>;
@@ -41,6 +47,7 @@ const resolveAgentScopedOutboundMediaAccessMock = vi.hoisted(() =>
       cfg: params.cfg,
       agentId: params.agentId,
       mediaSources: params.mediaSources ?? [],
+      ignoreConfiguredRoots: params.ignoreConfiguredRoots,
     }),
     readFile: createAgentScopedHostMediaReadFileMock({
       cfg: params.cfg,
@@ -540,6 +547,35 @@ describe("executeSendAction", () => {
       cfg: {},
       agentId: "agent-1",
       mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+  });
+
+  it("ignores configured fs roots for sandboxed plugin dispatch media", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: {
+          to: "channel:123",
+          message: "hello",
+          media: "/tmp/sandbox/image.png",
+        },
+        agentId: "agent-1",
+        ignoreConfiguredRootsForMedia: true,
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      mediaUrl: "/tmp/sandbox/image.png",
+    });
+
+    expect(mocks.getAgentScopedMediaLocalRootsForSources).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "agent-1",
+      mediaSources: ["/tmp/sandbox/image.png"],
+      ignoreConfiguredRoots: true,
     });
   });
 

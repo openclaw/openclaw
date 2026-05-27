@@ -1,6 +1,6 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { fireAndForgetHook } from "openclaw/plugin-sdk/hook-runtime";
 import { createInternalHookEvent, triggerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import {
@@ -10,13 +10,8 @@ import {
   toPluginMessageSentEvent,
 } from "openclaw/plugin-sdk/hook-runtime";
 import type { ReplyPayloadDelivery } from "openclaw/plugin-sdk/interactive-runtime";
-import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
-import {
-  buildOutboundMediaLoadOptions,
-  isGifMedia,
-  kindFromMime,
-  probeVideoDimensions,
-} from "openclaw/plugin-sdk/media-runtime";
+import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
+import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
@@ -29,7 +24,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
+import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
   markdownToTelegramChunks,
@@ -37,7 +32,6 @@ import {
   renderTelegramHtmlText,
   wrapFileReferencesInHtml,
 } from "../format.js";
-import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
@@ -265,16 +259,6 @@ function isCaptionTooLong(err: unknown): boolean {
   return CAPTION_TOO_LONG_RE.test(formatErrorMessage(err));
 }
 
-function resolveVoiceFallbackText(reply: ReplyPayload): string | undefined {
-  if (reply.text?.trim()) {
-    return reply.text;
-  }
-  if (reply.spokenText?.trim()) {
-    return reply.spokenText;
-  }
-  return undefined;
-}
-
 async function sendTelegramVoiceFallbackText(opts: {
   bot: Bot;
   chatId: string;
@@ -331,7 +315,7 @@ async function deliverMediaReply(params: {
   thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
   mediaLocalRoots?: readonly string[];
-  mediaMaxBytes?: number;
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   chunkText: ChunkTextFn;
   mediaLoader: typeof loadWebMedia;
   onVoiceRecording?: () => Promise<void> | void;
@@ -345,9 +329,8 @@ async function deliverMediaReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
-}): Promise<{ firstDeliveredMessageId?: number; visibleFallbackText?: string }> {
+}): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
-  let visibleFallbackText: string | undefined;
   let first = true;
   let pendingFollowUpText: string | undefined;
   for (const mediaUrl of params.mediaList) {
@@ -356,7 +339,7 @@ async function deliverMediaReply(params: {
       mediaUrl,
       buildOutboundMediaLoadOptions({
         mediaLocalRoots: params.mediaLocalRoots,
-        maxBytes: params.mediaMaxBytes,
+        mediaReadFile: params.mediaReadFile,
       }),
     );
     const kind = kindFromMime(media.contentType ?? undefined);
@@ -382,12 +365,10 @@ async function deliverMediaReply(params: {
       progress: params.progress,
     });
     const shouldAttachButtonsToMedia = isFirstMedia && params.replyMarkup && !followUpText;
-    const videoDimensions = kind === "video" ? await probeVideoDimensions(media.buffer) : undefined;
     const mediaParams: Record<string, unknown> = {
       caption: htmlCaption,
       ...(htmlCaption ? { parse_mode: "HTML" } : {}),
       ...(shouldAttachButtonsToMedia ? { reply_markup: params.replyMarkup } : {}),
-      ...(videoDimensions ? { width: videoDimensions.width, height: videoDimensions.height } : {}),
       ...buildTelegramSendParams({
         replyToMessageId,
         replyQuoteMessageId: params.replyQuoteMessageId,
@@ -468,7 +449,7 @@ async function deliverMediaReply(params: {
           await sendVoiceMedia(mediaParams, (err) => !isVoiceMessagesForbidden(err));
         } catch (voiceErr) {
           if (isVoiceMessagesForbidden(voiceErr)) {
-            const fallbackText = resolveVoiceFallbackText(params.reply);
+            const fallbackText = params.reply.text;
             if (!fallbackText || !fallbackText.trim()) {
               throw voiceErr;
             }
@@ -499,7 +480,6 @@ async function deliverMediaReply(params: {
             if (firstDeliveredMessageId == null) {
               firstDeliveredMessageId = fallbackMessageId;
             }
-            visibleFallbackText = fallbackText;
             markReplyApplied(params.progress, voiceFallbackReplyTo);
             markDelivered(params.progress);
             continue;
@@ -512,7 +492,7 @@ async function deliverMediaReply(params: {
             delete noCaptionParams.caption;
             delete noCaptionParams.parse_mode;
             await sendVoiceMedia(noCaptionParams);
-            const fallbackText = resolveVoiceFallbackText(params.reply);
+            const fallbackText = params.reply.text;
             if (fallbackText?.trim()) {
               await sendTelegramVoiceFallbackText({
                 bot: params.bot,
@@ -526,7 +506,6 @@ async function deliverMediaReply(params: {
                 silent: params.silent,
                 replyMarkup: params.replyMarkup,
               });
-              visibleFallbackText = fallbackText;
             }
             markReplyApplied(params.progress, replyToMessageId);
             continue;
@@ -580,7 +559,7 @@ async function deliverMediaReply(params: {
       pendingFollowUpText = undefined;
     }
   }
-  return { firstDeliveredMessageId, visibleFallbackText };
+  return firstDeliveredMessageId;
 }
 
 async function maybePinFirstDeliveredMessage(params: {
@@ -686,7 +665,7 @@ export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams):
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
-  cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
+  cfg?: import("openclaw/plugin-sdk/config-runtime").OpenClawConfig;
   chatId: string;
   accountId?: string;
   sessionKeyForInternalHooks?: string;
@@ -697,7 +676,7 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   bot: Bot;
   mediaLocalRoots?: readonly string[];
-  mediaMaxBytes?: number;
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   replyToMode: ReplyToMode;
   textLimit: number;
   thread?: TelegramThreadSpec | null;
@@ -721,7 +700,6 @@ export async function deliverReplies(params: {
   replyQuoteByMessageId?: TelegramNativeQuoteCandidateByMessageId;
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
-  transcriptMirror?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
@@ -729,8 +707,6 @@ export async function deliverReplies(params: {
     deliveredCount: 0,
   };
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
-  const transcriptMirror = params.transcriptMirror;
-  const deliveredContents: Array<{ text: string; mediaUrls: string[] }> = [];
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
@@ -774,20 +750,7 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
-    const presentation = normalizeMessagePresentation(reply?.presentation);
-    const interactive = reply?.interactive;
-    const resolvedReplyText =
-      resolveTelegramInteractiveTextFallback({
-        text: reply?.text,
-        interactive,
-        presentation,
-      }) ??
-      reply?.text ??
-      "";
-    if (reply && resolvedReplyText !== (reply.text ?? "")) {
-      reply = { ...reply, text: resolvedReplyText };
-    }
-    if (!resolvedReplyText && !hasMedia) {
+    if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
         continue;
@@ -796,12 +759,7 @@ export async function deliverReplies(params: {
       continue;
     }
 
-    const rawContent = resolvedReplyText;
-    const spokenHookContent =
-      !rawContent && reply.audioAsVoice === true && reply.spokenText?.trim()
-        ? reply.spokenText
-        : undefined;
-    const hookContent = spokenHookContent ?? rawContent;
+    const rawContent = reply.text || "";
     const replyToId =
       params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
     const replyQuote = resolveReplyQuoteForSend({
@@ -816,7 +774,7 @@ export async function deliverReplies(params: {
       const hookResult = await hookRunner?.runMessageSending(
         {
           to: params.chatId,
-          content: hookContent,
+          content: rawContent,
           replyToId,
           threadId: params.thread?.id,
           metadata: {
@@ -834,26 +792,17 @@ export async function deliverReplies(params: {
       if (hookResult?.cancel) {
         continue;
       }
-      if (typeof hookResult?.content === "string" && hookResult.content !== hookContent) {
-        reply = spokenHookContent
-          ? { ...reply, spokenText: hookResult.content }
-          : { ...reply, text: hookResult.content };
+      if (typeof hookResult?.content === "string" && hookResult.content !== rawContent) {
+        reply = { ...reply, text: hookResult.content };
       }
     }
 
-    let contentForSentHook =
-      reply.text || (reply.audioAsVoice === true ? resolveVoiceFallbackText(reply) : "") || "";
+    const contentForSentHook = reply.text || "";
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
-      const replyMarkup = buildInlineKeyboard(
-        resolveTelegramInlineButtons({
-          buttons: telegramData?.buttons,
-          presentation,
-          interactive,
-        }),
-      );
+      const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
       let firstDeliveredMessageId: number | undefined;
       if (mediaList.length === 0) {
         firstDeliveredMessageId = await deliverTextReply({
@@ -875,7 +824,7 @@ export async function deliverReplies(params: {
           progress,
         });
       } else {
-        const mediaDelivery = await deliverMediaReply({
+        firstDeliveredMessageId = await deliverMediaReply({
           reply,
           mediaList,
           bot: params.bot,
@@ -884,7 +833,7 @@ export async function deliverReplies(params: {
           thread: params.thread,
           tableMode: params.tableMode,
           mediaLocalRoots: params.mediaLocalRoots,
-          mediaMaxBytes: params.mediaMaxBytes,
+          mediaReadFile: params.mediaReadFile,
           chunkText,
           mediaLoader,
           onVoiceRecording: params.onVoiceRecording,
@@ -899,10 +848,6 @@ export async function deliverReplies(params: {
           replyToMode: params.replyToMode,
           progress,
         });
-        firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;
-        if (mediaDelivery.visibleFallbackText) {
-          contentForSentHook = mediaDelivery.visibleFallbackText;
-        }
       }
       await maybePinFirstDeliveredMessage({
         pin: reply.delivery?.pin,
@@ -911,10 +856,6 @@ export async function deliverReplies(params: {
         runtime: params.runtime,
         firstDeliveredMessageId,
       });
-
-      if (progress.deliveredCount > deliveredCountBeforeReply && transcriptMirror) {
-        deliveredContents.push({ text: contentForSentHook, mediaUrls: mediaList });
-      }
 
       emitMessageSentHooks({
         hookRunner,
@@ -942,24 +883,6 @@ export async function deliverReplies(params: {
         groupId: params.mirrorGroupId,
       });
       throw error;
-    }
-  }
-
-  if (progress.hasDelivered && transcriptMirror) {
-    const text = deliveredContents
-      .map((content) => content.text)
-      .filter(Boolean)
-      .join("\n\n");
-    const mediaUrls = deliveredContents.flatMap((content) => content.mediaUrls);
-    if (text || mediaUrls.length > 0) {
-      try {
-        await transcriptMirror({
-          text: text || undefined,
-          mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
-        });
-      } catch (mirrorErr) {
-        logVerbose(`telegram transcriptMirror failed: ${formatErrorMessage(mirrorErr)}`);
-      }
     }
   }
 

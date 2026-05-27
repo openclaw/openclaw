@@ -1,3 +1,4 @@
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
@@ -649,6 +650,8 @@ type DeliverOutboundPayloadsCoreParams = {
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** Explicitly signal sandbox mode to bypass host-root media restrictions. */
+  sandboxed?: boolean;
 };
 
 type DeliverOutboundPayloadsCoreRuntimeParams = DeliverOutboundPayloadsCoreParams & {
@@ -1362,6 +1365,14 @@ async function deliverOutboundPayloadsCore(
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const mediaSources = collectPayloadMediaSources(outboundPayloadPlan);
+  const ignoreConfiguredRoots =
+    params.sandboxed ??
+    (() => {
+      const sandboxSessionKey = params.session?.key ?? params.mirror?.sessionKey;
+      return sandboxSessionKey
+        ? resolveSandboxRuntimeStatus({ cfg, sessionKey: sandboxSessionKey }).sandboxed
+        : false;
+    })();
   const mediaAccess =
     mediaSources.length > 0
       ? resolveAgentScopedOutboundMediaAccess({
@@ -1376,6 +1387,7 @@ async function deliverOutboundPayloadsCore(
           requesterSenderName: params.session?.requesterSenderName,
           requesterSenderUsername: params.session?.requesterSenderUsername,
           requesterSenderE164: params.session?.requesterSenderE164,
+          ignoreConfiguredRoots,
         })
       : (params.mediaAccess ?? {});
   const results: OutboundDeliveryResult[] = [];

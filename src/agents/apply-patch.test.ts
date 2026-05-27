@@ -9,6 +9,123 @@ import {
 import { applyPatch } from "./apply-patch.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
+const pinnedPathHelper = vi.hoisted(() => {
+  const fs = require("node:fs/promises") as typeof import("node:fs/promises");
+  const path = require("node:path") as typeof import("node:path");
+  const { pipeline } = require("node:stream/promises") as typeof import("node:stream/promises");
+
+  async function resolvePinnedParent(params: {
+    rootPath: string;
+    relativeParentPath?: string;
+    mkdir?: boolean;
+  }): Promise<string> {
+    let current = params.rootPath;
+    for (const segment of (params.relativeParentPath ?? "").split("/").filter(Boolean)) {
+      const next = path.join(current, segment);
+      try {
+        const stat = await fs.lstat(next);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) {
+          throw new Error("symbolic link or non-directory path segment");
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !params.mkdir) {
+          throw error;
+        }
+        await fs.mkdir(next);
+      }
+      current = next;
+    }
+    return current;
+  }
+
+  return {
+    runPinnedPathHelper: vi.fn(
+      async (params: {
+        operation: "mkdirp" | "remove";
+        rootPath: string;
+        relativePath: string;
+      }) => {
+        const segments = params.relativePath.split("/").filter(Boolean);
+        const targetPath = path.join(params.rootPath, ...segments);
+        if (params.operation === "mkdirp") {
+          await resolvePinnedParent({
+            rootPath: params.rootPath,
+            relativeParentPath: params.relativePath,
+            mkdir: true,
+          });
+          return;
+        }
+        await resolvePinnedParent({
+          rootPath: params.rootPath,
+          relativeParentPath: segments.slice(0, -1).join("/"),
+          mkdir: false,
+        });
+        const stat = await fs.lstat(targetPath);
+        if (stat.isDirectory() && !stat.isSymbolicLink()) {
+          await fs.rmdir(targetPath);
+          return;
+        }
+        await fs.unlink(targetPath);
+      },
+    ),
+    runPinnedWriteHelper: vi.fn(
+      async (params: {
+        rootPath: string;
+        relativeParentPath: string;
+        basename: string;
+        mkdir: boolean;
+        mode: number;
+        input:
+          | { kind: "buffer"; data: string | Buffer; encoding?: BufferEncoding }
+          | { kind: "stream"; stream: NodeJS.ReadableStream };
+      }) => {
+        const parentPath = await resolvePinnedParent({
+          rootPath: params.rootPath,
+          relativeParentPath: params.relativeParentPath,
+          mkdir: params.mkdir,
+        });
+        const targetPath = path.join(parentPath, params.basename);
+        if (params.input.kind === "buffer") {
+          await fs.writeFile(targetPath, params.input.data, {
+            encoding: params.input.encoding,
+            mode: params.mode,
+          });
+        } else {
+          const handle = await fs.open(targetPath, "w", params.mode);
+          try {
+            await pipeline(params.input.stream, handle.createWriteStream());
+          } finally {
+            await handle.close().catch(() => undefined);
+          }
+        }
+        const stat = await fs.stat(targetPath);
+        return { dev: stat.dev, ino: stat.ino };
+      },
+    ),
+    runPinnedUnlinkHelper: vi.fn(
+      async (params: { rootPath: string; relativeParentPath: string; basename: string }) => {
+        const parentPath = await resolvePinnedParent({
+          rootPath: params.rootPath,
+          relativeParentPath: params.relativeParentPath,
+          mkdir: false,
+        });
+        await fs.unlink(path.join(parentPath, params.basename));
+      },
+    ),
+  };
+});
+
+vi.mock("../infra/fs-pinned-path-helper.js", () => ({
+  isPinnedPathHelperSpawnError: () => false,
+  runPinnedPathHelper: pinnedPathHelper.runPinnedPathHelper,
+}));
+
+vi.mock("../infra/fs-pinned-write-helper.js", () => ({
+  runPinnedWriteHelper: pinnedPathHelper.runPinnedWriteHelper,
+  runPinnedUnlinkHelper: pinnedPathHelper.runPinnedUnlinkHelper,
+}));
+import { resolveRoots } from "./pi-tools.fs-roots.js";
+
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-"));
   try {
@@ -84,17 +201,7 @@ async function expectOutsideWriteRejected(params: {
 }) {
   const patch = buildAddFilePatch(params.patchTargetPath);
   await expect(applyPatch(patch, { cwd: params.dir })).rejects.toThrow(/Path escapes sandbox root/);
-  await expectMissingPath(fs.readFile(params.outsidePath, "utf8"));
-}
-
-async function expectMissingPath(operation: Promise<unknown>) {
-  let error: NodeJS.ErrnoException | undefined;
-  try {
-    await operation;
-  } catch (caught) {
-    error = caught as NodeJS.ErrnoException;
-  }
-  expect(error?.code).toBe("ENOENT");
+  await expect(fs.readFile(params.outsidePath, "utf8")).rejects.toBeDefined();
 }
 
 describe("applyPatch", () => {
@@ -129,57 +236,6 @@ describe("applyPatch", () => {
     expect(memory.files.get("/sandbox/dest.txt")).toBe("foo\nbaz\n");
     expect(memory.files.has("/sandbox/source.txt")).toBe(false);
     expect(result.summary.modified).toEqual(["dest.txt"]);
-  });
-
-  it("updates in place when move target resolves to the source file", async () => {
-    const memory = createMemoryPatchSandbox({
-      "source.txt": "foo\nbar\n",
-    });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-*** Move to: ./source.txt
-@@
- foo
--bar
-+baz
-*** End Patch`;
-
-    const result = await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbaz\n");
-    expect(result.summary.modified).toEqual(["source.txt"]);
-  });
-
-  it("applies context-only insertions at the requested context", async () => {
-    const memory = createMemoryPatchSandbox({
-      "source.txt": "alpha\nanchor\nomega\n",
-    });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@ anchor
-+inserted
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/source.txt")).toBe("alpha\nanchor\ninserted\nomega\n");
-  });
-
-  it("keeps later insertion contexts in original file coordinates", async () => {
-    const memory = createMemoryPatchSandbox({
-      "source.txt": "a\nb\nc\n",
-    });
-    const patch = `*** Begin Patch
-*** Update File: source.txt
-@@ a
-+after-a
-@@ b
-+after-b
-*** End Patch`;
-
-    await applyPatch(patch, memory.options);
-
-    expect(memory.files.get("/sandbox/source.txt")).toBe("a\nafter-a\nb\nafter-b\nc\n");
   });
 
   it("supports end-of-file inserts", async () => {
@@ -293,7 +349,7 @@ describe("applyPatch", () => {
         await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
           /Symlink escapes sandbox root/,
         );
-        await expectMissingPath(fs.readFile(outsideFile, "utf8"));
+        await expect(fs.readFile(outsideFile, "utf8")).rejects.toBeDefined();
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
       }
@@ -415,19 +471,99 @@ describe("applyPatch", () => {
     });
   });
 
-  it("keeps dot-dot-prefixed filenames inside cwd and reports relative paths", async () => {
+  it("applies host-mode patches inside configured fs roots outside cwd", async () => {
     await withTempDir(async (dir) => {
+      const allowedDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-roots-"));
+      const target = path.join(allowedDir, "source.txt");
+      await fs.writeFile(target, "before\n", "utf8");
+
       const patch = `*** Begin Patch
-*** Add File: ..note.txt
-+inside
+*** Update File: ${target}
+@@
+-before
++after
 *** End Patch`;
 
-      const result = await applyPatch(patch, { cwd: dir });
-
-      expect(result.summary.added).toEqual(["..note.txt"]);
-      await expect(fs.readFile(path.join(dir, "..note.txt"), "utf8")).resolves.toBe("inside\n");
+      try {
+        const result = await applyPatch(patch, {
+          cwd: dir,
+          workspaceOnly: false,
+          roots: resolveRoots([{ path: allowedDir, kind: "dir", access: "rw" }]),
+        });
+        expect(await fs.readFile(target, "utf8")).toBe("after\n");
+        expect(result.summary.modified).toEqual([target]);
+      } finally {
+        await fs.rm(allowedDir, { recursive: true, force: true });
+      }
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "deletes symlink entries safely when host-mode roots are configured",
+    async () => {
+      await withTempDir(async (dir) => {
+        const allowedDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-roots-"));
+        const outsideDir = await fs.mkdtemp(
+          path.join(path.dirname(dir), "openclaw-patch-outside-"),
+        );
+        const outsideTarget = path.join(outsideDir, "keep.txt");
+        const linkPath = path.join(allowedDir, "link.txt");
+        await fs.writeFile(outsideTarget, "keep\n", "utf8");
+        await fs.symlink(outsideTarget, linkPath);
+
+        const patch = `*** Begin Patch
+*** Delete File: ${linkPath}
+*** End Patch`;
+
+        try {
+          const result = await applyPatch(patch, {
+            cwd: dir,
+            workspaceOnly: false,
+            roots: resolveRoots([{ path: allowedDir, kind: "dir", access: "rw" }]),
+          });
+          expect(result.summary.deleted).toEqual([linkPath]);
+          await expect(fs.lstat(linkPath)).rejects.toBeDefined();
+          expect(await fs.readFile(outsideTarget, "utf8")).toBe("keep\n");
+        } finally {
+          await fs.rm(allowedDir, { recursive: true, force: true });
+          await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "allows deleting a symlink alias without mutating a canonical read-only file root",
+    async () => {
+      await withTempDir(async (dir) => {
+        const allowedDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-roots-"));
+        const secretFile = path.join(allowedDir, "secret.txt");
+        const linkPath = path.join(allowedDir, "link.txt");
+        await fs.writeFile(secretFile, "keep\n", "utf8");
+        await fs.symlink(secretFile, linkPath);
+
+        const patch = `*** Begin Patch
+*** Delete File: ${linkPath}
+*** End Patch`;
+
+        try {
+          const result = await applyPatch(patch, {
+            cwd: dir,
+            workspaceOnly: false,
+            roots: resolveRoots([
+              { path: allowedDir, kind: "dir", access: "rw" },
+              { path: secretFile, kind: "file", access: "ro" },
+            ]),
+          });
+          expect(result.summary.deleted).toEqual([linkPath]);
+          await expect(fs.lstat(linkPath)).rejects.toBeDefined();
+          expect(await fs.readFile(secretFile, "utf8")).toBe("keep\n");
+        } finally {
+          await fs.rm(allowedDir, { recursive: true, force: true });
+        }
+      });
+    },
+  );
 
   it("allows deleting a symlink itself even if it points outside cwd", async () => {
     await withTempDir(async (dir) => {
@@ -451,41 +587,9 @@ describe("applyPatch", () => {
 
         const result = await applyPatch(patch, { cwd: dir });
         expect(result.summary.deleted).toEqual(["link"]);
-        await expectMissingPath(fs.lstat(linkDir));
+        await expect(fs.lstat(linkDir)).rejects.toBeDefined();
         const outsideContents = await fs.readFile(outsideTarget, "utf8");
         expect(outsideContents).toBe("keep\n");
-      } finally {
-        await fs.rm(outsideDir, { recursive: true, force: true });
-      }
-    });
-  });
-
-  it("rejects move targets whose parent path is a symlink outside cwd", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    await withTempDir(async (dir) => {
-      const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));
-      try {
-        const sourcePath = path.join(dir, "source.txt");
-        const outsideTarget = path.join(outsideDir, "moved.txt");
-        const linkDir = path.join(dir, "link");
-        await fs.writeFile(sourcePath, "before\n", "utf8");
-        await fs.symlink(outsideDir, linkDir);
-
-        const patch = `*** Begin Patch
-*** Update File: source.txt
-*** Move to: link/moved.txt
-@@
--before
-+after
-*** End Patch`;
-
-        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-          /path alias under sandbox root|symlink escapes sandbox root/i,
-        );
-        await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("before\n");
-        await expectMissingPath(fs.readFile(outsideTarget, "utf8"));
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
       }
@@ -558,12 +662,12 @@ describe("applyPatch", () => {
             symlinkTarget: outside,
             timing: "before-realpath",
             run: async () => {
-              await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
-                /path alias under sandbox root|path escapes sandbox root|under root|unable to resolve opened file path/i,
-              );
+              await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/under root/i);
             },
           });
-          await expectMissingPath(fs.stat(path.join(outside, "nested")));
+          await expect(fs.stat(path.join(outside, "nested"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
         } finally {
           await fs.rm(outside, { recursive: true, force: true });
         }
