@@ -77,6 +77,13 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   }
 }
 
+function expectPrivatePosixMode(mode: number, label: string): void {
+  if (process.platform === "win32") {
+    return;
+  }
+  expect(mode & 0o077, `${label} permissions are too broad: ${(mode & 0o777).toString(8)}`).toBe(0);
+}
+
 function matrixQaScenarioContext(): MatrixQaScenarioContext {
   return {
     baseUrl: "http://127.0.0.1:28008/",
@@ -3872,7 +3879,7 @@ describe("matrix live qa scenarios", () => {
           event: matrixQaMessageEvent({
             kind: "message",
             eventId: previewEventId,
-            body: "Working...\n- `tool: exec`",
+            body: "Working...\n- `tool: read`",
           }),
           since: "driver-sync-preview",
         },
@@ -3881,9 +3888,9 @@ describe("matrix live qa scenarios", () => {
             kind: "message",
             eventId: "$tool-progress-mention-edit",
             body:
-              'Working...\n- `search "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt" in . -> run sleep 2`',
+              "Working...\n- `read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt failed`",
             formattedBody:
-              'Working...<br><ul><li><code>search "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt" in . -&gt; run sleep 2</code></li></ul>',
+              "Working...<br><ul><li><code>read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt failed</code></li></ul>",
             mentions: {},
             relatesTo: {
               relType: "m.replace",
@@ -3926,12 +3933,99 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.reply?.eventId).toBe("$tool-progress-mention-final");
     const prompt = mockMessageBody(sendTextMessage, "sendTextMessage");
     expect(prompt).toContain(
-      "call the exec tool exactly once with this exact command before answering",
+      "read the missing workspace file `matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` before answering",
     );
-    expect(prompt).toContain(
-      "`rg -n 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt' . ; sleep 2`",
+    expect(prompt).toContain("The QA harness must observe that failed read");
+  });
+
+  it("rejects active Matrix mentions in final-first tool-progress previews", async () => {
+    const { sendTextMessage } = mockMatrixQaRoomClient({
+      driverEventId: "$tool-progress-mention-final-first-trigger",
+      events: [
+        {
+          event: ({ sendTextMessage }) =>
+            matrixQaMessageEvent({
+              kind: "message",
+              eventId: "$tool-progress-mention-final-first-final",
+              body: readMatrixQaReplyDirective(
+                mockMessageBody(sendTextMessage, "sendTextMessage"),
+                "MATRIX_QA_TOOL_PROGRESS_MENTION_SAFE_FIXED",
+              ),
+            }),
+          since: "driver-sync-final",
+        },
+        {
+          event: matrixQaMessageEvent({
+            kind: "message",
+            eventId: "$tool-progress-mention-final-first-progress",
+            body:
+              "Working...\n- `read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt failed`",
+            formattedBody:
+              "Working...<br><ul><li><code>read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt failed</code></li></ul>",
+            mentions: {
+              room: true,
+              userIds: ["@alice:matrix-qa.test"],
+            },
+          }),
+          since: "driver-sync-progress",
+        },
+      ],
+    });
+
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-mention-safety");
+
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).rejects.toThrow(
+      /active mentions/,
     );
-    expect(prompt).toContain("The QA harness must observe that exec tool call");
+    expect(mockMessageBody(sendTextMessage, "sendTextMessage")).toContain(
+      "read the missing workspace file",
+    );
+  });
+
+  it("does not accept top-level finals after a Matrix mention-safety preview", async () => {
+    const context = matrixQaScenarioContext();
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$tool-progress-mention-stale-trigger");
+    const previewEvent = matrixQaMessageEvent({
+      kind: "message",
+      eventId: "$tool-progress-mention-stale-preview",
+      body:
+        "Working...\n- `read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt failed`",
+      formattedBody:
+        "Working...<br><ul><li><code>read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt failed</code></li></ul>",
+      mentions: {},
+    });
+    const waitForRoomEvent = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        context.observedEvents.push(previewEvent);
+        return { event: previewEvent, since: "driver-sync-preview" };
+      })
+      .mockImplementationOnce(async (params: { predicate: (event: MatrixQaObservedEvent) => boolean }) => {
+        const topLevelFinal = matrixQaMessageEvent({
+          kind: "message",
+          eventId: "$tool-progress-mention-stale-final",
+          body: readMatrixQaReplyDirective(
+            mockMessageBody(sendTextMessage, "sendTextMessage"),
+            "MATRIX_QA_TOOL_PROGRESS_MENTION_SAFE_FIXED",
+          ),
+        });
+        expect(params.predicate(topLevelFinal)).toBe(false);
+        context.observedEvents.push(topLevelFinal);
+        throw new Error("timed out after 8000ms waiting for Matrix room event");
+      });
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-mention-safety");
+
+    await expect(runMatrixQaScenario(scenario, context)).rejects.toThrow(
+      /timed out after 8000ms waiting for Matrix room event/,
+    );
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(2);
   });
 
   it("preserves separate finalized block events when Matrix block streaming is enabled", async () => {
@@ -5587,13 +5681,14 @@ describe("matrix live qa scenarios", () => {
       const cliArtifactDir = path.join(outputDir, "cli-self-verification", cliRunDir ?? "");
       const cliArtifactMode = (await stat(cliArtifactDir)).mode;
       expect(typeof cliArtifactMode).toBe("number");
-      expect(cliArtifactMode & 0o777).toBe(0o700);
+      expectPrivatePosixMode(cliArtifactMode, "Matrix QA CLI artifact directory");
       await expect(
         readFile(path.join(cliArtifactDir, "verify-backup-restore.stdout.txt"), "utf8"),
       ).resolves.toContain('"success":true');
-      expect(
-        (await stat(path.join(cliArtifactDir, "verify-backup-restore.stdout.txt"))).mode & 0o777,
-      ).toBe(0o600);
+      const restoreStdoutMode = (
+        await stat(path.join(cliArtifactDir, "verify-backup-restore.stdout.txt"))
+      ).mode;
+      expectPrivatePosixMode(restoreStdoutMode, "Matrix QA CLI restore stdout artifact");
       await expect(
         readFile(path.join(cliArtifactDir, "verify-self.stdout.txt"), "utf8"),
       ).resolves.toContain("Device verified by owner: yes");

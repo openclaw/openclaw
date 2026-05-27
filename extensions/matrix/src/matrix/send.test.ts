@@ -716,6 +716,30 @@ describe("sendSingleTextMessageMatrix", () => {
     );
   });
 
+  it("supports partial draft preview sends without activating mention-looking text", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendSingleTextMessageMatrix(
+      "room:!room:example",
+      "Working...\n- `read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed`",
+      {
+        client,
+        cfg: {} as never,
+        includeMentions: false,
+        live: true,
+      },
+    );
+
+    const content = sentContent(sendMessage);
+    expect(content.msgtype).toBe("m.text");
+    expect(content).not.toHaveProperty("m.mentions");
+    expect(content["org.matrix.msc4357.live"]).toEqual({});
+    expect((content as { formatted_body?: string }).formatted_body).toContain(
+      "<code>read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed</code>",
+    );
+    expect((content as { formatted_body?: string }).formatted_body).not.toContain("matrix.to");
+  });
+
   it("does not activate mentions inside Matrix tool-progress code spans", async () => {
     const { client, sendMessage } = makeClient();
 
