@@ -83,6 +83,7 @@ function createMessageEndContext(
     consumeReplyDirectives?: ReturnType<typeof vi.fn>;
     warn?: ReturnType<typeof vi.fn>;
     builtinToolNames?: ReadonlySet<string>;
+    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     state?: Record<string, unknown>;
   } = {},
 ) {
@@ -90,6 +91,9 @@ function createMessageEndContext(
     params: {
       runId: "run-1",
       session: { id: "session-1" },
+      ...(params.sourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
+        : {}),
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       ...(params.onBlockReply ? { onBlockReply: params.onBlockReply } : { onBlockReply: vi.fn() }),
     },
@@ -135,6 +139,29 @@ function createMessageEndContext(
     flushBlockReplyBuffer: vi.fn(),
     blockChunker: null,
   } as unknown as EmbeddedPiSubscribeContext;
+}
+
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  return firstMockCall(mock, label)[0];
+}
+
+function createMessageToolEnvelope(message: string, args: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    name: "message",
+    arguments: {
+      action: "send",
+      message,
+      ...args,
+    },
+  });
 }
 
 describe("resolveSilentReplyFallbackText", () => {
@@ -584,7 +611,7 @@ describe("handleMessageUpdate commentary phase", () => {
     );
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    const event = onAgentEvent.mock.calls.at(0)?.[0] as
+    const event = firstMockArg(onAgentEvent, "agent event") as
       | { stream?: string; data?: { text?: string; delta?: string } }
       | undefined;
     expect(event?.stream).toBe("assistant");
@@ -629,7 +656,7 @@ describe("handleMessageEnd", () => {
       },
     } as never);
 
-    const warnCall = warn.mock.calls.at(0);
+    const warnCall = firstMockCall(warn, "warning log");
     expect(warnCall?.[0]).toBe(
       "Assistant reply looks like a tool call, but no structured tool invocation was emitted; treating it as text.",
     );
@@ -651,6 +678,42 @@ describe("handleMessageEnd", () => {
     expect(metadata?.pattern).toBe("json_tool_call");
     expect(metadata?.toolName).toBe("read");
     expect(metadata?.registeredTool).toBe(true);
+  });
+
+  it("unwraps only source-routed or message-tool-only standalone message-tool JSON", () => {
+    const visibleReply = "No specific tasks planned, but I'll keep watching for updates.";
+    const unroutedEnvelope = createMessageToolEnvelope(visibleReply);
+    const routedEnvelope = createMessageToolEnvelope(visibleReply, { target: "user:redacted" });
+    const toRoutedEnvelope = createMessageToolEnvelope(visibleReply, { to: "user:redacted" });
+
+    for (const [text, api, builtinToolNames, sourceReplyDeliveryMode, expected] of [
+      [unroutedEnvelope, undefined, new Set(["message"]), "message_tool_only", visibleReply],
+      [routedEnvelope, "openai-completions", new Set<string>(), undefined, visibleReply],
+      [toRoutedEnvelope, "openai-completions", new Set<string>(), undefined, visibleReply],
+      [routedEnvelope, undefined, new Set<string>(), undefined, routedEnvelope],
+      [unroutedEnvelope, undefined, new Set(["message"]), undefined, unroutedEnvelope],
+    ] as const) {
+      const emitBlockReply = vi.fn();
+      const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
+      const ctx = createMessageEndContext({
+        emitBlockReply,
+        consumeReplyDirectives,
+        builtinToolNames,
+        sourceReplyDeliveryMode,
+      });
+
+      void handleMessageEnd(ctx, {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          ...(api ? { api } : {}),
+          content: [{ type: "text", text }],
+        },
+      } as never);
+
+      expect(consumeReplyDirectives).toHaveBeenCalledWith(expected, { final: true });
+      expect(firstMockArg(emitBlockReply, "block reply")).toMatchObject({ text: expected });
+    }
   });
 
   it("does not warn when the assistant emitted a structured tool call", () => {
@@ -839,7 +902,7 @@ describe("handleMessageEnd", () => {
     } as never);
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    const event = onAgentEvent.mock.calls.at(0)?.[0] as
+    const event = firstMockArg(onAgentEvent, "agent event") as
       | { stream?: string; data?: { text?: string; delta?: string; replace?: boolean } }
       | undefined;
     expect(event?.stream).toBe("assistant");

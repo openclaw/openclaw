@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../cron/types.js";
 import { registerCronCli } from "./cron-cli.js";
 
@@ -39,6 +39,10 @@ const defaultGatewayMock = async (
 };
 callGatewayFromCli.mockImplementation(defaultGatewayMock);
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
@@ -75,7 +79,7 @@ type CronUpdatePatch = {
 };
 
 type CronAddParams = {
-  schedule?: { kind?: string; staggerMs?: number };
+  schedule?: { kind?: string; at?: string; staggerMs?: number };
   payload?: {
     model?: string;
     thinking?: string;
@@ -134,11 +138,11 @@ function runtimeErrorMessages(): string[] {
 }
 
 function expectRuntimeErrorContaining(text: string): void {
-  expect(runtimeErrorMessages().some((message) => message.includes(text))).toBe(true);
+  expect(runtimeErrorMessages().join("\n")).toContain(text);
 }
 
 function expectNoRuntimeErrorContaining(text: string): void {
-  expect(runtimeErrorMessages().some((message) => message.includes(text))).toBe(false);
+  expect(runtimeErrorMessages().join("\n")).not.toContain(text);
 }
 
 function stdoutText(): string {
@@ -227,6 +231,8 @@ async function expectCronEditWithScheduleLookupExit(
 async function runCronRunAndCaptureExit(params: {
   ran?: boolean;
   enqueued?: boolean;
+  runId?: string;
+  runStatus?: "ok" | "error" | "skipped";
   args?: string[];
 }) {
   resetGatewayMock();
@@ -241,6 +247,12 @@ async function runCronRunAndCaptureExit(params: {
           params: callParams,
           ...(typeof params.ran === "boolean" ? { ran: params.ran } : {}),
           ...(typeof params.enqueued === "boolean" ? { enqueued: params.enqueued } : {}),
+          ...(typeof params.runId === "string" ? { runId: params.runId } : {}),
+        };
+      }
+      if (method === "cron.runs") {
+        return {
+          entries: params.runStatus ? [{ status: params.runStatus }] : [],
         };
       }
       return { ok: true, params: callParams };
@@ -261,6 +273,7 @@ async function runCronRunAndCaptureExit(params: {
   return {
     exitSpy,
     runOpts: (runCall?.[1] ?? {}) as { timeout?: string },
+    calls: callGatewayFromCli.mock.calls,
   };
 }
 
@@ -294,6 +307,48 @@ describe("cron cli", () => {
   ])("$name", async ({ ran, enqueued, expectedExitCode }) => {
     const { exitSpy } = await runCronRunAndCaptureExit({ ran, enqueued });
     expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
+  });
+
+  it.each([
+    { status: "ok" as const, expectedExitCode: 0 },
+    { status: "error" as const, expectedExitCode: 1 },
+    { status: "skipped" as const, expectedExitCode: 1 },
+  ])(
+    "waits for queued cron run completion with status $status",
+    async ({ status, expectedExitCode }) => {
+      const { calls, exitSpy } = await runCronRunAndCaptureExit({
+        enqueued: true,
+        runId: "manual:job-1:123:0",
+        runStatus: status,
+        args: ["cron", "run", "job-1", "--wait", "--wait-timeout", "1s", "--poll-interval", "1ms"],
+      });
+
+      expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
+      const runsCall = calls.find((call) => call[0] === "cron.runs");
+      expect(runsCall?.[2]).toMatchObject({
+        id: "job-1",
+        runId: "manual:job-1:123:0",
+        limit: 1,
+      });
+      expect(stdoutText()).toContain('"completed": true');
+      expect(stdoutText()).toContain(`"status": "${status}"`);
+    },
+  );
+
+  it("rejects zero poll interval for cron run wait before enqueueing", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "run",
+      "job-1",
+      "--wait",
+      "--wait-timeout",
+      "1s",
+      "--poll-interval",
+      "0ms",
+    ]);
+
+    expectRuntimeErrorContaining("invalid --poll-interval");
+    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.run")).toBe(false);
   });
 
   it("trims model and thinking on cron add", { timeout: CRON_CLI_TEST_TIMEOUT_MS }, async () => {
@@ -395,6 +450,24 @@ describe("cron cli", () => {
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { deleteAfterRun?: boolean };
     expect(params?.deleteAfterRun).toBe(false);
+  });
+
+  it("accepts leading plus relative durations for cron add --at", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Plus duration",
+      "--at",
+      "+30m",
+      "--session",
+      "main",
+      "--system-event",
+      "hello",
+    ]);
+
+    expect(params?.schedule).toEqual({ kind: "at", at: "2026-05-25T00:30:00.000Z" });
   });
 
   it("includes --account on isolated cron add delivery", async () => {

@@ -44,7 +44,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 1
+          fetch-depth: 0
           fetch-tags: false
           persist-credentials: false
           submodules: false
@@ -92,7 +92,7 @@ jobs:
 
       - name: Upload SARIF as workflow artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: opengrep-pr-diff-sarif
           path: .opengrep-out/precise.sarif

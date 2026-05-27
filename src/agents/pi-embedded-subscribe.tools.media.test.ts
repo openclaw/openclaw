@@ -31,6 +31,30 @@ describe("extractToolResultMediaPaths", () => {
     });
   });
 
+  it("extracts structured details.media attachments", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            attachments: [
+              { type: "audio", path: "/tmp/song.mp3", mimeType: "audio/mpeg" },
+              { type: "image", url: "https://example.test/cover.png" },
+              { type: "file", media: "/tmp/stems.zip" },
+              { type: "file", fileUrl: "https://example.test/stems.zip" },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: [
+        "/tmp/song.mp3",
+        "https://example.test/cover.png",
+        "/tmp/stems.zip",
+        "https://example.test/stems.zip",
+      ],
+    });
+  });
+
   it("returns empty array when content has no text or image blocks", () => {
     expect(extractToolResultMediaPaths({ content: [{ type: "other" }] })).toStrictEqual([]);
   });
@@ -316,8 +340,14 @@ describe("extractToolResultMediaPaths", () => {
     expect(isToolResultMediaTrusted("video_generate")).toBe(true);
   });
 
-  it("trusts bundled plugin tool local MEDIA paths", () => {
-    expect(isToolResultMediaTrusted("music_generate")).toBe(true);
+  it("does not trust bundled plugin tool names without run-local metadata", () => {
+    expect(isToolResultMediaTrusted("plugin_media_tool")).toBe(false);
+  });
+
+  it("trusts bundled plugin tool names carried by run-local metadata", () => {
+    expect(
+      isToolResultMediaTrusted("plugin_media_tool", undefined, new Set(["plugin_media_tool"])),
+    ).toBe(true);
   });
 
   it("blocks trusted-media aliases that are not exact registered built-ins", () => {
@@ -358,18 +388,15 @@ describe("extractToolResultMediaPaths", () => {
     ).toEqual(["/tmp/reply.opus"]);
   });
 
-  it("keeps local media for bundled plugin tool names registered in this run", () => {
-    // music_generate is a bundled-plugin trusted tool; when the runner
-    // registers it for this run, its raw name must be allowed through the
-    // exact-name gate just like a core built-in.
+  it("keeps local media for bundled plugin tool names trusted in this run", () => {
     expect(
       filterToolResultMediaUrls(
-        "music_generate",
-        ["/tmp/song.mp3"],
+        "plugin_media_tool",
+        ["/tmp/meeting.wav"],
         undefined,
-        new Set(["music_generate"]),
+        new Set(["plugin_media_tool"]),
       ),
-    ).toEqual(["/tmp/song.mp3"]);
+    ).toEqual(["/tmp/meeting.wav"]);
   });
 
   it("strips local media for plugin-name collisions when the plugin is not registered", () => {

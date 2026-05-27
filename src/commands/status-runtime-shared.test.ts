@@ -45,7 +45,7 @@ function requireProviderUsageCall(): {
   config?: unknown;
   agentDir?: string;
 } {
-  const call = mocks.loadProviderUsageSummary.mock.calls.at(0);
+  const call = mocks.loadProviderUsageSummary.mock.calls[0];
   if (!call) {
     throw new Error("expected provider usage summary call");
   }
@@ -326,6 +326,7 @@ describe("status-runtime-shared", () => {
       config: { gateway: {} },
       sourceConfig: { gateway: { mode: "local" } },
       deep: false,
+      deepTimeoutMs: 1234,
       includeFilesystem: true,
       includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,

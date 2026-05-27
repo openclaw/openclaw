@@ -1,5 +1,6 @@
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { sendClickClackText } from "./outbound.js";
 import { getClickClackRuntime } from "./runtime.js";
 import { buildClickClackTarget } from "./target.js";
@@ -81,9 +82,20 @@ export async function handleClickClackInbound(params: {
   account: ResolvedClickClackAccount;
   config: CoreConfig;
   message: ClickClackMessage;
+  access?: ClickClackInboundAccess;
 }) {
   const runtime = getClickClackRuntime();
   const message = params.message;
+  const access =
+    params.access ??
+    (await resolveClickClackInboundAccess({
+      account: params.account,
+      config: params.config,
+      message,
+    }));
+  if (!access.shouldDispatch) {
+    return;
+  }
   const isDirect = Boolean(message.direct_conversation_id);
   const target = buildClickClackTarget(
     isDirect
@@ -150,7 +162,7 @@ export async function handleClickClackInbound(params: {
     Timestamp: message.created_at,
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: target,
-    CommandAuthorized: true,
+    CommandAuthorized: access.commandAuthorized,
   });
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.config as OpenClawConfig,

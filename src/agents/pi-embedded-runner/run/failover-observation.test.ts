@@ -24,6 +24,34 @@ function normalizeObservation(
   });
 }
 
+function firstWarnCall(warnSpy: { mock: { calls: unknown[][] } }): unknown[] {
+  const call = warnSpy.mock.calls[0];
+  if (!call) {
+    throw new Error("Expected warning log");
+  }
+  return call;
+}
+
+function firstWarnDetails(warnSpy: { mock: { calls: unknown[][] } }): {
+  consoleMessage?: string;
+  model?: string;
+  provider?: string;
+  providerRuntimeFailureKind?: string;
+  rawErrorPreview?: string;
+  sourceModel?: string;
+  sourceProvider?: string;
+} {
+  return firstWarnCall(warnSpy)[1] as {
+    consoleMessage?: string;
+    model?: string;
+    provider?: string;
+    providerRuntimeFailureKind?: string;
+    rawErrorPreview?: string;
+    sourceModel?: string;
+    sourceProvider?: string;
+  };
+}
+
 describe("normalizeFailoverDecisionObservationBase", () => {
   it("fills timeout observation reasons for deadline timeouts without provider error text", () => {
     const observation = normalizeObservation({
@@ -75,23 +103,15 @@ describe("createFailoverDecisionLogger", () => {
 
     logDecision("fallback_model");
 
-    const [message, details] = warnSpy.mock.calls.at(0) ?? [];
+    const [message] = firstWarnCall(warnSpy);
     expect(message).toBe("embedded run failover decision");
-    const observation = details as
-      | {
-          sourceProvider?: string;
-          sourceModel?: string;
-          provider?: string;
-          model?: string;
-          consoleMessage?: string;
-        }
-      | undefined;
-    expect(observation?.sourceProvider).toBe("github-copilot");
-    expect(observation?.sourceModel).toBe("gpt-5.4-mini");
-    expect(observation?.provider).toBe("openai");
-    expect(observation?.model).toBe("gpt-5.4");
-    expect(observation?.consoleMessage).toContain("from=github-copilot/gpt-5.4-mini");
-    expect(observation?.consoleMessage).toContain("to=openai/gpt-5.4");
+    const observation = firstWarnDetails(warnSpy);
+    expect(observation.sourceProvider).toBe("github-copilot");
+    expect(observation.sourceModel).toBe("gpt-5.4-mini");
+    expect(observation.provider).toBe("openai");
+    expect(observation.model).toBe("gpt-5.4");
+    expect(observation.consoleMessage).toContain("from=github-copilot/gpt-5.4-mini");
+    expect(observation.consoleMessage).toContain("to=openai/gpt-5.4");
   });
 
   it("omits to model refs when the source matches the selected target", () => {
@@ -114,11 +134,36 @@ describe("createFailoverDecisionLogger", () => {
 
     logDecision("surface_error");
 
-    expect(
-      (warnSpy.mock.calls.at(0)?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
-    ).toContain("from=openai/gpt-5.4");
-    expect(
-      (warnSpy.mock.calls.at(0)?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
-    ).not.toContain("to=openai/gpt-5.4");
+    expect(firstWarnDetails(warnSpy).consoleMessage).toContain("from=openai/gpt-5.4");
+    expect(firstWarnDetails(warnSpy).consoleMessage).not.toContain("to=openai/gpt-5.4");
+  });
+
+  it("omits raw HTML auth bodies from consoleMessage for HTML 401 auth failures", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const logDecision = createFailoverDecisionLogger({
+      stage: "assistant",
+      runId: "run:auth-html",
+      rawError: "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
+      failoverReason: "auth",
+      profileFailureReason: "auth",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      sourceProvider: "openai-codex",
+      sourceModel: "gpt-5.4",
+      profileId: "openai-codex:p1",
+      fallbackConfigured: true,
+      timedOut: false,
+      aborted: false,
+    });
+
+    logDecision("rotate_profile");
+
+    const observation = firstWarnDetails(warnSpy);
+    expect(observation.providerRuntimeFailureKind).toBe("auth_html");
+    expect(observation.rawErrorPreview).toBe(
+      "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
+    );
+    expect(observation.consoleMessage).not.toContain("rawError=");
+    expect(observation.consoleMessage).not.toContain("<html>");
   });
 });

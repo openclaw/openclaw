@@ -348,6 +348,12 @@ export const es: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -356,6 +362,8 @@ export const es: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -387,6 +395,7 @@ export const es: TranslationMap = {
   },
   tabs: {
     agents: "Agentes",
+    activity: "Activity",
     overview: "Resumen",
     channels: "Canales",
     instances: "Instancias",
@@ -408,6 +417,7 @@ export const es: TranslationMap = {
   },
   subtitles: {
     agents: "Gestionar espacios de trabajo, herramientas e identidades de agentes.",
+    activity: "Browser-local tool activity summaries.",
     overview: "Estado de la puerta de enlace, puntos de entrada y lectura rápida de salud.",
     channels: "Gestionar canales y ajustes.",
     instances: "Balizas de presencia de clientes y nodos conectados.",
@@ -426,6 +436,42 @@ export const es: TranslationMap = {
     debug: "Instantáneas de la puerta de enlace, eventos y llamadas RPC manuales.",
     logs: "Seguimiento en vivo de los registros de la puerta de enlace.",
     dreams: "Consolidación de la memoria durante el sueño.",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "Buscar",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "Herramienta",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "Borrar",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "Run",
+    session: "Sesión",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "En ejecución",
+      done: "Completado",
+      error: "Error",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -695,10 +741,6 @@ export const es: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Consulta adónde van los tokens, cuándo aumentan las sesiones y qué impulsa el costo.",
-    },
     common: {
       emptyValue: "—",
       unknown: "desconocido",
@@ -1048,6 +1090,10 @@ export const es: TranslationMap = {
     settings: "Configuración del chat",
     thinkingToggle: "Alternar salida de pensamiento/trabajo del asistente",
     toolCallsToggle: "Alternar llamadas a herramientas y resultados de herramientas",
+    autoScrollMode: "Modo de desplazamiento automático",
+    autoScrollAlways: "Siempre",
+    autoScrollNearBottom: "Cerca del final",
+    autoScrollOff: "Desactivado",
     focusToggle: "Alternar modo de enfoque (ocultar barra lateral + cabecera)",
     hideCronSessions: "Ocultar sesiones de cron",
     showCronSessions: "Mostrar sesiones de cron",
@@ -1091,11 +1137,16 @@ export const es: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "Sigo escuchando",
+      talkTranscript: "Transcripción de voz",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "Filtrar sesiones por agente",
       session: "Chat session",
+      sessionSearch: "Buscar sesiones",
+      clearSessionSearch: "Borrar búsqueda de sesiones",
+      loadMoreSessions: "Cargar más sesiones",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1208,6 +1259,9 @@ export const es: TranslationMap = {
       ascending: "Ascendente",
       descending: "Descendente",
       reset: "Restablecer",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "No hay tareas coincidentes.",
       loading: "Cargando...",
       loadMore: "Cargar más tareas",
@@ -1243,6 +1297,7 @@ export const es: TranslationMap = {
     form: {
       editJob: "Editar tarea",
       newJob: "Nueva tarea",
+      advancedJob: "Advanced job",
       updateSubtitle: "Actualiza la tarea programada seleccionada.",
       createSubtitle: "Crea una activación programada o ejecución de agente.",
       required: "Requerido",

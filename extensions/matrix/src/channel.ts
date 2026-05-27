@@ -341,6 +341,12 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
     selects: true,
     context: true,
     divider: true,
+    limits: {
+      text: {
+        markdownDialect: "markdown",
+        supportsEdit: true,
+      },
+    },
   },
   shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
     shouldSuppressLocalMatrixExecApprovalPrompt({
@@ -450,6 +456,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           }).map(projectMatrixConversationBinding),
       },
       messaging: {
+        defaultMarkdownTableMode: "bullets",
         targetPrefixes: ["matrix"],
         normalizeTarget: normalizeMatrixMessagingTarget,
         resolveInboundConversation: ({ to, conversationId, threadId }) =>

@@ -3,11 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing as embeddedRunTesting,
+  testing as embeddedRunTesting,
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
 } from "../../agents/pi-embedded-runner/runs.js";
 import { clearRuntimeConfigSnapshot } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import * as sessionTypesModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
@@ -25,7 +26,7 @@ import {
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { scheduleFollowupDrain } from "./queue.js";
-import { __testing as replyRunRegistryTesting, replyRunRegistry } from "./reply-run-registry.js";
+import { testing as replyRunRegistryTesting, replyRunRegistry } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
@@ -173,6 +174,20 @@ function expectReplyText(result: unknown, text: string): void {
   expectRecordFields(result, { text }, "reply result");
 }
 
+type MockCallSource = {
+  mock: {
+    calls: ReadonlyArray<ReadonlyArray<unknown>>;
+  };
+};
+
+function firstMockCallArg(mock: MockCallSource, label: string): unknown {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} to have at least one call`);
+  }
+  return call[0];
+}
+
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
@@ -278,6 +293,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   async function runBaseReplyWithAgentMeta(params: {
     agentMeta: Record<string, unknown>;
     collectDiagnostics?: boolean;
+    config?: OpenClawConfig;
     tmpPrefix: string;
     workspaceDir?: string;
   }) {
@@ -308,6 +324,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
       storePath,
       sessionEntry,
+      config: params.config,
       workspaceDir: params.workspaceDir,
     });
 
@@ -493,7 +510,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     );
   });
 
-  it("reads post-compaction context from the queued workspace instead of process cwd", async () => {
+  it("reads opted-in post-compaction context from the queued workspace instead of process cwd", async () => {
     const workspaceDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-post-compaction-workspace-"),
     );
@@ -515,6 +532,13 @@ describe("runReplyAgent auto-compaction token update", () => {
       const { sessionKey } = await runBaseReplyWithAgentMeta({
         tmpPrefix: "openclaw-post-compaction-workspace-root-",
         workspaceDir,
+        config: {
+          agents: {
+            defaults: {
+              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+            },
+          },
+        },
         agentMeta: {
           compactionCount: 1,
           lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
@@ -618,7 +642,7 @@ describe("runReplyAgent block streaming", () => {
     });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0][0].text).toBe("Hello");
+    expect((firstMockCallArg(onBlockReply, "block reply") as { text?: string }).text).toBe("Hello");
     expect(result).toBeUndefined();
   });
 
@@ -1107,6 +1131,22 @@ describe("runReplyAgent Active Memory inline debug", () => {
       "utf-8",
     );
 
+    runWithModelFallbackMock.mockImplementationOnce(
+      async ({ run }: RunWithModelFallbackParams) => ({
+        result: await run("anthropic", "claude"),
+        provider: "anthropic",
+        model: "claude",
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: "LLM request timed out.",
+            reason: "timeout",
+            status: 408,
+          },
+        ],
+      }),
+    );
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Visible reply" }],
       meta: {
@@ -1118,16 +1158,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
           winnerProvider: "anthropic",
           winnerModel: "claude",
           runner: "embedded",
-          fallbackUsed: true,
+          fallbackUsed: false,
           attempts: [
-            {
-              provider: "minimax-portal",
-              model: "MiniMax-M2.5",
-              result: "timeout",
-              reason: "timeout",
-              stage: "assistant",
-              elapsedMs: 15000,
-            },
             {
               provider: "anthropic",
               model: "claude",
@@ -1236,9 +1268,9 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect(traceText).toContain("attempts=2");
     expect(traceText).toContain("runner=embedded");
     expect(traceText).toContain("🔎 Fallback Chain:");
-    expect(traceText).toContain("1. minimax-portal/MiniMax-M2.5");
+    expect(traceText).toContain("1. openai/gpt-5.5");
     expect(traceText).toContain("result=timeout");
-    expect(traceText).toContain("elapsed=15.0s");
+    expect(traceText).toContain("status=408");
     expect(traceText).toContain("2. anthropic/claude");
     expect(traceText).toContain("result=success");
     expect(traceText).toContain("🔎 Request Shaping:");
@@ -1773,6 +1805,20 @@ describe("runReplyAgent claude-cli routing", () => {
           provider: "claude-cli",
           model: "opus-4.5",
         },
+        executionTrace: {
+          winnerProvider: "claude-cli",
+          winnerModel: "opus-4.5",
+          attempts: [
+            {
+              provider: "claude-cli",
+              model: "opus-4.5",
+              result: "error",
+              reason: "before_agent_run blocked the run",
+            },
+          ],
+          fallbackUsed: false,
+          runner: "cli",
+        },
       },
     });
 
@@ -1878,6 +1924,7 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(texts).toContain(
       "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
     );
+    expect(texts).toContain("fallbackUsed=no");
     expect(texts).not.toContain("secret hitl prompt");
   });
 
@@ -1962,7 +2009,7 @@ describe("runReplyAgent claude-cli routing", () => {
 
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expectRecordFields(
-      runCliAgentMock.mock.calls[0]?.[0],
+      firstMockCallArg(runCliAgentMock, "CLI run params"),
       { provider: "claude-cli" },
       "CLI run params",
     );
@@ -2406,8 +2453,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
 
     await createRun();
 
-    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as EmbeddedPiAgentParams | undefined;
-    expect(call?.enforceFinalTag).toBe(true);
+    const call = firstMockCallArg(runEmbeddedPiAgentMock, "PI run params") as EmbeddedPiAgentParams;
+    expect(call.enforceFinalTag).toBe(true);
   });
 
   it("enforces <final> during memory flush on fallback providers", async () => {
@@ -2430,6 +2477,11 @@ describe("runReplyAgent fallback reasoning tags", () => {
       provider: "google-gemini-cli",
       model: "gemini-3",
     }));
+    compactState.compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { tokensAfter: 1_000_000 },
+    });
 
     await createRun({
       sessionEntry: {
@@ -2451,7 +2503,13 @@ describe("runReplyAgent fallback reasoning tags", () => {
 });
 
 describe("runReplyAgent response usage footer", () => {
-  function createRun(params: { responseUsage: "tokens" | "full"; sessionKey: string }) {
+  function createRun(params: {
+    responseUsage: "tokens" | "full";
+    sessionKey: string;
+    config?: unknown;
+    provider?: string;
+    model?: string;
+  }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "whatsapp",
@@ -2479,10 +2537,10 @@ describe("runReplyAgent response usage footer", () => {
         messageProvider: "whatsapp",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: createCliBackendTestConfig(),
+        config: params.config ?? createCliBackendTestConfig(),
         skillsSnapshot: {},
-        provider: "anthropic",
-        model: "claude",
+        provider: params.provider ?? "anthropic",
+        model: params.model ?? "claude",
         thinkLevel: "low",
         verboseLevel: "off",
         elevatedLevel: "off",
@@ -2540,25 +2598,94 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).toContain(`· session \`${sessionKey}\``);
   });
 
-  it("does not append session key when responseUsage=tokens", async () => {
+  it("does not append session key or cost when responseUsage=tokens", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
         agentMeta: {
-          provider: "anthropic",
-          model: "claude",
+          provider: "amazon-bedrock",
+          model: "us.anthropic.claude-sonnet-4-6",
           usage: { input: 12, output: 3, cacheRead: 4, cacheWrite: 2 },
         },
       },
     });
 
     const sessionKey = "agent:main:whatsapp:dm:+1000";
-    const res = await createRun({ responseUsage: "tokens", sessionKey });
+    const res = await createRun({
+      responseUsage: "tokens",
+      sessionKey,
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6",
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              auth: "aws-sdk",
+              models: [
+                {
+                  id: "us.anthropic.claude-sonnet-4-6",
+                  cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
     expect(text).toContain("Usage:");
     expect(text).toContain("cache 4 cached / 2 new");
+    expect(text).not.toContain("est $");
     expect(text).not.toContain("· session ");
+  });
+
+  it("shows configured costs for aws-sdk providers when responseUsage=full", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "amazon-bedrock",
+          model: "us.anthropic.claude-sonnet-4-6",
+          usage: { input: 1_000, output: 2_000, cacheRead: 500, cacheWrite: 2_000 },
+        },
+      },
+    });
+
+    const sessionKey = "agent:main:whatsapp:dm:+1000";
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey,
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6",
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              auth: "aws-sdk",
+              models: [
+                {
+                  id: "us.anthropic.claude-sonnet-4-6",
+                  cost: {
+                    input: 3,
+                    output: 15,
+                    cacheRead: 0.3,
+                    cacheWrite: 3.75,
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+
+    expect(text).toContain("Usage: 1.0k in / 2.0k out");
+    expect(text).toContain("cache 500 cached / 2.0k new");
+    expect(text).toContain("est $0.04");
+    expect(text).toContain(`· session \`${sessionKey}\``);
   });
 });
 

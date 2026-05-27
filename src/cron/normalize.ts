@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 import {
   TimeoutSecondsFieldSchema,
@@ -13,7 +14,10 @@ import {
 } from "./delivery-field-schemas.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { inferLegacyName } from "./service/normalize.js";
-import { assertSafeCronSessionTargetId } from "./session-target.js";
+import {
+  assertSafeCronSessionTargetId,
+  resolveCronCurrentSessionTarget,
+} from "./session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import type { CronJobCreate, CronJobPatch } from "./types.js";
 
@@ -50,9 +54,7 @@ function normalizeTrimmedStringArray(
   options?: { allowNull?: boolean },
 ): string[] | null | undefined {
   if (Array.isArray(value)) {
-    const normalized = value
-      .map((entry) => normalizeOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry));
+    const normalized = normalizeTrimmedStringList(value);
     if (normalized.length === 0 && value.length > 0) {
       return undefined;
     }
@@ -581,28 +583,14 @@ export function normalizeCronJobInput(
       }
     }
 
-    // Resolve "current" sessionTarget to the actual sessionKey from context
-    if (next.sessionTarget === "current") {
-      if (options.sessionContext?.sessionKey) {
-        const sessionKey = options.sessionContext.sessionKey.trim();
-        if (sessionKey) {
-          // Store as session:customId format for persistence
-          next.sessionTarget = `session:${assertSafeCronSessionTargetId(sessionKey)}`;
-        }
-      }
-      // If "current" wasn't resolved, fall back to "isolated" behavior
-      // This handles CLI/headless usage where no session context exists
-      if (next.sessionTarget === "current") {
-        next.sessionTarget = "isolated";
-      }
-    }
-    if (next.sessionTarget === "current") {
-      const sessionKey = options.sessionContext?.sessionKey?.trim();
-      if (sessionKey) {
-        next.sessionTarget = `session:${assertSafeCronSessionTargetId(sessionKey)}`;
-      } else {
-        next.sessionTarget = "isolated";
-      }
+    const resolvedSessionTarget = resolveCronCurrentSessionTarget({
+      sessionTarget: typeof next.sessionTarget === "string" ? next.sessionTarget : undefined,
+      sessionKey: options.sessionContext?.sessionKey,
+    });
+    if (resolvedSessionTarget !== undefined) {
+      next.sessionTarget = resolvedSessionTarget;
+    } else {
+      delete next.sessionTarget;
     }
     if (
       "schedule" in next &&

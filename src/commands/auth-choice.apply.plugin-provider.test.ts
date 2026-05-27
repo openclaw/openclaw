@@ -41,9 +41,10 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
 }));
 
-const upsertAuthProfile = vi.hoisted(() => vi.fn());
+const upsertAuthProfile = vi.hoisted(() => vi.fn(() => ({ version: 1, profiles: {} })));
 vi.mock("../agents/auth-profiles.js", () => ({
   upsertAuthProfile,
+  upsertAuthProfileWithLock: upsertAuthProfile,
 }));
 
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "default"));
@@ -461,7 +462,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
 
     expect(ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
-    const [installParams] = ensureOnboardingPluginInstalled.mock.calls.at(0) ?? [];
+    const [installParams] = ensureOnboardingPluginInstalled.mock.calls[0] ?? [];
     if (installParams === undefined) {
       throw new Error("expected plugin install params");
     }

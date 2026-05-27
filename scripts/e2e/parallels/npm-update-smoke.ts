@@ -30,10 +30,12 @@ import {
 import { runWindowsBackgroundPowerShell } from "./guest-transports.ts";
 import { linuxUpdateScript, macosUpdateScript, windowsUpdateScript } from "./npm-update-scripts.ts";
 import { ensureVmRunning, resolveUbuntuVmName } from "./parallels-vm.ts";
+import { runTimedUpdateJob } from "./update-job-timeout.ts";
 
 interface NpmUpdateOptions {
   betaValidation?: string;
   freshTargetSpec?: string;
+  hostIp?: string;
   packageSpec: string;
   updateTarget: string;
   platforms: Set<Platform>;
@@ -93,8 +95,9 @@ interface NpmUpdateSummary {
 
 const macosVm = "macOS Tahoe";
 const windowsVm = "Windows 11";
-const linuxVmDefault = "Ubuntu 24.04.3 ARM64";
+const linuxVmDefault = "Ubuntu 26.04";
 const updateTimeoutSeconds = Number(process.env.OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S || 1200);
+const updateCleanupBackstopMs = 60_000;
 
 function usage(): string {
   return `Usage: bash scripts/e2e/parallels-npm-update-smoke.sh [options]
@@ -111,6 +114,7 @@ Options:
                              Default: all
   --provider <openai|anthropic|minimax>
   --model <provider/model>    Override the model used for agent-turn smoke checks.
+  --host-ip <ip>             Override Parallels host IP.
   --api-key-env <var>        Host env var name for provider API key.
   --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
   --json                     Print machine-readable JSON summary.
@@ -168,6 +172,10 @@ function parseArgs(argv: string[]): NpmUpdateOptions {
         break;
       case "--model":
         options.modelId = ensureValue(argv, i, arg);
+        i++;
+        break;
+      case "--host-ip":
+        options.hostIp = ensureValue(argv, i, arg);
         i++;
         break;
       case "--api-key-env":
@@ -251,7 +259,7 @@ class NpmUpdateSmoke {
       this.currentHeadShort = run("git", ["rev-parse", "--short=7", "HEAD"], {
         quiet: true,
       }).stdout.trim();
-      this.hostIp = resolveHostIp("");
+      this.hostIp = resolveHostIp(this.options.hostIp ?? "");
       this.configurePublishedTargets();
 
       if (this.options.platforms.has("linux")) {
@@ -541,20 +549,14 @@ class NpmUpdateSmoke {
         log += text;
         this.noteJobOutput(job, text);
       };
-      const timeout = setTimeout(() => {
-        append(`${label} update timed out after ${updateTimeoutSeconds}s\n`);
-      }, updateTimeoutSeconds * 1000);
-      try {
-        await fn({ append, logPath });
-        await writeFile(logPath, log, "utf8");
-        return 0;
-      } catch (error) {
-        append(`${error instanceof Error ? error.message : String(error)}\n`);
-        await writeFile(logPath, log, "utf8");
-        return 1;
-      } finally {
-        clearTimeout(timeout);
-      }
+      return await runTimedUpdateJob({
+        append,
+        label,
+        run: () => fn({ append, logPath }),
+        timeoutDescription: `${updateTimeoutSeconds}s plus cleanup backstop`,
+        timeoutMs: updateTimeoutSeconds * 1000 + updateCleanupBackstopMs,
+        writeLog: () => writeFile(logPath, log, "utf8"),
+      });
     })().finally(() => {
       job.durationMs = Date.now() - job.startedAt;
       job.done = true;
@@ -691,7 +693,7 @@ class NpmUpdateSmoke {
 
   private resolveMacosUpdateExecArgs(ctx: UpdateJobContext): string[] {
     const guestPath =
-      "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
+      "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/local/sbin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
     const currentUser = run("prlctl", ["exec", macosVm, "--current-user", "whoami"], {
       check: false,
       quiet: true,

@@ -468,6 +468,8 @@ describe("argv helpers", () => {
     { argv: ["node", "openclaw", "status"], expected: false },
     { argv: ["node", "openclaw", "health"], expected: false },
     { argv: ["node", "openclaw", "sessions"], expected: false },
+    { argv: ["node", "openclaw", "--profile", "work", "status"], expected: false },
+    { argv: ["node", "openclaw", "--log-level=debug", "models", "list"], expected: false },
     { argv: ["node", "openclaw", "config", "get", "update"], expected: false },
     { argv: ["node", "openclaw", "config", "unset", "update"], expected: false },
     { argv: ["node", "openclaw", "models", "list"], expected: false },

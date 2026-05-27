@@ -33,8 +33,6 @@ export type CompactEmbeddedPiSessionParams = {
   groupSpace?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
-  /** Whether the sender is an owner (required for owner-only tools). */
-  senderIsOwner?: boolean;
   sessionFile: string;
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;
@@ -42,6 +40,7 @@ export type CompactEmbeddedPiSessionParams = {
   agentDir?: string;
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
+  senderIsOwner?: boolean;
   provider?: string;
   model?: string;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
@@ -63,6 +62,11 @@ export type CompactEmbeddedPiSessionParams = {
   tokenBudget?: number;
   force?: boolean;
   trigger?: "budget" | "overflow" | "manual";
+  /**
+   * Preflight callers can allow native/current-session harness compaction but
+   * move plugin-owned budget compaction onto background turn maintenance.
+   */
+  deferOwningContextEngineCompaction?: boolean;
   diagId?: string;
   attempt?: number;
   maxAttempts?: number;

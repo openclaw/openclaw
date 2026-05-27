@@ -39,6 +39,7 @@ let pluginAutoEnableModule: PluginAutoEnableModule;
 let applyPluginAutoEnableSpy: ReturnType<typeof vi.fn>;
 let webSearchProvidersSharedModule: WebSearchProvidersSharedModule;
 let resetPluginRuntimeStateForTest: RuntimeModule["resetPluginRuntimeStateForTest"];
+let clearLoadPluginMetadataSnapshotMemo: typeof import("./plugin-metadata-snapshot.js").clearLoadPluginMetadataSnapshotMemo;
 
 const DEFAULT_WEB_SEARCH_WORKSPACE = "/tmp/workspace";
 const EXPECTED_BUNDLED_RUNTIME_WEB_SEARCH_PROVIDER_KEYS = [
@@ -218,7 +219,8 @@ function requireLastCallFirstArg(
   mock: { mock: { calls: readonly (readonly unknown[])[] } },
   label: string,
 ): Record<string, unknown> {
-  const call = mock.mock.calls.at(-1);
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
   if (!call) {
     throw new Error(`${label} should have been called`);
   }
@@ -334,7 +336,7 @@ function createActiveBraveRegistryFixture(params?: {
         : {}),
       env,
     });
-  const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
+  const { cacheKey } = loaderModule.testing.resolvePluginLoadCacheContext({
     config,
     activationSourceConfig,
     autoEnabledReasons,
@@ -345,6 +347,7 @@ function createActiveBraveRegistryFixture(params?: {
     activate: false,
   });
   const registry = createEmptyPluginRegistry();
+  registry.plugins.push({ id: "brave", status: "loaded" } as never);
   registry.webSearchProviders.push(createBraveRuntimeWebSearchProvider());
   setActivePluginRegistry(registry, cacheKey, "default", params?.activeWorkspaceDir);
 
@@ -413,11 +416,13 @@ describe("resolvePluginWebSearchProviders", () => {
     pluginAutoEnableModule = await import("../config/plugin-auto-enable.js");
     webSearchProvidersSharedModule = await import("./web-search-providers.shared.js");
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
+    ({ clearLoadPluginMetadataSnapshotMemo } = await import("./plugin-metadata-snapshot.js"));
     ({ resolvePluginWebSearchProviders, resolveRuntimeWebSearchProviders } =
       await import("./web-search-providers.runtime.js"));
   });
 
   beforeEach(() => {
+    clearLoadPluginMetadataSnapshotMemo();
     applyPluginAutoEnableSpy?.mockRestore();
     applyPluginAutoEnableSpy = vi
       .spyOn(pluginAutoEnableModule, "applyPluginAutoEnable")
@@ -446,6 +451,7 @@ describe("resolvePluginWebSearchProviders", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
+    clearLoadPluginMetadataSnapshotMemo();
     vi.restoreAllMocks();
   });
 

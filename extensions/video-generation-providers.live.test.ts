@@ -224,11 +224,11 @@ function buildLiveCapabilityOverrides(params: {
 }): Pick<VideoGenerationRequest, "size" | "aspectRatio" | "resolution" | "audio" | "watermark"> {
   const { caps, liveResolution, liveSize } = params;
   return {
-    ...(caps?.supportsSize && liveSize ? { size: liveSize } : {}),
-    ...(caps?.supportsAspectRatio ? { aspectRatio: "16:9" } : {}),
-    ...(caps?.supportsResolution ? { resolution: liveResolution } : {}),
-    ...(caps?.supportsAudio ? { audio: false } : {}),
-    ...(caps?.supportsWatermark ? { watermark: false } : {}),
+    ...(caps?.supportsSize && liveSize ? { size: liveSize } : undefined),
+    ...(caps?.supportsAspectRatio ? { aspectRatio: "16:9" } : undefined),
+    ...(caps?.supportsResolution ? { resolution: liveResolution } : undefined),
+    ...(caps?.supportsAudio ? { audio: false } : undefined),
+    ...(caps?.supportsWatermark ? { watermark: false } : undefined),
   };
 }
 
@@ -265,7 +265,7 @@ function resolveLiveVideoSkipReason(message: string): string | null {
   if (/access denied|not authorized|not enabled|permission denied/i.test(message)) {
     return "provider/model drift";
   }
-  if (/response missing job details/i.test(message)) {
+  if (/response missing job details|video generation response malformed/i.test(message)) {
     return "provider endpoint drift";
   }
   if (/blocked by (?:our )?moderation system|content policy|policy violation/i.test(message)) {
@@ -273,6 +273,14 @@ function resolveLiveVideoSkipReason(message: string): string | null {
   }
   return null;
 }
+
+describe("resolveLiveVideoSkipReason", () => {
+  it("classifies malformed provider video responses as endpoint drift", () => {
+    expect(resolveLiveVideoSkipReason("xAI video generation response malformed")).toBe(
+      "provider endpoint drift",
+    );
+  });
+});
 
 async function runLiveVideoAttempt(params: {
   authLabel: string;

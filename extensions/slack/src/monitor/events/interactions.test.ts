@@ -6,6 +6,7 @@ type DispatchPluginInteractiveHandlerResult = {
   matched: boolean;
   handled: boolean;
   duplicate: boolean;
+  result?: unknown;
 };
 const dispatchPluginInteractiveHandlerMock = vi.hoisted(() =>
   vi.fn<(arg: unknown) => Promise<DispatchPluginInteractiveHandlerResult>>(async () => ({
@@ -144,6 +145,7 @@ type RegisteredViewHandler = (args: {
   body: {
     user?: { id?: string };
     team?: { id?: string };
+    trigger_id?: string;
     view?: {
       id?: string;
       callback_id?: string;
@@ -162,6 +164,7 @@ type RegisteredViewClosedHandler = (args: {
   body: {
     user?: { id?: string };
     team?: { id?: string };
+    trigger_id?: string;
     view?: {
       id?: string;
       callback_id?: string;
@@ -313,7 +316,7 @@ function mockCallArg(mock: unknown, index: number, label: string, argIndex = 0):
   if (!Array.isArray(calls)) {
     throw new Error(`Expected ${label} to be a mock`);
   }
-  const call = calls[index];
+  const call = calls.at(index);
   if (!call) {
     throw new Error(`Expected ${label} call ${index + 1}`);
   }
@@ -342,6 +345,14 @@ function slackInteractionPayload(callIndex = 0): Record<string, unknown> {
     throw new Error("Expected Slack interaction event text");
   }
   return JSON.parse(eventText.replace("Slack interaction: ", "")) as Record<string, unknown>;
+}
+
+function enqueueSystemEventText(callIndex = 0): string {
+  const eventText = mockCallArg(enqueueSystemEventMock, callIndex, "enqueueSystemEvent");
+  if (typeof eventText !== "string") {
+    throw new Error("Expected Slack interaction event text");
+  }
+  return eventText;
 }
 
 function chatUpdateCall(app: { client: { chat: { update: unknown } } }, callIndex = 0) {
@@ -506,8 +517,11 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
-    const dispatchCalls = dispatchPluginInteractiveHandlerMock.mock.calls as unknown[][];
-    const dispatchCall = dispatchCalls[0]?.[0] as
+    const dispatchCall = mockCallArg(
+      dispatchPluginInteractiveHandlerMock,
+      0,
+      "plugin interactive dispatcher",
+    ) as
       | {
           channel?: string;
           data?: string;
@@ -598,7 +612,11 @@ describe("registerSlackInteractionEvents", () => {
       },
     });
 
-    const dispatchCall = dispatchPluginInteractiveHandlerMock.mock.calls[0]?.[0] as
+    const dispatchCall = mockCallArg(
+      dispatchPluginInteractiveHandlerMock,
+      0,
+      "plugin interactive dispatcher",
+    ) as
       | {
           invoke?: (params: {
             registration: { handler: (ctx: unknown) => unknown };
@@ -667,7 +685,11 @@ describe("registerSlackInteractionEvents", () => {
       },
     });
 
-    const dispatchCall = dispatchPluginInteractiveHandlerMock.mock.calls[0]?.[0] as
+    const dispatchCall = mockCallArg(
+      dispatchPluginInteractiveHandlerMock,
+      0,
+      "plugin interactive dispatcher",
+    ) as
       | {
           invoke?: (params: {
             registration: { handler: (ctx: unknown) => unknown };
@@ -742,7 +764,6 @@ describe("registerSlackInteractionEvents", () => {
           to: "channel:C1",
         },
         sessionKey: "agent:ops:slack:channel:C1",
-        trusted: false,
       },
     );
     expect(resolveSessionKey).toHaveBeenCalledWith({
@@ -911,7 +932,20 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("resolves exec approvals from shared interactive Slack actions", async () => {
-    const { ctx, app, getHandler } = createContext({ allowFrom: ["U999"] });
+    const { ctx, app, getHandler } = createContext({
+      allowFrom: ["U999"],
+      cfg: {
+        channels: {
+          slack: {
+            execApprovals: {
+              enabled: true,
+              approvers: ["u123"],
+              target: "both",
+            },
+          },
+        },
+      },
+    });
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const handler = getHandler();
@@ -952,7 +986,7 @@ describe("registerSlackInteractionEvents", () => {
       approvalId: "req-123",
       decision: "allow-once",
       senderId: "U123",
-      allowPluginFallback: true,
+      allowPluginFallback: false,
       clientDisplayName: "Slack approval (U123)",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
@@ -965,6 +999,220 @@ describe("registerSlackInteractionEvents", () => {
       blocks: [],
     });
     expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("resolves plugin approval buttons from plugin approvers", async () => {
+    const { ctx, app, getHandler } = createContext({
+      cfg: {
+        channels: {
+          slack: {
+            accounts: {
+              default: {
+                allowFrom: ["u123owner"],
+                execApprovals: {
+                  enabled: true,
+                  approvers: ["U999EXEC"],
+                  target: "both",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      respond,
+      body: {
+        user: { id: "U123OWNER" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200" },
+        message: {
+          ts: "100.200",
+          text: "Plugin approval required",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "plugin_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "plugin_actions",
+        value: "/approve plugin:req-123 allow-always",
+        text: { type: "plain_text", text: "Always allow" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      approvalId: "plugin:req-123",
+      decision: "allow-always",
+      senderId: "U123OWNER",
+      allowPluginFallback: false,
+      clientDisplayName: "Slack approval (U123OWNER)",
+    });
+    expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
+    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expectRecordFields(chatUpdateCall(app), {
+      channel: "C1",
+      ts: "100.200",
+      text: "Plugin approval required",
+      blocks: [],
+    });
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("allows unprefixed plugin approval fallback from plugin approvers", async () => {
+    const { ctx, app, getHandler } = createContext({
+      cfg: {
+        channels: {
+          slack: {
+            accounts: {
+              default: {
+                allowFrom: ["u123owner"],
+                execApprovals: {
+                  enabled: true,
+                  approvers: ["U999EXEC"],
+                  target: "both",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      respond,
+      body: {
+        user: { id: "U123OWNER" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200" },
+        message: {
+          ts: "100.200",
+          text: "Plugin approval required",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "plugin_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "plugin_actions",
+        value: "/approve req-legacy allow-once",
+        text: { type: "plain_text", text: "Allow once" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      approvalId: "req-legacy",
+      decision: "allow-once",
+      senderId: "U123OWNER",
+      allowPluginFallback: false,
+      resolveMethod: "plugin",
+      clientDisplayName: "Slack approval (U123OWNER)",
+    });
+    expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
+    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expectRecordFields(chatUpdateCall(app), {
+      channel: "C1",
+      ts: "100.200",
+      text: "Plugin approval required",
+      blocks: [],
+    });
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("rejects plugin approval buttons from exec-only approvers", async () => {
+    const { ctx, app, getHandler } = createContext({
+      cfg: {
+        channels: {
+          slack: {
+            accounts: {
+              default: {
+                allowFrom: ["U123OWNER"],
+                execApprovals: {
+                  enabled: true,
+                  approvers: ["U999EXEC"],
+                  target: "both",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      respond,
+      body: {
+        user: { id: "U999EXEC" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200" },
+        message: {
+          ts: "100.200",
+          text: "Plugin approval required",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "plugin_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "plugin_actions",
+        value: "/approve plugin:req-123 allow-always",
+        text: { type: "plain_text", text: "Always allow" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
+    expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
+    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(app.client.chat.update).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith({
+      text: "You are not authorized to approve this request.",
+      response_type: "ephemeral",
+    });
   });
 
   it("keeps exec approval buttons when gateway resolution fails", async () => {
@@ -1146,6 +1394,30 @@ describe("registerSlackInteractionEvents", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
+  it("does not ack unrelated modal lifecycle payloads", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, getViewHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewHandler = getViewHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewHandler({
+      ack,
+      body: {
+        user: { id: "U123" },
+        team: { id: "T9" },
+        view: {
+          id: "V123",
+          callback_id: "third_party_modal",
+        },
+      },
+    });
+
+    expect(ack).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
+  });
+
   it("captures select values and updates action rows for non-button actions", async () => {
     enqueueSystemEventMock.mockClear();
     const { ctx, app, getHandler } = createContext();
@@ -1176,7 +1448,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       actionType: string;
       selectedValues?: string[];
@@ -1533,7 +1805,7 @@ describe("registerSlackInteractionEvents", () => {
       threadTs: "222.111",
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       channelId?: string;
       messageTs?: string;
@@ -1771,7 +2043,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       actionType: string;
       selectedValues?: string[];
@@ -1832,7 +2104,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       actionType?: string;
       workflowTriggerUrl?: string;
@@ -1912,7 +2184,7 @@ describe("registerSlackInteractionEvents", () => {
       senderId: "U777",
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       interactionType: string;
       actionId: string;
@@ -1945,6 +2217,252 @@ describe("registerSlackInteractionEvents", () => {
     expect(envInput?.selectedValues).toEqual(["prod"]);
     expect(notesInput?.inputValue).toBe("ship now");
     expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches plugin-owned modal submissions with full view state before compacting events", async () => {
+    enqueueSystemEventMock.mockClear();
+    dispatchPluginInteractiveHandlerMock.mockResolvedValueOnce({
+      matched: true,
+      handled: true,
+      duplicate: false,
+      result: {
+        systemEvent: {
+          summary: "Contract form stored",
+          reference: "contract-submission-123",
+        },
+      },
+    });
+    const { ctx, getViewHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewHandler = getViewHandler();
+    const values: Record<string, Record<string, Record<string, unknown>>> = {};
+    for (let index = 0; index < 8; index += 1) {
+      values[`field_block_${index}`] = {
+        [`field_${index}`]: {
+          type: "plain_text_input",
+          value: `value-${index}-${"x".repeat(500)}`,
+        },
+      };
+    }
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewHandler({
+      ack,
+      body: {
+        user: { id: "U777" },
+        team: { id: "T1" },
+        trigger_id: "trigger-777",
+        view: {
+          id: "V777",
+          callback_id: "openclaw:contract_confirm_hearing",
+          private_metadata: JSON.stringify({
+            channelId: "D777",
+            channelType: "im",
+            userId: "U777",
+            pluginInteractiveData: "dean.contract:confirm_hearing",
+          }),
+          state: {
+            values,
+          },
+        },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    const dispatchCall = mockCallArg(
+      dispatchPluginInteractiveHandlerMock,
+      0,
+      "plugin interactive dispatcher",
+    ) as
+      | {
+          channel?: string;
+          data?: string;
+          dedupeId?: string;
+          invoke?: (params: {
+            registration: { handler: (ctx: unknown) => unknown };
+            namespace: string;
+            payload: string;
+          }) => Promise<unknown>;
+        }
+      | undefined;
+    expectRecordFields(requireRecord(dispatchCall, "dispatch call"), {
+      channel: "slack",
+      data: "dean.contract:confirm_hearing",
+      dedupeId: "view_submission:openclaw:contract_confirm_hearing:V777:U777",
+    });
+
+    const registrationHandler = vi.fn();
+    await dispatchCall?.invoke?.({
+      registration: { handler: registrationHandler },
+      namespace: "dean.contract",
+      payload: "confirm_hearing",
+    });
+    const registrationCtx = requireRecord(
+      mockCallArg(registrationHandler, 0, "registration handler"),
+      "registration handler ctx",
+    );
+    expectRecordFields(registrationCtx, {
+      accountId: ctx.accountId,
+      conversationId: "D777",
+      senderId: "U777",
+    });
+    expect(requireRecord(registrationCtx.auth, "registration auth").isAuthorizedSender).toBe(true);
+    const interaction = requireRecord(registrationCtx.interaction, "registration interaction") as {
+      inputs?: unknown[];
+      stateValues?: unknown;
+    };
+    expectRecordFields(interaction, {
+      kind: "view_submission",
+      data: "dean.contract:confirm_hearing",
+      namespace: "dean.contract",
+      payload: "confirm_hearing",
+      callbackId: "openclaw:contract_confirm_hearing",
+      viewId: "V777",
+      triggerId: "trigger-777",
+    });
+    expect(interaction.inputs).toHaveLength(8);
+    expect(interaction.stateValues).toEqual(values);
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const eventText = enqueueSystemEventText();
+    expect(eventText.length).toBeLessThanOrEqual(2400);
+    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+      pluginHandled?: boolean;
+      pluginNamespace?: string;
+      pluginSystemEvent?: { summary?: string; reference?: string };
+      inputs?: unknown[];
+      inputsOmitted?: number;
+      payloadTruncated?: boolean;
+    };
+    expectRecordFields(payload as unknown as Record<string, unknown>, {
+      pluginHandled: true,
+      pluginNamespace: "dean.contract",
+    });
+    expect(payload.pluginSystemEvent).toEqual({
+      summary: "Contract form stored",
+      reference: "contract-submission-123",
+    });
+    expect(Array.isArray(payload.inputs) ? payload.inputs.length : 0).toBeLessThanOrEqual(3);
+    expect(payload.inputsOmitted).toBe(5);
+    expect(payload.payloadTruncated).toBe(true);
+  });
+
+  it("dispatches callback-id-only plugin modal submissions without agent routing metadata", async () => {
+    enqueueSystemEventMock.mockClear();
+    dispatchPluginInteractiveHandlerMock.mockResolvedValueOnce({
+      matched: true,
+      handled: true,
+      duplicate: false,
+    });
+    const { ctx, getViewHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewHandler = getViewHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewHandler({
+      ack,
+      body: {
+        user: { id: "U777" },
+        view: {
+          id: "V778",
+          callback_id: "openclaw:dean.contract:confirm_hearing",
+          state: {
+            values: {
+              contract: {
+                name: { type: "plain_text_input", value: "Ari" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    const dispatchCall = mockCallArg(
+      dispatchPluginInteractiveHandlerMock,
+      0,
+      "plugin interactive dispatcher",
+    ) as
+      | {
+          channel?: string;
+          data?: string;
+          dedupeId?: string;
+          invoke?: (params: {
+            registration: { handler: (ctx: unknown) => unknown };
+            namespace: string;
+            payload: string;
+          }) => Promise<unknown>;
+        }
+      | undefined;
+    expectRecordFields(requireRecord(dispatchCall, "dispatch call"), {
+      channel: "slack",
+      data: "dean.contract:confirm_hearing",
+      dedupeId: "view_submission:openclaw:dean.contract:confirm_hearing:V778:U777",
+    });
+
+    const registrationHandler = vi.fn();
+    await dispatchCall?.invoke?.({
+      registration: { handler: registrationHandler },
+      namespace: "dean.contract",
+      payload: "confirm_hearing",
+    });
+    const registrationCtx = requireRecord(
+      mockCallArg(registrationHandler, 0, "registration handler"),
+      "registration handler ctx",
+    );
+    expect(requireRecord(registrationCtx.auth, "registration auth").isAuthorizedSender).toBe(false);
+    expectRecordFields(requireRecord(registrationCtx.interaction, "registration interaction"), {
+      kind: "view_submission",
+      data: "dean.contract:confirm_hearing",
+      namespace: "dean.contract",
+      payload: "confirm_hearing",
+      callbackId: "openclaw:dean.contract:confirm_hearing",
+      viewId: "V778",
+    });
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+  });
+
+  it("dispatches metadata-routed plugin modal submissions with non-openclaw callback ids", async () => {
+    enqueueSystemEventMock.mockClear();
+    dispatchPluginInteractiveHandlerMock.mockResolvedValueOnce({
+      matched: true,
+      handled: true,
+      duplicate: false,
+    });
+    const { ctx, getViewHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewHandler = getViewHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewHandler({
+      ack,
+      body: {
+        user: { id: "U777" },
+        view: {
+          id: "V779",
+          callback_id: "contract_confirm_hearing",
+          private_metadata: JSON.stringify({
+            channelId: "D777",
+            channelType: "im",
+            userId: "U777",
+            pluginInteractiveData: "dean.contract:confirm_hearing",
+          }),
+        },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    const dispatchCall = mockCallArg(
+      dispatchPluginInteractiveHandlerMock,
+      0,
+      "plugin interactive dispatcher",
+    ) as { channel?: string; data?: string; dedupeId?: string } | undefined;
+    expectRecordFields(requireRecord(dispatchCall, "dispatch call"), {
+      channel: "slack",
+      data: "dean.contract:confirm_hearing",
+      dedupeId: "view_submission:contract_confirm_hearing:V779:U777",
+    });
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
   });
 
   it("blocks modal events when private metadata userId does not match submitter", async () => {
@@ -2147,7 +2665,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       inputs: Array<{
         actionId: string;
@@ -2264,7 +2782,7 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       inputs: Array<{ actionId: string; richTextPreview?: string }>;
     };
@@ -2320,10 +2838,11 @@ describe("registerSlackInteractionEvents", () => {
     expect(ack).toHaveBeenCalled();
     expect(resolveSessionKey).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText, options] = enqueueSystemEventMock.mock.calls[0] as [
-      string,
-      { sessionKey?: string },
-    ];
+    const eventText = enqueueSystemEventText();
+    const options = requireRecord(
+      mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1),
+      "enqueueSystemEvent options",
+    ) as { sessionKey?: string };
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       interactionType: string;
       actionId: string;
@@ -2382,7 +2901,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       interactionType: string;
       isCleared?: boolean;
@@ -2437,7 +2956,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     expect(eventText.length).toBeLessThanOrEqual(2400);
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       payloadTruncated?: boolean;

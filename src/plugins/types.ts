@@ -28,6 +28,7 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type {
+  DiagnosticEventPrivateData,
   DiagnosticEventInput,
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
@@ -58,6 +59,7 @@ import type {
   RealtimeVoiceProviderId,
   RealtimeVoiceProviderResolveConfigContext,
 } from "../talk/provider-types.js";
+import type { TranscriptSourceProvider as TranscriptsSourceProviderCapability } from "../transcripts/provider-types.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -964,9 +966,9 @@ export type PluginEmbeddingProvider = {
   id: string;
   model: string;
   maxInputTokens?: number;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
-  embedBatchInputs?: (inputs: unknown[]) => Promise<number[][]>;
+  embedQuery: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
+  embedBatch: (texts: string[], options?: { signal?: AbortSignal }) => Promise<number[][]>;
+  embedBatchInputs?: (inputs: unknown[], options?: { signal?: AbortSignal }) => Promise<number[][]>;
   client?: unknown;
 };
 
@@ -1120,6 +1122,7 @@ export type ProviderPluginWizardSetup = {
   choiceHint?: string;
   assistantPriority?: number;
   assistantVisibility?: "visible" | "manual-only";
+  onboardingFeatured?: boolean;
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
@@ -1128,7 +1131,7 @@ export type ProviderPluginWizardSetup = {
    * Interactive onboarding surfaces where this auth choice should appear.
    * Defaults to `["text-inference"]` when omitted.
    */
-  onboardingScopes?: Array<"text-inference" | "image-generation">;
+  onboardingScopes?: Array<"text-inference" | "image-generation" | "music-generation">;
   /**
    * Optional model-allowlist prompt policy applied after this auth choice is
    * selected in configure/onboarding flows.
@@ -1829,6 +1832,8 @@ export type SpeechProviderPlugin = {
   label: string;
   aliases?: string[];
   autoSelectOrder?: number;
+  /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
+  defaultTimeoutMs?: number;
   models?: readonly string[];
   voices?: readonly string[];
   resolveConfig?: (ctx: SpeechProviderResolveConfigContext) => SpeechProviderConfig;
@@ -1871,6 +1876,13 @@ export type RealtimeTranscriptionProviderPlugin = {
 };
 
 export type PluginRealtimeTranscriptionProviderEntry = RealtimeTranscriptionProviderPlugin & {
+  pluginId: string;
+};
+
+/** Transcript source capability registered by a channel or meeting plugin. */
+export type TranscriptSourceProvider = TranscriptsSourceProviderCapability;
+
+export type PluginTranscriptsSourceProviderEntry = TranscriptSourceProvider & {
   pluginId: string;
 };
 
@@ -1969,6 +1981,10 @@ export type PluginCommandContext = {
   threadParentId?: string;
   /** Sensitive diagnostics-only session inventory for owner-gated commands. */
   diagnosticsSessions?: PluginCommandDiagnosticsSession[];
+  /** Host-bound runtime capabilities scoped to this command invocation. */
+  runtimeContext?: {
+    llm?: import("./runtime/types-core.js").PluginRuntimeCore["llm"];
+  };
   /** Internal diagnostics-only marker that exec approval already authorized upload. */
   diagnosticsUploadApproved?: boolean;
   /** Internal diagnostics-only marker to preview upload effects without exposing ids. */
@@ -1997,6 +2013,23 @@ export type PluginCommandHandler = (
 /**
  * Definition for a plugin-registered command.
  */
+export const AGENT_PROMPT_SURFACE_KINDS = [
+  "pi_main",
+  "codex_app_server",
+  "cli_backend",
+  "acp_backend",
+  "subagent",
+] as const;
+
+export type AgentPromptSurfaceKind = (typeof AGENT_PROMPT_SURFACE_KINDS)[number];
+
+export type AgentPromptGuidanceEntry = {
+  text: string;
+  surfaces?: readonly AgentPromptSurfaceKind[];
+};
+
+export type AgentPromptGuidance = string | AgentPromptGuidanceEntry;
+
 export type OpenClawPluginCommandDefinition = {
   /** Command name without leading slash (e.g., "tts") */
   name: string;
@@ -2024,7 +2057,7 @@ export type OpenClawPluginCommandDefinition = {
    */
   channels?: readonly string[];
   /** Optional system-prompt guidance for agents when this command is registered. */
-  agentPromptGuidance?: readonly string[];
+  agentPromptGuidance?: readonly AgentPromptGuidance[];
   /** Whether this command accepts arguments */
   acceptsArgs?: boolean;
   /** Whether only authorized senders can use this command (default: true) */
@@ -2255,6 +2288,7 @@ export type OpenClawGatewayDiscoveryAdvertiseContext = {
   gatewayPort: number;
   gatewayTlsEnabled: boolean;
   gatewayTlsFingerprintSha256?: string;
+  gatewayDirectReachable: boolean;
   canvasPort?: number;
   tailnetDns?: string;
   sshPort?: number;
@@ -2275,10 +2309,18 @@ export type OpenClawPluginServiceContext = {
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
+  startupTrace?: {
+    detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+    measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
+  };
   internalDiagnostics?: {
-    emit: (event: DiagnosticEventInput) => void;
+    emit: (event: DiagnosticEventInput, privateData?: DiagnosticEventPrivateData) => void;
     onEvent: (
-      listener: (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => void,
+      listener: (
+        event: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+        privateData: DiagnosticEventPrivateData,
+      ) => void,
     ) => () => void;
   };
 };
@@ -2347,8 +2389,15 @@ export type PluginConfigMigration = (config: OpenClawConfig) =>
   | null
   | undefined;
 
-export type MigrationItemStatus = "planned" | "migrated" | "skipped" | "conflict" | "error";
+export type MigrationItemStatus =
+  | "planned"
+  | "migrated"
+  | "skipped"
+  | "warning"
+  | "conflict"
+  | "error";
 export type MigrationItemKind =
+  | "auth"
   | "config"
   | "secret"
   | "memory"
@@ -2415,6 +2464,10 @@ export type MigrationApplyResult = MigrationPlan & {
   reportDir?: string;
 };
 
+export type MigrationProviderPreparation = {
+  dispose?: () => void | Promise<void>;
+};
+
 export type MigrationProviderContext = {
   config: OpenClawConfig;
   runtime?: PluginRuntime;
@@ -2423,6 +2476,7 @@ export type MigrationProviderContext = {
   source?: string;
   includeSecrets?: boolean;
   overwrite?: boolean;
+  providerOptions?: Record<string, unknown>;
   backupPath?: string;
   reportDir?: string;
   signal?: AbortSignal;
@@ -2434,6 +2488,9 @@ export type MigrationProviderPlugin = {
   label: string;
   description?: string;
   detect?: (ctx: MigrationProviderContext) => MigrationDetection | Promise<MigrationDetection>;
+  prepareApply?: (
+    ctx: MigrationProviderContext,
+  ) => MigrationProviderPreparation | Promise<MigrationProviderPreparation | undefined> | undefined;
   plan: (ctx: MigrationProviderContext) => MigrationPlan | Promise<MigrationPlan>;
   apply: (
     ctx: MigrationProviderContext,
@@ -2627,6 +2684,10 @@ export type OpenClawPluginApi = {
   registerProvider: (provider: ProviderPlugin) => void;
   /** Register provider-owned model catalog rows for text and media generation. */
   registerModelCatalogProvider: (provider: UnifiedModelCatalogProviderPlugin) => void;
+  /** Register a general embedding provider (embedding capability). */
+  registerEmbeddingProvider: (
+    adapter: import("./embedding-providers.js").EmbeddingProviderAdapter,
+  ) => void;
   /** Register a speech synthesis provider (speech capability). */
   registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
   /** Register a realtime transcription provider (streaming STT capability). */
@@ -2635,6 +2696,8 @@ export type OpenClawPluginApi = {
   registerRealtimeVoiceProvider: (provider: RealtimeVoiceProviderPlugin) => void;
   /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
+  /** Register a transcripts source provider (live or imported meeting transcript capability). */
+  registerTranscriptSourceProvider: (provider: TranscriptSourceProvider) => void;
   /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
   /** Register a video generation provider (video generation capability). */

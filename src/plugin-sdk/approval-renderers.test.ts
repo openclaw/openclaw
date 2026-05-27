@@ -9,14 +9,14 @@ import {
 describe("plugin-sdk/approval-renderers", () => {
   it.each([
     {
-      name: "builds shared approval payloads with generic interactive commands",
+      name: "builds shared approval payloads with generic presentation commands",
       payload: buildApprovalPendingReplyPayload({
         approvalId: "plugin:approval-123",
         approvalSlug: "plugin:a",
         text: "Approval required @everyone",
       }),
       textExpected: (text: string) => expect(text).toContain("@everyone"),
-      interactiveExpected: {
+      presentationExpected: {
         blocks: [
           {
             type: "buttons",
@@ -63,7 +63,7 @@ describe("plugin-sdk/approval-renderers", () => {
         },
       }),
       textExpected: (text: string) => expect(text).toContain("Plugin approval required"),
-      interactiveExpected: {
+      presentationExpected: {
         blocks: [
           {
             type: "buttons",
@@ -94,8 +94,10 @@ describe("plugin-sdk/approval-renderers", () => {
           approvalKind: "plugin",
           approvalSlug: "custom-slug",
           allowedDecisions: ["allow-once", "allow-always", "deny"],
+          description: "Needs approval",
           sessionKey: undefined,
           state: "pending",
+          title: "Sensitive action",
         },
         telegram: {
           quoteText: "quoted",
@@ -119,7 +121,7 @@ describe("plugin-sdk/approval-renderers", () => {
       }),
       textExpected: (text: string) =>
         expect(text).toContain("Reply with: /approve <id> allow-once|deny"),
-      interactiveExpected: {
+      presentationExpected: {
         blocks: [
           {
             type: "buttons",
@@ -145,8 +147,90 @@ describe("plugin-sdk/approval-renderers", () => {
           approvalKind: "plugin",
           approvalSlug: "plugin-a",
           allowedDecisions: ["allow-once", "deny"],
+          description: "Needs approval",
           sessionKey: undefined,
           state: "pending",
+          title: "Sensitive action",
+        },
+      },
+    },
+    {
+      name: "builds pending payloads with plugin-provided actions",
+      payload: buildApprovalPendingReplyPayload({
+        approvalKind: "plugin",
+        approvalId: "plugin:approval-123",
+        approvalSlug: "plugin:a",
+        text: "AgentKit approval required",
+        title: "World ID approval",
+        description: "Approve in World app",
+        severity: "critical",
+        toolName: "protected-request",
+        pluginId: "agentkit",
+        actions: [
+          {
+            kind: "command",
+            label: "Open AgentKit",
+            style: "primary",
+            command: "/agentkit approve plugin:approval-123",
+          },
+          {
+            kind: "decision",
+            label: "Deny",
+            style: "danger",
+            decision: "deny",
+            command: "/agentkit deny plugin:approval-123",
+          },
+        ],
+      }),
+      textExpected: (text: string) => expect(text).toBe("AgentKit approval required"),
+      presentationExpected: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Open AgentKit",
+                value: "/agentkit approve plugin:approval-123",
+                style: "primary",
+              },
+              {
+                label: "Deny",
+                value: "/agentkit deny plugin:approval-123",
+                style: "danger",
+              },
+            ],
+          },
+        ],
+      },
+      channelDataExpected: {
+        execApproval: {
+          agentId: undefined,
+          approvalId: "plugin:approval-123",
+          approvalKind: "plugin",
+          approvalSlug: "plugin:a",
+          allowedDecisions: ["allow-once", "allow-always", "deny"],
+          actions: [
+            {
+              kind: "command",
+              label: "Open AgentKit",
+              style: "primary",
+              command: "/agentkit approve plugin:approval-123",
+            },
+            {
+              kind: "decision",
+              label: "Deny",
+              style: "danger",
+              decision: "deny",
+              command: "/agentkit deny plugin:approval-123",
+            },
+          ],
+          description: "Approve in World app",
+          pluginId: "agentkit",
+          sessionKey: undefined,
+          severity: "critical",
+          state: "pending",
+          title: "World ID approval",
+          toolName: "protected-request",
         },
       },
     },
@@ -158,7 +242,7 @@ describe("plugin-sdk/approval-renderers", () => {
         text: "resolved @everyone",
       }),
       textExpected: (text: string) => expect(text).toBe("resolved @everyone"),
-      interactiveExpected: undefined,
+      presentationExpected: undefined,
       channelDataExpected: {
         execApproval: {
           approvalId: "req-123",
@@ -183,7 +267,7 @@ describe("plugin-sdk/approval-renderers", () => {
         },
       }),
       textExpected: (text: string) => expect(text).toContain("Plugin approval allowed once"),
-      interactiveExpected: undefined,
+      presentationExpected: undefined,
       channelDataExpected: {
         execApproval: {
           approvalId: "plugin-approval-123",
@@ -195,13 +279,14 @@ describe("plugin-sdk/approval-renderers", () => {
         },
       },
     },
-  ])("$name", ({ payload, textExpected, interactiveExpected, channelDataExpected }) => {
+  ])("$name", ({ payload, textExpected, presentationExpected, channelDataExpected }) => {
     if (payload.text === undefined) {
       throw new Error("expected rendered approval text");
     }
     textExpected(payload.text);
-    if (interactiveExpected) {
-      expect(payload.interactive).toEqual(interactiveExpected);
+    if (presentationExpected) {
+      expect(payload.presentation).toEqual(presentationExpected);
+      expect(payload.interactive).toBeUndefined();
     }
     if (channelDataExpected) {
       expect(payload.channelData).toEqual(channelDataExpected);

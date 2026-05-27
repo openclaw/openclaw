@@ -8,6 +8,9 @@ import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { resolveNpmRunner } from "./npm-runner.mjs";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
+import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 interface TranslationMap {
   [key: string]: string | TranslationMap;
@@ -85,7 +88,8 @@ const CONTROL_UI_I18N_WORKFLOW = 1;
 const DEFAULT_OPENAI_MODEL = "gpt-5.5";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
-const DEFAULT_PI_PACKAGE_VERSION = "0.58.3";
+export const DEFAULT_PI_PACKAGE_VERSION = "0.75.5";
+const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
@@ -109,6 +113,7 @@ const ENV_PI_ARGS = "OPENCLAW_CONTROL_UI_I18N_PI_ARGS";
 const ENV_PI_PACKAGE_VERSION = "OPENCLAW_CONTROL_UI_I18N_PI_PACKAGE_VERSION";
 const ENV_BATCH_CHAR_BUDGET = "OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET";
 const ENV_PROMPT_TIMEOUT = "OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT";
+const ENV_AUTH_OPTIONAL = "OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL";
 
 const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "zh-CN", fileName: "zh-CN.ts", exportName: "zh_CN", languageKey: "zhCN" },
@@ -872,6 +877,21 @@ function isPromptTimeoutError(error: Error): boolean {
   return error.message.toLowerCase().includes("timed out");
 }
 
+export function isProviderAuthError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("401") ||
+    message.includes("authentication_error") ||
+    message.includes("incorrect api key") ||
+    message.includes("invalid x-api-key")
+  );
+}
+
+function isProviderAuthOptional(): boolean {
+  const raw = process.env[ENV_AUTH_OPTIONAL]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
 function resolvePromptTimeoutMs(): number {
   const raw = process.env[ENV_PROMPT_TIMEOUT]?.trim();
   if (!raw) {
@@ -903,6 +923,128 @@ type PiCommand = {
   executable: string;
 };
 
+type ProcessCommand = {
+  args: string[];
+  env?: NodeJS.ProcessEnv;
+  executable: string;
+  shell: boolean;
+  windowsVerbatimArguments?: boolean;
+};
+
+type ResolveProcessCommandOptions = {
+  comSpec?: string;
+  env?: NodeJS.ProcessEnv;
+  execPath?: string;
+  existsSync?: (path: string) => boolean;
+  npmExecPath?: string;
+  platform?: NodeJS.Platform;
+};
+
+function portableExtension(value: string): string {
+  return path.posix.extname(value.split(/[/\\]/u).at(-1) ?? value).toLowerCase();
+}
+
+function isWindowsCommandShim(value: string, platform = process.platform): boolean {
+  const extension = portableExtension(value);
+  return platform === "win32" && (extension === ".cmd" || extension === ".bat");
+}
+
+function resolveEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
+  return key === undefined ? undefined : env[key];
+}
+
+function commandFromRunner(runner: {
+  args: string[];
+  command: string;
+  env?: NodeJS.ProcessEnv;
+  shell: boolean;
+  windowsVerbatimArguments?: boolean;
+}): ProcessCommand {
+  const command: ProcessCommand = {
+    args: runner.args,
+    executable: runner.command,
+    shell: runner.shell,
+    windowsVerbatimArguments: runner.windowsVerbatimArguments,
+  };
+  if (runner.env !== undefined) {
+    command.env = runner.env;
+  }
+  return command;
+}
+
+export function resolveControlUiI18nProcessCommand(
+  executable: string,
+  args: string[],
+  options: ResolveProcessCommandOptions = {},
+): ProcessCommand {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const comSpec = options.comSpec ?? resolveEnvValue(env, "ComSpec") ?? "cmd.exe";
+  if (isWindowsCommandShim(executable, platform)) {
+    return {
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine(executable, args)],
+      executable: comSpec,
+      shell: false,
+      windowsVerbatimArguments: true,
+    };
+  }
+  return { args, executable, shell: false };
+}
+
+export function resolveControlUiI18nNpmInstallCommand(
+  packageSpec: string,
+  options: ResolveProcessCommandOptions = {},
+): ProcessCommand {
+  return commandFromRunner(
+    resolveNpmRunner({
+      comSpec: options.comSpec,
+      env: options.env,
+      execPath: options.execPath,
+      existsSync: options.existsSync,
+      npmArgs: ["install", "--silent", "--no-audit", "--no-fund", packageSpec],
+      platform: options.platform,
+    }),
+  );
+}
+
+export function resolveControlUiI18nPnpmCommand(
+  args: string[],
+  options: ResolveProcessCommandOptions = {},
+): ProcessCommand {
+  return commandFromRunner(
+    resolvePnpmRunner({
+      comSpec: options.comSpec,
+      npmExecPath: options.npmExecPath ?? process.env.npm_execpath,
+      nodeExecPath: options.execPath ?? process.execPath,
+      platform: options.platform,
+      pnpmArgs: args,
+    }),
+  );
+}
+
+export function resolvePiShimNodeCommand(
+  shimPath: string,
+  options: Pick<ResolveProcessCommandOptions, "existsSync" | "platform"> = {},
+): PiCommand | null {
+  const platform = options.platform ?? process.platform;
+  if (!isWindowsCommandShim(shimPath, platform)) {
+    return null;
+  }
+  const cliPath = path.win32.join(
+    path.win32.dirname(shimPath),
+    "node_modules",
+    ...PI_PACKAGE_NAME.split("/"),
+    "dist",
+    "cli.js",
+  );
+  const exists = options.existsSync ?? existsSync;
+  if (!exists(cliPath)) {
+    return null;
+  }
+  return { executable: "node", args: [cliPath] };
+}
+
 function resolvePiPackageVersion(): string {
   return process.env[ENV_PI_PACKAGE_VERSION]?.trim() || DEFAULT_PI_PACKAGE_VERSION;
 }
@@ -918,12 +1060,33 @@ function getPiRuntimeDir() {
   );
 }
 
+export function resolveLocalPiCommand(root = ROOT): PiCommand | null {
+  const cliPath = path.join(root, "node_modules", ...PI_PACKAGE_NAME.split("/"), "dist", "cli.js");
+  if (!existsSync(cliPath)) {
+    return null;
+  }
+  return { executable: "node", args: [cliPath] };
+}
+
 async function resolvePiCommand(): Promise<PiCommand> {
   const explicitExecutable = process.env[ENV_PI_EXECUTABLE]?.trim();
   if (explicitExecutable) {
+    const explicitArgs = process.env[ENV_PI_ARGS]?.trim().split(/\s+/).filter(Boolean) ?? [];
+    const shimCommand = resolvePiShimNodeCommand(explicitExecutable);
+    if (shimCommand) {
+      return {
+        executable: shimCommand.executable,
+        args: [...shimCommand.args, ...explicitArgs],
+      };
+    }
+    if (isWindowsCommandShim(explicitExecutable)) {
+      throw new Error(
+        `${ENV_PI_EXECUTABLE} points to a Windows command shim that cannot safely carry the multiline i18n system prompt. Point it at node with ${ENV_PI_ARGS} set to the Pi package dist/cli.js path, or unset it so OpenClaw uses the managed Pi runtime.`,
+      );
+    }
     return {
       executable: explicitExecutable,
-      args: process.env[ENV_PI_ARGS]?.trim().split(/\s+/).filter(Boolean) ?? [],
+      args: explicitArgs,
     };
   }
 
@@ -931,30 +1094,34 @@ async function resolvePiCommand(): Promise<PiCommand> {
   for (const entry of pathEntries) {
     const candidate = path.join(entry, process.platform === "win32" ? "pi.cmd" : "pi");
     if (existsSync(candidate)) {
+      const shimCommand = resolvePiShimNodeCommand(candidate);
+      if (shimCommand) {
+        return shimCommand;
+      }
+      if (process.platform === "win32") {
+        continue;
+      }
       return { executable: candidate, args: [] };
     }
+  }
+
+  const localCommand = resolveLocalPiCommand();
+  if (localCommand) {
+    return localCommand;
   }
 
   const runtimeDir = getPiRuntimeDir();
   const cliPath = path.join(
     runtimeDir,
     "node_modules",
-    "@mariozechner",
-    "pi-coding-agent",
+    ...PI_PACKAGE_NAME.split("/"),
     "dist",
     "cli.js",
   );
   if (!existsSync(cliPath)) {
     await mkdir(runtimeDir, { recursive: true });
-    await runProcess(
-      "npm",
-      [
-        "install",
-        "--silent",
-        "--no-audit",
-        "--no-fund",
-        `@earendil-works/pi-coding-agent@${resolvePiPackageVersion()}`,
-      ],
+    await runProcessCommand(
+      resolveControlUiI18nNpmInstallCommand(`${PI_PACKAGE_NAME}@${resolvePiPackageVersion()}`),
       {
         cwd: runtimeDir,
         rejectOnFailure: true,
@@ -970,16 +1137,17 @@ type RunProcessOptions = {
   rejectOnFailure?: boolean;
 };
 
-async function runProcess(
-  executable: string,
-  args: string[],
+async function runProcessCommand(
+  command: ProcessCommand,
   options: RunProcessOptions = {},
 ): Promise<{ code: number; stderr: string; stdout: string }> {
   return await new Promise((resolve, reject) => {
-    const child = spawn(executable, args, {
+    const child = spawn(command.executable, command.args, {
       cwd: options.cwd ?? ROOT,
-      env: process.env,
+      env: command.env ?? process.env,
+      shell: command.shell,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsVerbatimArguments: command.windowsVerbatimArguments,
     });
 
     let stdout = "";
@@ -999,7 +1167,11 @@ async function runProcess(
     child.once("close", (code) => {
       if ((code ?? 1) !== 0 && options.rejectOnFailure) {
         reject(
-          new Error(`${executable} ${args.join(" ")} failed: ${stderr.trim() || stdout.trim()}`),
+          new Error(
+            `${command.executable} ${command.args.join(" ")} failed: ${
+              stderr.trim() || stdout.trim()
+            }`,
+          ),
         );
         return;
       }
@@ -1009,9 +1181,13 @@ async function runProcess(
 }
 
 async function formatGeneratedTypeScript(filePath: string, source: string): Promise<string> {
-  const result = await runProcess(
-    "pnpm",
-    ["exec", "oxfmt", "--stdin-filepath", path.relative(ROOT, filePath)],
+  const result = await runProcessCommand(
+    resolveControlUiI18nPnpmCommand([
+      "exec",
+      "oxfmt",
+      "--stdin-filepath",
+      path.relative(ROOT, filePath),
+    ]),
     {
       input: source,
       rejectOnFailure: true,
@@ -1138,10 +1314,13 @@ class PiRpcClient {
       "--system-prompt",
       systemPrompt,
     ];
-    const child = spawn(command.executable, args, {
+    const invocation = resolveControlUiI18nProcessCommand(command.executable, args);
+    const child = spawn(invocation.executable, invocation.args, {
       cwd: ROOT,
-      env: process.env,
+      env: invocation.env ?? process.env,
+      shell: invocation.shell,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
 
     const client = new PiRpcClient(child);
@@ -1540,6 +1719,18 @@ async function syncLocale(
           });
         }
       }
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (isProviderAuthOptional() && isProviderAuthError(failure)) {
+        logProgress(`${localeLabel}: translation provider auth failed; skipping refresh`);
+        return {
+          changed: false,
+          fallbackCount: previousMeta?.fallbackKeys.length ?? 0,
+          locale: entry.locale,
+          wrote: false,
+        } satisfies SyncOutcome;
+      }
+      throw failure;
     } finally {
       await clientAccess.resetClient();
     }

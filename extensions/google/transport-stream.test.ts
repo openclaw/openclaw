@@ -4,14 +4,32 @@ import path from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
-  buildGuardedModelFetchMock: vi.fn(),
-  guardedFetchMock: vi.fn(),
-}));
+const {
+  buildGuardedModelFetchMock,
+  guardedFetchMock,
+  googleAuthGetAccessTokenMock,
+  googleAuthMock,
+} = vi.hoisted(() => {
+  const googleAuthGetAccessTokenMock = vi.fn();
+  return {
+    buildGuardedModelFetchMock: vi.fn(),
+    guardedFetchMock: vi.fn(),
+    googleAuthGetAccessTokenMock,
+    googleAuthMock: vi.fn(function GoogleAuthMock() {
+      return {
+        getAccessToken: googleAuthGetAccessTokenMock,
+      };
+    }),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal) => ({
   ...(await importOriginal()),
   buildGuardedModelFetch: buildGuardedModelFetchMock,
+}));
+
+vi.mock("google-auth-library", () => ({
+  GoogleAuth: googleAuthMock,
 }));
 
 let buildGoogleGenerativeAiParams: typeof import("./transport-stream.js").buildGoogleGenerativeAiParams;
@@ -19,6 +37,7 @@ let buildGoogleGemini3FirstResponseRetryParams: typeof import("./transport-strea
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 let createGoogleVertexTransportStreamFn: typeof import("./transport-stream.js").createGoogleVertexTransportStreamFn;
 let hasGoogleVertexAuthorizedUserAdcSync: typeof import("./vertex-adc.js").hasGoogleVertexAuthorizedUserAdcSync;
+let resolveGoogleVertexAuthorizedUserHeaders: typeof import("./vertex-adc.js").resolveGoogleVertexAuthorizedUserHeaders;
 let resetGoogleVertexAuthorizedUserTokenCacheForTest: typeof import("./vertex-adc.js").resetGoogleVertexAuthorizedUserTokenCacheForTest;
 
 const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
@@ -73,6 +92,10 @@ function buildGoogleVertexModel(
 
 function buildSseResponse(events: unknown[]): Response {
   const sse = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
+  return buildRawSseResponse(sse);
+}
+
+function buildRawSseResponse(sse: string): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -166,6 +189,82 @@ function requireThinkingConfig(config: Record<string, unknown>): Record<string, 
   return thinkingConfig as Record<string, unknown>;
 }
 
+type GoogleTestContentTurn = Record<string, unknown> & {
+  parts: Array<Record<string, unknown>>;
+};
+
+function isModelTurnWithParts(content: Record<string, unknown>): content is GoogleTestContentTurn {
+  return content.role === "model" && Array.isArray(content.parts);
+}
+
+function getFirstModelTurn(contents: Array<Record<string, unknown>>): GoogleTestContentTurn {
+  const turn = contents.find(isModelTurnWithParts);
+  if (!turn) {
+    throw new Error("Expected at least one Google model turn");
+  }
+  return turn;
+}
+
+function getLastModelTurn(contents: Array<Record<string, unknown>>): GoogleTestContentTurn {
+  const turn = contents.toReversed().find(isModelTurnWithParts);
+  if (!turn) {
+    throw new Error("Expected at least one Google model turn");
+  }
+  return turn;
+}
+
+function googleToolCallAssistantTurn({
+  timestamp = 0,
+  provider = "google",
+  api = "google-generative-ai",
+  model = "gemini-3.1-pro-preview",
+  id = "call_1",
+  name = "lookup",
+  args = { q: "hello" },
+  thoughtSignature,
+}: {
+  timestamp?: number;
+  provider?: string;
+  api?: string;
+  model?: string;
+  id?: string;
+  name?: string;
+  args?: Record<string, unknown>;
+  thoughtSignature?: string;
+} = {}): Record<string, unknown> {
+  return {
+    role: "assistant",
+    provider,
+    api,
+    model,
+    stopReason: "toolUse",
+    timestamp,
+    content: [
+      {
+        type: "toolCall",
+        id,
+        name,
+        arguments: args,
+        ...(thoughtSignature ? { thoughtSignature } : {}),
+      },
+    ],
+  };
+}
+
+function toolResultTurn(toolCallId = "call_1", timestamp = 1): Record<string, unknown> {
+  return {
+    role: "toolResult",
+    timestamp,
+    content: [
+      {
+        type: "toolResult",
+        toolCallId,
+        content: [{ type: "text", text: "ok" }],
+      },
+    ],
+  };
+}
+
 describe("google transport stream", () => {
   beforeAll(async () => {
     ({
@@ -174,13 +273,18 @@ describe("google transport stream", () => {
       createGoogleGenerativeAiTransportStreamFn,
       createGoogleVertexTransportStreamFn,
     } = await import("./transport-stream.js"));
-    ({ hasGoogleVertexAuthorizedUserAdcSync, resetGoogleVertexAuthorizedUserTokenCacheForTest } =
-      await import("./vertex-adc.js"));
+    ({
+      hasGoogleVertexAuthorizedUserAdcSync,
+      resolveGoogleVertexAuthorizedUserHeaders,
+      resetGoogleVertexAuthorizedUserTokenCacheForTest,
+    } = await import("./vertex-adc.js"));
   });
 
   beforeEach(() => {
     buildGuardedModelFetchMock.mockReset();
     guardedFetchMock.mockReset();
+    googleAuthGetAccessTokenMock.mockReset();
+    googleAuthMock.mockClear();
     buildGuardedModelFetchMock.mockReturnValue(guardedFetchMock);
     resetGoogleVertexAuthorizedUserTokenCacheForTest();
   });
@@ -191,6 +295,7 @@ describe("google transport stream", () => {
 
   afterAll(() => {
     vi.doUnmock("openclaw/plugin-sdk/provider-transport-runtime");
+    vi.doUnmock("google-auth-library");
     vi.resetModules();
   });
 
@@ -291,18 +396,13 @@ describe("google transport stream", () => {
     });
 
     const payload = parseRequestJsonBody(init);
-    expect(payload.systemInstruction).toEqual({
-      parts: [{ text: "Follow policy." }],
-    });
     expect(payload.cachedContent).toBe("cachedContents/request-cache");
+    expect(payload.systemInstruction).toBeUndefined();
+    expect(payload.tools).toBeUndefined();
+    expect(payload.toolConfig).toBeUndefined();
     expect((payload.generationConfig as { thinkingConfig?: unknown }).thinkingConfig).toEqual({
       includeThoughts: true,
       thinkingLevel: "HIGH",
-    });
-    expect(
-      (payload.toolConfig as { functionCallingConfig?: unknown }).functionCallingConfig,
-    ).toEqual({
-      mode: "AUTO",
     });
     expect(result.api).toBe("google-generative-ai");
     expect(result.provider).toBe("google");
@@ -324,6 +424,103 @@ describe("google transport stream", () => {
     expect(result.content[2]).toHaveProperty("name", "lookup");
     expect(result.content[2]).toHaveProperty("arguments", { q: "hello" });
     expect(result.content[2]).toHaveProperty("thoughtSignature", "call_sig_1");
+  });
+
+  it("merges tool-call thought signatures from sibling SSE parts", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
+                  },
+                  { thoughtSignature: "call_sig_merged_1" },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel({
+          id: "gemini-3.1-pro-preview",
+          name: "Gemini 3.1 Pro Preview",
+        }),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as never,
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_1",
+        name: "lookup",
+        arguments: { q: "hello" },
+        thoughtSignature: "call_sig_merged_1",
+      },
+    ]);
+  });
+
+  it("keeps explicit thinking signatures after tool-call SSE parts", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
+                  },
+                  { thought: true, thoughtSignature: "thought_sig_after_call" },
+                  { thought: true, text: "draft" },
+                  { text: "answer" },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel({
+          id: "gemini-3.1-pro-preview",
+          name: "Gemini 3.1 Pro Preview",
+        }),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as never,
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.content[0]).toMatchObject({
+      type: "toolCall",
+      id: "call_1",
+      name: "lookup",
+      arguments: { q: "hello" },
+    });
+    expect(result.content[1]).toEqual({
+      type: "thinking",
+      thinking: "draft",
+      thinkingSignature: "thought_sig_after_call",
+    });
+    expect(result.content[2]).toEqual({ type: "text", text: "answer" });
   });
 
   it("builds a lean Gemini 3 first-response retry payload", () => {
@@ -349,6 +546,28 @@ describe("google transport stream", () => {
         thinkingLevel: "LOW",
       },
     });
+  });
+
+  it("wraps malformed Gemini SSE JSON", async () => {
+    guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse("data: {not json\n\n"));
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as unknown as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gemini-api-key",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Google SSE stream returned malformed JSON");
   });
 
   it("retries Gemini 3 requests with lean thinking when the first attempt has no first response", async () => {
@@ -494,6 +713,89 @@ describe("google transport stream", () => {
       Authorization: "Bearer oauth-token",
       "Content-Type": "application/json",
     });
+  });
+
+  it("detects supported Vertex ADC sources synchronously", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-detect-"));
+    for (const type of ["authorized_user", "external_account", "service_account"]) {
+      const credentialsPath = path.join(tempDir, `${type}.json`);
+      await writeFile(credentialsPath, JSON.stringify({ type }), "utf8");
+
+      expect(
+        hasGoogleVertexAuthorizedUserAdcSync({
+          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+        }),
+      ).toBe(true);
+    }
+
+    expect(
+      hasGoogleVertexAuthorizedUserAdcSync({
+        HOME: path.join(tempDir, "empty-home"),
+        KUBERNETES_SERVICE_HOST: "10.0.0.1",
+      }),
+    ).toBe(false);
+  });
+
+  it("resolves non-file Vertex ADC through google-auth-library without OAuth refresh fetch", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-authlib-"));
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("APPDATA", "");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.google-auth-token");
+    const tokenFetchMock = vi.fn();
+
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer ya29.google-auth-token",
+    });
+
+    expect(googleAuthMock).toHaveBeenCalledWith({
+      scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+    });
+    expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(1);
+    expect(tokenFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses google-auth-library bearer auth for Google Vertex credential marker requests", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-authlib-stream-"));
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("APPDATA", "");
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
+    googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.transport-token");
+    const tokenFetchMock = vi.fn();
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleVertexTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGoogleVertexModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gcp-vertex-credentials",
+          fetch: tokenFetchMock,
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    expect(tokenFetchMock).not.toHaveBeenCalled();
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    const guardedInit = requireRequestInit(guardedCall, "guarded fetch");
+    expectHeaders(guardedInit, {
+      Authorization: "Bearer ya29.transport-token",
+      "Content-Type": "application/json",
+      accept: "text/event-stream",
+    });
+    expect(new Headers(guardedInit.headers).has("x-goog-api-key")).toBe(false);
   });
 
   it("refreshes authorized_user ADC before Google Vertex requests", async () => {
@@ -700,7 +1002,7 @@ describe("google transport stream", () => {
     });
   });
 
-  it("uses Gemini skip-validator thought signatures for cross-provider tool-call replay", () => {
+  it("re-attaches replayed Gemini thought signatures when a later tool call is missing one", () => {
     const model = buildGeminiModel({
       id: "gemini-3.1-pro-preview",
       name: "Gemini 3.1 Pro Preview",
@@ -708,19 +1010,81 @@ describe("google transport stream", () => {
 
     const params = buildGoogleGenerativeAiParams(model, {
       messages: [
+        googleToolCallAssistantTurn({ thoughtSignature: "call_sig_replay_1" }),
+        toolResultTurn(),
+        googleToolCallAssistantTurn({ timestamp: 2 }),
+      ],
+    } as never);
+
+    // Find the last model-role content; should carry the replayed signature
+    // even though the second stored toolCall block had none.
+    expect(getLastModelTurn(params.contents)).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "call_sig_replay_1",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+  });
+
+  it("treats the Google transport alias as the same route for signature replay", () => {
+    const model = {
+      ...buildGeminiModel({
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+      }),
+      api: "openclaw-google-generative-ai-transport",
+    } as Model<"openclaw-google-generative-ai-transport">;
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        googleToolCallAssistantTurn({ thoughtSignature: "call_sig_alias_1" }),
+        toolResultTurn(),
+        googleToolCallAssistantTurn({ timestamp: 2 }),
+      ],
+    } as never);
+
+    expect(getLastModelTurn(params.contents)).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "call_sig_alias_1",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+  });
+
+  it("keeps text and thinking signatures when the request uses the Google transport alias", () => {
+    const model = {
+      ...buildGeminiModel({
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+      }),
+      api: "openclaw-google-generative-ai-transport",
+    } as Model<"openclaw-google-generative-ai-transport">;
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
         {
           role: "assistant",
-          provider: "anthropic",
-          api: "anthropic-messages",
-          model: "claude-opus-4-7",
-          stopReason: "toolUse",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-3.1-pro-preview",
+          stopReason: "stop",
           timestamp: 0,
           content: [
             {
-              type: "toolCall",
-              id: "call_1",
-              name: "lookup",
-              arguments: { q: "hello" },
+              type: "thinking",
+              thinking: "plan",
+              thinkingSignature: "think_sig_alias_1",
+            },
+            {
+              type: "text",
+              text: "answer",
+              textSignature: "text_sig_alias_1",
             },
           ],
         },
@@ -731,10 +1095,305 @@ describe("google transport stream", () => {
       role: "model",
       parts: [
         {
+          thought: true,
+          text: "plan",
+          thoughtSignature: "think_sig_alias_1",
+        },
+        {
+          text: "answer",
+          thoughtSignature: "text_sig_alias_1",
+        },
+      ],
+    });
+  });
+
+  it("preserves opaque same-route Gemini thought signatures during replay", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        googleToolCallAssistantTurn({ thoughtSignature: "opaque.sig-url_safe~1" }),
+        toolResultTurn(),
+        googleToolCallAssistantTurn({ timestamp: 2 }),
+      ],
+    } as never);
+
+    expect(getLastModelTurn(params.contents)).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "opaque.sig-url_safe~1",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+  });
+
+  it("keeps a tool call's own Gemini thought signature before replay fallback", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        googleToolCallAssistantTurn({ thoughtSignature: "call_sig_first_1" }),
+        toolResultTurn(),
+        googleToolCallAssistantTurn({
+          timestamp: 2,
+          thoughtSignature: "call_sig_second_1",
+        }),
+      ],
+    } as never);
+
+    const modelTurns = params.contents.filter(isModelTurnWithParts);
+    expect(modelTurns).toHaveLength(2);
+    expect(modelTurns[0]).toMatchObject({
+      parts: [
+        {
+          thoughtSignature: "call_sig_first_1",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+    expect(modelTurns[1]).toMatchObject({
+      parts: [
+        {
+          thoughtSignature: "call_sig_second_1",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+  });
+
+  it("does not replay Gemini thought signatures from later turns", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        googleToolCallAssistantTurn(),
+        toolResultTurn(),
+        googleToolCallAssistantTurn({
+          timestamp: 2,
+          thoughtSignature: "call_sig_future_1",
+        }),
+      ],
+    } as never);
+
+    const modelTurns = params.contents.filter(isModelTurnWithParts);
+    expect(modelTurns).toHaveLength(2);
+    expect(modelTurns[0]).toMatchObject({
+      parts: [
+        {
           thoughtSignature: "skip_thought_signature_validator",
           functionCall: { name: "lookup", args: { q: "hello" } },
         },
       ],
+    });
+    expect(modelTurns[1]).toMatchObject({
+      parts: [
+        {
+          thoughtSignature: "call_sig_future_1",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+  });
+
+  it("does not re-attach replayed Gemini thought signatures to a different tool-call part", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        googleToolCallAssistantTurn({ thoughtSignature: "call_sig_replay_1" }),
+        toolResultTurn(),
+        googleToolCallAssistantTurn({ timestamp: 2, args: { q: "hello-again" } }),
+      ],
+    } as never);
+
+    expect(getLastModelTurn(params.contents)).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "skip_thought_signature_validator",
+          functionCall: { name: "lookup", args: { q: "hello-again" } },
+        },
+      ],
+    });
+  });
+
+  it("does not replay tool-call thought signatures from a different provider route", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    // Prior turn came from an Anthropic route — its signature looks valid base64
+    // but must NOT be replayed into a Gemini request.
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        googleToolCallAssistantTurn({
+          provider: "anthropic",
+          api: "anthropic",
+          model: "claude-sonnet-4",
+          id: "call_foreign",
+          // Plausible-looking base64 from a non-Gemini provider.
+          thoughtSignature: "msg_01XFDUDYJgAACcnSM2TTgQsA",
+        }),
+        toolResultTurn("call_foreign"),
+        {
+          role: "user",
+          content: [{ type: "text", text: "Continue." }],
+        },
+      ],
+    } as never);
+
+    // The foreign signature should not be replayed into the Gemini payload.
+    // Gemini 3 still needs the documented skip fallback for unsigned function
+    // calls that came from another route.
+    const firstModelTurn = getFirstModelTurn(params.contents);
+    expect(firstModelTurn).toMatchObject({
+      role: "model",
+      parts: [
+        {
+          thoughtSignature: "skip_thought_signature_validator",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+    expect(firstModelTurn.parts[0].thoughtSignature).not.toBe("msg_01XFDUDYJgAACcnSM2TTgQsA");
+  });
+
+  it("does not replay prior Gemini thought signatures onto a later foreign route", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        googleToolCallAssistantTurn({ thoughtSignature: "call_sig_google_1" }),
+        toolResultTurn(),
+        googleToolCallAssistantTurn({
+          provider: "anthropic",
+          api: "anthropic",
+          model: "claude-sonnet-4",
+          timestamp: 2,
+        }),
+      ],
+    } as never);
+
+    const modelTurns = params.contents.filter(isModelTurnWithParts);
+    expect(modelTurns).toHaveLength(2);
+    expect(modelTurns[1]).toMatchObject({
+      parts: [
+        {
+          thoughtSignature: "skip_thought_signature_validator",
+          functionCall: { name: "lookup", args: { q: "hello" } },
+        },
+      ],
+    });
+    expect(modelTurns[1]?.parts[0].thoughtSignature).not.toBe("call_sig_google_1");
+  });
+
+  it("replaces invalid Gemini tool-call sentinel signatures with the skip fallback", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [googleToolCallAssistantTurn({ thoughtSignature: "reasoning" })],
+    } as never);
+
+    const part = (params.contents[0] as { parts: Array<Record<string, unknown>> }).parts[0];
+    expect(part).toMatchObject({
+      thoughtSignature: "skip_thought_signature_validator",
+      functionCall: { name: "lookup", args: { q: "hello" } },
+    });
+  });
+
+  it("preserves the skip-validator fallback for unsigned Gemini tool-call replay", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        googleToolCallAssistantTurn({ thoughtSignature: "skip_thought_signature_validator" }),
+      ],
+    } as never);
+
+    const part = (params.contents[0] as { parts: Array<Record<string, unknown>> }).parts[0];
+    expect(part).toMatchObject({
+      thoughtSignature: "skip_thought_signature_validator",
+      functionCall: { name: "lookup", args: { q: "hello" } },
+    });
+  });
+
+  it("adds skip-validator fallback to unsigned sibling Gemini 3 tool calls", () => {
+    const model = buildGeminiModel({
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+    });
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-3.1-pro-preview",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_math",
+              name: "math_eval",
+              arguments: { expression: "17*23" },
+              thoughtSignature: "real_sig_1",
+            },
+            {
+              type: "toolCall",
+              id: "call_lookup",
+              name: "lookup_fact",
+              arguments: { key: "beta" },
+            },
+            {
+              type: "toolCall",
+              id: "call_transform",
+              name: "string_transform",
+              arguments: { text: "claw", mode: "reverse" },
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    const parts = (params.contents[0] as { parts: Array<Record<string, unknown>> }).parts;
+    expect(parts).toHaveLength(3);
+    expect(parts[0]).toMatchObject({
+      thoughtSignature: "real_sig_1",
+      functionCall: { name: "math_eval", args: { expression: "17*23" } },
+    });
+    expect(parts[1]).toMatchObject({
+      thoughtSignature: "skip_thought_signature_validator",
+      functionCall: { name: "lookup_fact", args: { key: "beta" } },
+    });
+    expect(parts[2]).toMatchObject({
+      thoughtSignature: "skip_thought_signature_validator",
+      functionCall: { name: "string_transform", args: { text: "claw", mode: "reverse" } },
     });
   });
 
@@ -802,6 +1461,23 @@ describe("google transport stream", () => {
     const thinkingConfig = requireThinkingConfig(generationConfig);
     expect(thinkingConfig.includeThoughts).toBe(true);
     expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
+  });
+
+  it("does not send thinkingConfig when the resolved Google model disables reasoning", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({
+        id: "gemma-4-26b-a4b-it",
+        reasoning: false,
+      }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        reasoning: "medium",
+      },
+    );
+
+    expect(params.generationConfig ?? {}).not.toHaveProperty("thinkingConfig");
   });
 
   it("omits disabled thinkingBudget=0 for Gemini 2.5 Pro direct payloads", () => {
@@ -957,6 +1633,36 @@ describe("google transport stream", () => {
     );
 
     expect(params.cachedContent).toBe("cachedContents/prebuilt-context");
+  });
+
+  it("omits per-request system and tool settings when using cachedContent", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        systemPrompt: "Follow policy.",
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parameters: {
+              type: "object",
+              properties: { q: { type: "string" } },
+              required: ["q"],
+            },
+          },
+        ],
+      } as never,
+      {
+        cachedContent: " cachedContents/prebuilt-context ",
+        toolChoice: "auto",
+      },
+    );
+
+    expect(params.cachedContent).toBe("cachedContents/prebuilt-context");
+    expect(params.systemInstruction).toBeUndefined();
+    expect(params.tools).toBeUndefined();
+    expect(params.toolConfig).toBeUndefined();
   });
 
   it("uses a non-empty text placeholder for empty user text", () => {

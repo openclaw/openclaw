@@ -4,10 +4,12 @@ import type {
   ProviderPlugin,
   ProviderCatalogContext,
   ProviderCatalogResult,
+  ProviderAuthMethod,
   ProviderPluginCatalog,
   UnifiedModelCatalogProviderContext,
   ProviderPluginWizardSetup,
 } from "../plugins/types.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
   OpenClawPluginApi,
@@ -62,6 +64,7 @@ export type SingleProviderPluginOptions = {
     aliases?: string[];
     envVars?: string[];
     auth?: SingleProviderPluginApiKeyAuthOptions[];
+    extraAuth?: ProviderAuthMethod[];
     catalog: SingleProviderPluginCatalogOptions;
   } & Omit<
     ProviderPlugin,
@@ -99,13 +102,11 @@ function resolveEnvVars(params: {
   envVars?: string[];
   auth?: SingleProviderPluginApiKeyAuthOptions[];
 }): string[] | undefined {
-  const combined = [
+  const combined = normalizeStringEntries([
     ...(params.envVars ?? []),
     ...(params.auth ?? []).map((entry) => entry.envVar).filter(Boolean),
-  ]
-    .map((value) => value.trim())
-    .filter(Boolean);
-  return combined.length > 0 ? [...new Set(combined)] : undefined;
+  ]);
+  return combined.length > 0 ? uniqueStrings(combined) : undefined;
 }
 
 function projectProviderCatalogResultToUnifiedTextRows(params: {
@@ -178,6 +179,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
             ...(wizard ? { wizard } : {}),
           });
         });
+        auth.push(...(provider.extraAuth ?? []));
         let catalog: ProviderPluginCatalog;
         if ("run" in provider.catalog) {
           const catalogRun = provider.catalog.run;
@@ -233,6 +235,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
                   "aliases",
                   "envVars",
                   "auth",
+                  "extraAuth",
                   "catalog",
                   "staticCatalog",
                 ].includes(key),

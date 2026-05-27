@@ -14,8 +14,15 @@ let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resetPluginRuntimeStateForTest: RuntimeModule["resetPluginRuntimeStateForTest"];
 let resolvePluginWebFetchProviders: WebFetchProvidersRuntimeModule["resolvePluginWebFetchProviders"];
+let clearLoadPluginMetadataSnapshotMemo: typeof import("./plugin-metadata-snapshot.js").clearLoadPluginMetadataSnapshotMemo;
 
 const DEFAULT_WORKSPACE = "/tmp/workspace";
+
+type PluginLoadOptions = { logger?: Record<string, unknown> } & Record<string, unknown>;
+
+function firstPluginLoadOptions(mock: { mock: { calls: unknown[][] } }): PluginLoadOptions {
+  return (mock.mock.calls[0]?.[0] ?? {}) as PluginLoadOptions;
+}
 
 function createWebFetchEnv(overrides?: Partial<NodeJS.ProcessEnv>) {
   return {
@@ -112,10 +119,12 @@ describe("resolvePluginWebFetchProviders", () => {
     manifestRegistryModule = await import("./manifest-registry.js");
     webFetchProvidersSharedModule = await import("./web-fetch-providers.shared.js");
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
+    ({ clearLoadPluginMetadataSnapshotMemo } = await import("./plugin-metadata-snapshot.js"));
     ({ resolvePluginWebFetchProviders } = await import("./web-fetch-providers.runtime.js"));
   });
 
   beforeEach(() => {
+    clearLoadPluginMetadataSnapshotMemo();
     vi.spyOn(manifestRegistryModule, "loadPluginManifestRegistry").mockReturnValue(
       createManifestRegistryFixture() as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
         ...args: unknown[]
@@ -135,6 +144,7 @@ describe("resolvePluginWebFetchProviders", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
+    clearLoadPluginMetadataSnapshotMemo();
     vi.restoreAllMocks();
   });
 
@@ -175,8 +185,7 @@ describe("resolvePluginWebFetchProviders", () => {
     });
 
     expect(providers).toStrictEqual([]);
-    const { logger: inFlightLogger, ...inFlightLoadOptions } =
-      inFlightSpy.mock.calls.at(0)?.[0] ?? {};
+    const { logger: inFlightLogger, ...inFlightLoadOptions } = firstPluginLoadOptions(inFlightSpy);
     expect(Object.keys(inFlightLogger ?? {}).toSorted()).toEqual([
       "debug",
       "error",
@@ -205,7 +214,7 @@ describe("resolvePluginWebFetchProviders", () => {
         bundledAllowlistCompat: true,
         env,
       });
-    const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
+    const { cacheKey } = loaderModule.testing.resolvePluginLoadCacheContext({
       config,
       activationSourceConfig,
       autoEnabledReasons,
@@ -216,6 +225,7 @@ describe("resolvePluginWebFetchProviders", () => {
       activate: false,
     });
     const registry = createEmptyPluginRegistry();
+    registry.plugins.push({ id: "firecrawl", status: "loaded" } as never);
     registry.webFetchProviders.push(createRuntimeWebFetchProvider());
     setActivePluginRegistry(registry, cacheKey);
 
@@ -242,7 +252,7 @@ describe("resolvePluginWebFetchProviders", () => {
         workspaceDir: DEFAULT_WORKSPACE,
         env,
       });
-    const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
+    const { cacheKey } = loaderModule.testing.resolvePluginLoadCacheContext({
       config,
       activationSourceConfig,
       autoEnabledReasons,
@@ -253,6 +263,7 @@ describe("resolvePluginWebFetchProviders", () => {
       activate: false,
     });
     const registry = createEmptyPluginRegistry();
+    registry.plugins.push({ id: "firecrawl", status: "loaded" } as never);
     registry.webFetchProviders.push(createRuntimeWebFetchProvider());
     setActivePluginRegistry(registry, cacheKey, "default", DEFAULT_WORKSPACE);
 
@@ -292,7 +303,7 @@ describe("resolvePluginWebFetchProviders", () => {
       diagnostics: [],
       installRecords: {},
     });
-    const { logger, ...loadOptions } = loadOpenClawPluginsMock.mock.calls.at(0)?.[0] ?? {};
+    const { logger, ...loadOptions } = firstPluginLoadOptions(loadOpenClawPluginsMock);
     expect(Object.keys(logger ?? {}).toSorted()).toEqual(["debug", "error", "info", "warn"]);
     expect(loadOptions).toEqual({
       config: createFirecrawlAllowConfig(),

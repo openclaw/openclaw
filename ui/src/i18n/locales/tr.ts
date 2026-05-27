@@ -350,6 +350,12 @@ export const tr: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -358,6 +364,8 @@ export const tr: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -389,6 +397,7 @@ export const tr: TranslationMap = {
   },
   tabs: {
     agents: "Aracılar",
+    activity: "Activity",
     overview: "Genel Bakış",
     channels: "Kanallar",
     instances: "Örnekler",
@@ -410,6 +419,7 @@ export const tr: TranslationMap = {
   },
   subtitles: {
     agents: "Çalışma alanları, araçlar, kimlikler.",
+    activity: "Browser-local tool activity summaries.",
     overview: "Durum, giriş noktaları, sağlık.",
     channels: "Kanallar ve ayarlar.",
     instances: "Bağlı istemciler ve düğümler.",
@@ -428,6 +438,42 @@ export const tr: TranslationMap = {
     debug: "Anlık görüntüler, olaylar, RPC.",
     logs: "Canlı Gateway günlükleri.",
     dreams: "Uyku sırasında bellek birleştirme.",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "Ara",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "Araç",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "Temizle",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "Çalıştır",
+    session: "Oturum",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "Çalışıyor",
+      done: "Tamamlandı",
+      error: "Hata",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -697,10 +743,6 @@ export const tr: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Token'ların nereye gittiğini, oturumların ne zaman arttığını ve maliyeti neyin belirlediğini görün.",
-    },
     common: {
       emptyValue: "—",
       unknown: "bilinmiyor",
@@ -1048,6 +1090,10 @@ export const tr: TranslationMap = {
     settings: "Sohbet ayarları",
     thinkingToggle: "Asistanın düşünme/çalışma çıktısını aç/kapat",
     toolCallsToggle: "Araç çağrılarını ve araç sonuçlarını aç/kapat",
+    autoScrollMode: "Otomatik kaydırma modu",
+    autoScrollAlways: "Her zaman",
+    autoScrollNearBottom: "Alta yakın",
+    autoScrollOff: "Kapalı",
     focusToggle: "Odak modunu aç/kapat (kenar çubuğunu + sayfa başlığını gizle)",
     hideCronSessions: "Cron oturumlarını gizle",
     showCronSessions: "Cron oturumlarını göster",
@@ -1091,11 +1137,16 @@ export const tr: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "Hâlâ dinliyor",
+      talkTranscript: "Konuşma dökümü",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "Oturumları ajana göre filtrele",
       session: "Chat session",
+      sessionSearch: "Oturumlarda ara",
+      clearSessionSearch: "Oturum aramasını temizle",
+      loadMoreSessions: "Daha fazla oturum yükle",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1207,6 +1258,9 @@ export const tr: TranslationMap = {
       ascending: "Artan",
       descending: "Azalan",
       reset: "Sıfırla",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Eşleşen iş yok.",
       loading: "Yükleniyor...",
       loadMore: "Daha fazla iş yükle",
@@ -1242,6 +1296,7 @@ export const tr: TranslationMap = {
     form: {
       editJob: "İşi Düzenle",
       newJob: "Yeni İş",
+      advancedJob: "Advanced job",
       updateSubtitle: "Seçili zamanlanmış işi güncelleyin.",
       createSubtitle: "Zamanlanmış bir uyandırma veya aracı çalıştırması oluşturun.",
       required: "Gerekli",

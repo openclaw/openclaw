@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  isRecord,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation } from "./apply.js";
 import {
@@ -196,10 +201,6 @@ function shouldRouteBridgeRuntimeThroughGateway(config: ResolvedMemoryWikiConfig
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function isBoundedGatewayString(
   value: unknown,
   maxChars = GATEWAY_RESPONSE_MAX_STRING_CHARS,
@@ -336,11 +337,8 @@ function normalizeCliStringList(values?: string[]): string[] | undefined {
   if (!values) {
     return undefined;
   }
-  const normalized = values
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .filter((value, index, all) => all.indexOf(value) === index);
-  return normalized.length > 0 ? normalized : undefined;
+  const uniqueValues = uniqueStrings(normalizeStringEntries(values));
+  return uniqueValues.length > 0 ? uniqueValues : undefined;
 }
 
 function collectCliValues(value: string, acc: string[] = []) {
@@ -433,14 +431,29 @@ function addWikiSearchConfigOptions<T extends Command>(command: T): T {
     );
 }
 
+function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
+  const error = new Error(message) as Error & { code: string; exitCode: number };
+  error.name = "InvalidArgumentError";
+  // Commander recognizes parser failures by code; keep the import type-only for bundled plugin deps.
+  error.code = "commander.invalidArgument";
+  error.exitCode = 1;
+  return error;
+}
+
+function parseWikiConfidenceOption(value: string): number {
+  const confidence = Number(value);
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    throw invalidCliArgument("--confidence must be a number between 0 and 1.");
+  }
+  return confidence;
+}
+
 function addWikiApplyMutationOptions<T extends Command>(command: T): T {
   return command
     .option("--source-id <id>", "Source id", collectCliValues)
     .option("--contradiction <text>", "Contradiction note", collectCliValues)
     .option("--question <text>", "Open question", collectCliValues)
-    .option("--confidence <n>", "Confidence score between 0 and 1", (value: string) =>
-      Number(value),
-    )
+    .option("--confidence <n>", "Confidence score between 0 and 1", parseWikiConfidenceOption)
     .option("--status <status>", "Page status");
 }
 

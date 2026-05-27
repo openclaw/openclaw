@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
@@ -39,20 +40,38 @@ export type UpdateStatusOptions = {
   timeout?: string;
 };
 
+export type UpdateFinalizeOptions = {
+  json?: boolean;
+  channel?: string;
+  timeout?: string;
+  yes?: boolean;
+  restart?: boolean;
+};
+
 export type UpdateWizardOptions = {
   timeout?: string;
 };
 
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
+const MAX_SAFE_TIMEOUT_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
 
 export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
-  const timeoutMs = timeout ? Number.parseInt(timeout, 10) * 1000 : undefined;
-  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
+  if (timeout === undefined) {
+    return undefined;
+  }
+  const trimmed = timeout.trim();
+  const seconds = Number(trimmed);
+  if (
+    !/^\d+$/u.test(trimmed) ||
+    !Number.isSafeInteger(seconds) ||
+    seconds <= 0 ||
+    seconds > MAX_SAFE_TIMEOUT_SECONDS
+  ) {
     defaultRuntime.error(INVALID_TIMEOUT_ERROR);
     defaultRuntime.exit(1);
     return null;
   }
-  return timeoutMs;
+  return seconds * 1000;
 }
 
 const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
@@ -123,7 +142,7 @@ export function resolveGitInstallDir(): string {
 }
 
 function resolveDefaultGitDir(): string {
-  const home = os.homedir();
+  const home = resolveRequiredHomeDir(process.env, os.homedir);
   if (home.startsWith("/")) {
     return path.posix.join(home, "openclaw");
   }
@@ -203,6 +222,7 @@ export async function ensureGitCheckout(params: {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
   if (!dirExists) {
+    await fs.mkdir(path.dirname(params.dir), { recursive: true });
     return await runUpdateStep({
       name: "git clone",
       argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],

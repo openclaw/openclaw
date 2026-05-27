@@ -83,7 +83,7 @@ const installRunEmbeddedMocks = () => {
 };
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
-let authProfileUsageTesting: typeof import("./auth-profiles/usage.js").__testing;
+let authProfileUsageTesting: typeof import("./auth-profiles/usage.js").testing;
 let createDiagnosticLogRecordCaptureFn: typeof import("../logging/test-helpers/diagnostic-log-capture.js").createDiagnosticLogRecordCapture;
 let cleanupLogCapture: (() => void) | undefined;
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
@@ -94,7 +94,7 @@ beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
-  ({ __testing: authProfileUsageTesting } = await import("./auth-profiles/usage.js"));
+  ({ testing: authProfileUsageTesting } = await import("./auth-profiles/usage.js"));
   ({ createDiagnosticLogRecordCapture: createDiagnosticLogRecordCaptureFn } =
     await import("../logging/test-helpers/diagnostic-log-capture.js"));
   ({ resetLogger: resetLoggerFn, setLoggerOverride: setLoggerOverrideFn } =
@@ -385,15 +385,26 @@ const writeOpenAiCodexAuthStore = async (agentDir: string) => {
 const buildCopilotAssistant = (overrides: Partial<AssistantMessage> = {}) =>
   buildAssistant({ provider: "github-copilot", model: copilotModelId, ...overrides });
 
+const makeErrorAttempt = (
+  overrides: Partial<AssistantMessage> = {},
+  opts?: { currentAttempt?: boolean },
+) => {
+  const assistant = buildAssistant({
+    stopReason: "error",
+    ...overrides,
+  });
+  return makeAttempt({
+    assistantTexts: [],
+    lastAssistant: assistant,
+    ...(opts?.currentAttempt ? { currentAttemptAssistant: assistant } : {}),
+  });
+};
+
 const mockFailedThenSuccessfulAttempt = (errorMessage = "rate limit") => {
   runEmbeddedAttemptMock
     .mockResolvedValueOnce(
-      makeAttempt({
-        assistantTexts: [],
-        lastAssistant: buildAssistant({
-          stopReason: "error",
-          errorMessage,
-        }),
+      makeErrorAttempt({
+        errorMessage,
       }),
     )
     .mockResolvedValueOnce(
@@ -540,15 +551,14 @@ function mockSingleErrorAttempt(params: {
   model?: string;
 }) {
   runEmbeddedAttemptMock.mockResolvedValueOnce(
-    makeAttempt({
-      assistantTexts: [],
-      lastAssistant: buildAssistant({
-        stopReason: "error",
+    makeErrorAttempt(
+      {
         errorMessage: params.errorMessage,
         ...(params.provider ? { provider: params.provider } : {}),
         ...(params.model ? { model: params.model } : {}),
-      }),
-    }),
+      },
+      { currentAttempt: true },
+    ),
   );
 }
 

@@ -149,8 +149,7 @@ describe("config form renderer", () => {
     const selectedLabels = Array.from(selects).map((select) =>
       select.selectedOptions[0]?.textContent?.trim(),
     );
-    expect(selectedLabels).toContain("openai");
-    expect(selectedLabels).toContain("tailnet");
+    expect(selectedLabels).toEqual(["tailnet", "openai"]);
   });
 
   it("renders map fields from additionalProperties", () => {
@@ -223,7 +222,11 @@ describe("config form renderer", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Plugin Enabled");
+    const label = expectElement(
+      container.querySelector(".cfg-toggle-row__label"),
+      "plugin enabled label",
+    );
+    expect(label.textContent?.trim()).toBe("Plugin Enabled");
   });
 
   it("renders tags from uiHints metadata", () => {
@@ -246,8 +249,7 @@ describe("config form renderer", () => {
     const tags = Array.from(container.querySelectorAll(".cfg-tag")).map((node) =>
       node.textContent?.trim(),
     );
-    expect(tags).toContain("security");
-    expect(tags).toContain("secret");
+    expect(tags).toEqual(["security", "secret"]);
 
     render(
       renderConfigForm({
@@ -263,10 +265,21 @@ describe("config form renderer", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Gateway");
-    expect(container.textContent).toContain("Token");
-    expect(container.textContent).not.toContain("Allow From");
-    expect(container.textContent).not.toContain("Mode");
+    const sectionTitle = expectElement(
+      container.querySelector(".config-section-card__title"),
+      "tag-filtered section title",
+    );
+    expect(sectionTitle.textContent?.trim()).toBe("Gateway");
+    const fieldLabel = expectElement(
+      container.querySelector(".cfg-field__label"),
+      "tag-filtered field label",
+    );
+    expect(fieldLabel.textContent?.trim()).toBe("Token");
+    expect(
+      Array.from(container.querySelectorAll(".cfg-field__label")).map((label) =>
+        label.textContent?.trim(),
+      ),
+    ).toEqual(["Token"]);
   });
 
   it("supports SecretInput unions in additionalProperties maps", () => {
@@ -320,8 +333,7 @@ describe("config form renderer", () => {
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).not.toContain("models.providers");
-    expect(analysis.unsupportedPaths).not.toContain("models.providers.*.apiKey");
+    expect(analysis.unsupportedPaths).toEqual([]);
 
     render(
       renderConfigForm({
@@ -358,7 +370,32 @@ describe("config form renderer", () => {
       },
     };
     let analysis = analyzeConfigSchema(renderableUnionSchema);
-    expect(analysis.unsupportedPaths).not.toContain("mixed");
+    expect(analysis.unsupportedPaths).toEqual([]);
+
+    const typedWithAnyBranchSchema = {
+      type: "object",
+      properties: {
+        lastTouchedAt: {
+          title: "Config Last Touched At",
+          description: "ISO timestamp of the last config write.",
+          anyOf: [{ type: "string" }, {}],
+        },
+      },
+    };
+    analysis = analyzeConfigSchema(typedWithAnyBranchSchema);
+    expect(analysis.unsupportedPaths).toEqual(["lastTouchedAt"]);
+
+    const nullableSingleBranchSchema = {
+      type: "object",
+      properties: {
+        note: {
+          anyOf: [{ type: "string", nullable: true }],
+        },
+      },
+    };
+    analysis = analyzeConfigSchema(nullableSingleBranchSchema);
+    expect(analysis.unsupportedPaths).toEqual([]);
+    expect(analysis.schema?.properties?.note?.nullable).toBe(true);
 
     const nullableSchema = {
       type: "object",
@@ -367,7 +404,7 @@ describe("config form renderer", () => {
       },
     };
     analysis = analyzeConfigSchema(nullableSchema);
-    expect(analysis.unsupportedPaths).not.toContain("note");
+    expect(analysis.unsupportedPaths).toEqual([]);
 
     const untypedAdditionalPropertiesSchema = {
       type: "object",
@@ -387,7 +424,48 @@ describe("config form renderer", () => {
       },
     };
     analysis = analyzeConfigSchema(untypedAdditionalPropertiesSchema);
-    expect(analysis.unsupportedPaths).not.toContain("channels");
+    expect(analysis.unsupportedPaths).toEqual([]);
+  });
+
+  it("accepts transform-backed public config schema shapes", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        lastTouchedAt: {
+          anyOf: [{ type: "string" }, { type: "number" }],
+        },
+        setupCommand: {
+          anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+        },
+        allowedDomains: {
+          type: "array",
+          items: { type: "string" },
+        },
+        chatMessageMaxWidth: {
+          type: "string",
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).toEqual([]);
+
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {
+          lastTouchedAt: "2026-05-05T00:00:00.000Z",
+          setupCommand: "apt-get update",
+          allowedDomains: ["example.com"],
+          chatMessageMaxWidth: "960px",
+        },
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+    expect(container.textContent).not.toContain("Unsupported schema node");
   });
 
   it("treats additionalProperties true as editable map fields", () => {
@@ -401,7 +479,7 @@ describe("config form renderer", () => {
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).not.toContain("accounts");
+    expect(analysis.unsupportedPaths).toEqual([]);
 
     const onPatch = vi.fn();
     const container = document.createElement("div");

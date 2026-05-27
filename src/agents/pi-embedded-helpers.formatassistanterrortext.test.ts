@@ -66,6 +66,22 @@ describe("formatAssistantErrorText", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+  it("rewrites generic provider internal errors without support request ids", () => {
+    const msg = makeAssistantError(
+      "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID synthetic-provider-request-001 in your message.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned an internal error. Please try again in a moment.",
+    );
+  });
+  it("rewrites request-id-only generic provider internal errors without exposing the id", () => {
+    const msg = makeAssistantError(
+      "An error occurred while processing your request. Please include request ID req_synthetic_provider_request_001 in your message.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned an internal error. Please try again in a moment.",
+    );
+  });
   it("returns a model-switch hint for OpenAI model capacity errors", () => {
     const msg = makeAssistantError("Selected model is at capacity. Please try a different model.");
     expect(formatAssistantErrorText(msg)).toBe(
@@ -145,6 +161,72 @@ describe("formatAssistantErrorText", () => {
       model: "gemini-3.1-pro-preview",
     });
     expect(result).toBe(formatBillingErrorMessage("google", "gemini-3.1-pro-preview"));
+  });
+  it("returns a billing message for xAI 429 credit exhaustion before rate-limit copy", () => {
+    const msg = makeAssistantError(
+      '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "xai",
+      model: "grok-4.3",
+    });
+    expect(result).toBe(formatBillingErrorMessage("xai", "grok-4.3"));
+  });
+  it("keeps known Moonshot 429 balance failures on billing copy", () => {
+    const msg = makeAssistantError(
+      '429 {"error":{"message":"Your account has insufficient balance. Please recharge to continue.","type":"rate_limit_reached"}}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "moonshot",
+      model: "kimi-k2",
+    });
+    expect(result).toBe(formatBillingErrorMessage("moonshot", "kimi-k2"));
+  });
+  it("keeps high-confidence 429 insufficient quota failures on billing copy", () => {
+    const msg = makeAssistantError(
+      '429 {"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    expect(result).toBe(formatBillingErrorMessage("openai", "gpt-5.5"));
+  });
+  it("keeps high-confidence 429 insufficient balance failures on billing copy", () => {
+    const msg = makeAssistantError(
+      '429 {"error":"insufficient_balance","message":"Your credit balance is too low."}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "openai-compatible",
+      model: "custom-model",
+    });
+    expect(result).toBe(formatBillingErrorMessage("openai-compatible", "custom-model"));
+  });
+  it("keeps structured 429 insufficient balance codes on billing copy", () => {
+    const msg = makeAssistantError(
+      'HTTP 429: {"error":"insufficient_balance","message":"Insufficient account balance"}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "openai-compatible",
+      model: "custom-model",
+    });
+    expect(result).toBe(formatBillingErrorMessage("openai-compatible", "custom-model"));
+  });
+  it("keeps 429 more-credits failures on billing copy", () => {
+    const msg = makeAssistantError("429 This model requires more credits to use");
+    const result = formatAssistantErrorText(msg, {
+      provider: "openai-compatible",
+      model: "custom-model",
+    });
+    expect(result).toBe(formatBillingErrorMessage("openai-compatible", "custom-model"));
+  });
+  it("keeps OpenRouter 429 key budget failures on billing copy", () => {
+    const msg = makeAssistantError("429 API key budget limit exceeded");
+    const result = formatAssistantErrorText(msg, {
+      provider: "openrouter",
+      model: "openai/gpt-5.5",
+    });
+    expect(result).toBe(formatBillingErrorMessage("openrouter", "openai/gpt-5.5"));
   });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
@@ -265,6 +347,15 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns an explicit re-authentication message for Codex app-server refresh failures", () => {
+    const msg = makeAssistantError(
+      "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh failed. Re-authenticate this provider and try again.",
+    );
+  });
+
   it("returns a contention-specific message for OAuth refresh lock timeouts", () => {
     const msg = makeAssistantError("file lock timeout for /tmp/openclaw-oauth-refresh.lock");
     expect(formatAssistantErrorText(msg)).toBe(
@@ -317,10 +408,17 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns re-authentication copy for HTML provider 401 auth failures", () => {
+    const msg = makeAssistantError("401 <!DOCTYPE html><html><body>Unauthorized</body></html>");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
+    );
+  });
+
   it("returns an HTML-403 auth message for HTML provider auth failures", () => {
     const msg = makeAssistantError("403 <!DOCTYPE html><html><body>Access denied</body></html>");
     expect(formatAssistantErrorText(msg)).toBe(
-      "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
+      "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
     );
   });
 
@@ -405,6 +503,14 @@ describe("formatRawAssistantErrorForUi", () => {
 
   it("formats colon-delimited HTTP status lines", () => {
     expect(formatRawAssistantErrorForUi("HTTP 410: No body")).toBe("HTTP 410: No body");
+  });
+
+  it("formats plain provider internal errors without request ids", () => {
+    expect(
+      formatRawAssistantErrorForUi(
+        "An error occurred while processing your request. Please include the request ID synthetic-provider-request-001 in your message.",
+      ),
+    ).toBe("The AI service returned an internal error. Please try again in a moment.");
   });
 
   it("sanitizes HTML error pages into a clean unavailable message", () => {

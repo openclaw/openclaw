@@ -3,6 +3,9 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   hasGenerationToolAvailability,
+  isCapabilityProviderConfigured,
+  resolveMediaToolInboundRoots,
+  resolveCapabilityModelConfigForTool,
   resolveMediaToolLocalRoots,
   resolveModelFromRegistry,
 } from "./media-tool-shared.js";
@@ -54,6 +57,43 @@ describe("resolveMediaToolLocalRoots", () => {
     expect(normalizedRoots).not.toContain(normalizeHostPath(moviesDir));
     expect(normalizedRoots).not.toContain(normalizeHostPath("/"));
   });
+
+  it("keeps channel inbound attachment roots separate from local roots", () => {
+    const accountRoot = path.join("/tmp", "openclaw-imessage-work");
+    const sharedRoot = path.join("/tmp", "openclaw-imessage-shared");
+    const cfg = {
+      channels: {
+        imessage: {
+          attachmentRoots: [sharedRoot],
+          accounts: {
+            work: {
+              attachmentRoots: [accountRoot],
+            },
+          },
+        },
+      },
+    };
+
+    const withoutChannel = resolveMediaToolLocalRoots(undefined, { cfg });
+    expect(withoutChannel.map(normalizeHostPath)).not.toContain(normalizeHostPath(accountRoot));
+    expect(withoutChannel.map(normalizeHostPath)).not.toContain(normalizeHostPath(sharedRoot));
+    expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
+
+    const withImessage = resolveMediaToolLocalRoots(undefined, {
+      cfg,
+      channelId: "imessage",
+      accountId: "work",
+    });
+    expect(withImessage.map(normalizeHostPath)).not.toContain(normalizeHostPath(accountRoot));
+    expect(withImessage.map(normalizeHostPath)).not.toContain(normalizeHostPath(sharedRoot));
+    expect(
+      resolveMediaToolInboundRoots({
+        cfg,
+        channelId: "imessage",
+        accountId: "work",
+      }),
+    ).toEqual([accountRoot, sharedRoot, "/Users/*/Library/Messages/Attachments"]);
+  });
 });
 
 describe("resolveModelFromRegistry", () => {
@@ -104,6 +144,61 @@ describe("resolveModelFromRegistry", () => {
 });
 
 describe("hasGenerationToolAvailability", () => {
+  it("accepts config-backed custom provider auth for generation providers", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "custom-image": {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    };
+
+    expect(
+      hasGenerationToolAvailability({
+        providerKey: "imageGenerationProviders",
+        cfg,
+        providers: [{ id: "custom-image", defaultModel: "workflow" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves a provider-specific not-configured result over generic config auth", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "workflow-image": {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [],
+          },
+        },
+      },
+    };
+    const provider = {
+      id: "workflow-image",
+      defaultModel: "workflow",
+      isConfigured: () => false,
+    };
+
+    expect(
+      isCapabilityProviderConfigured({
+        providers: [provider],
+        provider,
+        cfg,
+      }),
+    ).toBe(false);
+    expect(
+      resolveCapabilityModelConfigForTool({
+        cfg,
+        providers: [provider],
+      }),
+    ).toBeNull();
+  });
+
   it("allows generation tools for runtime providers configured without auth", () => {
     expect(
       hasGenerationToolAvailability({

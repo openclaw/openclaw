@@ -9,6 +9,12 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import { isRecord } from "../shared/record-coerce.js";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+  uniqueValues,
+} from "../shared/string-normalization.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   type HookContext,
@@ -370,10 +376,6 @@ const sessionCatalogs =
   globalToolSearchState[SESSION_CATALOGS_KEY] ??
   (globalToolSearchState[SESSION_CATALOGS_KEY] = new Map<string, ToolSearchCatalogSession>());
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
   const toolSearch = tools?.toolSearch;
@@ -450,7 +452,7 @@ function sessionCatalogKeys(input: {
   if (input.agentId?.trim()) {
     keys.push(`agent:${input.agentId.trim()}`);
   }
-  return [...new Set(keys)];
+  return uniqueStrings(keys);
 }
 
 function sessionCatalogKey(input: {
@@ -802,7 +804,7 @@ export function registerToolSearchCatalog(params: {
     byId.set(entry.name, entry);
   }
   const next = {
-    entries: [...new Set(byId.values())].toSorted((a, b) => a.id.localeCompare(b.id)),
+    entries: uniqueValues(byId.values()).toSorted((a, b) => a.id.localeCompare(b.id)),
     searchCount: prior?.searchCount ?? 0,
     describeCount: prior?.describeCount ?? 0,
     callCount: prior?.callCount ?? 0,
@@ -850,7 +852,7 @@ function resolveCatalog(ctx: ToolSearchToolContext): ToolSearchCatalogSession {
   if (ctx.runId?.trim()) {
     throw new ToolInputError("Tool Search catalog is unavailable for this run.");
   }
-  const uniqueCatalogs = [...new Set(sessionCatalogs.values())];
+  const uniqueCatalogs = uniqueValues(sessionCatalogs.values());
   if (uniqueCatalogs.length === 1) {
     const catalog = uniqueCatalogs[0];
     if (catalog) {
@@ -879,11 +881,7 @@ function describeEntry(entry: ToolSearchCatalogEntry) {
 }
 
 function tokenize(input: string): string[] {
-  return input
-    .toLowerCase()
-    .split(/[^a-z0-9_./:-]+/u)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(input.toLowerCase().split(/[^a-z0-9_./:-]+/u));
 }
 
 function scoreEntry(entry: ToolSearchCatalogEntry, terms: string[]): number {
@@ -991,7 +989,7 @@ function sanitizeToolCallIdPart(value: string): string {
   return safe || "call";
 }
 
-class ToolSearchRuntime {
+export class ToolSearchRuntime {
   private callSequence = 0;
 
   constructor(
@@ -1010,6 +1008,11 @@ class ToolSearchRuntime {
       .toSorted((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id))
       .slice(0, limit)
       .map((hit) => compactEntry(hit.entry));
+  };
+
+  all = () => {
+    const catalog = resolveCatalog(this.ctx);
+    return catalog.entries.map((entry) => compactEntry(entry));
   };
 
   describe = async (id: string) => {
@@ -1060,6 +1063,97 @@ class ToolSearchRuntime {
   telemetry() {
     return getTelemetry(resolveCatalog(this.ctx));
   }
+}
+
+export function applyToolCatalogCompaction(params: {
+  tools: AnyAgentTool[];
+  enabled: boolean;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+  runId?: string;
+  catalogRef?: ToolSearchCatalogRef;
+  toolHookContext?: HookContext;
+  isVisibleControlTool: (tool: AnyAgentTool) => boolean;
+  shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
+}): {
+  tools: AnyAgentTool[];
+  compacted: boolean;
+  catalogToolCount: number;
+  catalogRegistered: boolean;
+} {
+  if (!params.enabled) {
+    return { tools: params.tools, compacted: false, catalogToolCount: 0, catalogRegistered: false };
+  }
+  const hasControlTool = params.tools.some((tool) => params.isVisibleControlTool(tool));
+  const key = sessionCatalogKey(params);
+  if (!hasControlTool || (!key && !params.catalogRef)) {
+    return {
+      tools: params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)),
+      compacted: false,
+      catalogToolCount: 0,
+      catalogRegistered: false,
+    };
+  }
+
+  const visible: AnyAgentTool[] = [];
+  const catalog: ToolSearchCatalogEntry[] = [];
+  const shouldCatalog = params.shouldCatalogTool ?? shouldCatalogTool;
+  for (const tool of params.tools) {
+    if (params.isVisibleControlTool(tool)) {
+      visible.push(tool);
+      continue;
+    }
+    if (shouldCatalog(tool)) {
+      catalog.push(toCatalogEntry(tool, undefined, params.toolHookContext));
+      continue;
+    }
+    visible.push(tool);
+  }
+  registerToolSearchCatalog({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    runId: params.runId,
+    catalogRef: params.catalogRef,
+    entries: catalog,
+    append: false,
+  });
+  return {
+    tools: visible,
+    compacted: catalog.length > 0,
+    catalogToolCount: catalog.length,
+    catalogRegistered: true,
+  };
+}
+
+export function addClientToolsToToolCatalog(params: {
+  tools: ToolDefinition[];
+  enabled: boolean;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+  runId?: string;
+  catalogRef?: ToolSearchCatalogRef;
+}): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
+  const key = sessionCatalogKey(params);
+  if (!params.enabled || (!key && !params.catalogRef)) {
+    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
+  }
+  const existing = params.catalogRef?.current ?? (key ? sessionCatalogs.get(key) : undefined);
+  if (!existing) {
+    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
+  }
+  registerToolSearchCatalog({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    runId: params.runId,
+    catalogRef: params.catalogRef,
+    entries: params.tools.map((tool) => toCatalogEntry(tool, "client")),
+    append: true,
+  });
+  return { tools: [], compacted: params.tools.length > 0, catalogToolCount: params.tools.length };
 }
 
 function toJsonSafe(value: unknown): unknown {
@@ -1408,7 +1502,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
   ];
 }
 
-export const __testing = {
+export const testing = {
   sessionCatalogs,
   resolveToolSearchConfig,
   isToolSearchCodeModeSupported,
@@ -1418,3 +1512,4 @@ export const __testing = {
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,
 };
+export { testing as __testing };

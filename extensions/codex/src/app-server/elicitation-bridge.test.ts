@@ -13,6 +13,22 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => (
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
+function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
+  return mock.mock.calls.at(index);
+}
+
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0) {
+  return mockCall(mock, index)?.at(argIndex);
+}
+
+function gatewayToolCall(index = 0) {
+  return mockCall(mockCallGatewayTool, index);
+}
+
+function gatewayToolArg(index = 0, argIndex = 0) {
+  return mockCallArg(mockCallGatewayTool, index, argIndex);
+}
+
 function createParams(): EmbeddedRunAttemptParams {
   return {
     sessionKey: "agent:main:session-1",
@@ -70,6 +86,24 @@ function buildCurrentCodexApprovalElicitation() {
       type: "object",
       properties: {},
     },
+  };
+}
+
+function buildComputerUseApprovalElicitation(overrides: Record<string, unknown> = {}) {
+  return {
+    threadId: "thread-1",
+    turnId: "turn-1",
+    serverName: "computer-use",
+    mode: "form",
+    message: "Allow Codex to use Notes?",
+    _meta: {
+      persist: ["always"],
+    },
+    requestedSchema: {
+      type: "object",
+      properties: {},
+    },
+    ...overrides,
   };
 }
 
@@ -262,16 +296,221 @@ describe("Codex app-server elicitation bridge", () => {
       content: null,
       _meta: null,
     });
-    const approvalRequestCall = mockCallGatewayTool.mock.calls[0];
+    const approvalRequestCall = gatewayToolCall();
     expect(approvalRequestCall?.[0]).toBe("plugin.approval.request");
     expect(approvalRequestCall?.[1]).toStrictEqual({ timeoutMs: 130_000 });
     expect(approvalRequestCall?.[3]).toStrictEqual({ expectFinal: false });
-    const approvalRequest = approvalRequestCall?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       description: string;
     };
     expect(approvalRequest.description).toContain("App: GitHub");
     expect(approvalRequest.description).toContain("Tool: Create pull request");
     expect(approvalRequest.description).toContain("Repository: openclaw/openclaw");
+  });
+
+  it("routes Computer Use app approvals through plugin approvals", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use", decision: "allow-once" });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildComputerUseApprovalElicitation(),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
+      computerUseMcpServerName: "computer-use",
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("maps Computer Use allow-always decisions onto persistent metadata", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use-always", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-computer-use-always",
+        decision: "allow-always",
+      });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildComputerUseApprovalElicitation(),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
+      computerUseMcpServerName: "computer-use",
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: {
+        persist: "always",
+      },
+    });
+  });
+
+  it("does not handle non-Computer Use elicitations without approval metadata", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildComputerUseApprovalElicitation({ serverName: "desktop-control" }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
+      computerUseMcpServerName: "computer-use",
+    });
+
+    expect(result).toBeUndefined();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("routes configured custom Computer Use server names through plugin approvals", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-custom-computer-use", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-custom-computer-use",
+        decision: "allow-once",
+      });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildComputerUseApprovalElicitation({ serverName: "desktop-control" }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
+      computerUseMcpServerName: "desktop-control",
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
+    const approvalRequest = gatewayToolArg(0, 2) as { description: string };
+    expect(approvalRequest.description).toContain("MCP server: desktop-control");
+  });
+
+  it("declines approved Computer Use app approvals with unmappable non-empty schemas", async () => {
+    const warnSpy = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use-fields", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use-fields", decision: "allow-once" });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildComputerUseApprovalElicitation({
+        requestedSchema: {
+          type: "object",
+          properties: {
+            appName: {
+              type: "string",
+              title: "App name",
+            },
+          },
+          required: ["appName"],
+        },
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
+      computerUseMcpServerName: "computer-use",
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      "codex MCP approval elicitation approved without a mappable response",
+      expect.objectContaining({
+        fields: ["appName"],
+        outcome: "approved-once",
+      }),
+    );
+  });
+
+  it("normalizes missing Computer Use schemas to the empty object schema", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use-schema", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-computer-use-schema",
+        decision: "allow-once",
+      });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildComputerUseApprovalElicitation({
+        requestedSchema: "not-a-schema",
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
+      computerUseMcpServerName: "computer-use",
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
+  });
+
+  it("does not bridge Computer Use elicitations outside form mode", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildComputerUseApprovalElicitation({
+        mode: "notification",
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
+      computerUseMcpServerName: "computer-use",
+    });
+
+    expect(result).toBeUndefined();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a Computer Use approval title and sanitizes server names", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use-title", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use-title", decision: "allow-once" });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildComputerUseApprovalElicitation({
+        message: "\u001b[31m",
+        serverName: "computer-use\u009b31m",
+        _meta: null,
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ apps: [] }),
+      computerUseMcpServerName: "computer-use\u009b31m",
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
+    const approvalRequest = gatewayToolArg(0, 2) as {
+      title: string;
+      description: string;
+    };
+    expect(approvalRequest.title).toBe("Computer Use approval");
+    expect(approvalRequest.description).toContain("MCP server: computer-use");
+    expect(approvalRequest.description).not.toContain("\u009b");
   });
 
   it("strips control and invisible formatting from approval display text", async () => {
@@ -314,7 +553,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
     });
 
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       title: string;
       description: string;
     };
@@ -369,7 +608,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
     });
 
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       title: string;
       description: string;
     };
@@ -427,7 +666,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
     });
 
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       description: string;
     };
     expect(approvalRequest.description).toContain("- repo: openclaw/openclaw");
@@ -471,7 +710,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
     });
 
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       description: string;
     };
     expect(approvalRequest.description).toContain("payload");
@@ -504,7 +743,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
     });
 
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       description: string;
     };
     expect(approvalRequest.description).toContain("p0");
@@ -938,11 +1177,11 @@ describe("Codex app-server elicitation bridge", () => {
       },
       _meta: null,
     });
-    const approvalRequestCall = mockCallGatewayTool.mock.calls[0];
+    const approvalRequestCall = gatewayToolCall();
     expect(approvalRequestCall?.[0]).toBe("plugin.approval.request");
     expect(approvalRequestCall?.[1]).toStrictEqual({ timeoutMs: 130_000 });
     expect(approvalRequestCall?.[3]).toStrictEqual({ expectFinal: false });
-    const approvalRequest = approvalRequestCall?.[2] as {
+    const approvalRequest = gatewayToolArg(0, 2) as {
       title: string;
       description: string;
     };
@@ -1029,7 +1268,7 @@ describe("Codex app-server elicitation bridge", () => {
       content: null,
       _meta: null,
     });
-    const [warningMessage, warningDetails] = warn.mock.calls[0] ?? [];
+    const [warningMessage, warningDetails] = mockCall(warn) ?? [];
     expect(warningMessage).toBe(
       "codex MCP approval elicitation approved without a mappable response",
     );

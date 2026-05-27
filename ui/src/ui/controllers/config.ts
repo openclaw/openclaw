@@ -6,6 +6,7 @@ import { coerceFormValues } from "./config/form-coerce.ts";
 import {
   cloneConfigObject,
   removePathValue,
+  sanitizeRedactedFormForSubmit,
   serializeConfigForm,
   setPathValue,
 } from "./config/form-utils.ts";
@@ -86,6 +87,23 @@ function applyConfigSchema(state: ConfigState, res: ConfigSchemaResponse) {
   state.configSchemaVersion = res.version ?? null;
 }
 
+function asConfigRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function resolveEditableSnapshotConfig(
+  snapshot: ConfigSnapshot | null | undefined,
+): Record<string, unknown> | null {
+  return (
+    asConfigRecord(snapshot?.sourceConfig) ??
+    asConfigRecord(snapshot?.resolved) ??
+    asConfigRecord(snapshot?.config)
+  );
+}
+
 export function applyConfigSnapshot(
   state: ConfigState,
   snapshot: ConfigSnapshot,
@@ -94,29 +112,30 @@ export function applyConfigSnapshot(
   const preservePendingChanges = state.configFormDirty && options.discardPendingChanges !== true;
   const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
   state.configSnapshot = snapshot;
-  const rawAvailable = typeof snapshot.raw === "string";
+  const editableConfig = resolveEditableSnapshotConfig(snapshot);
+  const rawAvailable = typeof snapshot.raw === "string" || !!editableConfig || !!state.configForm;
   if (!rawAvailable && state.configFormMode === "raw") {
     state.configFormMode = "form";
   }
   const rawFromSnapshot: string =
     typeof snapshot.raw === "string"
       ? snapshot.raw
-      : snapshot.config && typeof snapshot.config === "object"
-        ? serializeConfigForm(snapshot.config)
+      : editableConfig
+        ? serializeConfigForm(editableConfig)
         : state.configRaw;
-  if (!preservePendingChanges || state.configFormMode === "raw") {
+  if (!preservePendingChanges) {
     state.configRaw = rawFromSnapshot;
-  } else if (state.configForm) {
+  } else if (state.configFormMode !== "raw" && state.configForm) {
     state.configRaw = serializeConfigForm(state.configForm);
-  } else {
+  } else if (state.configFormMode !== "raw") {
     state.configRaw = rawFromSnapshot;
   }
   state.configValid = typeof snapshot.valid === "boolean" ? snapshot.valid : null;
   state.configIssues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
 
   if (!preservePendingChanges) {
-    state.configForm = cloneConfigObject(snapshot.config ?? {});
-    state.configFormOriginal = cloneConfigObject(snapshot.config ?? {});
+    state.configForm = cloneConfigObject(editableConfig ?? {});
+    state.configFormOriginal = cloneConfigObject(editableConfig ?? {});
     state.configRawOriginal = rawFromSnapshot;
     state.configFormDirty = false;
     state.configDraftBaseHash = snapshot.hash ?? null;
@@ -142,9 +161,6 @@ function asJsonSchema(value: unknown): JsonSchema | null {
  * gateway's Zod validation always sees correctly typed values.
  */
 function serializeFormForSubmit(state: ConfigState): string {
-  if (state.configFormMode === "raw" && typeof state.configSnapshot?.raw !== "string") {
-    throw new Error("Raw config editing is unavailable for this snapshot. Switch to Form mode.");
-  }
   if (state.configFormMode !== "form" || !state.configForm) {
     return state.configRaw;
   }
@@ -152,7 +168,12 @@ function serializeFormForSubmit(state: ConfigState): string {
   const form = schema
     ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
     : state.configForm;
-  return serializeConfigForm(form);
+  const sanitized = sanitizeRedactedFormForSubmit(
+    form,
+    state.configFormOriginal,
+    state.configRawOriginal,
+  );
+  return serializeConfigForm(sanitized);
 }
 
 type ConfigSubmitMethod = "config.set" | "config.apply";
@@ -226,7 +247,7 @@ async function submitConfigChange(
 
 function syncConfigDraft(state: ConfigState, nextForm: Record<string, unknown>) {
   const original = cloneConfigObject(
-    state.configFormOriginal ?? state.configSnapshot?.config ?? {},
+    state.configFormOriginal ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {},
   );
   const nextRaw = serializeConfigForm(nextForm);
   const originalRaw = serializeConfigForm(original);
@@ -278,7 +299,9 @@ export async function runUpdate(state: ConfigState) {
 }
 
 function mutateConfigForm(state: ConfigState, mutate: (draft: Record<string, unknown>) => void) {
-  const base = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
+  const base = cloneConfigObject(
+    state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {},
+  );
   mutate(base);
   syncConfigDraft(state, base);
 }
@@ -367,13 +390,18 @@ export function updateConfigFormValue(
   });
 }
 
+export function updateConfigRawValue(state: ConfigState, value: string) {
+  state.configRaw = value;
+  state.configFormDirty = value !== state.configRawOriginal;
+  if (state.configFormDirty) {
+    state.configDraftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
+  } else {
+    state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
+  }
+}
+
 export function stageConfigPreset(state: ConfigState, patch: Record<string, unknown>) {
-  const snapshotConfig =
-    state.configSnapshot?.config &&
-    typeof state.configSnapshot.config === "object" &&
-    !Array.isArray(state.configSnapshot.config)
-      ? state.configSnapshot.config
-      : null;
+  const snapshotConfig = resolveEditableSnapshotConfig(state.configSnapshot);
   const baseSource = state.configForm ?? snapshotConfig;
   if (!baseSource || (!state.configForm && !state.configSnapshot?.hash)) {
     return;
@@ -387,12 +415,11 @@ export function stageConfigPreset(state: ConfigState, patch: Record<string, unkn
 }
 
 export function resetConfigPendingChanges(state: ConfigState) {
-  state.configForm = cloneConfigObject(
-    state.configFormOriginal ?? state.configSnapshot?.config ?? {},
-  );
+  const editableConfig = resolveEditableSnapshotConfig(state.configSnapshot);
+  state.configForm = cloneConfigObject(state.configFormOriginal ?? editableConfig ?? {});
   state.configRaw =
     state.configRawOriginal ??
-    serializeConfigForm(state.configFormOriginal ?? state.configSnapshot?.config ?? {});
+    serializeConfigForm(state.configFormOriginal ?? editableConfig ?? {});
   state.configFormDirty = false;
   state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
   autoAllowlistedPluginIdsByState.delete(state);
@@ -428,8 +455,7 @@ export function ensureAgentConfigEntry(state: ConfigState, agentId: string): num
   if (!normalizedAgentId) {
     return -1;
   }
-  const source =
-    state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+  const source = state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot);
   const existingIndex = findAgentConfigEntryIndex(source, normalizedAgentId);
   if (existingIndex >= 0) {
     return existingIndex;
@@ -445,8 +471,7 @@ export function stageDefaultAgentConfigEntry(state: ConfigState, agentId: string
   if (!normalizedAgentId) {
     return false;
   }
-  const source =
-    state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+  const source = state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot);
   const targetIndex = findAgentConfigEntryIndex(source, normalizedAgentId);
   if (targetIndex < 0) {
     return false;
@@ -476,9 +501,26 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
   if (!state.client || !state.connected) {
     return;
   }
+  state.lastError = null;
   try {
-    await state.client.request("config.openFile", {});
-  } catch {
+    const res = await state.client.request<{ ok: boolean; path?: string; error?: string }>(
+      "config.openFile",
+      {},
+    );
+    if (!res.ok) {
+      const errorMessage = res.error || "Failed to open config file";
+      state.lastError = errorMessage;
+      const path = res.path || state.configSnapshot?.path;
+      if (path) {
+        try {
+          await navigator.clipboard.writeText(path);
+          state.lastError += `\n\nFile path copied to clipboard: ${path}`;
+        } catch {
+          state.lastError += `\n\nFile path: ${path}`;
+        }
+      }
+    }
+  } catch (err) {
     const path = state.configSnapshot?.path;
     if (path) {
       try {
@@ -487,5 +529,6 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
         // ignore
       }
     }
+    state.lastError = String(err);
   }
 }

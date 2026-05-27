@@ -31,7 +31,7 @@ import {
   renderSessionsCard,
   renderUsageInsights,
 } from "./usage-render-overview.ts";
-import {
+import type {
   SessionLogEntry,
   SessionLogRole,
   UsageColumnId,
@@ -421,11 +421,6 @@ export function renderUsage(props: UsageProps) {
 
   return html`
     <div class="usage-page">
-      <section class="usage-page-header">
-        <div class="usage-page-title">${t("tabs.usage")}</div>
-        <div class="usage-page-subtitle">${t("usage.page.subtitle")}</div>
-      </section>
-
       <section class="card usage-header ${display.headerPinned ? "pinned" : ""}">
         <div class="usage-header-row">
           <div class="usage-header-title">

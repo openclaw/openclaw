@@ -15,10 +15,15 @@ import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-hel
 const runtime = createTestRuntime();
 let minimalChannelsCommandRegistry: ReturnType<typeof createTestRegistry>;
 const createClackPrompterMock = vi.hoisted(() => vi.fn());
+const catalogMocks = vi.hoisted(() => ({
+  listTrustedChannelPluginCatalogEntries: vi.fn(() => []),
+}));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: createClackPrompterMock,
 }));
+
+vi.mock("./channel-setup/trusted-catalog.js", () => catalogMocks);
 
 type ChannelSectionConfig = {
   enabled?: boolean;
@@ -339,7 +344,7 @@ describe("channels command", () => {
   // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe written config shape.
   function getWrittenConfig<T>(): T {
     expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const [config] = configMocks.writeConfigFile.mock.calls.at(0) ?? [];
+    const [config] = configMocks.writeConfigFile.mock.calls[0] ?? [];
     if (config === undefined) {
       throw new Error("expected written channel config");
     }

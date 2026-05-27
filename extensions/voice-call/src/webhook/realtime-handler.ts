@@ -5,10 +5,15 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
+  createRealtimeVoiceForcedConsultCoordinator,
   createTalkSessionController,
   createRealtimeVoiceBridgeSession,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  readRealtimeVoiceConsultQuestion,
+  readSpeakableRealtimeVoiceToolResult,
   recordTalkObservabilityEvent,
+  type RealtimeVoiceForcedConsultCoordinator,
+  type RealtimeVoiceForcedConsultHandle,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
@@ -16,16 +21,19 @@ import {
   type TalkEventInput,
   type TalkSessionController,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import WebSocket, { WebSocketServer } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
+import { RealtimeAudioPacer, RealtimeMulawSpeechStartDetector } from "./realtime-audio-pacer.js";
 import {
-  RealtimeMulawSpeechStartDetector,
-  RealtimeTwilioAudioPacer,
-} from "./realtime-audio-pacer.js";
+  type StreamFrameAdapter,
+  TelnyxStreamFrameAdapter,
+  TwilioStreamFrameAdapter,
+} from "./stream-frame-adapter.js";
 
 export type ToolHandlerContext = {
   partialUserTranscript?: string;
@@ -43,11 +51,13 @@ const MAX_REALTIME_WS_BUFFERED_BYTES = 1024 * 1024;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
+const FORCED_CONSULT_REASON = "provider_final_transcript_without_openclaw_agent_consult";
 const CONSULT_TRANSCRIPT_SETTLE_MS = 350;
 const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
 const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
 const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
 const BARGE_IN_REQUIRED_LOUD_CHUNKS = 2;
+const logger = createSubsystemLogger("voice-call/realtime");
 
 function normalizePath(pathname: string): string {
   const trimmed = pathname.trim();
@@ -76,21 +86,6 @@ function buildGreetingInstructions(
     : `${intro} "${trimmedGreeting}"`;
 }
 
-function readSpeakableToolResultText(result: unknown): string | undefined {
-  if (typeof result === "string") {
-    return result.trim() || undefined;
-  }
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    return undefined;
-  }
-  const text = (result as { text?: unknown }).text;
-  if (typeof text === "string" && text.trim()) {
-    return text.trim();
-  }
-  const output = (result as { output?: unknown }).output;
-  return typeof output === "string" && output.trim() ? output.trim() : undefined;
-}
-
 function readConsultArgText(args: unknown, key: string): string | undefined {
   if (!args || typeof args !== "object" || Array.isArray(args)) {
     return undefined;
@@ -100,12 +95,7 @@ function readConsultArgText(args: unknown, key: string): string | undefined {
 }
 
 function readConsultQuestionText(args: unknown): string | undefined {
-  return (
-    readConsultArgText(args, "question") ??
-    readConsultArgText(args, "prompt") ??
-    readConsultArgText(args, "query") ??
-    readConsultArgText(args, "task")
-  );
+  return readRealtimeVoiceConsultQuestion(args);
 }
 
 function normalizeTranscriptText(text: string): string {
@@ -222,6 +212,21 @@ type PendingStreamToken = {
   from?: string;
   to?: string;
   direction?: "inbound" | "outbound";
+  providerName?: "twilio" | "telnyx";
+  callId?: string;
+};
+
+export type StreamSessionRequest = {
+  providerName?: "twilio" | "telnyx";
+  callId?: string;
+  from?: string;
+  to?: string;
+  direction?: "inbound" | "outbound";
+};
+
+export type StreamSession = {
+  token: string;
+  streamUrl: string;
 };
 
 type CallRegistration = {
@@ -295,10 +300,11 @@ export class RealtimeCallHandler {
     string,
     ReturnType<typeof setTimeout>
   >();
-  private readonly forcedConsultTimersByCallId = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly forcedConsultInFlightByCallId = new Set<string>();
+  private readonly forcedConsultCoordinatorsByCallId = new Map<
+    string,
+    RealtimeVoiceForcedConsultCoordinator
+  >();
   private readonly forcedConsultsByCallId = new Map<string, ForcedConsultState>();
-  private readonly lastProviderConsultAtByCallId = new Map<string, number>();
   private readonly nativeConsultsInFlightByCallId = new Map<string, NativeConsultState>();
   private publicOrigin: string | null = null;
   private publicPathPrefix = "";
@@ -332,25 +338,32 @@ export class RealtimeCallHandler {
   }
 
   buildTwiMLPayload(req: http.IncomingMessage, params?: URLSearchParams): WebhookResponsePayload {
-    const host = this.publicOrigin || req.headers.host || DEFAULT_HOST;
     const rawDirection = params?.get("Direction");
-    const token = this.issueStreamToken({
-      from: params?.get("From") ?? undefined,
-      to: params?.get("To") ?? undefined,
-      direction: rawDirection?.startsWith("outbound") ? "outbound" : "inbound",
-    });
-    const wsUrl = `wss://${host}${this.getStreamPathPattern()}/${token}`;
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+    const previousOrigin = this.publicOrigin;
+    if (!previousOrigin) {
+      this.publicOrigin = req.headers.host ?? DEFAULT_HOST;
+    }
+    try {
+      const { streamUrl } = this.issueStreamSession({
+        providerName: "twilio",
+        from: params?.get("From") ?? undefined,
+        to: params?.get("To") ?? undefined,
+        direction: rawDirection?.startsWith("outbound") ? "outbound" : "inbound",
+      });
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${wsUrl}" />
+    <Stream url="${streamUrl}" />
   </Connect>
 </Response>`;
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "text/xml" },
-      body: twiml,
-    };
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "text/xml" },
+        body: twiml,
+      };
+    } finally {
+      this.publicOrigin = previousOrigin;
+    }
   }
 
   handleWebSocketUpgrade(request: http.IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -362,6 +375,10 @@ export class RealtimeCallHandler {
       socket.destroy();
       return;
     }
+
+    const providerName = callerMeta.providerName ?? "twilio";
+    const adapter: StreamFrameAdapter =
+      providerName === "telnyx" ? new TelnyxStreamFrameAdapter() : new TwilioStreamFrameAdapter();
 
     const wss = new WebSocketServer({
       noServer: true,
@@ -378,18 +395,23 @@ export class RealtimeCallHandler {
 
       ws.on("message", (data: Buffer) => {
         try {
-          const msg = JSON.parse(data.toString()) as Record<string, unknown>;
-          if (!initialized && msg.event === "start") {
+          const frame = adapter.parseInbound(data.toString());
+          if (frame.kind === "ignored") {
+            return;
+          }
+          if (frame.kind === "start") {
+            if (initialized) {
+              return;
+            }
             initialized = true;
-            const startData =
-              typeof msg.start === "object" && msg.start !== null
-                ? (msg.start as Record<string, unknown>)
-                : undefined;
-            const streamSid =
-              typeof startData?.streamSid === "string" ? startData.streamSid : "unknown";
-            const callSid = typeof startData?.callSid === "string" ? startData.callSid : "unknown";
-            activeCallSid = callSid;
-            const nextBridge = this.handleCall(streamSid, callSid, ws, callerMeta);
+            activeCallSid = frame.providerCallId;
+            const nextBridge = this.handleCall(
+              frame.streamId,
+              frame.providerCallId,
+              ws,
+              callerMeta,
+              adapter,
+            );
             if (!nextBridge) {
               return;
             }
@@ -399,40 +421,36 @@ export class RealtimeCallHandler {
           if (!bridge) {
             return;
           }
-          const mediaData =
-            typeof msg.media === "object" && msg.media !== null
-              ? (msg.media as Record<string, unknown>)
-              : undefined;
-          if (msg.event === "media" && typeof mediaData?.payload === "string") {
-            const audio = Buffer.from(mediaData.payload, "base64");
+          if (frame.kind === "media") {
+            const audio = Buffer.from(frame.payloadBase64, "base64");
             bridge.sendAudio(audio);
-            const mediaTimestamp =
-              typeof mediaData.timestamp === "number"
-                ? mediaData.timestamp
-                : typeof mediaData.timestamp === "string"
-                  ? Number.parseInt(mediaData.timestamp, 10)
-                  : Number.NaN;
-            if (Number.isFinite(mediaTimestamp)) {
+            if (frame.timestampMs !== undefined) {
               if (lastMediaTimestamp !== undefined) {
-                const gapMs = mediaTimestamp - lastMediaTimestamp;
+                const gapMs = frame.timestampMs - lastMediaTimestamp;
                 const now = Date.now();
                 if ((gapMs > 120 || gapMs < 0) && now - lastMediaGapWarnAt > 5_000) {
                   lastMediaGapWarnAt = now;
                   console.warn(
-                    `[voice-call] realtime media timestamp gap providerCallId=${activeCallSid} gapMs=${gapMs} timestamp=${mediaTimestamp}`,
+                    `[voice-call] realtime media timestamp gap providerCallId=${activeCallSid} gapMs=${gapMs} timestamp=${frame.timestampMs}`,
                   );
                 }
               }
-              lastMediaTimestamp = mediaTimestamp;
-              bridge.setMediaTimestamp(mediaTimestamp);
+              lastMediaTimestamp = frame.timestampMs;
+              bridge.setMediaTimestamp(frame.timestampMs);
             }
             return;
           }
-          if (msg.event === "mark") {
+          if (frame.kind === "mark") {
             bridge.acknowledgeMark();
             return;
           }
-          if (msg.event === "stop") {
+          if (frame.kind === "error") {
+            console.error(
+              `[voice-call] realtime WS error frame providerCallId=${activeCallSid} code=${frame.code ?? "?"} title=${frame.title ?? ""} detail=${frame.detail ?? ""}`,
+            );
+            return;
+          }
+          if (frame.kind === "stop") {
             stopReceived = true;
             this.closeTelephonyBridge(activeCallSid, bridge, "completed");
           }
@@ -469,6 +487,19 @@ export class RealtimeCallHandler {
     }
   }
 
+  issueStreamSession(request: StreamSessionRequest = {}): StreamSession {
+    const token = this.issueStreamToken({
+      providerName: request.providerName ?? "twilio",
+      callId: request.callId,
+      from: request.from,
+      to: request.to,
+      direction: request.direction,
+    });
+    const host = this.publicOrigin || DEFAULT_HOST;
+    const streamUrl = `wss://${host}${this.getStreamPathPattern()}/${token}`;
+    return { token, streamUrl };
+  }
+
   private issueStreamToken(meta: Omit<PendingStreamToken, "expiry"> = {}): string {
     const token = randomUUID();
     this.pendingStreamTokens.set(token, { expiry: Date.now() + STREAM_TOKEN_TTL_MS, ...meta });
@@ -493,6 +524,8 @@ export class RealtimeCallHandler {
       from: entry.from,
       to: entry.to,
       direction: entry.direction,
+      providerName: entry.providerName,
+      callId: entry.callId,
     };
   }
 
@@ -501,6 +534,7 @@ export class RealtimeCallHandler {
     callSid: string,
     ws: WebSocket,
     callerMeta: Omit<PendingStreamToken, "expiry">,
+    adapter: StreamFrameAdapter,
   ): ActiveRealtimeVoiceBridge | null {
     const registration = this.registerCallInManager(callSid, callerMeta);
     if (!registration) {
@@ -567,7 +601,7 @@ export class RealtimeCallHandler {
       this.endCallInManager(callSid, callId, reason);
     };
 
-    const sendJson = (message: unknown): boolean => {
+    const sendString = (message: string): boolean => {
       if (ws.readyState !== WebSocket.OPEN) {
         return false;
       }
@@ -578,7 +612,7 @@ export class RealtimeCallHandler {
         ws.close(1013, "Backpressure: send buffer exceeded");
         return false;
       }
-      ws.send(JSON.stringify(message));
+      ws.send(message);
       if (ws.bufferedAmount > MAX_REALTIME_WS_BUFFERED_BYTES) {
         console.warn(
           `[voice-call] realtime outbound websocket backpressure after send callId=${callId} providerCallId=${callSid} bufferedBytes=${ws.bufferedAmount}`,
@@ -588,9 +622,13 @@ export class RealtimeCallHandler {
       }
       return true;
     };
-    const audioPacer = new RealtimeTwilioAudioPacer({
-      streamSid,
-      sendJson,
+    const audioPacer = new RealtimeAudioPacer({
+      send: sendString,
+      serializer: {
+        media: (payload) => adapter.serializeMedia(payload),
+        clear: () => adapter.serializeClear(),
+        mark: (name) => adapter.serializeMark(name),
+      },
       onBackpressure: () => {
         console.warn(
           `[voice-call] realtime paced audio backpressure callId=${callId} providerCallId=${callSid}`,
@@ -960,14 +998,19 @@ export class RealtimeCallHandler {
   }
 
   private clearForcedConsultState(callId: string): void {
-    const timer = this.forcedConsultTimersByCallId.get(callId);
-    if (timer) {
-      clearTimeout(timer);
-      this.forcedConsultTimersByCallId.delete(callId);
-    }
-    this.forcedConsultInFlightByCallId.delete(callId);
+    this.forcedConsultCoordinatorsByCallId.get(callId)?.clear();
+    this.forcedConsultCoordinatorsByCallId.delete(callId);
     this.forcedConsultsByCallId.delete(callId);
-    this.lastProviderConsultAtByCallId.delete(callId);
+  }
+
+  private forcedConsultCoordinator(callId: string): RealtimeVoiceForcedConsultCoordinator {
+    const existing = this.forcedConsultCoordinatorsByCallId.get(callId);
+    if (existing) {
+      return existing;
+    }
+    const created = createRealtimeVoiceForcedConsultCoordinator();
+    this.forcedConsultCoordinatorsByCallId.set(callId, created);
+    return created;
   }
 
   private closeTelephonyBridge(
@@ -1001,40 +1044,48 @@ export class RealtimeCallHandler {
     if (!handler) {
       return;
     }
-    const existingTimer = this.forcedConsultTimersByCallId.get(params.callId);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
+    const existingForcedConsult = this.forcedConsultsByCallId.get(params.callId);
+    if (existingForcedConsult && !existingForcedConsult.completedAt) {
+      return;
     }
-    const timer = setTimeout(() => {
-      this.forcedConsultTimersByCallId.delete(params.callId);
-      if (this.forcedConsultInFlightByCallId.has(params.callId)) {
-        return;
-      }
-      const lastProviderConsultAt = this.lastProviderConsultAtByCallId.get(params.callId) ?? 0;
-      if (Date.now() - lastProviderConsultAt < 2_000) {
+    const coordinator = this.forcedConsultCoordinator(params.callId);
+    if (coordinator.hasRecentNativeConsult(question, { allowUnknownQuestion: true })) {
+      return;
+    }
+    coordinator.clearPending();
+    const pending = coordinator.prepare(question);
+    if (!pending) {
+      return;
+    }
+    coordinator.schedule(pending, FORCED_CONSULT_FALLBACK_DELAY_MS, (handle) => {
+      const activeForcedConsult = this.forcedConsultsByCallId.get(params.callId);
+      if (activeForcedConsult && !activeForcedConsult.completedAt) {
         return;
       }
       void this.runForcedAgentConsult({
         ...params,
-        question,
+        handle,
         handler,
       });
-    }, FORCED_CONSULT_FALLBACK_DELAY_MS);
-    this.forcedConsultTimersByCallId.set(params.callId, timer);
+    });
   }
 
   private async runForcedAgentConsult(params: {
     session: ActiveRealtimeVoiceBridge;
     callId: string;
     callSid: string;
-    question: string;
+    handle: RealtimeVoiceForcedConsultHandle;
     clearAudio: () => void;
     handler: ToolHandlerFn;
   }): Promise<void> {
-    this.forcedConsultInFlightByCallId.add(params.callId);
+    const coordinator = this.forcedConsultCoordinator(params.callId);
+    coordinator.markStarted(params.handle);
     const startedAt = Date.now();
+    logger.debug(
+      `[voice-call] realtime forced agent consult reason=${FORCED_CONSULT_REASON} consultPolicy=always callId=${params.callId} providerCallId=${params.callSid} chars=${params.handle.question.length}`,
+    );
     console.log(
-      `[voice-call] realtime forced agent consult starting callId=${params.callId} providerCallId=${params.callSid} chars=${params.question.length}`,
+      `[voice-call] realtime forced agent consult starting callId=${params.callId} providerCallId=${params.callSid} chars=${params.handle.question.length}`,
     );
     params.clearAudio();
     const state: ForcedConsultState = {
@@ -1042,9 +1093,7 @@ export class RealtimeCallHandler {
       promise: Promise.resolve().then(() =>
         params.handler(
           {
-            question: params.question,
-            context:
-              "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult because consultPolicy is always.",
+            question: params.handle.question,
           },
           params.callId,
           {},
@@ -1055,7 +1104,11 @@ export class RealtimeCallHandler {
     try {
       const result = await state.promise;
       state.completedAt = Date.now();
-      const text = readSpeakableToolResultText(result);
+      coordinator.markDelivered(params.handle);
+      const text = readSpeakableRealtimeVoiceToolResult(result, {
+        keys: ["text", "output"],
+        maxChars: FORCED_CONSULT_RESULT_MAX_CHARS,
+      });
       if (!text) {
         console.warn(
           `[voice-call] realtime forced agent consult returned no speakable text callId=${params.callId} providerCallId=${params.callSid}`,
@@ -1069,16 +1122,16 @@ export class RealtimeCallHandler {
       console.log(
         `[voice-call] realtime forced agent consult completed callId=${params.callId} providerCallId=${params.callSid} elapsedMs=${Date.now() - startedAt}`,
       );
-      this.consumePartialUserTranscript(params.callId, params.question);
+      this.consumePartialUserTranscript(params.callId, params.handle.question);
     } catch (error) {
       console.warn(
         `[voice-call] realtime forced agent consult failed callId=${params.callId} providerCallId=${params.callSid} error=${formatErrorMessage(error)}`,
       );
     } finally {
-      this.forcedConsultInFlightByCallId.delete(params.callId);
       const cleanupTimer = setTimeout(() => {
         if (this.forcedConsultsByCallId.get(params.callId) === state) {
           this.forcedConsultsByCallId.delete(params.callId);
+          coordinator.remove(params.handle);
         }
       }, FORCED_CONSULT_NATIVE_DEDUPE_MS);
       cleanupTimer.unref?.();
@@ -1098,14 +1151,7 @@ export class RealtimeCallHandler {
       ...(callerMeta.to ? { to: callerMeta.to } : {}),
     };
 
-    this.manager.processEvent({
-      id: `realtime-initiated-${callSid}`,
-      callId: callSid,
-      type: "call.initiated",
-      ...baseFields,
-    });
-
-    const callRecord = this.manager.getCallByProviderCallId(callSid);
+    const callRecord = this.resolveRealtimeCall(callSid, callerMeta, baseFields);
     if (!callRecord) {
       return null;
     }
@@ -1120,7 +1166,7 @@ export class RealtimeCallHandler {
 
     this.manager.processEvent({
       id: `realtime-answered-${callSid}`,
-      callId: callSid,
+      callId: callRecord.callId,
       type: "call.answered",
       ...baseFields,
     });
@@ -1132,6 +1178,32 @@ export class RealtimeCallHandler {
         initialGreeting,
       ),
     };
+  }
+
+  private resolveRealtimeCall(
+    callSid: string,
+    callerMeta: Omit<PendingStreamToken, "expiry">,
+    baseFields: {
+      providerCallId: string;
+      timestamp: number;
+      direction: "inbound" | "outbound";
+      from?: string;
+      to?: string;
+    },
+  ): CallRecord | null {
+    if (callerMeta.callId) {
+      const call = this.manager.getCall(callerMeta.callId);
+      return call?.providerCallId === callSid ? call : null;
+    }
+
+    this.manager.processEvent({
+      id: `realtime-initiated-${callSid}`,
+      callId: callSid,
+      type: "call.initiated",
+      ...baseFields,
+    });
+
+    return this.manager.getCallByProviderCallId(callSid) ?? null;
   }
 
   private extractInitialGreeting(call: CallRecord): string | undefined {
@@ -1201,15 +1273,17 @@ export class RealtimeCallHandler {
       }
     };
     if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      this.lastProviderConsultAtByCallId.set(callId, Date.now());
-      const timer = this.forcedConsultTimersByCallId.get(callId);
-      if (timer) {
-        clearTimeout(timer);
-        this.forcedConsultTimersByCallId.delete(callId);
+      const coordinator = this.forcedConsultCoordinator(callId);
+      const forcedMatch = coordinator.recordNativeConsult(args, bridgeCallId);
+      if (forcedMatch.kind === "none") {
+        const pending = coordinator.consumePending();
+        if (pending) {
+          coordinator.remove(pending);
+        }
       }
       const forcedConsult = this.forcedConsultsByCallId.get(callId);
       if (forcedConsult) {
-        if (forcedConsult.completedAt) {
+        if (forcedConsult.completedAt || forcedMatch.kind === "already_delivered") {
           submitFinalToolResult({
             status: "already_delivered",
             message: "OpenClaw already delivered this consult result internally. Do not repeat it.",

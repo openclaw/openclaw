@@ -346,6 +346,12 @@ export const zh_TW: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -354,6 +360,8 @@ export const zh_TW: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -385,6 +393,7 @@ export const zh_TW: TranslationMap = {
   },
   tabs: {
     agents: "代理",
+    activity: "Activity",
     overview: "概覽",
     channels: "頻道",
     instances: "實例",
@@ -406,6 +415,7 @@ export const zh_TW: TranslationMap = {
   },
   subtitles: {
     agents: "工作區、工具、身份。",
+    activity: "Browser-local tool activity summaries.",
     overview: "狀態、入口點、健康。",
     channels: "頻道和設置。",
     instances: "已連接客戶端和節點。",
@@ -424,6 +434,42 @@ export const zh_TW: TranslationMap = {
     debug: "快照、事件、RPC。",
     logs: "實時網關日誌。",
     dreams: "睡眠期間的記憶整合。",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "Search",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "工具",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "清除",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "執行",
+    session: "工作階段",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "執行中",
+      done: "完成",
+      error: "錯誤",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -683,9 +729,6 @@ export const zh_TW: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "查看 token 流向、工作階段何時飆升，以及成本由何而來。",
-    },
     common: {
       emptyValue: "—",
       unknown: "未知",
@@ -1009,6 +1052,10 @@ export const zh_TW: TranslationMap = {
     settings: "聊天設定",
     thinkingToggle: "切換助手思考/工作輸出",
     toolCallsToggle: "切換工具呼叫與工具結果",
+    autoScrollMode: "自動捲動模式",
+    autoScrollAlways: "一律",
+    autoScrollNearBottom: "接近底部",
+    autoScrollOff: "關閉",
     focusToggle: "切換專注模式 (隱藏側邊欄 + 頁面頁眉)",
     hideCronSessions: "隱藏定時任務會話",
     showCronSessions: "顯示定時任務會話",
@@ -1052,11 +1099,16 @@ export const zh_TW: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "仍在聆聽",
+      talkTranscript: "語音逐字稿",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "按代理篩選會話",
       session: "Chat session",
+      sessionSearch: "搜尋工作階段",
+      clearSessionSearch: "清除工作階段搜尋",
+      loadMoreSessions: "載入更多工作階段",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1168,6 +1220,9 @@ export const zh_TW: TranslationMap = {
       ascending: "升序",
       descending: "降序",
       reset: "重設",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "沒有符合的工作。",
       loading: "載入中...",
       loadMore: "載入更多工作",
@@ -1203,6 +1258,7 @@ export const zh_TW: TranslationMap = {
     form: {
       editJob: "編輯工作",
       newJob: "新增工作",
+      advancedJob: "Advanced job",
       updateSubtitle: "更新所選的排程工作。",
       createSubtitle: "建立排程喚醒或 Agent 執行。",
       required: "必填",

@@ -1,6 +1,7 @@
 import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
+import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug } from "../monitor/allow-list.js";
@@ -10,6 +11,8 @@ import type { VoiceSessionEntry } from "./session.js";
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
 export const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
+
+const logger = createSubsystemLogger("discord/voice");
 
 export type DiscordVoiceIngressContext = {
   extraSystemPrompt?: string;
@@ -21,6 +24,42 @@ export type DiscordVoiceAgentTurnResult = {
   context: DiscordVoiceIngressContext;
   text: string;
 };
+
+function summarizeAgentTurnPayloads(payloads: readonly unknown[]): string {
+  let textPayloads = 0;
+  let nonEmptyTextPayloads = 0;
+  let reasoningPayloads = 0;
+  let errorPayloads = 0;
+  let mediaPayloads = 0;
+
+  for (const payload of payloads) {
+    if (!payload || typeof payload !== "object") {
+      continue;
+    }
+    const record = payload as Record<string, unknown>;
+    const text = record.text;
+    if (typeof text === "string") {
+      textPayloads += 1;
+      if (text.trim()) {
+        nonEmptyTextPayloads += 1;
+      }
+    }
+    if (record.isReasoning === true) {
+      reasoningPayloads += 1;
+    }
+    if (record.isError === true) {
+      errorPayloads += 1;
+    }
+    if (
+      typeof record.mediaUrl === "string" ||
+      (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0)
+    ) {
+      mediaPayloads += 1;
+    }
+  }
+
+  return `payloadCount=${payloads.length} textPayloads=${textPayloads} nonEmptyTextPayloads=${nonEmptyTextPayloads} reasoningPayloads=${reasoningPayloads} errorPayloads=${errorPayloads} mediaPayloads=${mediaPayloads}`;
+}
 
 export async function resolveDiscordVoiceIngressContext(params: {
   entry: VoiceSessionEntry;
@@ -100,7 +139,6 @@ export async function runDiscordVoiceAgentTurn(params: {
       messageChannel: "discord",
       messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
       extraSystemPrompt: context.extraSystemPrompt,
-      senderIsOwner: context.senderIsOwner,
       allowModelOverride: Boolean(voiceModel),
       model: voiceModel,
       toolsAllow: params.toolsAllow,
@@ -108,12 +146,45 @@ export async function runDiscordVoiceAgentTurn(params: {
     },
     params.runtime,
   );
+  const payloads = result.payloads ?? [];
+  const text = payloads
+    .map((payload) => payload.text)
+    .filter((entry) => typeof entry === "string" && entry.trim())
+    .join("\n")
+    .trim();
+  if (!text) {
+    logger.info(
+      `discord voice: agent turn produced no speakable payloads guild=${params.entry.guildId} channel=${params.entry.channelId} voiceSession=${params.entry.voiceSessionKey} supervisorSession=${params.entry.route.sessionKey} agent=${params.entry.route.agentId} user=${params.userId} ${summarizeAgentTurnPayloads(payloads)}`,
+    );
+  }
   return {
     context,
-    text: (result.payloads ?? [])
-      .map((payload) => payload.text)
-      .filter((text) => typeof text === "string" && text.trim())
-      .join("\n")
-      .trim(),
+    text,
   };
+}
+
+export async function resolveDiscordVoiceRealtimeBootstrapContext(params: {
+  entry: VoiceSessionEntry;
+  cfg: OpenClawConfig;
+  discordConfig: DiscordAccountConfig;
+}): Promise<string | undefined> {
+  const realtimeConfig = params.discordConfig.voice?.realtime;
+  const files = realtimeConfig?.bootstrapContextFiles;
+  if (files?.length === 0) {
+    return undefined;
+  }
+  try {
+    return await resolveRealtimeBootstrapContextInstructions({
+      config: params.cfg,
+      agentId: params.entry.route.agentId,
+      sessionKey: params.entry.route.sessionKey,
+      files,
+      warn: (message) => logger.warn(`discord voice: realtime bootstrap context: ${message}`),
+    });
+  } catch (error) {
+    logger.warn(
+      `discord voice: realtime bootstrap context unavailable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
 }

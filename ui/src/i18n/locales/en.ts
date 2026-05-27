@@ -346,6 +346,12 @@ export const en: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -354,6 +360,8 @@ export const en: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -385,6 +393,7 @@ export const en: TranslationMap = {
   },
   tabs: {
     agents: "Agents",
+    activity: "Activity",
     overview: "Overview",
     channels: "Channels",
     instances: "Instances",
@@ -406,6 +415,7 @@ export const en: TranslationMap = {
   },
   subtitles: {
     agents: "Workspaces, tools, identities.",
+    activity: "Browser-local tool activity summaries.",
     overview: "Status, entry points, health.",
     channels: "Channels and settings.",
     instances: "Connected clients and nodes.",
@@ -424,6 +434,42 @@ export const en: TranslationMap = {
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",
     dreams: "Memory dreaming, consolidation, and reflection.",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "Search",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "Tool",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "Clear",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "Run",
+    session: "Session",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "Running",
+      done: "Done",
+      error: "Error",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -688,9 +734,6 @@ export const en: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "See where tokens go, when sessions spike, and what drives cost.",
-    },
     common: {
       emptyValue: "—",
       unknown: "unknown",
@@ -1032,6 +1075,10 @@ export const en: TranslationMap = {
     settings: "Chat settings",
     thinkingToggle: "Toggle assistant thinking/working output",
     toolCallsToggle: "Toggle tool calls and tool results",
+    autoScrollMode: "Auto-scroll mode",
+    autoScrollAlways: "Always",
+    autoScrollNearBottom: "Near bottom",
+    autoScrollOff: "Off",
     focusToggle: "Toggle focus mode (hide sidebar + page header)",
     hideCronSessions: "Hide cron sessions",
     showCronSessions: "Show cron sessions",
@@ -1075,11 +1122,16 @@ export const en: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "Still listening",
+      talkTranscript: "Talk transcript",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "Filter sessions by agent",
       session: "Chat session",
+      sessionSearch: "Search sessions",
+      clearSessionSearch: "Clear session search",
+      loadMoreSessions: "Load more sessions",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1162,7 +1214,7 @@ export const en: TranslationMap = {
       whenHint: "Pick a schedule. You can fine-tune it later.",
       howHeading: "How should it work?",
       howHint: "Choose how results are delivered.",
-      title: "New Automation",
+      title: "New Cron Job",
     },
     summary: {
       enabled: "Enabled",
@@ -1191,6 +1243,9 @@ export const en: TranslationMap = {
       ascending: "Ascending",
       descending: "Descending",
       reset: "Reset",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "No matching jobs.",
       loading: "Loading...",
       loadMore: "Load more jobs",
@@ -1226,6 +1281,7 @@ export const en: TranslationMap = {
     form: {
       editJob: "Edit Job",
       newJob: "New Job",
+      advancedJob: "Advanced job",
       updateSubtitle: "Update the selected scheduled job.",
       createSubtitle: "Create a scheduled wakeup or agent run.",
       required: "Required",

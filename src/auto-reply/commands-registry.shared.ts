@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -51,7 +52,9 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
   return {
     key: command.key,
     nativeName: command.nativeName,
-    nativeAliases: command.nativeAliases?.map((alias) => alias.trim()).filter(Boolean),
+    nativeAliases: command.nativeAliases
+      ? normalizeStringEntries(command.nativeAliases)
+      : undefined,
     description: command.description,
     acceptsArgs,
     args: command.args,
@@ -400,16 +403,16 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "subagents",
       nativeName: "subagents",
-      description: "List, kill, log, spawn, or steer subagent runs for this session.",
+      description: "Inspect subagent runs for this session.",
       textAlias: "/subagents",
       category: "management",
       tier: "standard",
       args: [
         {
           name: "action",
-          description: "list | kill | log | info | send | steer | spawn",
+          description: "list | log | info",
           type: "string",
-          choices: ["list", "kill", "log", "info", "send", "steer", "spawn"],
+          choices: ["list", "log", "info"],
         },
         {
           name: "target",
@@ -498,22 +501,6 @@ export function buildBuiltinChatCommands(
       textAlias: "/agents",
       category: "management",
       tier: "standard",
-    }),
-    defineChatCommand({
-      key: "kill",
-      nativeName: "kill",
-      description: "Kill a running subagent (or all).",
-      textAlias: "/kill",
-      category: "management",
-      tier: "standard",
-      args: [
-        {
-          name: "target",
-          description: "Label, run id, index, or all",
-          type: "string",
-        },
-      ],
-      argsMenu: "auto",
     }),
     defineChatCommand({
       key: "steer",
@@ -916,7 +903,7 @@ export function buildBuiltinChatCommands(
           name: "mode",
           description: "queue mode",
           type: "string",
-          choices: ["steer", "queue", "interrupt", "followup", "collect", "steer-backlog"],
+          choices: ["steer", "followup", "collect", "interrupt"],
         },
         {
           name: "debounce",

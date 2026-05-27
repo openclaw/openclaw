@@ -90,7 +90,7 @@ let prepareProviderDynamicModel: typeof import("./provider-runtime.js").prepareP
 let prepareProviderRuntimeAuth: typeof import("./provider-runtime.js").prepareProviderRuntimeAuth;
 let refreshProviderOAuthCredentialWithPlugin: typeof import("./provider-runtime.js").refreshProviderOAuthCredentialWithPlugin;
 let resolveProviderRuntimePlugin: typeof import("./provider-runtime.js").resolveProviderRuntimePlugin;
-let providerRuntimeTesting: typeof import("./provider-runtime.js").__testing;
+let providerRuntimeTesting: typeof import("./provider-runtime.js").testing;
 let runProviderDynamicModel: typeof import("./provider-runtime.js").runProviderDynamicModel;
 let validateProviderReplayTurnsWithPlugin: typeof import("./provider-runtime.js").validateProviderReplayTurnsWithPlugin;
 let wrapProviderStreamFn: typeof import("./provider-runtime.js").wrapProviderStreamFn;
@@ -169,6 +169,18 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value;
 }
 
+function firstMockArg(mock: { mock: { calls: unknown[][] } }): unknown {
+  return mock.mock.calls[0]?.[0];
+}
+
+function firstMockStringArg(mock: { mock: { calls: unknown[][] } }, label: string): string {
+  const value = firstMockArg(mock);
+  if (typeof value !== "string") {
+    throw new Error(`Expected ${label} to be a string`);
+  }
+  return value;
+}
+
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
     expect(record[key]).toEqual(value);
@@ -184,7 +196,8 @@ function expectObjectOrArrayFields(value: unknown, fields: Record<string, unknow
 }
 
 function getLastResolvePluginProvidersParams() {
-  return requireRecord(resolvePluginProvidersMock.mock.calls.at(-1)?.[0], "provider load params");
+  const calls = resolvePluginProvidersMock.mock.calls;
+  return requireRecord(calls[calls.length - 1]?.[0], "provider load params");
 }
 
 function expectProviderRuntimePluginLoad(params: { provider: string; expectedPluginId?: string }) {
@@ -343,7 +356,7 @@ describe("provider-runtime", () => {
       prepareProviderRuntimeAuth,
       refreshProviderOAuthCredentialWithPlugin,
       resolveProviderRuntimePlugin,
-      __testing: providerRuntimeTesting,
+      testing: providerRuntimeTesting,
       runProviderDynamicModel,
       validateProviderReplayTurnsWithPlugin,
       wrapProviderStreamFn,
@@ -354,6 +367,7 @@ describe("provider-runtime", () => {
 
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
+    providerRuntimeTesting.clearProviderRuntimePluginCacheForTest();
     providerRuntimeTesting.resetExternalAuthFallbackWarningCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
@@ -472,6 +486,45 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
+  it("uses loaded stream hooks without loading runtime plugins when requested", () => {
+    const createStreamFn = vi.fn(() => vi.fn());
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+      createStreamFn,
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: DEMO_PROVIDER_ID,
+      provider,
+      source: "test",
+    });
+    setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
+
+    expect(
+      resolveProviderStreamFn({
+        provider: DEMO_PROVIDER_ID,
+        workspaceDir: "/tmp/workspace",
+        allowRuntimePluginLoad: false,
+        context: createDemoResolvedModelContext({}),
+      }),
+    ).toBeTypeOf("function");
+    expect(createStreamFn).toHaveBeenCalledOnce();
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("does not load runtime plugins for stream hooks when loading is disabled", () => {
+    expect(
+      resolveProviderStreamFn({
+        provider: DEMO_PROVIDER_ID,
+        allowRuntimePluginLoad: false,
+        context: createDemoResolvedModelContext({}),
+      }),
+    ).toBeUndefined();
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
   it("uses current provider-ref owner plugin config for provider hooks", () => {
     const provider: ProviderPlugin = {
       id: DEMO_PROVIDER_ID,
@@ -583,6 +636,88 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not reuse default runtime provider cache entries across active workspaces", () => {
+    const firstProvider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo one",
+      auth: [],
+    };
+    const secondProvider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo two",
+      auth: [],
+    };
+
+    setActivePluginRegistry(createEmptyPluginRegistry(), "workspace-one", "default", "/tmp/one");
+    resolvePluginProvidersMock.mockReturnValueOnce([firstProvider]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(firstProvider);
+
+    setActivePluginRegistry(createEmptyPluginRegistry(), "workspace-two", "default", "/tmp/two");
+    resolvePluginProvidersMock.mockReturnValueOnce([secondProvider]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(secondProvider);
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse default runtime provider cache entries across same-workspace reloads", () => {
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+    };
+
+    setActivePluginRegistry(createEmptyPluginRegistry(), "workspace-one", "default", "/tmp/work");
+    resolvePluginProvidersMock.mockReturnValueOnce([provider]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(provider);
+
+    setActivePluginRegistry(createEmptyPluginRegistry(), "workspace-two", "default", "/tmp/work");
+    resolvePluginProvidersMock.mockReturnValueOnce([]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBeUndefined();
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache default runtime provider misses without active registry invalidation", () => {
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+    };
+
+    resolvePluginProvidersMock.mockReturnValueOnce([]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBeUndefined();
+
+    resolvePluginProvidersMock.mockReturnValueOnce([provider]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(provider);
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache provider-scoped misses while runtime provider loading is in flight", () => {
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+    };
+    let providerScopedLoadInFlight = true;
+    isPluginProvidersLoadInFlightMock.mockImplementation(
+      (params) =>
+        Boolean(params.providerRefs?.includes(DEMO_PROVIDER_ID)) && providerScopedLoadInFlight,
+    );
+    resolvePluginProvidersMock.mockImplementation((params) =>
+      providerScopedLoadInFlight && params.providerRefs?.includes(DEMO_PROVIDER_ID)
+        ? []
+        : [provider],
+    );
+
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBeUndefined();
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+
+    providerScopedLoadInFlight = false;
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(provider);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not reuse auto-enabled runtime providers for synthetic auth fallback", () => {
     const runtimeProvider: ProviderPlugin = {
       id: DEMO_PROVIDER_ID,
@@ -669,7 +804,7 @@ describe("provider-runtime", () => {
     }
 
     expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
-    const warning = String(providerRuntimeWarnMock.mock.calls.at(0)?.[0] ?? "");
+    const warning = firstMockStringArg(providerRuntimeWarnMock, "provider warning");
     expect(warning).toContain('Provider plugin "legacy-providerWARN forged"');
     expect(warning).not.toContain("\n");
   });
@@ -870,7 +1005,7 @@ describe("provider-runtime", () => {
       },
     });
     expectRecordFields(
-      requireRecord(extraParamsForTransport.mock.calls.at(0)?.[0], "transport params context"),
+      requireRecord(firstMockArg(extraParamsForTransport), "transport params context"),
       {
         provider: DEMO_PROVIDER_ID,
         modelId: MODEL.id,
@@ -1006,10 +1141,7 @@ describe("provider-runtime", () => {
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
     expect(contribution?.stablePrefix).toContain("provider overlay");
     expect(contribution?.sectionOverrides?.execution_bias).toBe("saw built-in overlay");
-    const overlayContext = requireRecord(
-      resolvePromptOverlay.mock.calls.at(0)?.[0],
-      "overlay context",
-    );
+    const overlayContext = requireRecord(firstMockArg(resolvePromptOverlay), "overlay context");
     expect(overlayContext.provider).toBe("openrouter");
     expect(overlayContext.modelId).toBe("openai/gpt-5.4");
     expect(
@@ -1102,7 +1234,7 @@ describe("provider-runtime", () => {
         label: "Google",
         hookAliases: ["google-vertex"],
         auth: [],
-        normalizeModelId: ({ modelId }) => modelId.replace("flash-lite", "flash-lite-preview"),
+        normalizeModelId: ({ modelId }) => modelId.replace("flash-lite-preview", "flash-lite"),
       },
     ]);
 
@@ -1111,10 +1243,10 @@ describe("provider-runtime", () => {
         provider: "google-vertex",
         context: {
           provider: "google-vertex",
-          modelId: "gemini-3.1-flash-lite",
+          modelId: "gemini-3.1-flash-lite-preview",
         },
       }),
-    ).toBe("gemini-3.1-flash-lite-preview");
+    ).toBe("gemini-3.1-flash-lite");
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 

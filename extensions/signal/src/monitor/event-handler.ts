@@ -26,21 +26,22 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import {
-  buildPendingHistoryContextFromMap,
-  recordPendingHistoryEntryIfEnabled,
-} from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  maybeResolveSignalApprovalReaction,
+  resolveSignalApprovalConversationKey,
+} from "../approval-reactions.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -161,8 +162,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     let combinedBody = body;
     const historyKey = entry.isGroup ? (entry.groupId ?? "unknown") : undefined;
     if (entry.isGroup && historyKey) {
-      combinedBody = buildPendingHistoryContextFromMap({
-        historyMap: deps.groupHistories,
+      const channelHistory = createChannelHistoryWindow({ historyMap: deps.groupHistories });
+      combinedBody = channelHistory.buildPendingContext({
         historyKey,
         limit: deps.historyLimit,
         currentMessage: combinedBody,
@@ -186,11 +187,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
     const inboundHistory =
       entry.isGroup && historyKey && deps.historyLimit > 0
-        ? (deps.groupHistories.get(historyKey) ?? []).map((historyEntry) => ({
-            sender: historyEntry.sender,
-            body: historyEntry.body,
-            timestamp: historyEntry.timestamp,
-          }))
+        ? createChannelHistoryWindow({ historyMap: deps.groupHistories }).buildInboundHistory({
+            historyKey,
+            limit: deps.historyLimit,
+          })
         : undefined;
     const ctxPayload = finalizeInboundContext({
       Body: combinedBody,
@@ -284,6 +284,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         deps.runtime.error?.(danger(`signal ${info.kind} reply failed: ${String(err)}`));
       },
     });
+    const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+      route,
+      sessionKey: route.sessionKey,
+    });
 
     await runInboundReplyTurn({
       channel: "signal",
@@ -306,11 +310,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           record: {
             updateLastRoute: !entry.isGroup
               ? {
-                  sessionKey: route.mainSessionKey,
+                  sessionKey: inboundLastRouteSessionKey,
                   channel: "signal",
                   to: entry.senderRecipient,
                   accountId: route.accountId,
                   mainDmOwnerPin: (() => {
+                    if (inboundLastRouteSessionKey !== route.mainSessionKey) {
+                      return undefined;
+                    }
                     const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
                       dmScope: deps.cfg.session?.dmScope,
                       allowFrom: deps.allowFrom,
@@ -415,14 +422,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     },
   });
 
-  function handleReactionOnlyInbound(params: {
+  async function handleReactionOnlyInbound(params: {
     envelope: SignalEnvelope;
     sender: SignalSender;
     senderDisplay: string;
     reaction: SignalReactionMessage;
     hasBodyContent: boolean;
     accessDecision: { decision: "allow" | "block" | "pairing"; reasonCode: string };
-  }): boolean {
+  }): Promise<boolean> {
     if (params.hasBodyContent) {
       return false;
     }
@@ -435,6 +442,28 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = params.reaction.groupInfo?.groupId ?? undefined;
     const groupName = params.reaction.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
+    const messageId = params.reaction.targetSentTimestamp
+      ? String(params.reaction.targetSentTimestamp)
+      : "unknown";
+    const conversationKey = resolveSignalApprovalConversationKey(
+      groupId ? `group:${groupId}` : `signal:${resolveSignalRecipient(params.sender)}`,
+    );
+    if (
+      conversationKey &&
+      (await maybeResolveSignalApprovalReaction({
+        cfg: deps.cfg,
+        accountId: deps.accountId,
+        conversationKey,
+        messageId,
+        reactionKey: emojiLabel,
+        actorId: formatSignalSenderId(params.sender),
+        targetAuthor: params.reaction.targetAuthor,
+        targetAuthorUuid: params.reaction.targetAuthorUuid,
+        logVerboseMessage: logVerbose,
+      }))
+    ) {
+      return true;
+    }
     if (params.accessDecision.decision !== "allow") {
       logVerbose(
         `Blocked signal reaction sender ${params.senderDisplay} (${params.accessDecision.reasonCode})`,
@@ -462,9 +491,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       senderPeerId,
     });
     const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
-    const messageId = params.reaction.targetSentTimestamp
-      ? String(params.reaction.targetSentTimestamp)
-      : "unknown";
     const text = deps.buildSignalReactionSystemEventText({
       emojiLabel,
       actorLabel: senderName,
@@ -484,7 +510,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     ]
       .filter(Boolean)
       .join(":");
-    enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey, trusted: false });
+    enqueueSystemEvent(text, {
+      sessionKey: route.sessionKey,
+      contextKey,
+    });
     return true;
   }
 
@@ -582,14 +611,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     if (
       reaction &&
-      handleReactionOnlyInbound({
+      (await handleReactionOnlyInbound({
         envelope,
         sender,
         senderDisplay,
         reaction,
         hasBodyContent,
         accessDecision: senderAccess,
-      })
+      }))
     ) {
       return;
     }
@@ -717,8 +746,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       })();
       const pendingBodyText = messageText || pendingPlaceholder || visibleQuoteText;
       const historyKey = groupId ?? "unknown";
-      recordPendingHistoryEntryIfEnabled({
-        historyMap: deps.groupHistories,
+      createChannelHistoryWindow({ historyMap: deps.groupHistories }).record({
         historyKey,
         limit: deps.historyLimit,
         entry: {

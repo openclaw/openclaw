@@ -17,6 +17,7 @@ function createMockOptions(
     req: { method, params, id: "req-1" },
     params,
     client: {
+      connId: "conn-test-client",
       connect: {
         client: { id: "test-client", displayName: "Test Client" },
       },
@@ -201,6 +202,7 @@ describe("createPluginApprovalHandlers", () => {
 
       // Resolve the approval so the handler can complete
       const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
+      expect(manager.getSnapshot(approvalId)?.requestedByClientId).toBe("test-client");
       manager.resolve(approvalId, "allow-once");
 
       await handlerPromise;
@@ -229,6 +231,39 @@ describe("createPluginApprovalHandlers", () => {
       expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(true);
       expect(responseResult(opts.respond as unknown as MockCallSource).decision).toBeNull();
       expect(responseCall(opts.respond as unknown as MockCallSource).error).toBeUndefined();
+    });
+
+    it("keeps plugin approvals pending without an approval route when requested", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Sensitive action",
+          description: "Desc",
+          twoPhase: true,
+          keepPendingWithoutRoute: true,
+        },
+        {
+          respond,
+          context: createNoExecApprovalContext(),
+        },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](opts);
+
+      await vi.waitFor(() => {
+        const accepted = acceptedResult(respond as unknown as MockCallSource);
+        expect(accepted.status).toBe("accepted");
+        expect(accepted.id).toBeTypeOf("string");
+      });
+
+      const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
+      expect(manager.getSnapshot(approvalId)).not.toBeNull();
+      manager.resolve(approvalId, "allow-once");
+      await handlerPromise;
+
+      expect(responseResult(respond as unknown as MockCallSource, 1).decision).toBe("allow-once");
     });
 
     it("passes caller connId to hasExecApprovalClients to exclude self", async () => {
@@ -340,6 +375,55 @@ describe("createPluginApprovalHandlers", () => {
       expect(responseError(opts.respond as unknown as MockCallSource).code).toBeTypeOf("string");
     });
 
+    it("rejects command approval actions that carry approval decisions", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions("plugin.approval.request", {
+        title: "T",
+        description: "D",
+        actions: [
+          {
+            kind: "command",
+            label: "Verify externally",
+            style: "primary",
+            decision: "allow-once",
+            commandTemplate: "/agentkit approve {id}",
+          },
+        ],
+      });
+
+      await handlers["plugin.approval.request"](opts);
+
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).message).toContain(
+        "command actions must not include decision",
+      );
+    });
+
+    it("rejects decision approval actions outside allowed decisions", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions("plugin.approval.request", {
+        title: "T",
+        description: "D",
+        allowedDecisions: ["deny"],
+        actions: [
+          {
+            kind: "decision",
+            label: "Allow once",
+            style: "primary",
+            decision: "allow-once",
+            commandTemplate: "/approve {id} allow-once",
+          },
+        ],
+      });
+
+      await handlers["plugin.approval.request"](opts);
+
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).message).toContain(
+        "decision allow-once is not in allowedDecisions",
+      );
+    });
+
     it("generates plugin-prefixed IDs", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const respond = vi.fn();
@@ -356,7 +440,7 @@ describe("createPluginApprovalHandlers", () => {
         },
       );
       await handlers["plugin.approval.request"](opts);
-      const result = respond.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+      const result = responseResult(respond as unknown as MockCallSource);
       expectPluginApprovalId(result?.id, "generated plugin approval id");
     });
 
@@ -374,7 +458,10 @@ describe("createPluginApprovalHandlers", () => {
       await handlers["plugin.approval.request"](opts);
 
       expect(createSpy).toHaveBeenCalledTimes(1);
-      expectPluginApprovalId(createSpy.mock.calls[0]?.[2], "manager.create approval id");
+      expectPluginApprovalId(
+        mockCall(createSpy, 0, "manager.create call")[2],
+        "manager.create approval id",
+      );
     });
 
     it("rejects plugin-provided id field", async () => {
@@ -417,6 +504,64 @@ describe("createPluginApprovalHandlers", () => {
         "allow-once",
         "deny",
       ]);
+      manager.resolve(approvalId, "deny");
+      await handlerPromise;
+    });
+
+    it("stores plugin approval action templates as expanded commands", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "T",
+          description: "D",
+          actions: [
+            {
+              kind: "command",
+              label: "Open AgentKit",
+              style: "primary",
+              commandTemplate: "/agentkit approve {id}",
+            },
+            {
+              kind: "decision",
+              label: "Deny",
+              style: "danger",
+              decision: "deny",
+              commandTemplate: "/agentkit deny {id}",
+            },
+          ],
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](opts);
+      await vi.waitFor(() => {
+        const accepted = acceptedResult(respond as unknown as MockCallSource);
+        expect(accepted.status).toBe("accepted");
+        expect(accepted.id).toBeTypeOf("string");
+      });
+
+      const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
+      const expectedActions = [
+        {
+          kind: "command",
+          label: "Open AgentKit",
+          style: "primary",
+          command: `/agentkit approve ${approvalId}`,
+        },
+        {
+          kind: "decision",
+          label: "Deny",
+          style: "danger",
+          decision: "deny",
+          command: `/agentkit deny ${approvalId}`,
+        },
+      ];
+      expect(manager.getSnapshot(approvalId)?.request.actions).toEqual(expectedActions);
+      expect(broadcastCall(opts).payload.request).toMatchObject({ actions: expectedActions });
+
       manager.resolve(approvalId, "deny");
       await handlerPromise;
     });
@@ -465,6 +610,52 @@ describe("createPluginApprovalHandlers", () => {
       manager.resolve(approvalId, "allow-once");
       await handlerPromise;
     });
+
+    it("lists only plugin approvals owned by the caller", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const visible = manager.create(
+        { title: "Visible", description: "D" },
+        60_000,
+        "plugin:visible",
+      );
+      visible.requestedByDeviceId = "device-owner";
+      visible.requestedByConnId = "conn-owner";
+      visible.requestedByClientId = "client-owner";
+      void manager.register(visible, 60_000);
+
+      const hidden = manager.create({ title: "Hidden", description: "D" }, 60_000, "plugin:hidden");
+      hidden.requestedByDeviceId = "device-other";
+      hidden.requestedByConnId = "conn-other";
+      hidden.requestedByClientId = "client-other";
+      void manager.register(hidden, 60_000);
+
+      const listRespond = vi.fn();
+      await handlers["plugin.approval.list"](
+        createMockOptions(
+          "plugin.approval.list",
+          {},
+          {
+            respond: listRespond,
+            client: {
+              connId: "conn-owner",
+              connect: {
+                client: { id: "client-owner" },
+                device: { id: "device-owner" },
+              },
+            } as unknown as GatewayRequestHandlerOptions["client"],
+          },
+        ),
+      );
+
+      expect(responseCall(listRespond as unknown as MockCallSource).ok).toBe(true);
+      const approvals = requireArray(
+        responseCall(listRespond as unknown as MockCallSource).result,
+        "approval list",
+      );
+      expect(approvals.map((entry) => requireRecord(entry, "approval").id)).toEqual([
+        "plugin:visible",
+      ]);
+    });
   });
 
   describe("plugin.approval.waitDecision", () => {
@@ -481,6 +672,36 @@ describe("createPluginApprovalHandlers", () => {
     it("returns not found for unknown id", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.waitDecision", { id: "unknown" });
+      await handlers["plugin.approval.waitDecision"](opts);
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).message).toContain(
+        "expired or not found",
+      );
+    });
+
+    it("returns not found for approvals hidden from the caller", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create({ title: "T", description: "D" }, 60_000);
+      record.requestedByDeviceId = "device-owner";
+      record.requestedByConnId = "conn-owner";
+      record.requestedByClientId = "client-owner";
+      void manager.register(record, 60_000);
+      manager.resolve(record.id, "allow-once");
+
+      const opts = createMockOptions(
+        "plugin.approval.waitDecision",
+        { id: record.id },
+        {
+          client: {
+            connId: "conn-other",
+            connect: {
+              client: { id: "client-other" },
+              device: { id: "device-other" },
+              scopes: ["operator.approvals"],
+            },
+          } as unknown as GatewayRequestHandlerOptions["client"],
+        },
+      );
       await handlers["plugin.approval.waitDecision"](opts);
       expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
       expect(responseError(opts.respond as unknown as MockCallSource).message).toContain(
@@ -537,6 +758,74 @@ describe("createPluginApprovalHandlers", () => {
       expect(resolvedBroadcast.payload.id).toBe(record.id);
       expect(resolvedBroadcast.payload.decision).toBe("deny");
       expect(resolvedBroadcast.options).toEqual({ dropIfSlow: true });
+    });
+
+    it("resolves only plugin approvals owned by the caller", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const visible = manager.create(
+        { title: "Visible", description: "D" },
+        60_000,
+        "plugin:abcd-visible",
+      );
+      visible.requestedByDeviceId = "device-owner";
+      visible.requestedByConnId = "conn-owner";
+      visible.requestedByClientId = "client-owner";
+      void manager.register(visible, 60_000);
+
+      const hidden = manager.create(
+        { title: "Hidden", description: "D" },
+        60_000,
+        "plugin:abcd-hidden",
+      );
+      hidden.requestedByDeviceId = "device-other";
+      hidden.requestedByConnId = "conn-other";
+      hidden.requestedByClientId = "client-other";
+      void manager.register(hidden, 60_000);
+
+      const ownerClient = {
+        connId: "conn-owner",
+        connect: {
+          client: { id: "client-owner" },
+          device: { id: "device-owner" },
+        },
+      } as unknown as GatewayRequestHandlerOptions["client"];
+      const resolveRespond = vi.fn();
+      await handlers["plugin.approval.resolve"](
+        createMockOptions(
+          "plugin.approval.resolve",
+          {
+            id: "plugin:abcd",
+            decision: "allow-once",
+          },
+          {
+            respond: resolveRespond,
+            client: ownerClient,
+          },
+        ),
+      );
+      expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(manager.getSnapshot(visible.id)?.decision).toBe("allow-once");
+      expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
+
+      const hiddenRespond = vi.fn();
+      await handlers["plugin.approval.resolve"](
+        createMockOptions(
+          "plugin.approval.resolve",
+          {
+            id: hidden.id,
+            decision: "deny",
+          },
+          {
+            respond: hiddenRespond,
+            client: ownerClient,
+          },
+        ),
+      );
+      expect(responseCall(hiddenRespond as unknown as MockCallSource).ok).toBe(false);
+      const error = responseError(hiddenRespond as unknown as MockCallSource);
+      expect(error.code).toBe("INVALID_REQUEST");
+      expect(error.message).toBe("unknown or expired approval id");
+      expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
     });
 
     it("rejects decisions outside plugin approval allowed decisions", async () => {

@@ -32,6 +32,10 @@ function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
   return actual;
 }
 
+function mockCall<T extends readonly unknown[]>(mock: { mock: { calls: T[] } }, index = 0) {
+  return mock.mock.calls.at(index);
+}
+
 function buildMatrixReceipt(messageIds: readonly string[], roomId = "!room:example.org") {
   return {
     primaryPlatformMessageId: messageIds[0],
@@ -85,12 +89,14 @@ function buildExecApprovalView(
     host: "gateway",
     actions: [
       {
+        kind: "decision",
         decision: "allow-once",
         label: "Allow Once",
         style: "success",
         command: "/approve req-1 allow-once",
       },
       {
+        kind: "decision",
         decision: "deny",
         label: "Deny",
         style: "danger",
@@ -118,6 +124,7 @@ function buildPluginApprovalView(
     severity: "critical",
     actions: [
       {
+        kind: "decision",
         decision: "allow-once",
         label: "Allow Once",
         style: "success",
@@ -204,7 +211,7 @@ describe("matrixApprovalNativeRuntime", () => {
       pendingPayload,
     });
 
-    const [target, text, options] = sendSingleTextMessage.mock.calls[0] ?? [];
+    const [target, text, options] = mockCall(sendSingleTextMessage) ?? [];
     expect(target).toBe("room:!room:example.org");
     expect(String(text)).toContain("echo hi");
     const extraContent = (options as { extraContent?: Record<string, unknown> } | undefined)
@@ -254,7 +261,7 @@ describe("matrixApprovalNativeRuntime", () => {
       pendingPayload,
     });
 
-    const [target, text, options] = sendSingleTextMessage.mock.calls[0] ?? [];
+    const [target, text, options] = mockCall(sendSingleTextMessage) ?? [];
     expect(target).toBe("room:!room:example.org");
     expect(String(text)).toContain("deploy");
     const extraContent = (options as { extraContent?: Record<string, unknown> } | undefined)
@@ -273,6 +280,7 @@ describe("matrixApprovalNativeRuntime", () => {
       allowedDecisions: ["allow-once"],
       actions: [
         {
+          kind: "decision",
           decision: "allow-once",
           label: "Allow Once",
           style: "success",
@@ -284,10 +292,50 @@ describe("matrixApprovalNativeRuntime", () => {
       agentId: "agent-1",
       severity: "critical",
     });
-    expect(reactMessage.mock.calls[0]?.[0]).toBe("!room:example.org");
-    expect(reactMessage.mock.calls[0]?.[1]).toBe("$plugin-approval");
-    expect(reactMessage.mock.calls[0]?.[2]).toBe("✅");
-    expectRecordFields(reactMessage.mock.calls[0]?.[3], { accountId: "default" });
+    expect(mockCall(reactMessage)?.[0]).toBe("!room:example.org");
+    expect(mockCall(reactMessage)?.[1]).toBe("$plugin-approval");
+    expect(mockCall(reactMessage)?.[2]).toBe("✅");
+    expectRecordFields(mockCall(reactMessage)?.[3], { accountId: "default" });
+  });
+
+  it("preserves plugin command actions in Matrix fallback text", async () => {
+    const view = buildPluginApprovalView({
+      actions: [
+        {
+          kind: "command",
+          label: "Verify with World",
+          style: "primary",
+          command: "/agentkit approve plugin:req-1 allow-once",
+        },
+        {
+          kind: "decision",
+          decision: "deny",
+          label: "Deny",
+          style: "danger",
+          command: "/approve plugin:req-1 deny",
+        },
+      ],
+    });
+    const pendingPayload = await buildPendingPayload(view);
+
+    expect(pendingPayload.text).toContain("/agentkit approve plugin:req-1 allow-once");
+    expect(pendingPayload.text).toContain("/approve plugin:req-1 deny");
+    expect(pendingPayload.text).not.toContain("/approve <id>");
+    expect(pendingPayload.extraContent[MATRIX_APPROVAL_METADATA_KEY].actions).toEqual([
+      {
+        kind: "command",
+        label: "Verify with World",
+        style: "primary",
+        command: "/agentkit approve plugin:req-1 allow-once",
+      },
+      {
+        kind: "decision",
+        decision: "deny",
+        label: "Deny",
+        style: "danger",
+        command: "/approve plugin:req-1 deny",
+      },
+    ]);
   });
 
   it("binds Matrix approval reactions before publishing option reactions", async () => {
@@ -437,6 +485,7 @@ describe("matrixApprovalNativeRuntime", () => {
     const view = buildExecApprovalView({
       actions: [
         {
+          kind: "decision",
           decision: "allow-once",
           label: "Allow Once",
           style: "success",
@@ -468,16 +517,16 @@ describe("matrixApprovalNativeRuntime", () => {
       pendingPayload,
     });
 
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("room:!room:example.org");
-    expect(sendMessage.mock.calls[0]?.[1]).toBe(pendingPayload.text);
-    expectRecordFields(sendMessage.mock.calls[0]?.[2], {
+    expect(mockCall(sendMessage)?.[0]).toBe("room:!room:example.org");
+    expect(mockCall(sendMessage)?.[1]).toBe(pendingPayload.text);
+    expectRecordFields(mockCall(sendMessage)?.[2], {
       accountId: "default",
       extraContent: pendingPayload.extraContent,
     });
-    expect(reactMessage.mock.calls[0]?.[0]).toBe("!room:example.org");
-    expect(reactMessage.mock.calls[0]?.[1]).toBe("$primary");
-    expect(typeof reactMessage.mock.calls[0]?.[2]).toBe("string");
-    expectRecordFields(reactMessage.mock.calls[0]?.[3], { accountId: "default" });
+    expect(mockCall(reactMessage)?.[0]).toBe("!room:example.org");
+    expect(mockCall(reactMessage)?.[1]).toBe("$primary");
+    expect(typeof mockCall(reactMessage)?.[2]).toBe("string");
+    expectRecordFields(mockCall(reactMessage)?.[3], { accountId: "default" });
     expectRecordFields(entry, {
       roomId: "!room:example.org",
       platformMessageIds: ["$primary", "$last"],

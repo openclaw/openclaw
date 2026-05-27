@@ -17,7 +17,6 @@ import {
   OPENAI_CODEX_LOGIN_LABEL,
   OPENAI_CODEX_WIZARD_GROUP,
 } from "./auth-choice-copy.js";
-import { buildOpenAICodexCliBackend } from "./cli-backend.js";
 
 async function runOpenAIProviderAuthMethod(
   methodId: string,
@@ -54,6 +53,7 @@ export function buildOpenAISetupProvider(): ProviderPlugin {
       choiceLabel: OPENAI_CHATGPT_LOGIN_LABEL,
       choiceHint: OPENAI_CHATGPT_LOGIN_HINT,
       assistantPriority: -40,
+      assistantVisibility: "manual-only",
       ...OPENAI_ACCOUNT_WIZARD_GROUP,
     },
     run: async (ctx) => runOpenAICodexProviderAuthMethod("oauth", ctx),
@@ -69,6 +69,7 @@ export function buildOpenAISetupProvider(): ProviderPlugin {
       choiceLabel: OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
       choiceHint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
       assistantPriority: -10,
+      assistantVisibility: "manual-only",
       ...OPENAI_ACCOUNT_WIZARD_GROUP,
     },
     run: async (ctx) => runOpenAICodexProviderAuthMethod("device-code", ctx),
@@ -109,6 +110,7 @@ export function buildOpenAICodexSetupProvider(): ProviderPlugin {
       choiceLabel: OPENAI_CODEX_LOGIN_LABEL,
       choiceHint: OPENAI_CODEX_LOGIN_HINT,
       assistantPriority: -30,
+      onboardingFeatured: true,
       ...OPENAI_CODEX_WIZARD_GROUP,
     },
     run: async (ctx) => runOpenAICodexProviderAuthMethod("oauth", ctx),
@@ -139,6 +141,7 @@ export function buildOpenAICodexSetupProvider(): ProviderPlugin {
       choiceLabel: OPENAI_CODEX_API_KEY_BACKUP_LABEL,
       choiceHint: OPENAI_CODEX_API_KEY_BACKUP_HINT,
       assistantPriority: 5,
+      assistantVisibility: "manual-only",
       ...OPENAI_CODEX_WIZARD_GROUP,
     },
     run: async (ctx) => runOpenAICodexProviderAuthMethod("api-key", ctx),
@@ -159,6 +162,5 @@ export default definePluginEntry({
   register(api) {
     api.registerProvider(buildOpenAISetupProvider());
     api.registerProvider(buildOpenAICodexSetupProvider());
-    api.registerCliBackend(buildOpenAICodexCliBackend());
   },
 });

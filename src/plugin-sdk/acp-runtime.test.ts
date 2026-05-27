@@ -52,7 +52,7 @@ const ctx = {
 
 function expectDispatchPayloadFields(expected: Record<string, unknown>): void {
   expect(dispatchMock).toHaveBeenCalledTimes(1);
-  const [payload] = dispatchMock.mock.calls.at(0) ?? [];
+  const [payload] = dispatchMock.mock.calls[0] ?? [];
   expect(payload).toBeTypeOf("object");
   for (const [key, value] of Object.entries(expected)) {
     expect((payload as Record<string, unknown>)[key]).toBe(value);
@@ -112,6 +112,35 @@ describe("tryDispatchAcpReplyHook", () => {
       dispatcher: ctx.dispatcher,
       bypassForCommand: true,
     });
+  });
+
+  it("passes a live tool-summary predicate through to ACP runtime", async () => {
+    bypassMock.mockResolvedValue(false);
+    dispatchMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    let shouldSendToolSummaries = true;
+    const eventWithGetter = {
+      ...event,
+      get shouldSendToolSummaries() {
+        return shouldSendToolSummaries;
+      },
+    };
+
+    await tryDispatchAcpReplyHook(eventWithGetter, ctx);
+
+    expectDispatchPayloadFields({
+      shouldSendToolSummaries: true,
+    });
+    const [payload] = dispatchMock.mock.calls[0] ?? [];
+    const livePredicate = (payload as { shouldSendToolSummariesNow?: () => boolean })
+      .shouldSendToolSummariesNow;
+    expect(livePredicate).toBeTypeOf("function");
+    expect(livePredicate?.()).toBe(true);
+
+    shouldSendToolSummaries = false;
+    expect(livePredicate?.()).toBe(false);
   });
 
   it("returns unhandled when ACP dispatcher declines the turn", async () => {

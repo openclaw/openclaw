@@ -93,16 +93,20 @@ function getRuntimeLog(index: number): string {
   return String(call[0]);
 }
 
+function getLastRuntimeLog(): string {
+  return getRuntimeLog(runtimeLogMock.mock.calls.length - 1);
+}
+
 function getJoinedRuntimeLogs() {
   return getRuntimeLogs().join("\n");
 }
 
 function expectLogsInclude(logs: readonly string[], fragment: string) {
-  expect(logs.some((log) => log.includes(fragment))).toBe(true);
+  expect(logs.join("\n")).toContain(fragment);
 }
 
 function expectLogsExclude(logs: readonly string[], fragment: string) {
-  expect(logs.some((log) => log.includes(fragment))).toBe(false);
+  expect(logs.join("\n")).not.toContain(fragment);
 }
 
 function expectLogsMatch(logs: readonly string[], pattern: RegExp) {
@@ -460,6 +464,7 @@ const mocks = vi.hoisted(() => ({
       inconsistent_timestamps: 0,
     },
   }),
+  getInspectableTaskAuditFindings: vi.fn().mockReturnValue([]),
   resolveGatewayService: vi.fn().mockReturnValue({
     label: "LaunchAgent",
     loadedText: "loaded",
@@ -726,6 +731,7 @@ vi.mock("../node-host/config.js", () => ({
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
   getInspectableTaskRegistrySummary: mocks.getInspectableTaskRegistrySummary,
   getInspectableTaskAuditSummary: mocks.getInspectableTaskAuditSummary,
+  getInspectableTaskAuditFindings: mocks.getInspectableTaskAuditFindings,
 }));
 vi.mock("../security/audit.js", () => ({
   runSecurityAudit: mocks.runSecurityAudit,
@@ -945,6 +951,8 @@ describe("statusCommand", () => {
         inconsistent_timestamps: 0,
       },
     });
+    mocks.getInspectableTaskAuditFindings.mockReset();
+    mocks.getInspectableTaskAuditFindings.mockReturnValue([]);
     mocks.runSecurityAudit.mockReset();
     mocks.runSecurityAudit.mockResolvedValue(createDefaultSecurityAuditResult());
     mocks.resolveGatewayService.mockReset();
@@ -1025,7 +1033,7 @@ describe("statusCommand", () => {
     const allPayload = JSON.parse(getRuntimeLog(0));
     expect(allPayload.securityAudit.summary.critical).toBe(1);
     expect(allPayload.securityAudit.summary.warn).toBe(1);
-    const auditParams = mocks.runSecurityAudit.mock.calls.at(0)?.[0];
+    const auditParams = mocks.runSecurityAudit.mock.calls[0]?.[0];
     expect(auditParams?.includeFilesystem).toBe(true);
     expect(auditParams?.includeChannelSecurity).toBe(true);
   });
@@ -1038,7 +1046,7 @@ describe("statusCommand", () => {
 
     await statusCommand({ usage: true, timeoutMs: 1234 }, runtime as never);
 
-    const params = snapshotMock.mock.calls.at(-1)?.[0] as
+    const params = snapshotMock.mock.calls[snapshotMock.mock.calls.length - 1]?.[0] as
       | {
           config: unknown;
           timeoutMs?: number;
@@ -1083,7 +1091,7 @@ describe("statusCommand", () => {
     await withUnknownUsageStore(async () => {
       runtimeLogMock.mockClear();
       await statusCommand({ json: true }, runtime as never);
-      const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+      const payload = JSON.parse(getLastRuntimeLog());
       expect(payload.sessions.recent[0].totalTokens).toBeNull();
       expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
       expect(payload.sessions.recent[0].percentUsed).toBeNull();
@@ -1103,7 +1111,7 @@ describe("statusCommand", () => {
     });
     runtimeLogMock.mockClear();
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+    const payload = JSON.parse(getLastRuntimeLog());
     expect(payload.sessions.recent[0].totalTokens).toBe(5000);
     expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
     expect(payload.sessions.recent[0].percentUsed).toBe(50);
@@ -1126,7 +1134,7 @@ describe("statusCommand", () => {
       "Plugin compatibility",
       "Channels",
       "WhatsApp",
-      "bootstrap files",
+      "no workspaces bootstrapping",
       "Tasks",
       "Sessions",
       "+1000",
@@ -1144,6 +1152,7 @@ describe("statusCommand", () => {
     expectLogsInclude(logs, "Cache");
     expectLogsInclude(logs, "40% hit");
     expectLogsInclude(logs, "read 2.0k");
+    expect(logs.join("\n")).not.toContain("no bootstrap files");
   });
 
   it("shows a maintenance hint when task audit errors are present", async () => {
@@ -1181,6 +1190,25 @@ describe("statusCommand", () => {
         inconsistent_timestamps: 0,
       },
     });
+    mocks.getInspectableTaskAuditFindings.mockReturnValue([
+      {
+        severity: "error",
+        code: "stale_running",
+        detail: "running task appears stuck",
+        task: {
+          taskId: "stale-running-task",
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          scopeKind: "session",
+          task: "Stale task",
+          status: "running",
+          deliveryStatus: "pending",
+          notifyPolicy: "done_only",
+          createdAt: Date.now() - 60_000,
+        },
+      },
+    ]);
 
     const joined = await runStatusAndGetJoinedLogs();
 
@@ -1278,7 +1306,7 @@ describe("statusCommand", () => {
     });
 
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+    const payload = JSON.parse(getLastRuntimeLog());
     const gatewayAuthMessage = payload.gateway.error ?? payload.gateway.authWarning;
     expect(typeof gatewayAuthMessage).toBe("string");
     expect(gatewayAuthMessage.trim().length).toBeGreaterThan(0);
@@ -1448,7 +1476,7 @@ describe("statusCommand", () => {
     });
 
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+    const payload = JSON.parse(getLastRuntimeLog());
     expect(payload.sessions.count).toBe(2);
     expect(payload.sessions.paths.length).toBe(2);
     expect(

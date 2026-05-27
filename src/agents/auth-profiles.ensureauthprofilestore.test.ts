@@ -80,6 +80,14 @@ describe("ensureAuthProfileStore", () => {
     );
   }
 
+  function writeRawAuthProfileStore(agentDir: string, raw: unknown): void {
+    fs.writeFileSync(
+      path.join(agentDir, "auth-profiles.json"),
+      `${JSON.stringify(raw, null, 2)}\n`,
+      "utf8",
+    );
+  }
+
   function loadAuthProfile(agentDir: string, profileId: string): AuthProfileCredential {
     clearRuntimeAuthProfileStoreSnapshots();
     const store = ensureAuthProfileStore(agentDir);
@@ -202,6 +210,43 @@ describe("ensureAuthProfileStore", () => {
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
+  });
+
+  it("ignores array-shaped auth profile stores instead of loading numeric profile ids", () => {
+    withTempAgentDir("openclaw-auth-profiles-array-", (agentDir) => {
+      writeRawAuthProfileStore(agentDir, {
+        version: AUTH_STORE_VERSION,
+        profiles: [
+          {
+            type: "api_key",
+            provider: "openai",
+            key: "test-array-shaped-profile",
+          },
+        ],
+      });
+
+      const store = ensureAuthProfileStore(agentDir);
+
+      expect(store.profiles["0"]).toBeUndefined();
+      expect(Object.keys(store.profiles)).toEqual([]);
+    });
+  });
+
+  it("ignores top-level array auth stores instead of treating entries as profiles", () => {
+    withTempAgentDir("openclaw-auth-top-array-", (agentDir) => {
+      writeRawAuthProfileStore(agentDir, [
+        {
+          type: "api_key",
+          provider: "openai",
+          key: "test-array-shaped-store",
+        },
+      ]);
+
+      const store = ensureAuthProfileStore(agentDir);
+
+      expect(store.profiles["0"]).toBeUndefined();
+      expect(Object.keys(store.profiles)).toEqual([]);
+    });
   });
 
   it("merges main auth profiles into agent store and keeps agent overrides", () => {
@@ -821,17 +866,10 @@ describe("ensureAuthProfileStore", () => {
       const persistedProfile = persisted.profiles["openai-codex:default"];
       expect(persistedProfile?.type).toBe("oauth");
       expect(persistedProfile?.provider).toBe("openai-codex");
-      const oauthRef = persistedProfile?.oauthRef as
-        | { source?: string; provider?: string; id?: unknown }
-        | undefined;
-      expect(oauthRef?.source).toBe("openclaw-credentials");
-      expect(oauthRef?.provider).toBe("openai-codex");
-      expect(typeof oauthRef?.id).toBe("string");
-      expect(persistedProfile).not.toHaveProperty("access");
-      expect(persistedProfile).not.toHaveProperty("refresh");
+      expect(persistedProfile?.access).toBe("access-token");
+      expect(persistedProfile?.refresh).toBe("refresh-token");
+      expect(persistedProfile).not.toHaveProperty("oauthRef");
       expect(persistedProfile).not.toHaveProperty("idToken");
-      expect(JSON.stringify(persisted)).not.toContain("access-token");
-      expect(JSON.stringify(persisted)).not.toContain("refresh-token");
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
       restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);

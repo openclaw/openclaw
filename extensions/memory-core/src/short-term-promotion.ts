@@ -5,7 +5,11 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-ru
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -15,11 +19,11 @@ import {
 import { asRecord } from "./dreaming-shared.js";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 
-const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})\.md$/;
+const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
 const SHORT_TERM_SESSION_CORPUS_RE =
   /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
-const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
+const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
 export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;
@@ -96,6 +100,7 @@ type ShortTermPhaseSignalEntry = {
   remHits: number;
   lastLightAt?: string;
   lastRemAt?: string;
+  lastRemConsideredAt?: string;
 };
 
 type ShortTermPhaseSignalStore = {
@@ -284,7 +289,17 @@ function consumeDreamingLeadPrefix(snippet: string): string {
 
 function hasDreamingNarrativeLead(snippet: string): boolean {
   const withoutPrefix = consumeDreamingLeadPrefix(snippet);
-  return /^Candidate:/i.test(withoutPrefix) || /^Reflections?:/i.test(withoutPrefix);
+  if (/^(?:Candidate|Reflections?):/i.test(withoutPrefix)) {
+    return true;
+  }
+  // Managed dreaming blocks occasionally serialize recall metadata (status:/confidence:/
+  // evidence:/recalls:) inline before the Candidate or Reflections marker, so the
+  // start-of-string check misses shapes like "status: staged - Candidate: User: ...".
+  // The composite detector below still requires the full signal combination, so widening
+  // the lead check to anywhere in the first 200 chars closes the leak without creating
+  // false positives for ordinary durable notes that merely mention the word in prose.
+  const head = withoutPrefix.slice(0, 200);
+  return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
 function isContaminatedDreamingSnippet(raw: string): boolean {
@@ -821,12 +836,17 @@ function normalizePhaseSignalStore(raw: unknown, nowIso: string): ShortTermPhase
       typeof entry.lastRemAt === "string" && entry.lastRemAt.trim().length > 0
         ? entry.lastRemAt
         : undefined;
+    const lastRemConsideredAt =
+      typeof entry.lastRemConsideredAt === "string" && entry.lastRemConsideredAt.trim().length > 0
+        ? entry.lastRemConsideredAt
+        : undefined;
     entries[key] = {
       key,
       lightHits,
       remHits,
       ...(lastLightAt ? { lastLightAt } : {}),
       ...(lastRemAt ? { lastRemAt } : {}),
+      ...(lastRemConsideredAt ? { lastRemConsideredAt } : {}),
     };
   }
   return {
@@ -1168,7 +1188,7 @@ export async function recordDreamingPhaseSignals(params: {
   if (!workspaceDir) {
     return;
   }
-  const keys = [...new Set(params.keys.map((key) => key.trim()).filter(Boolean))];
+  const keys = uniqueStrings(normalizeStringEntries(params.keys));
   if (keys.length === 0) {
     return;
   }
@@ -1210,6 +1230,86 @@ export async function recordDreamingPhaseSignals(params: {
     phaseSignals.updatedAt = nowIso;
     await writePhaseSignalStore(workspaceDir, phaseSignals);
   });
+}
+
+export async function recordRemConsideredPhaseSignals(params: {
+  workspaceDir?: string;
+  keys: string[];
+  nowMs?: number;
+}): Promise<void> {
+  const workspaceDir = params.workspaceDir?.trim();
+  if (!workspaceDir) {
+    return;
+  }
+  const keys = uniqueStrings(normalizeStringEntries(params.keys));
+  if (keys.length === 0) {
+    return;
+  }
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+
+  await withShortTermLock(workspaceDir, async () => {
+    const [store, phaseSignals] = await Promise.all([
+      readStore(workspaceDir, nowIso),
+      readPhaseSignalStore(workspaceDir, nowIso),
+    ]);
+    const knownKeys = new Set(Object.keys(store.entries));
+
+    for (const key of keys) {
+      if (!knownKeys.has(key)) {
+        continue;
+      }
+      const entry = phaseSignals.entries[key] ?? {
+        key,
+        lightHits: 0,
+        remHits: 0,
+      };
+      entry.lastRemConsideredAt = nowIso;
+      phaseSignals.entries[key] = entry;
+    }
+
+    for (const [key, entry] of Object.entries(phaseSignals.entries)) {
+      if (!knownKeys.has(key) || (entry.lightHits <= 0 && entry.remHits <= 0)) {
+        delete phaseSignals.entries[key];
+      }
+    }
+
+    phaseSignals.updatedAt = nowIso;
+    await writePhaseSignalStore(workspaceDir, phaseSignals);
+  });
+}
+
+export async function readLightStagedKeys(params: {
+  workspaceDir: string;
+  nowMs?: number;
+}): Promise<Set<string>> {
+  const workspaceDir = params.workspaceDir?.trim();
+  if (!workspaceDir) {
+    return new Set();
+  }
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const store = await readPhaseSignalStore(workspaceDir, nowIso);
+  const keys = new Set<string>();
+  for (const [key, entry] of Object.entries(store.entries)) {
+    if (entry.lightHits <= 0) {
+      continue;
+    }
+    const lastLightMs = Date.parse(entry.lastLightAt ?? "");
+    const lastRemMs = Date.parse(entry.lastRemAt ?? "");
+    const lastRemConsideredMs = Date.parse(entry.lastRemConsideredAt ?? "");
+    const lastConsumedMs = Math.max(
+      Number.isFinite(lastRemMs) ? lastRemMs : Number.NEGATIVE_INFINITY,
+      Number.isFinite(lastRemConsideredMs) ? lastRemConsideredMs : Number.NEGATIVE_INFINITY,
+    );
+    const hasPendingLightSignal = Number.isFinite(lastLightMs)
+      ? lastLightMs > lastConsumedMs
+      : !entry.lastRemAt;
+    if (hasPendingLightSignal) {
+      keys.add(key);
+    }
+  }
+  return keys;
 }
 
 export async function rankShortTermPromotionCandidates(
@@ -1491,6 +1591,38 @@ function relocateCandidateRange(
   };
 }
 
+const DREAMING_FENCE_START_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:start\s*-->/i;
+const DREAMING_FENCE_END_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:end\s*-->/i;
+
+function lineRangeOverlapsDreamingFence(
+  lines: string[],
+  startLine: number,
+  endLine: number,
+): boolean {
+  if (lines.length === 0) {
+    return false;
+  }
+  const safeStart = Math.max(1, Math.min(startLine, lines.length));
+  const safeEnd = Math.max(safeStart, Math.min(endLine, lines.length));
+  let insideFence = false;
+  for (let i = 0; i < safeEnd; i += 1) {
+    const line = lines[i] ?? "";
+    if (DREAMING_FENCE_START_RE.test(line)) {
+      insideFence = true;
+      continue;
+    }
+    if (DREAMING_FENCE_END_RE.test(line)) {
+      insideFence = false;
+      continue;
+    }
+    const oneIndexed = i + 1;
+    if (insideFence && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function rehydratePromotionCandidate(
   workspaceDir: string,
   candidate: PromotionCandidate,
@@ -1510,6 +1642,13 @@ async function rehydratePromotionCandidate(
     const lines = rawSource.split(/\r?\n/);
     const relocated = relocateCandidateRange(lines, candidate);
     if (!relocated) {
+      continue;
+    }
+    // Managed dreaming blocks in daily memory files are scratchwork, not durable
+    // content. If rehydration lands inside an openclaw:dreaming fence (for example
+    // because file edits shifted lines between ranking and apply), refuse the
+    // candidate so dream artifacts cannot be promoted into MEMORY.md.
+    if (lineRangeOverlapsDreamingFence(lines, relocated.startLine, relocated.endLine)) {
       continue;
     }
     return {
@@ -1535,7 +1674,7 @@ function buildPromotionSection(
     const snippet = candidate.snippet || "(no snippet captured)";
     lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
     lines.push(
-      `- ${snippet} [score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`,
+      `- ${snippet.replace(/^- +/, "")} [score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`,
     );
   }
 
@@ -2008,7 +2147,7 @@ export async function removeGroundedShortTermCandidates(params: {
   return { removed, storePath };
 }
 
-export const __testing = {
+export const testing = {
   parseLockOwnerPid,
   canStealStaleLock,
   isProcessLikelyAlive,
@@ -2018,4 +2157,6 @@ export const __testing = {
   buildClaimHash,
   totalSignalCountForEntry,
   isContaminatedDreamingSnippet,
+  lineRangeOverlapsDreamingFence,
 };
+export { testing as __testing };

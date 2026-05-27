@@ -351,6 +351,12 @@ export const ja_JP: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -359,6 +365,8 @@ export const ja_JP: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -390,6 +398,7 @@ export const ja_JP: TranslationMap = {
   },
   tabs: {
     agents: "エージェント",
+    activity: "Activity",
     overview: "概要",
     channels: "チャンネル",
     instances: "インスタンス",
@@ -411,6 +420,7 @@ export const ja_JP: TranslationMap = {
   },
   subtitles: {
     agents: "ワークスペース、ツール、ID。",
+    activity: "Browser-local tool activity summaries.",
     overview: "ステータス、エントリーポイント、健全性。",
     channels: "チャンネルと設定。",
     instances: "接続されたクライアントとノード。",
@@ -429,6 +439,42 @@ export const ja_JP: TranslationMap = {
     debug: "スナップショット、イベント、RPC。",
     logs: "ライブ Gateway ログ。",
     dreams: "スリープ中のメモリ統合。",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "検索",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "ツール",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "クリア",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "実行",
+    session: "セッション",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "実行中",
+      done: "完了",
+      error: "エラー",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -695,9 +741,6 @@ export const ja_JP: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "トークンの使用先、セッションが急増するタイミング、コストの要因を確認できます。",
-    },
     common: {
       emptyValue: "—",
       unknown: "不明",
@@ -1045,6 +1088,10 @@ export const ja_JP: TranslationMap = {
     settings: "チャット設定",
     thinkingToggle: "アシスタントの思考 / 作業出力の表示を切り替え",
     toolCallsToggle: "ツール呼び出しとツール結果の表示を切り替え",
+    autoScrollMode: "自動スクロールモード",
+    autoScrollAlways: "常に",
+    autoScrollNearBottom: "下部付近",
+    autoScrollOff: "オフ",
     focusToggle: "フォーカスモードを切り替え（サイドバー + ページヘッダーを非表示）",
     hideCronSessions: "Cron セッションを非表示",
     showCronSessions: "Cron セッションを表示",
@@ -1088,11 +1135,16 @@ export const ja_JP: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "まだ聞いています",
+      talkTranscript: "会話の文字起こし",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "エージェントでセッションを絞り込む",
       session: "Chat session",
+      sessionSearch: "セッションを検索",
+      clearSessionSearch: "セッション検索をクリア",
+      loadMoreSessions: "さらにセッションを読み込む",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1205,6 +1257,9 @@ export const ja_JP: TranslationMap = {
       ascending: "昇順",
       descending: "降順",
       reset: "リセット",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "一致するジョブはありません。",
       loading: "読み込み中...",
       loadMore: "さらにジョブを読み込む",
@@ -1240,6 +1295,7 @@ export const ja_JP: TranslationMap = {
     form: {
       editJob: "ジョブを編集",
       newJob: "新しいジョブ",
+      advancedJob: "Advanced job",
       updateSubtitle: "選択したスケジュール済みジョブを更新します。",
       createSubtitle: "スケジュールされたウェイクアップまたはエージェント実行を作成します。",
       required: "必須",

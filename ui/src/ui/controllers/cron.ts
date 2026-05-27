@@ -3,7 +3,7 @@ import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import { getCronJobPayload, hasCronJobPayload } from "../cron-payload.ts";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
 import type {
   CronJob,
   CronDeliveryStatus,
@@ -221,7 +221,7 @@ export async function loadCronModelSuggestions(state: CronModelSuggestionsState)
         return typeof id === "string" ? id.trim() : "";
       })
       .filter(Boolean);
-    state.cronModelSuggestions = Array.from(new Set(ids)).toSorted((a, b) => a.localeCompare(b));
+    state.cronModelSuggestions = sortUniqueStrings(ids);
   } catch {
     state.cronModelSuggestions = [];
   }
@@ -644,7 +644,8 @@ function buildFailureAlert(form: CronFormState, existingChannel?: string) {
   return patch;
 }
 
-export async function addCronJob(state: CronState) {
+export async function addCronJob(state: CronState): Promise<boolean> {
+  let saved = false;
   await withCronBusy(state, async (client) => {
     const form = normalizeCronFormState(state.cronForm);
     if (form !== state.cronForm) {
@@ -730,7 +731,9 @@ export async function addCronJob(state: CronState) {
     }
     await loadCronJobsPage(state);
     await loadCronStatus(state);
+    saved = true;
   });
+  return saved;
 }
 
 export async function toggleCronJob(state: CronState, job: CronJob, enabled: boolean) {

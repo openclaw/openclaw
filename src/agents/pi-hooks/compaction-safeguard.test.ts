@@ -19,7 +19,7 @@ import {
   setCompactionSafeguardCancelReason,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
-import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
+import compactionSafeguardExtension, { testing } from "./compaction-safeguard.js";
 
 vi.mock("../compaction.js", async () => {
   const actual = await vi.importActual<typeof compactionModule>("../compaction.js");
@@ -56,14 +56,14 @@ const {
   MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
-} = __testing;
+} = testing;
 
 beforeEach(() => {
-  __testing.setSummarizeInStagesForTest(mockSummarizeInStages);
+  testing.setSummarizeInStagesForTest(mockSummarizeInStages);
 });
 
 afterEach(() => {
-  __testing.setSummarizeInStagesForTest();
+  testing.setSummarizeInStagesForTest();
   clearCompactionProviders();
 });
 
@@ -199,6 +199,39 @@ function expectCompactionResult(result: {
     throw new Error("Expected compaction result");
   }
   return result.compaction;
+}
+
+function mockCallArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex = 0,
+  argIndex = 0,
+): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex + 1}`);
+  }
+  return call[argIndex];
+}
+
+function latestMockCallArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  argIndex = 0,
+): unknown {
+  return mockCallArg(mock, mock.mock.calls.length - 1, argIndex);
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error("expected array");
+  }
+  return value;
 }
 
 describe("compaction-safeguard tool failures", () => {
@@ -1308,7 +1341,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    const droppedCall = mockSummarizeInStages.mock.calls.at(0)?.[0];
+    const droppedCall = requireRecord(mockCallArg(mockSummarizeInStages));
     expect(droppedCall?.customInstructions).toContain(
       "Produce a compact, factual summary with these exact section headings:",
     );
@@ -1351,7 +1384,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     await compactionHandler(event, mockContext);
 
-    const call = mockSummarizeInStages.mock.calls.at(0)?.[0];
+    const call = requireRecord(mockCallArg(mockSummarizeInStages));
     expect(call?.reserveTokens).toBe(128_000);
   });
 
@@ -1390,13 +1423,15 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const result = (await compactionHandler(event, mockContext)) as { cancel?: boolean };
 
     expect(result.cancel).not.toBe(true);
-    const summaryCall = mockSummarizeInStages.mock.calls.at(-1)?.[0];
-    expect(summaryCall?.headers?.["Copilot-Integration-Id"]).toBe("vscode-chat");
-    expect(summaryCall?.headers?.["Editor-Plugin-Version"]).toBe("copilot-chat/0.35.0");
-    expect(summaryCall?.headers?.["Openai-Organization"]).toBe("github-copilot");
-    expect(summaryCall?.headers?.["User-Agent"]).toBe("GitHubCopilotChat/0.26.7");
-    expect(summaryCall?.headers?.["X-Test"]).toBe("1");
-    expect(summaryCall?.headers?.["x-initiator"]).toBe("user");
+    const summaryCall = latestMockCallArg(mockSummarizeInStages) as {
+      headers?: Record<string, string>;
+    };
+    expect(summaryCall.headers?.["Copilot-Integration-Id"]).toBe("vscode-chat");
+    expect(summaryCall.headers?.["Editor-Plugin-Version"]).toBe("copilot-chat/0.35.0");
+    expect(summaryCall.headers?.["Openai-Organization"]).toBe("github-copilot");
+    expect(summaryCall.headers?.["User-Agent"]).toBe("GitHubCopilotChat/0.35.0");
+    expect(summaryCall.headers?.["X-Test"]).toBe("1");
+    expect(summaryCall.headers?.["x-initiator"]).toBe("user");
   });
 
   it("does not retry summaries unless quality guard is explicitly enabled", async () => {
@@ -1539,9 +1574,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
-    const secondCall = mockSummarizeInStages.mock.calls.at(1)?.[0];
-    expect(secondCall?.customInstructions).toContain("Quality check feedback");
-    expect(secondCall?.customInstructions).toContain("missing_section:## Decisions");
+    const secondCall = mockCallArg(mockSummarizeInStages, 1) as {
+      customInstructions?: string;
+    };
+    expect(secondCall.customInstructions).toContain("Quality check feedback");
+    expect(secondCall.customInstructions).toContain("missing_section:## Decisions");
   });
 
   it("does not treat preserved latest asks as satisfying overlap checks", async () => {
@@ -1626,8 +1663,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
-    const secondCall = mockSummarizeInStages.mock.calls.at(1)?.[0];
-    expect(secondCall?.customInstructions).toContain("latest_user_ask_not_reflected");
+    const secondCall = mockCallArg(mockSummarizeInStages, 1) as {
+      customInstructions?: string;
+    };
+    expect(secondCall.customInstructions).toContain("latest_user_ask_not_reflected");
   });
 
   it("preserves split-turn and recent-turn suffixes when retry fallback is capped", async () => {
@@ -1817,10 +1856,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    const call = mockSummarizeInStages.mock.calls.at(0)?.[0];
+    const call = requireRecord(mockCallArg(mockSummarizeInStages));
     expect(call?.previousSummary).toBeUndefined();
-    expect(JSON.stringify(call?.messages[0])).toContain("<previous-compaction-summary>");
-    expect(JSON.stringify(call?.messages[0])).toContain("Old duplicated section");
+    const messages = requireArray(call.messages);
+    expect(JSON.stringify(messages[0])).toContain("<previous-compaction-summary>");
+    expect(JSON.stringify(messages[0])).toContain("Old duplicated section");
   });
 
   it("passes compaction instructions to providers and preserves suffix context", async () => {
@@ -1880,14 +1920,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const compaction = expectCompactionResult(result);
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
     expect(mockSummarizeInStages).not.toHaveBeenCalled();
-    const providerInput = providerSummarize.mock.calls.at(0)?.[0];
+    const providerInput = requireRecord(mockCallArg(providerSummarize));
     expect(providerInput?.previousSummary).toBe("previous provider summary");
     expect(providerInput?.customInstructions).toContain("Keep milestone names.");
     expect(providerInput?.summarizationInstructions).toEqual({
       identifierPolicy: "custom",
       identifierInstructions: "Preserve ticket IDs exactly.",
     });
-    const providerMessages = providerSummarize.mock.calls.at(0)?.[0]?.messages ?? [];
+    const providerMessages = providerInput.messages ?? [];
     expect(JSON.stringify(providerMessages)).not.toContain("openclaw.runtime-context");
     expect(JSON.stringify(providerMessages)).not.toContain("secret runtime context");
     expect(compaction.summary).toContain("provider summary body");
@@ -2201,21 +2241,94 @@ describe("compaction-safeguard double-compaction guard", () => {
     const compaction = expectCompactionResult(result);
     expect(compaction.summary).toContain("branch summary");
     expect(compaction.summary).not.toContain("No prior history.");
-    expect(mockSummarizeInStages).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: expect.arrayContaining([
-          expect.objectContaining({
-            role: "custom",
-            customType: "cron-request",
-            content: "prepare the daily report",
-          }),
-          expect.objectContaining({
-            role: "toolResult",
-            toolName: "read",
-          }),
-        ]),
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const messages = requireArray(summarizeCall.messages);
+    expect(
+      messages.some((message) => {
+        const record = requireRecord(message);
+        return (
+          record.role === "custom" &&
+          record.customType === "cron-request" &&
+          record.content === "prepare the daily report"
+        );
       }),
-    );
+    ).toBe(true);
+    expect(
+      messages.some((message) => {
+        const record = requireRecord(message);
+        return record.role === "toolResult" && record.toolName === "read";
+      }),
+    ).toBe(true);
+  });
+
+  it("recovers user and assistant branch turns when compaction preparation has only tool output", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("branch summary with visible turns");
+
+    const now = Date.now();
+    const sessionManager = {
+      ...stubSessionManager(),
+      getBranch: () => [
+        {
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: new Date(now).toISOString(),
+          message: {
+            role: "user",
+            content: "what is the deployment status?",
+            timestamp: now,
+          },
+        },
+        {
+          type: "message",
+          id: "assistant-1",
+          parentId: "user-1",
+          timestamp: new Date(now + 1).toISOString(),
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "I will check the deploy." }],
+            timestamp: now + 1,
+          },
+        },
+      ],
+    } as ExtensionContext["sessionManager"];
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "status",
+            content: [{ type: "text", text: "deploy green" }],
+            timestamp: now + 2,
+          },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-6",
+        tokensBefore: 38085,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "test-key",
+    });
+
+    const compaction = expectCompactionResult(result);
+    expect(compaction.summary).toContain("branch summary with visible turns");
+    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const messages = requireArray(summarizeCall.messages);
+    expect(messages.map((message) => requireRecord(message).role)).toEqual(["user", "assistant"]);
   });
 
   it("continues when messages include real conversation content", async () => {
@@ -2238,7 +2351,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("treats tool results as real conversation only when linked to a meaningful user ask", () => {
     expect(
-      __testing.isRealConversationMessage(
+      testing.isRealConversationMessage(
         {
           role: "toolResult",
           toolCallId: "t1",
@@ -2259,7 +2372,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     ).toBe(false);
 
     expect(
-      __testing.isRealConversationMessage(
+      testing.isRealConversationMessage(
         {
           role: "toolResult",
           toolCallId: "t2",
@@ -2282,7 +2395,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("does not treat assistant-only tool calls as meaningful conversation", () => {
     expect(
-      __testing.hasMeaningfulConversationContent({
+      testing.hasMeaningfulConversationContent({
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
       } as AgentMessage),
@@ -2291,14 +2404,14 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("does not treat reasoning-only assistant blocks as meaningful conversation", () => {
     expect(
-      __testing.hasMeaningfulConversationContent({
+      testing.hasMeaningfulConversationContent({
         role: "assistant",
         content: [{ type: "thinking", thinking: "checking" }],
       } as AgentMessage),
     ).toBe(false);
 
     expect(
-      __testing.hasMeaningfulConversationContent({
+      testing.hasMeaningfulConversationContent({
         role: "assistant",
         content: [{ type: "reasoning", summary: [] }],
       } as unknown as AgentMessage),
@@ -2307,7 +2420,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("treats markup-wrapped heartbeat tokens as boilerplate", () => {
     expect(
-      __testing.hasMeaningfulConversationContent(
+      testing.hasMeaningfulConversationContent(
         castAgentMessage({
           role: "assistant",
           content: "<b>HEARTBEAT_OK</b>",
@@ -2326,7 +2439,9 @@ async function expectWorkspaceSummaryEmptyForAgentsAlias(
     const outside = path.join(root, "outside-secret.txt");
     fs.writeFileSync(outside, "secret");
     createAlias(outside, path.join(root, "AGENTS.md"));
-    await expect(readWorkspaceContextForSummary()).resolves.toBe("");
+    await expect(readWorkspaceContextForSummary(["Session Startup", "Red Lines"])).resolves.toBe(
+      "",
+    );
   } finally {
     cwdSpy.mockRestore();
     fs.rmSync(root, { recursive: true, force: true });
@@ -2334,6 +2449,83 @@ async function expectWorkspaceSummaryEmptyForAgentsAlias(
 }
 
 describe("readWorkspaceContextForSummary", () => {
+  async function withWorkspaceSummary(
+    content: string,
+    sectionNames: string[] | undefined,
+  ): Promise<string> {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
+    try {
+      fs.writeFileSync(path.join(root, "AGENTS.md"), content);
+      return await readWorkspaceContextForSummary(sectionNames);
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("returns empty when post-compaction sections are not configured", async () => {
+    const result = await withWorkspaceSummary(
+      "## Session Startup\n\nRead AGENTS.md\n\n## Red Lines\n\nBe careful.\n",
+      undefined,
+    );
+
+    expect(result).toBe("");
+  });
+
+  it("returns empty when post-compaction sections are explicitly disabled", async () => {
+    const result = await withWorkspaceSummary("## Session Startup\n\nRead AGENTS.md\n", []);
+
+    expect(result).toBe("");
+  });
+
+  it("injects workspace critical rules only for explicit section opt-in", async () => {
+    const result = await withWorkspaceSummary(
+      "## Session Startup\n\nRead AGENTS.md\n\n## Other\n\nIgnore me.\n",
+      ["Session Startup", "Red Lines"],
+    );
+
+    expect(result).toContain("<workspace-critical-rules>");
+    expect(result).toContain("## Session Startup");
+    expect(result).toContain("Read AGENTS.md");
+    expect(result).not.toContain("Ignore me");
+  });
+
+  it("reads workspace context from the configured workspace instead of process cwd", async () => {
+    const processRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-cwd-"));
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-workspace-"));
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(processRoot);
+    try {
+      fs.writeFileSync(
+        path.join(processRoot, "AGENTS.md"),
+        "## Session Startup\n\nWrong cwd rules.\n",
+      );
+      fs.writeFileSync(
+        path.join(workspaceRoot, "AGENTS.md"),
+        "## Session Startup\n\nUse the run workspace rules.\n",
+      );
+
+      const result = await readWorkspaceContextForSummary(["Session Startup"], workspaceRoot);
+
+      expect(result).toContain("Use the run workspace rules.");
+      expect(result).not.toContain("Wrong cwd rules.");
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(processRoot, { recursive: true, force: true });
+      fs.rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves legacy fallback only for the explicit default section pair", async () => {
+    const result = await withWorkspaceSummary(
+      "## Every Session\n\nDo startup things.\n\n## Safety\n\nBe safe.\n",
+      ["Red Lines", "Session Startup"],
+    );
+
+    expect(result).toContain("Do startup things");
+    expect(result).toContain("Be safe");
+  });
+
   it.runIf(process.platform !== "win32")(
     "returns empty when AGENTS.md is a symlink escape",
     async () => {

@@ -16,6 +16,7 @@ type TranscriptLine = {
 const sessionEntryState = vi.hoisted(() => ({
   transcriptPath: "",
   sessionId: "",
+  hasEntry: true,
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -26,10 +27,12 @@ vi.mock("../session-utils.js", async () => {
     loadSessionEntry: () => ({
       cfg: {},
       storePath: path.join(path.dirname(sessionEntryState.transcriptPath), "sessions.json"),
-      entry: {
-        sessionId: sessionEntryState.sessionId,
-        sessionFile: sessionEntryState.transcriptPath,
-      },
+      entry: sessionEntryState.hasEntry
+        ? {
+            sessionId: sessionEntryState.sessionId,
+            sessionFile: sessionEntryState.transcriptPath,
+          }
+        : undefined,
       canonicalKey: "main",
     }),
   };
@@ -113,6 +116,15 @@ function expectAbortPayloadContainsRunIds(payload: unknown, runIds: string[]) {
   }
 }
 
+function requireLastRespondCall(respond: ReturnType<typeof vi.fn>): unknown[] {
+  const calls = respond.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected respond call");
+  }
+  return call;
+}
+
 function expectPersistedAbortMessage(
   message: unknown,
   expected: {
@@ -133,9 +145,10 @@ function expectPersistedAbortMessage(
   expect(abort.runId).toBe(expected.runId);
 }
 
-function setMockSessionEntry(transcriptPath: string, sessionId: string) {
+function setMockSessionEntry(transcriptPath: string, sessionId: string, hasEntry = true) {
   sessionEntryState.transcriptPath = transcriptPath;
   sessionEntryState.sessionId = sessionId;
+  sessionEntryState.hasEntry = hasEntry;
 }
 
 async function createTranscriptFixture(prefix: string) {
@@ -145,6 +158,14 @@ async function createTranscriptFixture(prefix: string) {
   await writeTranscriptHeader(transcriptPath, sessionId);
   setMockSessionEntry(transcriptPath, sessionId);
   return { transcriptPath, sessionId };
+}
+
+async function createMissingEntryFixture(prefix: string) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const transcriptPath = path.join(dir, "missing.jsonl");
+  const sessionId = "client-supplied-session";
+  setMockSessionEntry(transcriptPath, sessionId, false);
+  return { sessionId };
 }
 
 afterEach(() => {
@@ -179,7 +200,7 @@ describe("chat abort transcript persistence", () => {
       respond,
     });
 
-    const [ok1, payload1] = respond.mock.calls.at(-1) ?? [];
+    const [ok1, payload1] = requireLastRespondCall(respond);
     expect(ok1).toBe(true);
     expectAbortPayload(payload1, { runIds: [runId] });
 
@@ -233,7 +254,7 @@ describe("chat abort transcript persistence", () => {
       respond,
     });
 
-    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     expectAbortPayloadContainsRunIds(payload, ["run-a", "run-b"]);
 
@@ -258,9 +279,6 @@ describe("chat abort transcript persistence", () => {
       chatDeltaSentAt: new Map([["run-stop-1", Date.now()]]),
       removeChatRun: vi.fn().mockReturnValue({ sessionKey: "main", clientRunId: "client-stop-1" }),
       agentRunSeq: new Map<string, number>([["run-stop-1", 1]]),
-      dedupe: {
-        get: vi.fn(),
-      },
     });
 
     await chatHandlers["chat.send"]({
@@ -276,7 +294,7 @@ describe("chat abort transcript persistence", () => {
       isWebchatConnect: () => false,
     });
 
-    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     expectAbortPayload(payload, { runIds: ["run-stop-1"] });
 
@@ -288,6 +306,99 @@ describe("chat abort transcript persistence", () => {
       origin: "stop-command",
       runId: "run-stop-1",
     });
+  });
+
+  it("plain stop aborts runs tracked under the canonical session key", async () => {
+    const { sessionId } = await createTranscriptFixture("openclaw-chat-stop-canonical-");
+    const respond = vi.fn();
+    const active = createActiveRun("main", { sessionId });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-stop-canonical", active]]),
+      removeChatRun: vi.fn().mockReturnValue({
+        sessionKey: "main",
+        clientRunId: "run-stop-canonical",
+      }),
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "alias-main",
+        message: "stop",
+        idempotencyKey: "idem-stop-canonical",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: ["run-stop-canonical"] });
+    expect(active.controller.signal.aborted).toBe(true);
+    expect(context.chatAbortControllers.has("run-stop-canonical")).toBe(false);
+  });
+
+  it("plain stop aborts raw-alias runs for the same backing session", async () => {
+    const { sessionId } = await createTranscriptFixture("openclaw-chat-stop-raw-alias-");
+    const respond = vi.fn();
+    const active = createActiveRun("alias-main", { sessionId });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-stop-raw-alias", active]]),
+      removeChatRun: vi.fn().mockReturnValue({
+        sessionKey: "alias-main",
+        clientRunId: "run-stop-raw-alias",
+      }),
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "main",
+        message: "stop",
+        idempotencyKey: "idem-stop-raw-alias",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: ["run-stop-raw-alias"] });
+    expect(active.controller.signal.aborted).toBe(true);
+    expect(context.chatAbortControllers.has("run-stop-raw-alias")).toBe(false);
+  });
+
+  it("does not match stop targets by client-supplied session id without a stored entry", async () => {
+    const { sessionId } = await createMissingEntryFixture("openclaw-chat-stop-client-session-");
+    const respond = vi.fn();
+    const active = createActiveRun("third-session", { sessionId });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-stop-client-session", active]]),
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "other-session",
+        sessionId,
+        message: "stop",
+        idempotencyKey: "idem-stop-client-session",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expect(expectRecord(payload, "abort payload").aborted).toBe(false);
+    expect(active.controller.signal.aborted).toBe(false);
+    expect(context.chatAbortControllers.has("run-stop-client-session")).toBe(true);
   });
 
   it("skips run-scoped transcript persistence when partial text is blank", async () => {
@@ -309,7 +420,7 @@ describe("chat abort transcript persistence", () => {
       respond,
     });
 
-    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
     expectAbortPayload(payload, { runIds: [runId] });
 
