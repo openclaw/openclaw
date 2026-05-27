@@ -2,7 +2,10 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatCliFailureLines } from "./cli/failure-output.js";
-import { armLocalAgentHardTimeout, exitAfterCliCompletion } from "./cli/local-agent-lifetime.js";
+import {
+  armLocalAgentHardTimeout,
+  exitAfterLocalAgentCompletion,
+} from "./cli/local-agent-lifetime.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -120,7 +123,7 @@ if (isMain) {
 
   void runLegacyCliEntry(process.argv)
     .then(() => {
-      exitAfterCliCompletion();
+      return exitAfterLocalAgentCompletion();
     })
     .catch((err) => {
       for (const line of formatCliFailureLines({

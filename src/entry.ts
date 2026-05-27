@@ -3,7 +3,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { getCommandPathWithRootOptions, hasFlag, isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
-import { armLocalAgentHardTimeout, exitAfterCliCompletion } from "./cli/local-agent-lifetime.js";
+import {
+  armLocalAgentHardTimeout,
+  exitAfterLocalAgentCompletion,
+} from "./cli/local-agent-lifetime.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
@@ -155,7 +158,7 @@ if (
 
       if (!tryHandleRootVersionFastPath(process.argv)) {
         await runMainOrRootHelp(process.argv);
-        exitAfterCliCompletion();
+        await exitAfterLocalAgentCompletion();
       }
     }
   }
