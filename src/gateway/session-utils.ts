@@ -325,7 +325,14 @@ export function isFullyUsableCompactionCheckpoint(
   ) {
     return false;
   }
-  return Boolean(normalizeOptionalString(checkpoint.preCompaction.sessionFile));
+  if (normalizeOptionalString(checkpoint.preCompaction.sessionFile)) {
+    return true;
+  }
+  return Boolean(
+    normalizeOptionalString(checkpoint.postCompaction.sessionFile) &&
+    (normalizeOptionalString(checkpoint.postCompaction.leafId) ||
+      normalizeOptionalString(checkpoint.postCompaction.entryId)),
+  );
 }
 
 export function resolveFullyUsableCompactionCheckpoints(

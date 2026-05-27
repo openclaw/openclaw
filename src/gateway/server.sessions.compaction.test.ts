@@ -389,13 +389,18 @@ test("sessions.compaction.* scopes selected global checkpoints to the requested 
 test("sessions.compaction.* discovers checkpoint transcript files when store metadata is missing", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   const fixture = await createCheckpointFixture(dir);
+  const preCompactionSession = fixture.preCompactionSession;
+  const preCompactionSessionFile = fixture.preCompactionSessionFile;
+  if (!preCompactionSession || !preCompactionSessionFile) {
+    throw new Error("expected pre-compaction fixture snapshot");
+  }
   const { SessionManager } = await getSessionManagerModule();
   const checkpointId = randomUUID();
   const checkpointFile = path.join(
     dir,
     `${path.parse(fixture.sessionFile).name}.checkpoint.${checkpointId}.jsonl`,
   );
-  await fs.copyFile(fixture.preCompactionSessionFile, checkpointFile);
+  await fs.copyFile(preCompactionSessionFile, checkpointFile);
   await fs.utimes(checkpointFile, 1_700_000_000.123, 1_700_000_001.789);
   const expectedCreatedAt = Math.trunc((await fs.stat(checkpointFile)).mtimeMs);
   const expectedCheckpointFile = await fs.realpath(checkpointFile);
@@ -462,7 +467,7 @@ test("sessions.compaction.* discovers checkpoint transcript files when store met
     expect(checkpoint.payload?.checkpoint).toMatchObject({
       checkpointId,
       preCompaction: {
-        sessionId: fixture.preCompactionSession.getSessionId(),
+        sessionId: preCompactionSession.getSessionId(),
         sessionFile: expectedCheckpointFile,
         leafId: fixture.preCompactionLeafId,
       },
@@ -489,9 +494,7 @@ test("sessions.compaction.* discovers checkpoint transcript files when store met
       throw new Error("expected branched disk checkpoint session file");
     }
     const branchedSession = SessionManager.open(branchedSessionFile, dir);
-    expect(branchedSession.getEntries()).toHaveLength(
-      fixture.preCompactionSession.getEntries().length,
-    );
+    expect(branchedSession.getEntries()).toHaveLength(preCompactionSession.getEntries().length);
 
     const restored = await rpcReq<{
       ok: true;
@@ -509,7 +512,7 @@ test("sessions.compaction.* discovers checkpoint transcript files when store met
     expect(restored.payload?.entry.compactionCheckpoints?.[0]).toMatchObject({
       checkpointId,
       preCompaction: {
-        sessionFile: checkpointFile,
+        sessionFile: expectedCheckpointFile,
       },
     });
     const restoredSessionFile = restored.payload?.entry.sessionFile;
@@ -517,9 +520,7 @@ test("sessions.compaction.* discovers checkpoint transcript files when store met
       throw new Error("expected restored disk checkpoint session file");
     }
     const restoredSession = SessionManager.open(restoredSessionFile, dir);
-    expect(restoredSession.getEntries()).toHaveLength(
-      fixture.preCompactionSession.getEntries().length,
-    );
+    expect(restoredSession.getEntries()).toHaveLength(preCompactionSession.getEntries().length);
 
     const storeAfterRestore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
@@ -535,15 +536,22 @@ test("sessions.compaction.* discovers checkpoint transcript files when store met
 test("sessions.compaction.* ignores malformed usable-looking stored checkpoint metadata when disk checkpoint matches", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   const fixture = await createCheckpointFixture(dir);
+  const preCompactionSession = fixture.preCompactionSession;
+  const preCompactionSessionFile = fixture.preCompactionSessionFile;
+  if (!preCompactionSession || !preCompactionSessionFile) {
+    throw new Error("expected pre-compaction fixture snapshot");
+  }
   const { SessionManager } = await getSessionManagerModule();
   const checkpointId = randomUUID();
   const checkpointFile = path.join(
     dir,
     `${path.parse(fixture.sessionFile).name}.checkpoint.${checkpointId}.jsonl`,
   );
-  await fs.copyFile(fixture.preCompactionSessionFile, checkpointFile);
+  await fs.copyFile(preCompactionSessionFile, checkpointFile);
   await fs.utimes(checkpointFile, 1_700_000_000.123, 1_700_000_001.789);
   const expectedCreatedAt = Math.trunc((await fs.stat(checkpointFile)).mtimeMs);
+  const expectedCheckpointFile = await fs.realpath(checkpointFile);
+  const expectedSessionFile = await fs.realpath(fixture.sessionFile);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(fixture.sessionId, {
@@ -556,7 +564,7 @@ test("sessions.compaction.* ignores malformed usable-looking stored checkpoint m
             createdAt: 1_700_000_002_000,
             reason: "manual",
             preCompaction: {
-              sessionId: fixture.preCompactionSession.getSessionId(),
+              sessionId: preCompactionSession.getSessionId(),
             },
             postCompaction: {
               sessionId: fixture.sessionId,
@@ -584,7 +592,7 @@ test("sessions.compaction.* ignores malformed usable-looking stored checkpoint m
     expect(listedCheckpoints.payload?.checkpoints[0]?.checkpointId).toBe(checkpointId);
     expect(listedCheckpoints.payload?.checkpoints[0]?.createdAt).toBe(expectedCreatedAt);
     expect(listedCheckpoints.payload?.checkpoints[0]?.preCompaction.sessionFile).toBe(
-      checkpointFile,
+      expectedCheckpointFile,
     );
 
     const checkpoint = await rpcReq<{
@@ -602,13 +610,13 @@ test("sessions.compaction.* ignores malformed usable-looking stored checkpoint m
     expect(checkpoint.payload?.checkpoint).toMatchObject({
       checkpointId,
       preCompaction: {
-        sessionId: fixture.preCompactionSession.getSessionId(),
-        sessionFile: checkpointFile,
+        sessionId: preCompactionSession.getSessionId(),
+        sessionFile: expectedCheckpointFile,
         leafId: fixture.preCompactionLeafId,
       },
       postCompaction: {
         sessionId: fixture.sessionId,
-        sessionFile: fixture.sessionFile,
+        sessionFile: expectedSessionFile,
       },
     });
 
@@ -629,9 +637,7 @@ test("sessions.compaction.* ignores malformed usable-looking stored checkpoint m
       throw new Error("expected branched disk checkpoint session file");
     }
     const branchedSession = SessionManager.open(branchedSessionFile, dir);
-    expect(branchedSession.getEntries()).toHaveLength(
-      fixture.preCompactionSession.getEntries().length,
-    );
+    expect(branchedSession.getEntries()).toHaveLength(preCompactionSession.getEntries().length);
 
     const restored = await rpcReq<{
       ok: true;
@@ -649,7 +655,7 @@ test("sessions.compaction.* ignores malformed usable-looking stored checkpoint m
     expect(restored.payload?.entry.compactionCheckpoints?.[0]).toMatchObject({
       checkpointId,
       preCompaction: {
-        sessionFile: checkpointFile,
+        sessionFile: expectedCheckpointFile,
       },
     });
     const restoredSessionFile = restored.payload?.entry.sessionFile;
@@ -657,9 +663,7 @@ test("sessions.compaction.* ignores malformed usable-looking stored checkpoint m
       throw new Error("expected restored disk checkpoint session file");
     }
     const restoredSession = SessionManager.open(restoredSessionFile, dir);
-    expect(restoredSession.getEntries()).toHaveLength(
-      fixture.preCompactionSession.getEntries().length,
-    );
+    expect(restoredSession.getEntries()).toHaveLength(preCompactionSession.getEntries().length);
   } finally {
     ws.close();
   }
