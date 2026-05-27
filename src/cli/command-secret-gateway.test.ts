@@ -111,10 +111,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   function setSingleSecretTargetDeps(params: {
     path: string;
     pathSegments: readonly string[];
-    resolveManifestContractOwnerPluginId?: (params: {
-      contract: string;
-      value: string;
-    }) => string | undefined;
+    resolveManifestContractOwnerPluginId?: NonNullable<
+      Parameters<
+        typeof commandSecretGatewayTesting.setDepsForTest
+      >[0]["resolveManifestContractOwnerPluginId"]
+    >;
   }): () => void {
     const deps: Parameters<typeof commandSecretGatewayTesting.setDepsForTest>[0] = {
       analyzeCommandSecretAssignmentsFromSnapshot: ({ inactiveRefPaths, resolvedConfig }) => {
