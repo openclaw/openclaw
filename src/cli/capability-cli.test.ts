@@ -192,6 +192,11 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   getProviderEnvVars: mocks.getProviderEnvVars,
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
 }));
 
 vi.mock("../config/config.js", () => ({
