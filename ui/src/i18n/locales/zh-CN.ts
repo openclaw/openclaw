@@ -1119,7 +1119,7 @@ export const zh_CN: TranslationMap = {
     ko: "한국어 (韩语)",
     fr: "Français (法语)",
     ar: "(阿拉伯语) العربية",
-    it: "Italiano(意大利语)",
+    it: "Italiano (意大利语)",
     tr: "Türkçe (土耳其语)",
     uk: "Українська (乌克兰语)",
     id: "Bahasa Indonesia (印度尼西亚语)",
