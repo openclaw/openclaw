@@ -2043,6 +2043,7 @@ export async function runAgentTurnWithFallback(params: {
                     trigger: params.isHeartbeat ? "heartbeat" : "user",
                     sessionFile: params.followupRun.run.sessionFile,
                     workspaceDir: params.followupRun.run.workspaceDir,
+                    cwd: params.followupRun.run.cwd,
                     config: runtimeConfig,
                     prompt: params.commandBody,
                     transcriptPrompt: params.transcriptCommandBody,

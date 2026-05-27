@@ -103,6 +103,7 @@ export async function mirrorTranscriptBestEffort(params: {
   notifyUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
   result: EmbeddedRunAttemptResult;
   sessionKey?: string;
+  cwd: string;
   threadId: string;
   turnId: string;
 }): Promise<void> {
@@ -116,6 +117,8 @@ export async function mirrorTranscriptBestEffort(params: {
       sessionFile: params.params.sessionFile,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      sessionId: params.params.sessionId,
+      cwd: params.cwd,
       messages,
       // Scope is thread-stable. Each entry in `messagesSnapshot` is tagged
       // with a per-turn `attachCodexMirrorIdentity` value carrying its own
@@ -182,6 +185,7 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
   agentId?: string;
   notifyUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
   sessionKey?: string;
+  cwd: string;
   threadId: string;
   turnId: string;
 }): Promise<void> {
@@ -198,6 +202,8 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
         sessionFile: params.params.sessionFile,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        sessionId: params.params.sessionId,
+        cwd: params.cwd,
         messages: [userPromptMessage],
         idempotencyScope: `codex-app-server:${params.threadId}`,
         config: params.params.config,
@@ -266,6 +272,8 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
 
 export async function mirrorCodexAppServerTranscript(params: {
   sessionFile: string;
+  sessionId?: string;
+  cwd?: string;
   sessionKey?: string;
   agentId?: string;
   messages: AgentMessage[];
@@ -326,6 +334,8 @@ export async function mirrorCodexAppServerTranscript(params: {
         transcriptPath: params.sessionFile,
         message: messageToAppend,
         idempotencyLookup: idempotencyKey ? "caller-checked" : "scan",
+        sessionId: params.sessionId,
+        cwd: params.cwd,
         config: params.config,
       });
       if (appendedMessage.role === "user") {

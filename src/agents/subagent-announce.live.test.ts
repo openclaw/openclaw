@@ -373,10 +373,14 @@ describeLive("subagent announce live", () => {
       const parentToken = `PARENT_SAW_${childToken}`;
       const parentStartedToken = `PARENT_READY_${nonce}`;
       const steerToken = `STEER_${nonce}`;
-      const steerMessage = `${steerToken}: reply exactly ${childToken} now.`;
+      const steerMessage = [
+        `${steerToken} has arrived.`,
+        "Stop waiting and do not call any tools.",
+        `Reply exactly ${childToken} and nothing else.`,
+      ].join(" ");
       const childTask = [
         `Immediately call sessions_yield with message="waiting for ${steerToken}".`,
-        `After a steering message containing ${steerToken} arrives, reply exactly ${childToken}.`,
+        `After a steering message says ${steerToken} has arrived, stop waiting and reply exactly ${childToken}.`,
         `Do not reply with ${childToken} before receiving ${steerToken}.`,
       ].join(" ");
       const sessionKey = `agent:main:live-subagent-${nonce.toLowerCase()}`;

@@ -68,6 +68,7 @@ export function resolveCliRunQueueKey(params: {
 
 export function buildCliAgentSystemPrompt(params: {
   workspaceDir: string;
+  cwd?: string;
   config?: OpenClawConfig;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
@@ -83,6 +84,7 @@ export function buildCliAgentSystemPrompt(params: {
   modelDisplay: string;
   agentId?: string;
 }) {
+  const runtimeWorkspaceDir = params.cwd?.trim() || params.workspaceDir;
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
     agentId: params.agentId,
@@ -91,8 +93,8 @@ export function buildCliAgentSystemPrompt(params: {
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
-    workspaceDir: params.workspaceDir,
-    cwd: process.cwd(),
+    workspaceDir: runtimeWorkspaceDir,
+    cwd: runtimeWorkspaceDir,
     runtime: {
       host: "openclaw",
       os: `${os.type()} ${os.release()}`,
@@ -106,7 +108,7 @@ export function buildCliAgentSystemPrompt(params: {
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
     agentId: params.agentId,
-    workspaceDir: params.workspaceDir,
+    workspaceDir: runtimeWorkspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -398,7 +400,11 @@ export function buildCliArgs(params: {
         params.systemPromptFilePath,
       ),
     );
-  } else if ((!params.useResume || params.backend.systemPromptWhen === "always") && params.systemPrompt && params.backend.systemPromptArg) {
+  } else if (
+    (!params.useResume || params.backend.systemPromptWhen === "always") &&
+    params.systemPrompt &&
+    params.backend.systemPromptArg
+  ) {
     args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
   }
   if (!params.useResume && params.sessionId) {

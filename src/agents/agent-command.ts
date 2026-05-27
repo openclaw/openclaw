@@ -475,6 +475,8 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const workspaceDir = resolveUserPath(workspaceDirRaw);
+  const cwd =
+    normalizeOptionalString(opts.cwd) ?? normalizeOptionalString(sessionEntryRaw?.spawnedCwd);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
     config: cfg,
@@ -552,6 +554,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     sessionAgentId,
     outboundSession,
     workspaceDir,
+    cwd: cwd ? resolveUserPath(cwd) : undefined,
     agentDir,
     modelManifestContext,
     runId,
@@ -591,12 +594,14 @@ async function agentCommandInternal(
     sessionAgentId,
     outboundSession,
     workspaceDir,
+    cwd,
     agentDir,
     runId,
     acpManager,
     acpResolution,
     modelManifestContext,
   } = prepared;
+  const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
 
   try {
@@ -1413,6 +1418,7 @@ async function agentCommandInternal(
               sessionAgentId,
               sessionFile: attemptSessionFile,
               workspaceDir,
+              cwd,
               body,
               isFallbackRetry,
               resolvedThinkLevel,
@@ -1667,7 +1673,7 @@ async function agentCommandInternal(
             storePath: suppressVisibleSessionEffects ? undefined : storePath,
             sessionAgentId,
             threadId: opts.threadId,
-            sessionCwd: workspaceDir,
+            sessionCwd: effectiveCwd,
             config: cfg,
             embeddedAssistantGapFill,
           });
@@ -1692,6 +1698,7 @@ async function agentCommandInternal(
             storePath,
             sessionAgentId,
             workspaceDir,
+            cwd: effectiveCwd,
             agentDir,
             provider: result.meta.agentMeta?.provider ?? provider,
             model: result.meta.agentMeta?.model ?? model,

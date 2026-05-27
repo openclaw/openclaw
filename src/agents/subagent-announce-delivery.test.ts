@@ -626,6 +626,7 @@ describe("resolveSubagentCompletionOrigin", () => {
 describe("deliverSubagentAnnouncement active requester steering", () => {
   async function deliverSteeredAnnouncement(params: {
     mode?: "followup" | "collect" | "interrupt";
+    announceTimeoutMs?: number;
     queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
     requesterOrigin?: {
       channel?: string;
@@ -646,6 +647,17 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
         params.queueEmbeddedAgentMessageWithOutcome ?? createQueueOutcomeMock(true),
       getRuntimeConfig: () =>
         ({
+          ...(params.announceTimeoutMs !== undefined
+            ? {
+                agents: {
+                  defaults: {
+                    subagents: {
+                      announceTimeoutMs: params.announceTimeoutMs,
+                    },
+                  },
+                },
+              }
+            : {}),
           messages: {
             queue: {
               mode: params.mode ?? "followup",
@@ -783,6 +795,165 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     );
   });
 
+  it("waits through compaction and re-steers the active requester (86566)", async () => {
+    const previousTestFast = process.env.OPENCLAW_TEST_FAST;
+    process.env.OPENCLAW_TEST_FAST = "1";
+    try {
+      // First steer attempt observes a compacting run; once compaction ends the
+      // same wake succeeds, so completion must stay on the steering path instead
+      // of falling back to the direct requester-agent handoff.
+      const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+        "compacting",
+        true,
+      ]);
+      const callGateway = await deliverSteeredAnnouncement({
+        queueEmbeddedAgentMessageWithOutcome,
+        requesterOrigin: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "acct-1",
+        },
+      });
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+      const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
+      expectRecordFields(retryOptions, {
+        steeringMode: "all",
+        debounceMs: 0,
+        waitForTranscriptCommit: true,
+      });
+      expect(retryOptions.deliveryTimeoutMs).toBeGreaterThan(0);
+      expect(retryOptions.deliveryTimeoutMs).toBeLessThan(120_000);
+    } finally {
+      if (previousTestFast === undefined) {
+        delete process.env.OPENCLAW_TEST_FAST;
+      } else {
+        process.env.OPENCLAW_TEST_FAST = previousTestFast;
+      }
+    }
+  });
+
+  it("keeps retrying compaction past the backoff schedule until the delivery timeout (86566)", async () => {
+    const previousTestFast = process.env.OPENCLAW_TEST_FAST;
+    process.env.OPENCLAW_TEST_FAST = "1";
+    try {
+      // The backoff schedule has four entries, but a compaction that only
+      // finishes after the schedule is exhausted should still be retried while
+      // the run stays within the delivery timeout (120s here). Five compacting
+      // outcomes (more than the schedule length) precede the queued success, so
+      // the wake must keep retrying past the schedule instead of falling back.
+      const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+        "compacting",
+        "compacting",
+        "compacting",
+        "compacting",
+        "compacting",
+        true,
+      ]);
+      const callGateway = await deliverSteeredAnnouncement({
+        queueEmbeddedAgentMessageWithOutcome,
+        requesterOrigin: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "acct-1",
+        },
+      });
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(6);
+    } finally {
+      if (previousTestFast === undefined) {
+        delete process.env.OPENCLAW_TEST_FAST;
+      } else {
+        process.env.OPENCLAW_TEST_FAST = previousTestFast;
+      }
+    }
+  });
+
+  it("passes the remaining delivery window into compaction retries (86566)", async () => {
+    const previousTestFast = process.env.OPENCLAW_TEST_FAST;
+    process.env.OPENCLAW_TEST_FAST = "1";
+    try {
+      const queueEmbeddedAgentMessageWithOutcome = vi
+        .fn<QueueEmbeddedAgentMessageWithOutcome>()
+        .mockImplementationOnce((sessionId: string) => ({
+          queued: false,
+          sessionId,
+          reason: "compacting",
+          gatewayHealth: "live",
+        }))
+        .mockImplementationOnce((sessionId: string) => ({
+          queued: true,
+          sessionId,
+          target: "embedded_run",
+          gatewayHealth: "live",
+        }));
+      const callGateway = await deliverSteeredAnnouncement({
+        announceTimeoutMs: 500,
+        queueEmbeddedAgentMessageWithOutcome,
+        requesterOrigin: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "acct-1",
+        },
+      });
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+      const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
+      expectRecordFields(retryOptions, {
+        steeringMode: "all",
+        debounceMs: 0,
+        waitForTranscriptCommit: true,
+      });
+      expect(retryOptions.deliveryTimeoutMs).toBeGreaterThan(0);
+      expect(retryOptions.deliveryTimeoutMs).toBeLessThan(500);
+    } finally {
+      if (previousTestFast === undefined) {
+        delete process.env.OPENCLAW_TEST_FAST;
+      } else {
+        process.env.OPENCLAW_TEST_FAST = previousTestFast;
+      }
+    }
+  });
+
+  it("does not retry non-compacting steer failures (86566)", async () => {
+    // Only compacting is treated as transient; other wake failures keep their
+    // existing single-attempt fallback behavior.
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "no_active_run",
+      true,
+    ]);
+    const callGateway = createGatewayMock();
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "paperclip-session",
+        isActive: true,
+      }),
+      queueEmbeddedAgentMessageWithOutcome,
+      getRuntimeConfig: () =>
+        ({
+          messages: { queue: { mode: "steer", debounceMs: 0 } },
+        }) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:eng:paperclip:issue:123",
+      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-no-active-run-no-retry",
+    });
+
+    // Non-compacting failure is not retried: the steer is attempted once.
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledOnce();
+    expectRecordFields(result, { path: "none" });
+  });
+
   it("does not report delivery when active requester steering is rejected", async () => {
     const queueEmbeddedAgentMessageWithOutcome = vi.fn(async (sessionId: string) => ({
       queued: false as const,
@@ -913,6 +1084,42 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     );
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("waits through compaction on the completion handoff wake (86566)", async () => {
+    const previousTestFast = process.env.OPENCLAW_TEST_FAST;
+    process.env.OPENCLAW_TEST_FAST = "1";
+    try {
+      // The generated-completion active wake (expectsCompletionMessage) must also
+      // wait through a compacting run and re-steer the same wake instead of
+      // falling back to direct delivery.
+      const callGateway = createGatewayMock();
+      const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+        "compacting",
+        true,
+      ]);
+      const result = await deliverSlackThreadAnnouncement({
+        callGateway,
+        sessionId: "requester-session-1",
+        isActive: true,
+        expectsCompletionMessage: true,
+        directIdempotencyKey: "announce-compaction-completion",
+        queueEmbeddedAgentMessageWithOutcome,
+      });
+
+      expectRecordFields(result, {
+        delivered: true,
+        path: "steered",
+      });
+      expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+      expect(callGateway).not.toHaveBeenCalled();
+    } finally {
+      if (previousTestFast === undefined) {
+        delete process.env.OPENCLAW_TEST_FAST;
+      } else {
+        process.env.OPENCLAW_TEST_FAST = previousTestFast;
+      }
+    }
   });
 
   it("does not also direct-run a queued active completion", async () => {

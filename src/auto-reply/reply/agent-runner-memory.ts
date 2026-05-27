@@ -821,6 +821,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     senderE164: params.followupRun.run.senderE164,
     sessionFile: sessionFile ?? params.followupRun.run.sessionFile,
     workspaceDir: params.followupRun.run.workspaceDir,
+    cwd: params.followupRun.run.cwd,
     agentDir: params.followupRun.run.agentDir,
     config: params.cfg,
     skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,

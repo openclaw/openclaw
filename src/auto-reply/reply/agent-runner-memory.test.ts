@@ -100,6 +100,7 @@ type CompactEmbeddedAgentSessionParams = {
   sessionKey?: string;
   sandboxSessionKey?: string;
   currentTokenCount?: number;
+  cwd?: string;
   sessionFile?: string;
   sessionId?: string;
   trigger?: string;
@@ -848,6 +849,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionId: "session",
         sessionFile,
         sessionKey: "agent:main:main",
+        cwd: "/tmp/task-repo",
         runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
       }),
       defaultModel: "anthropic/claude-opus-4-6",
@@ -864,6 +866,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     const compactCall = requireCompactEmbeddedAgentSessionCall();
     expect(compactCall.sessionKey).toBe("agent:main:main");
+    expect(compactCall.cwd).toBe("/tmp/task-repo");
     expect(compactCall.sandboxSessionKey).toBe("agent:main:telegram:default:direct:12345");
   });
 

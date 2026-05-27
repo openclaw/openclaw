@@ -21,6 +21,7 @@ import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-con
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
+import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
@@ -143,6 +144,8 @@ export async function prepareCliRunContext(
     );
   }
   const workspaceDir = resolvedWorkspace;
+  const cwd = params.cwd ? resolveUserPath(params.cwd) : workspaceDir;
+  const cwdHash = hashCliSessionText(cwd);
 
   const backendResolved = resolveCliBackendConfig(params.provider, params.config, {
     agentId: params.agentId,
@@ -382,6 +385,7 @@ export async function prepareCliRunContext(
           authEpochVersion: CLI_AUTH_EPOCH_VERSION,
           extraSystemPromptHash,
           promptToolNamesHash,
+          cwdHash,
           mcpConfigHash: preparedBackendFinal.mcpConfigHash,
           mcpResumeHash: preparedBackendFinal.mcpResumeHash,
         })
@@ -412,7 +416,7 @@ export async function prepareCliRunContext(
   const openClawReferences = await prepareDeps.resolveOpenClawReferencePaths({
     workspaceDir,
     argv1: process.argv[1],
-    cwd: process.cwd(),
+    cwd,
     moduleUrl: import.meta.url,
   });
   const skillsPrompt = resolveSkillsPromptForRun({
@@ -429,6 +433,7 @@ export async function prepareCliRunContext(
     }) ??
     buildCliAgentSystemPrompt({
       workspaceDir,
+      cwd,
       config: params.config,
       defaultThinkLevel: params.thinkLevel,
       extraSystemPrompt,
@@ -600,6 +605,7 @@ export async function prepareCliRunContext(
       effectiveAuthProfileId,
       started,
       workspaceDir,
+      cwd,
       backendResolved,
       preparedBackend: preparedBackendFinal,
       reusableCliSession,
@@ -620,6 +626,7 @@ export async function prepareCliRunContext(
       authEpochVersion: CLI_AUTH_EPOCH_VERSION,
       extraSystemPromptHash,
       promptToolNamesHash,
+      cwdHash,
     };
   } catch (err) {
     try {

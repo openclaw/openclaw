@@ -19,6 +19,7 @@ export type EmbeddedCompactionRuntimeContext = {
   currentMessageId?: string | number;
   authProfileId?: string;
   workspaceDir: string;
+  cwd?: string;
   agentDir: string;
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
@@ -117,6 +118,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   currentMessageId?: string | number | null;
   authProfileId?: string | null;
   workspaceDir: string;
+  cwd?: string | null;
   agentDir: string;
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
@@ -155,6 +157,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     currentMessageId: params.currentMessageId ?? undefined,
     authProfileId: resolved.authProfileId,
     workspaceDir: params.workspaceDir,
+    cwd: params.cwd ?? undefined,
     agentDir: params.agentDir,
     config: params.config,
     skillsSnapshot: params.skillsSnapshot,

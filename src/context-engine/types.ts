@@ -196,6 +196,8 @@ export type ContextEnginePromptCacheInfo = {
 };
 
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
+  /** Runtime task working directory; workspaceDir remains the agent bootstrap workspace. */
+  cwd?: string;
   /**
    * True when the host has explicitly opted this maintenance run into
    * consuming deferred compaction debt.

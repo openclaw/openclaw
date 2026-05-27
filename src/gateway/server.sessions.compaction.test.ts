@@ -284,6 +284,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main", {
+        spawnedCwd: "/tmp/task-repo",
         thinkingLevel: "medium",
         reasoningLevel: "stream",
         contextBudgetStatus: {
@@ -383,6 +384,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
         thinkLevel?: string;
         trigger?: string;
         workspaceDir?: string;
+        cwd?: string;
       }
     | undefined;
   if (!compactionCall) {
@@ -398,6 +400,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   }
   expect(path.basename(compactionCall.sessionFile)).toBe("sess-main.jsonl");
   expect(compactionCall.workspaceDir).toBe(path.join(os.tmpdir(), "openclaw-gateway-test"));
+  expect(compactionCall.cwd).toBe("/tmp/task-repo");
   expect(callConfig.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-6");
   expect(callConfig.agents?.defaults?.workspace).toBe(
     path.join(os.tmpdir(), "openclaw-gateway-test"),

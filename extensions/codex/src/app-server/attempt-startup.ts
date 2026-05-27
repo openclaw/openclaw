@@ -82,6 +82,7 @@ export async function startCodexAttemptThread(params: {
   buildAttemptParams: () => EmbeddedRunAttemptParams;
   sessionAgentId: string;
   effectiveWorkspace: string;
+  effectiveCwd: string;
   dynamicTools: CodexDynamicToolSpec[];
   developerInstructions: string | undefined;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
@@ -238,7 +239,7 @@ export async function startCodexAttemptThread(params: {
               params.nativeToolSurfaceEnabled,
             );
             const startupExecutionCwd = resolveCodexAppServerExecutionCwd({
-              effectiveWorkspace: params.effectiveWorkspace,
+              effectiveCwd: params.effectiveCwd,
               environment: startupSandboxEnvironment,
               nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
             });
@@ -374,7 +375,14 @@ export async function startCodexAttemptThread(params: {
       releaseSharedClientLease,
     };
   } catch (error) {
-    if (params.signal.aborted || shouldClearSharedClientAfterStartupRace(error)) {
+    if (
+      params.signal.aborted ||
+      shouldClearSharedClientAfterStartupRace(error) ||
+      shouldClearSharedClientAfterStartupFailure({
+        error,
+        spawnedBy: params.spawnedBy,
+      })
+    ) {
       clearSharedCodexAppServerClientIfCurrent(startupClientForAbandonedRequestCleanup);
     }
     throw error;
@@ -388,4 +396,17 @@ function shouldClearSharedClientAfterStartupRace(error: unknown): boolean {
       error.message === "codex app-server startup aborted" ||
       error.message.endsWith(" timed out"))
   );
+}
+
+function shouldClearSharedClientAfterStartupFailure(params: {
+  error: unknown;
+  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
+}): boolean {
+  if (!(params.error instanceof Error)) {
+    return !params.spawnedBy;
+  }
+  if (params.error.message.includes("write EPIPE")) {
+    return true;
+  }
+  return !params.spawnedBy;
 }

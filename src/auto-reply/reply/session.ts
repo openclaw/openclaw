@@ -315,6 +315,7 @@ export async function initSessionState(params: {
   let persistedLabel: string | undefined;
   let persistedSpawnedBy: SessionEntry["spawnedBy"];
   let persistedSpawnedWorkspaceDir: SessionEntry["spawnedWorkspaceDir"];
+  let persistedSpawnedCwd: SessionEntry["spawnedCwd"];
   let persistedParentSessionKey: SessionEntry["parentSessionKey"];
   let persistedForkedFromParent: SessionEntry["forkedFromParent"];
   let persistedSpawnDepth: SessionEntry["spawnDepth"];
@@ -536,6 +537,7 @@ export async function initSessionState(params: {
       persistedLabel = entry.label;
       persistedSpawnedBy = entry.spawnedBy;
       persistedSpawnedWorkspaceDir = entry.spawnedWorkspaceDir;
+      persistedSpawnedCwd = entry.spawnedCwd;
       persistedParentSessionKey = entry.parentSessionKey;
       persistedForkedFromParent = entry.forkedFromParent;
       persistedSpawnDepth = entry.spawnDepth;
@@ -659,6 +661,7 @@ export async function initSessionState(params: {
     label: persistedLabel ?? baseEntry?.label,
     spawnedBy: persistedSpawnedBy ?? baseEntry?.spawnedBy,
     spawnedWorkspaceDir: persistedSpawnedWorkspaceDir ?? baseEntry?.spawnedWorkspaceDir,
+    spawnedCwd: persistedSpawnedCwd ?? baseEntry?.spawnedCwd,
     parentSessionKey: persistedParentSessionKey ?? baseEntry?.parentSessionKey,
     forkedFromParent: persistedForkedFromParent ?? baseEntry?.forkedFromParent,
     spawnDepth: persistedSpawnDepth ?? baseEntry?.spawnDepth,

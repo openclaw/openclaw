@@ -96,6 +96,8 @@ export type FollowupRun = {
     traceAuthorized?: boolean;
     sessionFile: string;
     workspaceDir: string;
+    /** Task working directory for runtime execution. Defaults to workspaceDir. */
+    cwd?: string;
     config: OpenClawConfig;
     skillsSnapshot?: SkillSnapshot;
     provider: string;

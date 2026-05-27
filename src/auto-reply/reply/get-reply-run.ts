@@ -1247,6 +1247,7 @@ export async function runPreparedReply(
         command.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
+      cwd: normalizeOptionalString(sessionEntry?.spawnedCwd),
       config: cfg,
       skillsSnapshot,
       provider,

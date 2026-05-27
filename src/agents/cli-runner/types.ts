@@ -33,6 +33,8 @@ export type RunCliAgentParams = {
   trigger?: EmbeddedRunTrigger;
   sessionFile: string;
   workspaceDir: string;
+  /** Task working directory for CLI execution. Defaults to workspaceDir. */
+  cwd?: string;
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
@@ -113,6 +115,7 @@ export type CliReusableSession = {
     | "auth-profile"
     | "auth-epoch"
     | "system-prompt"
+    | "cwd"
     | "mcp"
     | "missing-transcript";
 };
@@ -122,6 +125,7 @@ export type PreparedCliRunContext = {
   effectiveAuthProfileId?: string;
   started: number;
   workspaceDir: string;
+  cwd?: string;
   backendResolved: ResolvedCliBackend;
   preparedBackend: CliPreparedBackend;
   reusableCliSession: CliReusableSession;
@@ -143,4 +147,5 @@ export type PreparedCliRunContext = {
   authEpochVersion: number;
   extraSystemPromptHash?: string;
   promptToolNamesHash?: string;
+  cwdHash?: string;
 };

@@ -212,6 +212,106 @@ function resolveDirectAnnounceTransientRetryDelaysMs() {
     : ([5_000, 10_000, 20_000] as const);
 }
 
+// Backoff schedule for re-attempting an active-requester steer while the run is
+// compacting. Compaction is transient and usually finishes quickly, so a denser
+// schedule is used than for transient delivery errors. Total wait stays well
+// within the announce delivery timeout, and the loop also stops on cancellation.
+function resolveCompactionSteerRetryDelaysMs() {
+  return process.env.OPENCLAW_TEST_FAST === "1"
+    ? ([8, 16, 32, 64] as const)
+    : ([1_000, 2_000, 4_000, 8_000] as const);
+}
+
+// Wake an active requester run through transient compacting and transcript-wait
+// outcomes. Both active-wake call sites use one loop so delivery deadlines and
+// best-effort transcript retry stay consistent.
+async function resolveActiveWakeWithRetries(
+  sessionId: string,
+  message: string,
+  wakeOptions: EmbeddedAgentQueueMessageOptions,
+  signal?: AbortSignal,
+): Promise<EmbeddedAgentQueueMessageOutcome> {
+  // Bound the whole active wake by the caller's delivery window. Each retry
+  // passes only the remaining window into transcript-commit waiting so a
+  // near-deadline retry cannot add another full timeout.
+  const compactionDeadlineMs =
+    typeof wakeOptions.deliveryTimeoutMs === "number" && wakeOptions.deliveryTimeoutMs > 0
+      ? Date.now() + wakeOptions.deliveryTimeoutMs
+      : undefined;
+  let currentOptions = wakeOptions;
+  const resolveRetryOptions = (): EmbeddedAgentQueueMessageOptions | undefined => {
+    if (compactionDeadlineMs === undefined) {
+      return currentOptions;
+    }
+    const remainingDeliveryTimeoutMs = compactionDeadlineMs - Date.now();
+    if (remainingDeliveryTimeoutMs <= 0) {
+      return undefined;
+    }
+    return {
+      ...currentOptions,
+      deliveryTimeoutMs: remainingDeliveryTimeoutMs,
+    };
+  };
+  let outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+  const compactionRetryDelaysMs = resolveCompactionSteerRetryDelaysMs();
+  let compactionRetryIndex = 0;
+  for (;;) {
+    if (outcome.queued || signal?.aborted) {
+      break;
+    }
+    if (
+      outcome.reason === "transcript_commit_wait_unsupported" &&
+      currentOptions.waitForTranscriptCommit === true
+    ) {
+      const bestEffortOptions = { ...currentOptions };
+      delete bestEffortOptions.waitForTranscriptCommit;
+      currentOptions = bestEffortOptions;
+      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+      continue;
+    }
+    if (outcome.reason === "compacting") {
+      const remainingDeliveryTimeoutMs =
+        compactionDeadlineMs === undefined ? undefined : compactionDeadlineMs - Date.now();
+      const canRetry =
+        remainingDeliveryTimeoutMs === undefined
+          ? compactionRetryIndex < compactionRetryDelaysMs.length
+          : remainingDeliveryTimeoutMs > 0;
+      if (!canRetry) {
+        break;
+      }
+      // Use the next scheduled backoff delay; once the schedule is exhausted,
+      // keep using its last entry until the deadline is reached.
+      const scheduledDelayMs =
+        compactionRetryDelaysMs[
+          Math.min(compactionRetryIndex, compactionRetryDelaysMs.length - 1)
+        ] ?? 0;
+      // Clamp the wait to the remaining delivery window so the final retry does
+      // not sleep past the deadline (which would overrun the delivery timeout).
+      // If no time remains, stop retrying and let the fallback handle it.
+      const delayMs =
+        remainingDeliveryTimeoutMs === undefined
+          ? scheduledDelayMs
+          : Math.min(scheduledDelayMs, remainingDeliveryTimeoutMs);
+      if (delayMs <= 0 && remainingDeliveryTimeoutMs !== undefined) {
+        break;
+      }
+      await waitForAnnounceRetryDelay(delayMs, signal);
+      if (signal?.aborted) {
+        break;
+      }
+      compactionRetryIndex += 1;
+      const retryOptions = resolveRetryOptions();
+      if (!retryOptions) {
+        break;
+      }
+      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, retryOptions);
+      continue;
+    }
+    break;
+  }
+  return outcome;
+}
+
 export function resolveSubagentAnnounceTimeoutMs(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
   if (typeof configured !== "number" || !Number.isFinite(configured)) {
@@ -487,20 +587,12 @@ async function maybeSteerSubagentAnnounce(params: {
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
     waitForTranscriptCommit: true,
   };
-  let queueOutcome = await resolveQueueEmbeddedAgentMessageOutcome(
+  const queueOutcome = await resolveActiveWakeWithRetries(
     sessionId,
     params.steerMessage,
     queueOptions,
+    params.signal,
   );
-  if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
-    const bestEffortQueueOptions = { ...queueOptions };
-    delete bestEffortQueueOptions.waitForTranscriptCommit;
-    queueOutcome = await resolveQueueEmbeddedAgentMessageOutcome(
-      sessionId,
-      params.steerMessage,
-      bestEffortQueueOptions,
-    );
-  }
   if (queueOutcome.queued) {
     return {
       status: "steered",
@@ -1012,20 +1104,15 @@ async function sendSubagentAnnounceDirectly(params: {
           : {}),
         waitForTranscriptCommit: true,
       };
-      let wakeOutcome = await resolveQueueEmbeddedAgentMessageOutcome(
+      // Reuse the shared active-wake retry helper so the generated-completion
+      // wake also waits through compaction (and best-effort transcript retry)
+      // instead of treating a compacting run as a terminal wake failure.
+      const wakeOutcome = await resolveActiveWakeWithRetries(
         requesterActivity.sessionId,
         params.triggerMessage,
         wakeOptions,
+        params.signal,
       );
-      if (!wakeOutcome.queued && wakeOutcome.reason === "transcript_commit_wait_unsupported") {
-        const bestEffortWakeOptions = { ...wakeOptions };
-        delete bestEffortWakeOptions.waitForTranscriptCommit;
-        wakeOutcome = await resolveQueueEmbeddedAgentMessageOutcome(
-          requesterActivity.sessionId,
-          params.triggerMessage,
-          bestEffortWakeOptions,
-        );
-      }
       if (wakeOutcome.queued) {
         return {
           delivered: true,

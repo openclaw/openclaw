@@ -548,6 +548,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
 export function buildAfterTurnRuntimeContext(params: {
   attempt: AfterTurnRuntimeContextAttempt;
   workspaceDir: string;
+  cwd?: string;
   agentDir: string;
   activeAgentId?: string;
   contextEnginePluginId?: string;
@@ -566,6 +567,7 @@ export function buildAfterTurnRuntimeContext(params: {
       currentMessageId: params.attempt.currentMessageId,
       authProfileId: params.attempt.authProfileId,
       workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
       agentDir: params.agentDir,
       config: params.attempt.config,
       skillsSnapshot: params.attempt.skillsSnapshot,

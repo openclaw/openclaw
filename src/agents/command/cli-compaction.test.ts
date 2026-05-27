@@ -90,6 +90,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     const sessionId = "session-cli";
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const storePath = path.join(tmpDir, "sessions.json");
+    const taskCwd = path.join(tmpDir, "task-repo");
+    await fs.mkdir(taskCwd, { recursive: true });
     await writeSessionFile({ sessionFile, sessionId });
 
     const sessionEntry: SessionEntry = {
@@ -112,13 +114,17 @@ describe("runCliTurnCompactionLifecycle", () => {
 
     const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
     const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const settingsCwds: string[] = [];
     setCliCompactionTestDeps({
       resolveContextEngine: async () => buildContextEngine({ compactCalls }),
-      createPreparedEmbeddedAgentSettingsManager: async () => ({
-        getCompactionReserveTokens: () => 200,
-        getCompactionKeepRecentTokens: () => 0,
-        applyOverrides: () => {},
-      }),
+      createPreparedEmbeddedAgentSettingsManager: async (params) => {
+        settingsCwds.push(params.cwd);
+        return {
+          getCompactionReserveTokens: () => 200,
+          getCompactionKeepRecentTokens: () => 0,
+          applyOverrides: () => {},
+        };
+      },
       shouldPreemptivelyCompactBeforePrompt: () => ({
         route: "fits",
         shouldCompact: false,
@@ -141,6 +147,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       storePath,
       sessionAgentId: "main",
       workspaceDir: tmpDir,
+      cwd: taskCwd,
       agentDir: tmpDir,
       provider: "claude-cli",
       model: "opus",
@@ -155,6 +162,9 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactCall?.currentTokenCount).toBe(950);
     expect(compactCall?.force).toBe(true);
     expect(compactCall?.compactionTarget).toBe("budget");
+    expect(compactCall?.runtimeContext?.workspaceDir).toBe(tmpDir);
+    expect(compactCall?.runtimeContext?.cwd).toBe(taskCwd);
+    expect(settingsCwds).toEqual([taskCwd]);
     expect(maintenance).toHaveBeenCalledTimes(1);
     const maintenanceCalls = maintenance.mock.calls as unknown as Array<
       [
