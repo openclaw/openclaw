@@ -113,6 +113,7 @@ Defaults:
 - `consultFastMode`: optional fast-mode override for realtime `openclaw_agent_consult` calls.
 - `realtime.provider`: selects the active browser/server realtime voice provider. Use `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.
 - `realtime.providers.<provider>` stores provider-owned realtime config. The browser receives only ephemeral or constrained session credentials, never a standard API key.
+- `realtime.providers.openai.apiKey`: must be a direct OpenAI Platform key for OpenAI Realtime, not an Azure AI Foundry / Azure OpenAI model key or OpenAI-compatible proxy key. Use `openai-codex` OAuth where supported, or `gateway-relay` with `azureEndpoint` + `azureDeployment` for Azure Realtime.
 - `realtime.providers.openai.voice`: built-in OpenAI Realtime voice id. Current `gpt-realtime-2` voices are `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, and `cedar`; `marin` and `cedar` are recommended for best quality.
 - `realtime.transport`: `webrtc` and `provider-websocket` are browser realtime transports. Android uses realtime relay only when this is `gateway-relay`; otherwise Android Talk uses its native STT/TTS loop.
 - `realtime.brain`: `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility behavior; `none` is for transcription or external orchestration.
