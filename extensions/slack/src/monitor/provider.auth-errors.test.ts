@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
+import { isNonRecoverableSlackAuthError } from "./provider.js";
 
 describe("isNonRecoverableSlackAuthError", () => {
   it.each([

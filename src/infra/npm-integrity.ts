@@ -21,32 +21,25 @@ type ResolveNpmIntegrityDriftParams<TPayload> = {
   warn?: (payload: TPayload) => void;
 };
 
-type ResolveNpmIntegrityDriftResult<TPayload> = {
+export type ResolveNpmIntegrityDriftResult<TPayload> = {
   integrityDrift?: NpmIntegrityDrift;
   proceed: boolean;
   payload?: TPayload;
 };
 
-function normalizeIntegrity(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
-}
-
 export async function resolveNpmIntegrityDrift<TPayload>(
   params: ResolveNpmIntegrityDriftParams<TPayload>,
 ): Promise<ResolveNpmIntegrityDriftResult<TPayload>> {
-  const expectedIntegrity = normalizeIntegrity(params.expectedIntegrity);
-  const actualIntegrity = normalizeIntegrity(params.resolution.integrity);
-  if (!expectedIntegrity || !actualIntegrity) {
+  if (!params.expectedIntegrity || !params.resolution.integrity) {
     return { proceed: true };
   }
-  if (expectedIntegrity === actualIntegrity) {
+  if (params.expectedIntegrity === params.resolution.integrity) {
     return { proceed: true };
   }
 
   const integrityDrift: NpmIntegrityDrift = {
-    expectedIntegrity,
-    actualIntegrity,
+    expectedIntegrity: params.expectedIntegrity,
+    actualIntegrity: params.resolution.integrity,
   };
   const payload = params.createPayload({
     spec: params.spec,
@@ -55,7 +48,7 @@ export async function resolveNpmIntegrityDrift<TPayload>(
     resolution: params.resolution,
   });
 
-  let proceed = false;
+  let proceed = true;
   if (params.onIntegrityDrift) {
     proceed = await params.onIntegrityDrift(payload);
   } else {

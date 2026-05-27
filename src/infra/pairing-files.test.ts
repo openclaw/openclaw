@@ -2,8 +2,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   pruneExpiredPending,
-  reconcilePendingPairingRequests,
   resolvePairingPaths,
+  upsertPendingPairingRequest,
 } from "./pairing-files.js";
 
 describe("pairing file helpers", () => {
@@ -30,59 +30,57 @@ describe("pairing file helpers", () => {
     });
   });
 
-  it("refreshes a single matching pending request in place", async () => {
+  it("reuses existing pending requests without persisting again", async () => {
     const persist = vi.fn(async () => undefined);
-    const existing = { requestId: "req-1", deviceId: "device-1", ts: 1, version: 1 };
+    const existing = { requestId: "req-1", deviceId: "device-1", ts: 1 };
     const pendingById = { "req-1": existing };
 
     await expect(
-      reconcilePendingPairingRequests({
+      upsertPendingPairingRequest({
         pendingById,
-        existing: [existing],
-        incoming: { version: 2 },
-        canRefreshSingle: () => true,
-        refreshSingle: (pending, incoming) => ({ ...pending, version: incoming.version, ts: 2 }),
-        buildReplacement: vi.fn(() => ({ requestId: "req-2", deviceId: "device-1", ts: 2 })),
+        isExisting: (pending) => pending.deviceId === "device-1",
+        createRequest: vi.fn(() => ({ requestId: "req-2", deviceId: "device-1", ts: 2 })),
+        isRepair: false,
         persist,
       }),
     ).resolves.toEqual({
       status: "pending",
-      request: { requestId: "req-1", deviceId: "device-1", ts: 2, version: 2 },
+      request: existing,
       created: false,
     });
-    expect(persist).toHaveBeenCalledOnce();
+    expect(persist).not.toHaveBeenCalled();
   });
 
-  it("replaces existing pending requests with one merged request", async () => {
+  it("creates and persists new pending requests with the repair flag", async () => {
     const persist = vi.fn(async () => undefined);
-    const pendingById = {
-      "req-1": { requestId: "req-1", deviceId: "device-2", ts: 1 },
-      "req-2": { requestId: "req-2", deviceId: "device-2", ts: 2 },
-    };
+    const createRequest = vi.fn((isRepair: boolean) => ({
+      requestId: "req-2",
+      deviceId: "device-2",
+      ts: 2,
+      isRepair,
+    }));
+    const pendingById: Record<
+      string,
+      { requestId: string; deviceId: string; ts: number; isRepair: boolean }
+    > = {};
 
     await expect(
-      reconcilePendingPairingRequests({
+      upsertPendingPairingRequest({
         pendingById,
-        existing: Object.values(pendingById).toSorted((left, right) => right.ts - left.ts),
-        incoming: { deviceId: "device-2" },
-        canRefreshSingle: () => false,
-        refreshSingle: (pending) => pending,
-        buildReplacement: vi.fn(() => ({
-          requestId: "req-3",
-          deviceId: "device-2",
-          ts: 3,
-          isRepair: true,
-        })),
+        isExisting: (pending) => pending.deviceId === "device-2",
+        createRequest,
+        isRepair: true,
         persist,
       }),
     ).resolves.toEqual({
       status: "pending",
-      request: { requestId: "req-3", deviceId: "device-2", ts: 3, isRepair: true },
+      request: { requestId: "req-2", deviceId: "device-2", ts: 2, isRepair: true },
       created: true,
     });
+    expect(createRequest).toHaveBeenCalledWith(true);
     expect(persist).toHaveBeenCalledOnce();
     expect(pendingById).toEqual({
-      "req-3": { requestId: "req-3", deviceId: "device-2", ts: 3, isRepair: true },
+      "req-2": { requestId: "req-2", deviceId: "device-2", ts: 2, isRepair: true },
     });
   });
 });

@@ -21,28 +21,20 @@ describe("runTasksWithConcurrency", () => {
     });
 
     const resultPromise = runTasksWithConcurrency({ tasks, limit: 2 });
-    const takeResolver = (index: number): (() => void) => {
-      const resolver = resolvers[index];
-      if (!resolver) {
-        throw new Error(`expected task ${index} to be running`);
-      }
-      return resolver;
-    };
-
     await flushMicrotasks();
-    const resolveFirst = takeResolver(0);
-    const resolveSecond = takeResolver(1);
+    expect(typeof resolvers[0]).toBe("function");
+    expect(typeof resolvers[1]).toBe("function");
 
-    resolveSecond();
+    resolvers[1]?.();
     await flushMicrotasks();
-    const resolveThird = takeResolver(2);
+    expect(typeof resolvers[2]).toBe("function");
 
-    resolveFirst();
+    resolvers[0]?.();
     await flushMicrotasks();
-    const resolveFourth = takeResolver(3);
+    expect(typeof resolvers[3]).toBe("function");
 
-    resolveThird();
-    resolveFourth();
+    resolvers[2]?.();
+    resolvers[3]?.();
 
     const result = await resultPromise;
     expect(result.hasError).toBe(false);
@@ -83,7 +75,6 @@ describe("runTasksWithConcurrency", () => {
 
   it("continues after failures and reports the first one", async () => {
     const firstErr = new Error("first");
-    const secondErr = new Error("second");
     const onTaskError = vi.fn();
     const tasks = [
       async () => {
@@ -91,7 +82,7 @@ describe("runTasksWithConcurrency", () => {
       },
       async () => 20,
       async () => {
-        throw secondErr;
+        throw new Error("second");
       },
       async () => 40,
     ];
@@ -108,6 +99,6 @@ describe("runTasksWithConcurrency", () => {
     expect(result.results[3]).toBe(40);
     expect(onTaskError).toHaveBeenCalledTimes(2);
     expect(onTaskError).toHaveBeenNthCalledWith(1, firstErr, 0);
-    expect(onTaskError).toHaveBeenNthCalledWith(2, secondErr, 2);
+    expect(onTaskError).toHaveBeenNthCalledWith(2, expect.any(Error), 2);
   });
 });

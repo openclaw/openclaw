@@ -1,18 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { TelegramInlineButtonsScope } from "openclaw/plugin-sdk/config-contracts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramInlineButtonsScope } from "openclaw/plugin-sdk/config-runtime";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 
 const DEFAULT_INLINE_BUTTONS_SCOPE: TelegramInlineButtonsScope = "allowlist";
 
 function normalizeInlineButtonsScope(value: unknown): TelegramInlineButtonsScope | undefined {
-  const trimmed = normalizeOptionalLowercaseString(value);
-  if (!trimmed) {
+  if (typeof value !== "string") {
     return undefined;
   }
+  const trimmed = value.trim().toLowerCase();
   if (
     trimmed === "off" ||
     trimmed === "dm" ||
@@ -46,7 +42,7 @@ export function resolveTelegramInlineButtonsScopeFromCapabilities(
   }
   if (Array.isArray(capabilities)) {
     const enabled = capabilities.some(
-      (entry) => normalizeLowercaseStringOrEmpty(String(entry)) === "inlinebuttons",
+      (entry) => String(entry).trim().toLowerCase() === "inlinebuttons",
     );
     return enabled ? "all" : "off";
   }

@@ -1,10 +1,8 @@
-import { coerceSecretRef } from "../config/types.secrets.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles.js";
-import { normalizeProviderId } from "./provider-id.js";
+import { normalizeProviderId } from "./model-selection.js";
 
-type PiApiKeyCredential = { type: "api_key"; key: string };
-type PiOAuthCredential = {
+export type PiApiKeyCredential = { type: "api_key"; key: string };
+export type PiOAuthCredential = {
   type: "oauth";
   access: string;
   refresh: string;
@@ -14,38 +12,20 @@ type PiOAuthCredential = {
 export type PiCredential = PiApiKeyCredential | PiOAuthCredential;
 export type PiCredentialMap = Record<string, PiCredential>;
 
-export type ResolvePiCredentialMapOptions = {
-  includeSecretRefPlaceholders?: boolean;
-};
-
-const PI_SECRET_REF_CONFIGURED_MARKER = "openclaw-secret-ref-configured";
-
-function hasConfiguredSecretRef(value: unknown): boolean {
-  return coerceSecretRef(value) !== null;
-}
-
-function secretRefPlaceholder(
-  options: ResolvePiCredentialMapOptions | undefined,
-): PiCredential | null {
-  if (options?.includeSecretRefPlaceholders === true) {
-    return { type: "api_key", key: PI_SECRET_REF_CONFIGURED_MARKER };
-  }
-  return null;
-}
-
-function convertAuthProfileCredentialToPi(
-  cred: AuthProfileCredential,
-  options?: ResolvePiCredentialMapOptions,
-): PiCredential | null {
+export function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): PiCredential | null {
   if (cred.type === "api_key") {
-    const key = normalizeOptionalString(cred.key) ?? "";
+    const key = typeof cred.key === "string" ? cred.key.trim() : "";
     if (!key) {
-      return hasConfiguredSecretRef(cred.keyRef) ? secretRefPlaceholder(options) : null;
+      return null;
     }
     return { type: "api_key", key };
   }
 
   if (cred.type === "token") {
+    const token = typeof cred.token === "string" ? cred.token.trim() : "";
+    if (!token) {
+      return null;
+    }
     if (
       typeof cred.expires === "number" &&
       Number.isFinite(cred.expires) &&
@@ -53,16 +33,12 @@ function convertAuthProfileCredentialToPi(
     ) {
       return null;
     }
-    const token = normalizeOptionalString(cred.token) ?? "";
-    if (!token) {
-      return hasConfiguredSecretRef(cred.tokenRef) ? secretRefPlaceholder(options) : null;
-    }
     return { type: "api_key", key: token };
   }
 
   if (cred.type === "oauth") {
-    const access = normalizeOptionalString(cred.access) ?? "";
-    const refresh = normalizeOptionalString(cred.refresh) ?? "";
+    const access = typeof cred.access === "string" ? cred.access.trim() : "";
+    const refresh = typeof cred.refresh === "string" ? cred.refresh.trim() : "";
     if (!access || !refresh || !Number.isFinite(cred.expires) || cred.expires <= 0) {
       return null;
     }
@@ -77,17 +53,14 @@ function convertAuthProfileCredentialToPi(
   return null;
 }
 
-export function resolvePiCredentialMapFromStore(
-  store: AuthProfileStore,
-  options?: ResolvePiCredentialMapOptions,
-): PiCredentialMap {
+export function resolvePiCredentialMapFromStore(store: AuthProfileStore): PiCredentialMap {
   const credentials: PiCredentialMap = {};
   for (const credential of Object.values(store.profiles)) {
-    const provider = normalizeProviderId(credential.provider ?? "");
+    const provider = normalizeProviderId(String(credential.provider ?? "")).trim();
     if (!provider || credentials[provider]) {
       continue;
     }
-    const converted = convertAuthProfileCredentialToPi(credential, options);
+    const converted = convertAuthProfileCredentialToPi(credential);
     if (converted) {
       credentials[provider] = converted;
     }

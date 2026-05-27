@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObjectWithPlugins } from "./validation.js";
+import { validateConfigObjectWithPlugins } from "./config.js";
 
 describe("config hooks module paths", () => {
   const expectRejectedIssuePath = (config: Record<string, unknown>, expectedPath: string) => {
@@ -8,7 +8,7 @@ describe("config hooks module paths", () => {
     if (res.ok) {
       throw new Error("expected validation failure");
     }
-    expect(res.issues.map((issue) => issue.path)).toContain(expectedPath);
+    expect(res.issues.some((iss) => iss.path === expectedPath)).toBe(true);
   };
 
   it("rejects absolute hooks.mappings[].transform.module", () => {
@@ -85,7 +85,7 @@ describe("config hooks module paths", () => {
           {
             match: { path: "custom" },
             action: "agent",
-            channel: "collabchat",
+            channel: "feishu",
             messageTemplate: "hello",
           },
         ],

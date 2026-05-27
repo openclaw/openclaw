@@ -1,7 +1,4 @@
-import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-type LineOutboundMediaKind = "image" | "video" | "audio";
+export type LineOutboundMediaKind = "image" | "video" | "audio";
 
 export type LineOutboundMediaResolved = {
   mediaUrl: string;
@@ -18,11 +15,7 @@ type ResolveLineOutboundMediaOpts = {
   trackingId?: string;
 };
 
-const LINE_OUTBOUND_MEDIA_SSRF_POLICY: SsrFPolicy = {
-  allowPrivateNetwork: false,
-};
-
-export async function validateLineMediaUrl(url: string): Promise<void> {
+export function validateLineMediaUrl(url: string): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -35,13 +28,10 @@ export async function validateLineMediaUrl(url: string): Promise<void> {
   if (url.length > 2000) {
     throw new Error(`LINE outbound media URL must be 2000 chars or less (got ${url.length})`);
   }
-  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
-    policy: LINE_OUTBOUND_MEDIA_SSRF_POLICY,
-  });
 }
 
 export function detectLineMediaKind(mimeType: string): LineOutboundMediaKind {
-  const normalized = normalizeLowercaseStringOrEmpty(mimeType);
+  const normalized = mimeType.toLowerCase();
   if (normalized.startsWith("image/")) {
     return "image";
   }
@@ -64,7 +54,7 @@ function isHttpsUrl(url: string): boolean {
 
 function detectLineMediaKindFromUrl(url: string): LineOutboundMediaKind | undefined {
   try {
-    const pathname = normalizeLowercaseStringOrEmpty(new URL(url).pathname);
+    const pathname = new URL(url).pathname.toLowerCase();
     if (/\.(png|jpe?g|gif|webp|bmp|heic|heif|avif)$/i.test(pathname)) {
       return "image";
     }
@@ -86,10 +76,10 @@ export async function resolveLineOutboundMedia(
 ): Promise<LineOutboundMediaResolved> {
   const trimmedUrl = mediaUrl.trim();
   if (isHttpsUrl(trimmedUrl)) {
-    await validateLineMediaUrl(trimmedUrl);
+    validateLineMediaUrl(trimmedUrl);
     const previewImageUrl = opts.previewImageUrl?.trim();
     if (previewImageUrl) {
-      await validateLineMediaUrl(previewImageUrl);
+      validateLineMediaUrl(previewImageUrl);
     }
     const mediaKind =
       opts.mediaKind ??

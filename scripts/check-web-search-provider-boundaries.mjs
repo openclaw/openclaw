@@ -3,8 +3,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { diffInventoryEntries, runBaselineInventoryCheck } from "./lib/guard-inventory-utils.mjs";
-import { collectSourceFileContents } from "./lib/source-file-scan-cache.mjs";
+import {
+  diffInventoryEntries,
+  normalizeRepoPath,
+  runBaselineInventoryCheck,
+} from "./lib/guard-inventory-utils.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -64,6 +67,38 @@ const ignoredFiles = new Set([
 ]);
 
 let webSearchProviderInventoryPromise;
+
+async function walkFiles(rootDir) {
+  const out = [];
+  let entries = [];
+  try {
+    entries = await fs.readdir(rootDir, { withFileTypes: true });
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return out;
+    }
+    throw error;
+  }
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const entryPath = path.join(rootDir, entry.name);
+    if (entry.isDirectory()) {
+      if (ignoredDirNames.has(entry.name)) {
+        continue;
+      }
+      out.push(...(await walkFiles(entryPath)));
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (!scanExtensions.has(path.extname(entry.name))) {
+      continue;
+    }
+    out.push(entryPath);
+  }
+  return out;
+}
 
 function compareInventoryEntries(left, right) {
   return (
@@ -157,17 +192,20 @@ export async function collectWebSearchProviderBoundaryInventory() {
   if (!webSearchProviderInventoryPromise) {
     webSearchProviderInventoryPromise = (async () => {
       const inventory = [];
-      const files = await collectSourceFileContents({
-        repoRoot,
-        scanRoots,
-        scanExtensions,
-        ignoredDirNames,
-      });
+      const files = (
+        await Promise.all(scanRoots.map(async (root) => await walkFiles(path.join(repoRoot, root))))
+      )
+        .flat()
+        .toSorted((left, right) =>
+          normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
+        );
 
-      for (const { relativeFile, content } of files) {
+      for (const filePath of files) {
+        const relativeFile = normalizeRepoPath(repoRoot, filePath);
         if (ignoredFiles.has(relativeFile) || relativeFile.includes(".test.")) {
           continue;
         }
+        const content = await fs.readFile(filePath, "utf8");
         const lines = content.split(/\r?\n/);
 
         if (relativeFile === "src/plugins/web-search-providers.ts") {
@@ -219,9 +257,9 @@ function formatEntry(entry) {
   return `${entry.provider} ${entry.file}:${entry.line} ${entry.reason}`;
 }
 
-export async function runWebSearchProviderBoundaryCheck(argv, io) {
+export async function runWebSearchProviderBoundaryCheck(argv = process.argv.slice(2), io) {
   return await runBaselineInventoryCheck({
-    argv: argv ?? process.argv.slice(2),
+    argv,
     io,
     collectActual: collectWebSearchProviderBoundaryInventory,
     readExpected: readExpectedInventory,
@@ -231,7 +269,7 @@ export async function runWebSearchProviderBoundaryCheck(argv, io) {
   });
 }
 
-export async function main(argv, io) {
+export async function main(argv = process.argv.slice(2), io) {
   const exitCode = await runWebSearchProviderBoundaryCheck(argv, io);
   if (!io && exitCode !== 0) {
     process.exit(exitCode);

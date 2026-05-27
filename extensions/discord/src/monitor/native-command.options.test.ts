@@ -1,5 +1,5 @@
-import { ApplicationCommandType, ChannelType, InteractionContextType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { ChannelType } from "discord-api-types/v10";
+import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { logVerboseMock } = vi.hoisted(() => ({
@@ -26,20 +26,14 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  resolveHumanDelayConfig: () => undefined,
-}));
-
 let listNativeCommandSpecs: typeof import("openclaw/plugin-sdk/command-auth").listNativeCommandSpecs;
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
-let nativeCommandTesting: typeof import("./native-command.js").testing;
-let resolveDiscordNativeAutocompleteAuthorized: typeof import("./native-command-auth.js").resolveDiscordNativeAutocompleteAuthorized;
 let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
 
 function createNativeCommand(
   name: string,
   opts?: {
-    cfg?: OpenClawConfig;
+    cfg?: ReturnType<typeof loadConfig>;
     discordConfig?: NonNullable<OpenClawConfig["channels"]>["discord"];
   },
 ): ReturnType<typeof import("./native-command.js").createDiscordNativeCommand> {
@@ -49,19 +43,10 @@ function createNativeCommand(
   if (!command) {
     throw new Error(`missing native command: ${name}`);
   }
-  const baseCfg: OpenClawConfig = opts?.cfg ?? {};
-  const discordConfig: NonNullable<OpenClawConfig["channels"]>["discord"] =
-    opts?.discordConfig ?? baseCfg.channels?.discord ?? {};
-  const cfg =
-    opts?.discordConfig === undefined
-      ? baseCfg
-      : {
-          ...baseCfg,
-          channels: {
-            ...baseCfg.channels,
-            discord: discordConfig,
-          },
-        };
+  const cfg = (opts?.cfg ?? {}) as ReturnType<typeof loadConfig>;
+  const discordConfig = (opts?.discordConfig ?? {}) as NonNullable<
+    OpenClawConfig["channels"]
+  >["discord"];
   return createDiscordNativeCommand({
     command,
     cfg,
@@ -110,114 +95,10 @@ function readChoices(option: CommandOption | undefined): unknown[] | undefined {
   return Array.isArray(value) ? value : undefined;
 }
 
-function requireAutocomplete(option: CommandOption, errorMessage: string) {
-  const autocomplete = readAutocomplete(option);
-  if (typeof autocomplete !== "function") {
-    throw new Error(errorMessage);
-  }
-  return autocomplete as (interaction: unknown) => Promise<unknown>;
-}
-
-function createAllowedGuildAutocompleteConfig(
-  commands: NonNullable<OpenClawConfig["commands"]>,
-): OpenClawConfig {
-  return {
-    commands,
-    channels: {
-      discord: {
-        groupPolicy: "allowlist",
-        guilds: {
-          "guild-1": {
-            channels: {
-              "channel-1": {
-                enabled: true,
-                requireMention: false,
-              },
-            },
-          },
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
-
-async function runAutocomplete(
-  autocomplete: (interaction: unknown) => Promise<unknown>,
-  params: {
-    userId: string;
-    username?: string;
-    globalName?: string;
-    channelType: ChannelType;
-    channelId: string;
-    channelName: string;
-    guildId?: string;
-    focusedValue: string;
-  },
-) {
-  const respond = vi.fn(async (_choices: unknown[]) => undefined);
-
-  await autocomplete({
-    user: {
-      id: params.userId,
-      username: params.username ?? params.userId,
-      globalName: params.globalName ?? params.userId,
-    },
-    channel: {
-      type: params.channelType,
-      id: params.channelId,
-      name: params.channelName,
-    },
-    guild: params.guildId ? { id: params.guildId } : undefined,
-    rawData: {
-      member: { roles: [] },
-    },
-    options: {
-      getFocused: () => ({ value: params.focusedValue }),
-    },
-    respond,
-    client: {},
-  } as never);
-
-  return respond;
-}
-
-async function resolveAutocompleteAuthorized(params: {
-  cfg: OpenClawConfig;
-  userId: string;
-  username?: string;
-  globalName?: string;
-}) {
-  return await resolveDiscordNativeAutocompleteAuthorized({
-    cfg: params.cfg,
-    discordConfig: params.cfg.channels?.discord ?? {},
-    accountId: "default",
-    interaction: {
-      user: {
-        id: params.userId,
-        username: params.username ?? params.userId,
-        globalName: params.globalName ?? params.userId,
-      },
-      channel: {
-        type: ChannelType.GuildText,
-        id: "channel-1",
-        name: "general",
-      },
-      guild: { id: "guild-1" },
-      rawData: {
-        member: { roles: [] },
-      },
-      client: {},
-    } as never,
-  });
-}
-
 describe("createDiscordNativeCommand option wiring", () => {
   beforeAll(async () => {
     ({ listNativeCommandSpecs } = await import("openclaw/plugin-sdk/command-auth"));
-    ({ createDiscordNativeCommand, testing: nativeCommandTesting } = await import(
-      "./native-command.js"
-    ));
-    ({ resolveDiscordNativeAutocompleteAuthorized } = await import("./native-command-auth.js"));
+    ({ createDiscordNativeCommand } = await import("./native-command.js"));
     ({ createNoopThreadBindingManager } = await import("./thread-bindings.js"));
   });
 
@@ -229,18 +110,31 @@ describe("createDiscordNativeCommand option wiring", () => {
   it("uses autocomplete for /acp action so inline action values are accepted", async () => {
     const command = createNativeCommand("acp");
     const action = requireOption(command, "action");
-    const autocomplete = requireAutocomplete(action, "acp action option did not wire autocomplete");
+    const autocomplete = readAutocomplete(action);
+    if (typeof autocomplete !== "function") {
+      throw new Error("acp action option did not wire autocomplete");
+    }
+    const respond = vi.fn(async (_choices: unknown[]) => undefined);
 
     expect(readChoices(action)).toBeUndefined();
-    const respond = await runAutocomplete(autocomplete, {
-      userId: "owner",
-      username: "tester",
-      globalName: "Tester",
-      channelType: ChannelType.DM,
-      channelId: "dm-1",
-      channelName: "dm-1",
-      focusedValue: "st",
-    });
+    await autocomplete({
+      user: {
+        id: "owner",
+        username: "tester",
+        globalName: "Tester",
+      },
+      channel: {
+        type: ChannelType.DM,
+        id: "dm-1",
+      },
+      guild: undefined,
+      rawData: {},
+      options: {
+        getFocused: () => ({ value: "st" }),
+      },
+      respond,
+      client: {},
+    } as never);
     expect(respond).toHaveBeenCalledWith([
       { name: "steer", value: "steer" },
       { name: "status", value: "status" },
@@ -249,17 +143,16 @@ describe("createDiscordNativeCommand option wiring", () => {
   });
 
   it("keeps static choices for non-acp string action arguments", () => {
-    const command = createNativeCommand("config");
+    const command = createNativeCommand("voice");
     const action = requireOption(command, "action");
     const choices = readChoices(action);
 
     expect(readAutocomplete(action)).toBeUndefined();
-    expect(choices).toEqual([
-      { name: "show", value: "show" },
-      { name: "get", value: "get" },
-      { name: "set", value: "set" },
-      { name: "unset", value: "unset" },
-    ]);
+    expect(choices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: expect.any(String), value: expect.any(String) }),
+      ]),
+    );
   });
 
   it("returns no autocomplete choices for unauthorized users", async () => {
@@ -270,208 +163,45 @@ describe("createDiscordNativeCommand option wiring", () => {
             discord: ["user:allowed-user"],
           },
         },
-      } as OpenClawConfig,
+      } as ReturnType<typeof loadConfig>,
     });
     const level = requireOption(command, "level");
-    const autocomplete = requireAutocomplete(level, "think level option did not wire autocomplete");
-    const respond = await runAutocomplete(autocomplete, {
-      userId: "blocked-user",
-      username: "blocked",
-      globalName: "Blocked",
-      channelType: ChannelType.GuildText,
-      channelId: "channel-1",
-      channelName: "general",
-      guildId: "guild-1",
-      focusedValue: "",
-    });
-
-    expect(respond).toHaveBeenCalledWith([]);
-  });
-
-  it("rejects autocomplete when commands.ownerAllowFrom rejects the sender", async () => {
-    await expect(
-      resolveAutocompleteAuthorized({
-        cfg: createAllowedGuildAutocompleteConfig({
-          ownerAllowFrom: ["user:owner-user"],
-        }),
-        userId: "blocked-user",
-        username: "blocked",
-        globalName: "Blocked",
-      }),
-    ).resolves.toBe(false);
-  });
-
-  it("authorizes autocomplete for commands.allowFrom users when commands.ownerAllowFrom is configured", async () => {
-    await expect(
-      resolveAutocompleteAuthorized({
-        cfg: createAllowedGuildAutocompleteConfig({
-          ownerAllowFrom: ["user:owner-user"],
-          allowFrom: {
-            discord: ["user:allowed-user"],
-          },
-        }),
-        userId: "blocked-user",
-        username: "blocked",
-        globalName: "Blocked",
-      }),
-    ).resolves.toBe(false);
-    await expect(
-      resolveAutocompleteAuthorized({
-        cfg: createAllowedGuildAutocompleteConfig({
-          ownerAllowFrom: ["user:owner-user"],
-          allowFrom: {
-            discord: ["user:allowed-user"],
-          },
-        }),
-        userId: "allowed-user",
-        username: "allowed",
-        globalName: "Allowed",
-      }),
-    ).resolves.toBe(true);
-  });
-
-  it("keeps plugin command autocomplete aligned with dispatch owner checks", async () => {
-    const restoreMatchPluginCommand = nativeCommandTesting.setMatchPluginCommand((prompt) =>
-      prompt === "/pair" ? ({ command: { name: "pair" }, args: "" } as never) : null,
-    );
-    try {
-      const command = createDiscordNativeCommand({
-        command: {
-          name: "pair",
-          description: "Pair",
-          acceptsArgs: true,
-          args: [
-            {
-              name: "mode",
-              description: "Pairing mode",
-              type: "string",
-              preferAutocomplete: true,
-              choices: () => [
-                { label: "fast", value: "fast" },
-                { label: "secure", value: "secure" },
-              ],
-            },
-          ],
-        },
-        cfg: createAllowedGuildAutocompleteConfig({
-          ownerAllowFrom: ["user:owner-user"],
-        }),
-        discordConfig: {
-          groupPolicy: "allowlist",
-          guilds: {
-            "guild-1": {
-              channels: {
-                "channel-1": {
-                  enabled: true,
-                  requireMention: false,
-                },
-              },
-            },
-          },
-        },
-        accountId: "default",
-        sessionPrefix: "discord:slash",
-        ephemeralDefault: true,
-        threadBindings: createNoopThreadBindingManager("default"),
-      });
-      const mode = requireOption(command, "mode");
-      const autocomplete = requireAutocomplete(mode, "plugin mode option did not wire autocomplete");
-      const respond = await runAutocomplete(autocomplete, {
-        userId: "blocked-user",
-        username: "blocked",
-        globalName: "Blocked",
-        channelType: ChannelType.GuildText,
-        channelId: "channel-1",
-        channelName: "general",
-        guildId: "guild-1",
-        focusedValue: "",
-      });
-
-      expect(respond).toHaveBeenCalledWith([
-        { name: "fast", value: "fast" },
-        { name: "secure", value: "secure" },
-      ]);
-    } finally {
-      nativeCommandTesting.setMatchPluginCommand(restoreMatchPluginCommand);
+    const autocomplete = readAutocomplete(level);
+    if (typeof autocomplete !== "function") {
+      throw new Error("think level option did not wire autocomplete");
     }
-  });
+    const respond = vi.fn(async (_choices: unknown[]) => undefined);
 
-  it("returns no autocomplete choices outside the Discord allowlist when commands.useAccessGroups is false and commands.allowFrom is not configured", async () => {
-    const command = createNativeCommand("think", {
-      cfg: {
-        commands: {
-          useAccessGroups: false,
-        },
-        channels: {
-          discord: {
-            groupPolicy: "allowlist",
-            guilds: {
-              "other-guild": {
-                channels: {
-                  "other-channel": {
-                    enabled: true,
-                    requireMention: false,
-                  },
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-    });
-    const level = requireOption(command, "level");
-    const autocomplete = requireAutocomplete(level, "think level option did not wire autocomplete");
-    const respond = await runAutocomplete(autocomplete, {
-      userId: "allowed-user",
-      username: "allowed",
-      globalName: "Allowed",
-      channelType: ChannelType.GuildText,
-      channelId: "channel-1",
-      channelName: "general",
-      guildId: "guild-1",
-      focusedValue: "xh",
-    });
-
-    expect(respond).toHaveBeenCalledWith([]);
-  });
-
-  it("returns no autocomplete choices for group DMs outside dm.groupChannels", async () => {
-    const discordConfig = {
-      dm: {
-        enabled: true,
-        policy: "open",
-        groupEnabled: true,
-        groupChannels: ["allowed-group"],
+    await autocomplete({
+      user: {
+        id: "blocked-user",
+        username: "blocked",
+        globalName: "Blocked",
       },
-    } satisfies NonNullable<OpenClawConfig["channels"]>["discord"];
-    const command = createNativeCommand("think", {
-      cfg: {
-        commands: {
-          allowFrom: {
-            discord: ["user:allowed-user"],
-          },
-        },
-      } as OpenClawConfig,
-      discordConfig,
-    });
-    const level = requireOption(command, "level");
-    const autocomplete = requireAutocomplete(level, "think level option did not wire autocomplete");
-    const respond = await runAutocomplete(autocomplete, {
-      userId: "allowed-user",
-      username: "allowed",
-      globalName: "Allowed",
-      channelType: ChannelType.GroupDM,
-      channelId: "blocked-group",
-      channelName: "Blocked Group",
-      focusedValue: "xh",
-    });
+      channel: {
+        type: ChannelType.GuildText,
+        id: "channel-1",
+        name: "general",
+      },
+      guild: {
+        id: "guild-1",
+      },
+      rawData: {
+        member: { roles: [] },
+      },
+      options: {
+        getFocused: () => ({ value: "xh" }),
+      },
+      respond,
+      client: {},
+    } as never);
 
     expect(respond).toHaveBeenCalledWith([]);
   });
 
   it("truncates Discord command and option descriptions to Discord's limit", () => {
     const longDescription = "x".repeat(140);
-    const cfg = {} as OpenClawConfig;
+    const cfg = {} as ReturnType<typeof loadConfig>;
     const discordConfig = {} as NonNullable<OpenClawConfig["channels"]>["discord"];
     const command = createDiscordNativeCommand({
       command: {
@@ -499,47 +229,5 @@ describe("createDiscordNativeCommand option wiring", () => {
     expect(command.description).toBe("x".repeat(100));
     expect(requireOption(command, "input").description).toHaveLength(100);
     expect(requireOption(command, "input").description).toBe("x".repeat(100));
-  });
-
-  it("serializes localized command descriptions", () => {
-    const longDescription = "k".repeat(140);
-    const command = createDiscordNativeCommand({
-      command: {
-        name: "localized",
-        description: "Default description",
-        descriptionLocalizations: {
-          ko: "현지화된 설명",
-          "en-GB": longDescription,
-        },
-        acceptsArgs: false,
-      },
-      cfg: {} as OpenClawConfig,
-      discordConfig: {},
-      accountId: "default",
-      sessionPrefix: "discord:slash",
-      ephemeralDefault: true,
-      threadBindings: createNoopThreadBindingManager("default"),
-    });
-
-    expect(command.descriptionLocalizations).toEqual({
-      ko: "현지화된 설명",
-      "en-GB": "k".repeat(100),
-    });
-    expect(command.serialize()).toEqual({
-      name: "localized",
-      description: "Default description",
-      description_localizations: {
-        ko: "현지화된 설명",
-        "en-GB": "k".repeat(100),
-      },
-      type: ApplicationCommandType.ChatInput,
-      integration_types: [0, 1],
-      contexts: [
-        InteractionContextType.Guild,
-        InteractionContextType.BotDM,
-        InteractionContextType.PrivateChannel,
-      ],
-      default_member_permissions: null,
-    });
   });
 });

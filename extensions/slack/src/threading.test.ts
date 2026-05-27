@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveSlackThreadContext, resolveSlackThreadTargets } from "./threading.js";
 
 describe("resolveSlackThreadTargets", () => {
-  function expectAutoCreatedTopLevelThreadTsBehavior(replyToMode: "off" | "first" | "batched") {
+  function expectAutoCreatedTopLevelThreadTsBehavior(replyToMode: "off" | "first") {
     const { replyThreadTs, statusThreadTs, isThreadReply } = resolveSlackThreadTargets({
       replyToMode,
       message: {
@@ -67,10 +67,6 @@ describe("resolveSlackThreadTargets", () => {
 
   it("keeps first-mode behavior for auto-created top-level thread_ts", () => {
     expectAutoCreatedTopLevelThreadTsBehavior("first");
-  });
-
-  it("keeps batched-mode behavior for auto-created top-level thread_ts", () => {
-    expectAutoCreatedTopLevelThreadTsBehavior("batched");
   });
 
   it("sets messageThreadId for top-level messages when replyToMode is all", () => {

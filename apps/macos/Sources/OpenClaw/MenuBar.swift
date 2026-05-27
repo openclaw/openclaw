@@ -10,7 +10,6 @@ import SwiftUI
 @main
 struct OpenClawApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @Environment(\.openWindow) private var openWindow
     @State private var state: AppState
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app")
     private let gatewayManager = GatewayProcessManager.shared
@@ -51,8 +50,8 @@ struct OpenClawApp: App {
                 gatewayStatus: self.gatewayManager.status,
                 animationsEnabled: self.state.iconAnimationsEnabled && !self.isGatewaySleeping,
                 iconState: self.effectiveIconState)
-                .background(SettingsWindowOpenRegistrar())
         }
+        .menuBarExtraStyle(.menu)
         .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
             self.statusItem = item
             MenuSessionsInjector.shared.install(into: item)
@@ -60,7 +59,6 @@ struct OpenClawApp: App {
             self.installStatusItemMouseHandler(for: item)
             self.updateHoverHUDSuppression()
         }
-        .menuBarExtraStyle(.menu)
         .onChange(of: self.state.isPaused) { _, paused in
             self.applyStatusItemAppearance(paused: paused, sleeping: self.isGatewaySleeping)
             if self.state.connectionMode == .local {
@@ -80,41 +78,35 @@ struct OpenClawApp: App {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
         }
 
-        Window("OpenClaw Settings", id: SettingsWindowOpener.windowID) {
+        Settings {
             SettingsRootView(state: self.state, updater: self.delegate.updaterController)
                 .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
                 .environment(self.tailscaleService)
         }
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         .windowResizability(.contentSize)
-        .commands {
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings...") {
-                    self.openWindow(id: SettingsWindowOpener.windowID)
-                }
-                .keyboardShortcut(",", modifiers: .command)
-            }
-            SidebarCommands()
-        }
         .onChange(of: self.isMenuPresented) { _, _ in
             self.updateStatusHighlight()
             self.updateHoverHUDSuppression()
         }
     }
 
-    private func applyStatusItemAppearance(paused _: Bool, sleeping _: Bool) {
-        // Keep the status item actionable even when the Gateway is paused or disconnected.
-        // The SwiftUI label already renders those states; AppKit's disabled appearance can
-        // leak into menu item validation and grey out app-level commands like Settings.
-        self.statusItem?.button?.appearsDisabled = false
+    private func applyStatusItemAppearance(paused: Bool, sleeping: Bool) {
+        self.statusItem?.button?.appearsDisabled = paused || sleeping
     }
 
     private static func applyAttachOnlyOverrideIfNeeded() {
         let args = CommandLine.arguments
         guard args.contains("--attach-only") || args.contains("--no-launchd") else { return }
-        if let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride() {
+        if let error = GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(true) {
             Self.logger.error("attach-only flag failed: \(error, privacy: .public)")
             return
+        }
+        Task {
+            _ = await GatewayLaunchAgentManager.set(
+                enabled: false,
+                bundlePath: Bundle.main.bundlePath,
+                port: GatewayEnvironment.gatewayPort())
         }
         Self.logger.info("attach-only flag enabled")
     }
@@ -157,7 +149,7 @@ struct OpenClawApp: App {
         handler.translatesAutoresizingMaskIntoConstraints = false
         handler.onLeftClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemClick")
-            self.openDashboardWindow()
+            self.toggleWebChatPanel()
         }
         handler.onRightClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemRightClick")
@@ -181,10 +173,15 @@ struct OpenClawApp: App {
     }
 
     @MainActor
-    private func openDashboardWindow() {
+    private func toggleWebChatPanel() {
         HoverHUDController.shared.setSuppressed(true)
         self.isMenuPresented = false
-        AppNavigationActions.openDashboard()
+        Task { @MainActor in
+            let sessionKey = await WebChatManager.shared.preferredSessionKey()
+            WebChatManager.shared.togglePanel(
+                sessionKey: sessionKey,
+                anchorProvider: { [self] in self.statusButtonScreenFrame() })
+        }
     }
 
     @MainActor
@@ -243,79 +240,11 @@ private final class StatusItemMouseHandlerView: NSView {
     }
 }
 
-private struct SettingsWindowOpenRegistrar: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .onAppear {
-                let openWindow = self.openWindow
-                SettingsWindowOpener.shared.register {
-                    openWindow(id: SettingsWindowOpener.windowID)
-                }
-            }
-    }
-}
-
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var state: AppState?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     let updaterController: UpdaterProviding = makeUpdaterController()
-
-    func applicationDockMenu(_: NSApplication) -> NSMenu? {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        menu.addItem(self.dockMenuItem(
-            title: "Open Dashboard",
-            systemImage: "gauge",
-            action: #selector(self.openDashboardFromDockMenu(_:))))
-        menu.addItem(self.dockMenuItem(
-            title: "Open Chat",
-            systemImage: "bubble.left.and.bubble.right",
-            action: #selector(self.openChatFromDockMenu(_:))))
-        let canvasTitle = AppStateStore.shared.canvasPanelVisible ? "Close Canvas" : "Open Canvas"
-        let canvasItem = self.dockMenuItem(
-            title: canvasTitle,
-            systemImage: "rectangle.inset.filled.on.rectangle",
-            action: #selector(self.toggleCanvasFromDockMenu(_:)))
-        canvasItem.isEnabled = AppStateStore.shared.canvasEnabled
-        menu.addItem(canvasItem)
-        menu.addItem(.separator())
-        menu.addItem(self.dockMenuItem(
-            title: "Settings…",
-            systemImage: "gearshape",
-            action: #selector(self.openSettingsFromDockMenu(_:))))
-        return menu
-    }
-
-    private func dockMenuItem(title: String, systemImage: String, action: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: title)
-        return item
-    }
-
-    @objc
-    private func openDashboardFromDockMenu(_: Any?) {
-        AppNavigationActions.openDashboard()
-    }
-
-    @objc
-    private func openChatFromDockMenu(_: Any?) {
-        AppNavigationActions.openChat()
-    }
-
-    @objc
-    private func toggleCanvasFromDockMenu(_: Any?) {
-        AppNavigationActions.toggleCanvas()
-    }
-
-    @objc
-    private func openSettingsFromDockMenu(_: Any?) {
-        AppNavigationActions.openSettings()
-    }
 
     func application(_: NSApplication, open urls: [URL]) {
         Task { @MainActor in
@@ -360,19 +289,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WebChatManager.shared.show(sessionKey: sessionKey)
             }
         }
-        if CommandLine.arguments.contains("--dashboard") {
-            self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
-            Task { @MainActor in
-                if DashboardManager.shared.showConfiguredWindowIfPossible() {
-                    return
-                }
-                do {
-                    try await DashboardManager.shared.show()
-                } catch {
-                    DashboardManager.shared.showFailure(error)
-                }
-            }
-        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -384,7 +300,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MacNodeModeCoordinator.shared.stop()
         TerminationSignalWatcher.shared.stop()
         VoiceWakeGlobalSettingsSync.shared.stop()
-        DashboardManager.shared.close()
         WebChatManager.shared.close()
         WebChatManager.shared.resetTunnels()
         Task { await RemoteTunnelManager.shared.stopAll() }
@@ -394,10 +309,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func scheduleFirstRunOnboardingIfNeeded() {
-        if AppStateStore.shared.connectionMode != .unconfigured {
-            OnboardingController.markComplete()
-            return
-        }
         let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
         let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }

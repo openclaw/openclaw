@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
-  setInternalHooksEnabled,
   triggerInternalHook,
 } from "./internal-hooks.js";
 import { loadInternalHooks } from "./loader.js";
@@ -25,7 +24,6 @@ describe("bundle plugin hooks", () => {
 
   beforeEach(async () => {
     clearInternalHooks();
-    setInternalHooksEnabled(true);
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fsp.mkdir(workspaceDir, { recursive: true });
     previousBundledHooksDir = process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
@@ -34,7 +32,6 @@ describe("bundle plugin hooks", () => {
 
   afterEach(() => {
     clearInternalHooks();
-    setInternalHooksEnabled(true);
     if (previousBundledHooksDir === undefined) {
       delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
     } else {
@@ -98,15 +95,6 @@ describe("bundle plugin hooks", () => {
     };
   }
 
-  function requireOnlyHookEntry(entries: ReturnType<typeof loadWorkspaceHookEntries>) {
-    expect(entries).toHaveLength(1);
-    const [entry] = entries;
-    if (!entry) {
-      throw new Error("Expected bundled hook entry");
-    }
-    return entry;
-  }
-
   it("exposes enabled bundle hook dirs as plugin-managed hook entries", async () => {
     const bundleRoot = await writeBundleHookFixture();
 
@@ -114,14 +102,14 @@ describe("bundle plugin hooks", () => {
       config: createConfig(true),
     });
 
-    const entry = requireOnlyHookEntry(entries);
-    expect(entry.hook.name).toBe("bundle-hook");
-    expect(entry.hook.source).toBe("openclaw-plugin");
-    expect(entry.hook.pluginId).toBe("sample-bundle");
-    expect(entry.hook.baseDir).toBe(
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.hook.name).toBe("bundle-hook");
+    expect(entries[0]?.hook.source).toBe("openclaw-plugin");
+    expect(entries[0]?.hook.pluginId).toBe("sample-bundle");
+    expect(entries[0]?.hook.baseDir).toBe(
       fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
     );
-    expect(entry.metadata?.events).toEqual(["command:new"]);
+    expect(entries[0]?.metadata?.events).toEqual(["command:new"]);
   });
 
   it("loads and executes enabled bundle hooks through the internal hook loader", async () => {

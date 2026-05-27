@@ -116,7 +116,7 @@ final class VoiceWakeTester {
         }
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request] buffer, _ in
-            request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
+            request?.append(buffer)
         }
 
         engine.prepare()
@@ -230,23 +230,15 @@ final class VoiceWakeTester {
         if self.holdingAfterDetect {
             return
         }
-        let triggerOnlyMatch = match == nil
-            ? VoiceWakeRecognitionDebugSupport.triggerOnlyFallbackMatch(
-                transcript: text,
-                triggers: self.currentTriggers,
-                trimWake: WakeWordGate.stripWake)
-            : nil
-        let acceptedMatch = match.flatMap { $0.command.isEmpty ? nil : $0 } ?? triggerOnlyMatch
-        if let match = acceptedMatch {
+        if let match, !match.command.isEmpty {
             self.holdingAfterDetect = true
-            let detectedText = match.command.isEmpty ? (match.trigger ?? text) : match.command
-            self.detectedText = detectedText
-            self.logger.info("voice wake detected (test) (len=\(detectedText.count))")
+            self.detectedText = match.command
+            self.logger.info("voice wake detected (test) (len=\(match.command.count))")
             await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
             self.stop()
             await MainActor.run {
                 AppStateStore.shared.stopVoiceEars()
-                onUpdate(.detected(detectedText))
+                onUpdate(.detected(match.command))
             }
             return
         }
@@ -407,26 +399,20 @@ final class VoiceWakeTester {
             guard !self.isStopping, !self.holdingAfterDetect else { return }
             guard let lastSeenAt, let lastText else { return }
             guard self.lastTranscriptAt == lastSeenAt, self.lastTranscript == lastText else { return }
-            let gateConfig = WakeWordGateConfig(triggers: triggers)
-            let match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
+            guard let match = VoiceWakeRecognitionDebugSupport.textOnlyFallbackMatch(
                 transcript: lastText,
                 triggers: triggers,
-                config: gateConfig,
+                config: WakeWordGateConfig(triggers: triggers),
                 trimWake: WakeWordGate.stripWake)
-                ?? VoiceWakeRecognitionDebugSupport.triggerOnlyFallbackMatch(
-                    transcript: lastText,
-                    triggers: triggers,
-                    trimWake: WakeWordGate.stripWake)
-            guard let match else { return }
+            else { return }
             self.holdingAfterDetect = true
-            let detectedText = match.command.isEmpty ? (match.trigger ?? lastText) : match.command
-            self.detectedText = detectedText
-            self.logger.info("voice wake detected (test, silence) (len=\(detectedText.count))")
+            self.detectedText = match.command
+            self.logger.info("voice wake detected (test, silence) (len=\(match.command.count))")
             await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
             self.stop()
             await MainActor.run {
                 AppStateStore.shared.stopVoiceEars()
-                onUpdate(.detected(detectedText))
+                onUpdate(.detected(match.command))
             }
         }
     }

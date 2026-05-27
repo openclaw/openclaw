@@ -5,12 +5,12 @@ type EmbeddedRunTriggerPolicy = {
 };
 
 const DEFAULT_EMBEDDED_RUN_TRIGGER_POLICY: EmbeddedRunTriggerPolicy = {
-  injectHeartbeatPrompt: false,
+  injectHeartbeatPrompt: true,
 };
 
 const EMBEDDED_RUN_TRIGGER_POLICY: Partial<Record<EmbeddedRunTrigger, EmbeddedRunTriggerPolicy>> = {
-  heartbeat: {
-    injectHeartbeatPrompt: true,
+  cron: {
+    injectHeartbeatPrompt: false,
   },
 };
 

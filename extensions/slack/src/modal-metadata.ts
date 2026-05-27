@@ -1,14 +1,15 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-type SlackModalPrivateMetadata = {
+export type SlackModalPrivateMetadata = {
   sessionKey?: string;
   channelId?: string;
   channelType?: string;
   userId?: string;
-  pluginInteractiveData?: string;
 };
 
 const SLACK_PRIVATE_METADATA_MAX = 3000;
+
+function normalizeString(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
 
 export function parseSlackModalPrivateMetadata(raw: unknown): SlackModalPrivateMetadata {
   if (typeof raw !== "string" || raw.trim().length === 0) {
@@ -17,11 +18,10 @@ export function parseSlackModalPrivateMetadata(raw: unknown): SlackModalPrivateM
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return {
-      sessionKey: normalizeOptionalString(parsed.sessionKey),
-      channelId: normalizeOptionalString(parsed.channelId),
-      channelType: normalizeOptionalString(parsed.channelType),
-      userId: normalizeOptionalString(parsed.userId),
-      pluginInteractiveData: normalizeOptionalString(parsed.pluginInteractiveData),
+      sessionKey: normalizeString(parsed.sessionKey),
+      channelId: normalizeString(parsed.channelId),
+      channelType: normalizeString(parsed.channelType),
+      userId: normalizeString(parsed.userId),
     };
   } catch {
     return {};
@@ -34,7 +34,6 @@ export function encodeSlackModalPrivateMetadata(input: SlackModalPrivateMetadata
     ...(input.channelId ? { channelId: input.channelId } : {}),
     ...(input.channelType ? { channelType: input.channelType } : {}),
     ...(input.userId ? { userId: input.userId } : {}),
-    ...(input.pluginInteractiveData ? { pluginInteractiveData: input.pluginInteractiveData } : {}),
   };
   const encoded = JSON.stringify(payload);
   if (encoded.length > SLACK_PRIVATE_METADATA_MAX) {

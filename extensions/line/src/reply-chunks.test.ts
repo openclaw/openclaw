@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 
-const LINE_TEST_CFG = { channels: { line: { channelAccessToken: "line-token" } } };
-
 function createReplyChunksHarness() {
   const replyMessageLine = vi.fn(async () => ({}));
   const pushMessageLine = vi.fn(async () => ({}));
@@ -35,7 +33,6 @@ describe("sendLineReplyChunks", () => {
       quickReplies: ["A", "B"],
       replyToken: "token",
       replyTokenUsed: false,
-      cfg: LINE_TEST_CFG,
       accountId: "default",
       replyMessageLine,
       pushMessageLine,
@@ -53,7 +50,7 @@ describe("sendLineReplyChunks", () => {
         { type: "text", text: "two" },
         { type: "text", text: "three" },
       ],
-      { cfg: LINE_TEST_CFG, accountId: "default" },
+      { accountId: "default" },
     );
     expect(pushMessageLine).not.toHaveBeenCalled();
     expect(pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
@@ -74,7 +71,6 @@ describe("sendLineReplyChunks", () => {
       quickReplies: ["A"],
       replyToken: "token",
       replyTokenUsed: false,
-      cfg: LINE_TEST_CFG,
       replyMessageLine,
       pushMessageLine,
       pushTextMessageWithQuickReplies,
@@ -103,7 +99,6 @@ describe("sendLineReplyChunks", () => {
       quickReplies: ["A"],
       replyToken: "token",
       replyTokenUsed: false,
-      cfg: LINE_TEST_CFG,
       replyMessageLine,
       pushMessageLine,
       pushTextMessageWithQuickReplies,
@@ -121,16 +116,12 @@ describe("sendLineReplyChunks", () => {
         { type: "text", text: "4" },
         { type: "text", text: "5" },
       ],
-      { cfg: LINE_TEST_CFG, accountId: undefined },
+      { accountId: undefined },
     );
     expect(pushMessageLine).toHaveBeenCalledTimes(1);
-    expect(pushMessageLine).toHaveBeenCalledWith("line:group:1", "6", {
-      cfg: LINE_TEST_CFG,
-      accountId: undefined,
-    });
+    expect(pushMessageLine).toHaveBeenCalledWith("line:group:1", "6", { accountId: undefined });
     expect(pushTextMessageWithQuickReplies).toHaveBeenCalledTimes(1);
     expect(pushTextMessageWithQuickReplies).toHaveBeenCalledWith("line:group:1", "7", ["A"], {
-      cfg: LINE_TEST_CFG,
       accountId: undefined,
     });
     expect(createTextMessageWithQuickReplies).not.toHaveBeenCalled();
@@ -144,8 +135,7 @@ describe("sendLineReplyChunks", () => {
       createTextMessageWithQuickReplies,
     } = createReplyChunksHarness();
     const onReplyError = vi.fn();
-    const replyError = new Error("reply failed");
-    replyMessageLine.mockRejectedValueOnce(replyError);
+    replyMessageLine.mockRejectedValueOnce(new Error("reply failed"));
 
     const result = await sendLineReplyChunks({
       to: "line:group:1",
@@ -153,7 +143,6 @@ describe("sendLineReplyChunks", () => {
       quickReplies: ["A"],
       replyToken: "token",
       replyTokenUsed: false,
-      cfg: LINE_TEST_CFG,
       accountId: "default",
       replyMessageLine,
       pushMessageLine,
@@ -163,17 +152,14 @@ describe("sendLineReplyChunks", () => {
     });
 
     expect(result.replyTokenUsed).toBe(true);
-    expect(onReplyError).toHaveBeenCalledWith(replyError);
+    expect(onReplyError).toHaveBeenCalledWith(expect.any(Error));
     expect(pushMessageLine).toHaveBeenNthCalledWith(1, "line:group:1", "1", {
-      cfg: LINE_TEST_CFG,
       accountId: "default",
     });
     expect(pushMessageLine).toHaveBeenNthCalledWith(2, "line:group:1", "2", {
-      cfg: LINE_TEST_CFG,
       accountId: "default",
     });
     expect(pushTextMessageWithQuickReplies).toHaveBeenCalledWith("line:group:1", "3", ["A"], {
-      cfg: LINE_TEST_CFG,
       accountId: "default",
     });
   });

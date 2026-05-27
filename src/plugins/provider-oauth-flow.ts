@@ -25,10 +25,12 @@ export function createVpsAwareOAuthHandlers(params: {
       if (params.isRemote) {
         params.spin.stop("OAuth URL ready");
         params.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
-        manualCodePromise = params.prompter.text({
-          message: manualPromptMessage,
-          validate: validateRequiredInput,
-        });
+        manualCodePromise = params.prompter
+          .text({
+            message: manualPromptMessage,
+            validate: validateRequiredInput,
+          })
+          .then((value) => String(value));
         return;
       }
 
@@ -45,7 +47,7 @@ export function createVpsAwareOAuthHandlers(params: {
         placeholder: prompt.placeholder,
         validate: validateRequiredInput,
       });
-      return code;
+      return String(code);
     },
   };
 }

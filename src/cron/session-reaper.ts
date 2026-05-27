@@ -7,8 +7,11 @@
  */
 
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
-import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
+import {
+  archiveRemovedSessionTranscripts,
+  loadSessionStore,
+  updateSessionStore,
+} from "../config/sessions.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
@@ -36,7 +39,7 @@ export function resolveRetentionMs(cronConfig?: CronConfig): number | null {
   return DEFAULT_RETENTION_MS;
 }
 
-type ReaperResult = {
+export type ReaperResult = {
   swept: boolean;
   pruned: number;
 };

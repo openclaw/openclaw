@@ -1,6 +1,9 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
+import type { OpenClawPluginApi } from "../runtime-api.js";
 import { FeishuConfigSchema } from "./config-schema.js";
-import type { ResolvedFeishuAccount } from "./types.js";
+import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
 
 type CreateFeishuClient = typeof import("./client.js").createFeishuClient;
 type CreateFeishuWSClient = typeof import("./client.js").createFeishuWSClient;
@@ -17,9 +20,9 @@ const wsClientCtorMock = vi.hoisted(() =>
     return { connected: true };
   }),
 );
-const proxyAgentCtorMock = vi.hoisted(() =>
-  vi.fn(function createAmbientNodeProxyAgent() {
-    return { proxied: true };
+const httpsProxyAgentCtorMock = vi.hoisted(() =>
+  vi.fn(function httpsProxyAgentCtor(proxyUrl: string) {
+    return { proxyUrl };
   }),
 );
 const mockBaseHttpInstance = vi.hoisted(() => ({
@@ -91,6 +94,11 @@ vi.mock("./subagent-hooks.js", () => ({
   registerFeishuSubagentHooks: registerFeishuSubagentHooksMock,
 }));
 
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
 const baseAccount: ResolvedFeishuAccount = {
   accountId: "main",
   selectionSource: "explicit",
@@ -111,16 +119,6 @@ type HttpInstanceLike = {
   post: (url: string, body?: unknown, options?: Record<string, unknown>) => Promise<unknown>;
 };
 
-function requireHttpInstance(value: unknown): HttpInstanceLike {
-  if (isRecord(value) && typeof value.get === "function" && typeof value.post === "function") {
-    return {
-      get: value.get as HttpInstanceLike["get"],
-      post: value.post as HttpInstanceLike["post"],
-    };
-  }
-  throw new Error("expected Feishu HTTP instance");
-}
-
 function readCallOptions(
   mock: { mock: { calls: unknown[][] } },
   index = -1,
@@ -129,26 +127,13 @@ function readCallOptions(
   return isRecord(call) ? call : {};
 }
 
-function firstWsClientOptions(): {
-  agent?: unknown;
-  wsConfig?: unknown;
-  onError?: unknown;
-  onReady?: unknown;
-  onReconnected?: unknown;
-  onReconnecting?: unknown;
-} {
+function firstWsClientOptions(): { agent?: unknown } {
   const options = readCallOptions(wsClientCtorMock, 0);
-  return {
-    agent: options.agent,
-    wsConfig: options.wsConfig,
-    onError: options.onError,
-    onReady: options.onReady,
-    onReconnected: options.onReconnected,
-    onReconnecting: options.onReconnecting,
-  };
+  return { agent: options.agent };
 }
 
 beforeAll(async () => {
+  vi.resetModules();
   vi.doMock("@larksuiteoapi/node-sdk", () => ({
     AppType: { SelfBuild: "self" },
     Domain: { Feishu: "https://open.feishu.cn", Lark: "https://open.larksuite.com" },
@@ -158,16 +143,8 @@ beforeAll(async () => {
     EventDispatcher: vi.fn(),
     defaultHttpInstance: mockBaseHttpInstance,
   }));
-  vi.doMock("@openclaw/proxyline", () => ({
-    createAmbientNodeProxyAgent: proxyAgentCtorMock,
-    hasAmbientNodeProxyConfigured: vi.fn(() =>
-      Boolean(
-        process.env.HTTPS_PROXY ??
-        process.env.https_proxy ??
-        process.env.HTTP_PROXY ??
-        process.env.http_proxy,
-      ),
-    ),
+  vi.doMock("https-proxy-agent", () => ({
+    HttpsProxyAgent: httpsProxyAgentCtorMock,
   }));
 
   ({
@@ -204,6 +181,7 @@ beforeEach(() => {
       EventDispatcher: vi.fn() as never,
       defaultHttpInstance: mockBaseHttpInstance as never,
     },
+    HttpsProxyAgent: httpsProxyAgentCtorMock as never,
   });
 });
 
@@ -224,45 +202,45 @@ afterEach(() => {
   setFeishuClientRuntimeForTest();
 });
 
-afterAll(() => {
-  vi.doUnmock("./channel.js");
-  vi.doUnmock("./docx.js");
-  vi.doUnmock("./chat.js");
-  vi.doUnmock("./wiki.js");
-  vi.doUnmock("./drive.js");
-  vi.doUnmock("./perm.js");
-  vi.doUnmock("./bitable.js");
-  vi.doUnmock("./runtime.js");
-  vi.doUnmock("./subagent-hooks.js");
-  vi.doUnmock("@larksuiteoapi/node-sdk");
-  vi.doUnmock("@openclaw/proxyline");
-  vi.resetModules();
-});
-
 describe("createFeishuClient HTTP timeout", () => {
-  const readLastClientHttpInstance = (): HttpInstanceLike =>
-    requireHttpInstance(readCallOptions(clientCtorMock).httpInstance);
+  const getLastClientHttpInstance = (): HttpInstanceLike | undefined => {
+    const httpInstance = readCallOptions(clientCtorMock).httpInstance;
+    if (
+      isRecord(httpInstance) &&
+      typeof httpInstance.get === "function" &&
+      typeof httpInstance.post === "function"
+    ) {
+      return {
+        get: httpInstance.get as HttpInstanceLike["get"],
+        post: httpInstance.post as HttpInstanceLike["post"],
+      };
+    }
+    return undefined;
+  };
 
   const expectGetCallTimeout = async (timeout: number) => {
-    const httpInstance = readLastClientHttpInstance();
-    await httpInstance.get("https://example.com/api");
-    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith("https://example.com/api", { timeout });
+    const httpInstance = getLastClientHttpInstance();
+    expect(httpInstance).toBeDefined();
+    await httpInstance?.get("https://example.com/api");
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ timeout }),
+    );
   };
 
   it("passes a custom httpInstance with default timeout to Lark.Client", () => {
     createFeishuClient({ appId: "app_1", appSecret: "secret_1", accountId: "timeout-test" }); // pragma: allowlist secret
 
-    const httpInstance = readLastClientHttpInstance();
-    expect(typeof httpInstance.get).toBe("function");
-    expect(typeof httpInstance.post).toBe("function");
+    expect(readCallOptions(clientCtorMock).httpInstance).toBeDefined();
   });
 
   it("injects default timeout into HTTP request options", async () => {
     createFeishuClient({ appId: "app_2", appSecret: "secret_2", accountId: "timeout-inject" }); // pragma: allowlist secret
 
-    const httpInstance = readLastClientHttpInstance();
+    const httpInstance = getLastClientHttpInstance();
 
-    await httpInstance.post(
+    expect(httpInstance).toBeDefined();
+    await httpInstance?.post(
       "https://example.com/api",
       { data: 1 },
       { headers: { "X-Custom": "yes" } },
@@ -271,20 +249,22 @@ describe("createFeishuClient HTTP timeout", () => {
     expect(mockBaseHttpInstance.post).toHaveBeenCalledWith(
       "https://example.com/api",
       { data: 1 },
-      { timeout: FEISHU_HTTP_TIMEOUT_MS, headers: { "X-Custom": "yes" } },
+      expect.objectContaining({ timeout: FEISHU_HTTP_TIMEOUT_MS, headers: { "X-Custom": "yes" } }),
     );
   });
 
   it("allows explicit timeout override per-request", async () => {
     createFeishuClient({ appId: "app_3", appSecret: "secret_3", accountId: "timeout-override" }); // pragma: allowlist secret
 
-    const httpInstance = readLastClientHttpInstance();
+    const httpInstance = getLastClientHttpInstance();
 
-    await httpInstance.get("https://example.com/api", { timeout: 5_000 });
+    expect(httpInstance).toBeDefined();
+    await httpInstance?.get("https://example.com/api", { timeout: 5_000 });
 
-    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith("https://example.com/api", {
-      timeout: 5_000,
-    });
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ timeout: 5_000 }),
+    );
   });
 
   it("uses config-configured default timeout when provided", async () => {
@@ -363,85 +343,109 @@ describe("createFeishuClient HTTP timeout", () => {
     });
 
     expect(clientCtorMock.mock.calls.length).toBe(2);
-    const httpInstance = readLastClientHttpInstance();
-    await httpInstance.get("https://example.com/api");
+    const httpInstance = getLastClientHttpInstance();
+    expect(httpInstance).toBeDefined();
+    await httpInstance?.get("https://example.com/api");
 
-    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith("https://example.com/api", {
-      timeout: 45_000,
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
+      "https://example.com/api",
+      expect.objectContaining({ timeout: 45_000 }),
+    );
+  });
+});
+
+describe("feishu plugin register", () => {
+  it("registers the Feishu channel, tools, and subagent hooks", async () => {
+    const { default: plugin } = await import("../index.js");
+    const registerChannel = vi.fn();
+    const api = createTestPluginApi({
+      id: "feishu-test",
+      name: "Feishu Test",
+      source: "local",
+      runtime: createPluginRuntimeMock(),
+      on: vi.fn(),
+      config: {},
+      registerChannel,
     });
+
+    plugin.register(api);
+
+    expect(setFeishuRuntimeMock).toHaveBeenCalledWith(api.runtime);
+    expect(registerChannel).toHaveBeenCalledTimes(1);
+    expect(registerChannel).toHaveBeenCalledWith({ plugin: feishuPluginMock });
+    expect(registerFeishuSubagentHooksMock).toHaveBeenCalledWith(api);
+    expect(registerFeishuDocToolsMock).toHaveBeenCalledWith(api);
+    expect(registerFeishuChatToolsMock).toHaveBeenCalledWith(api);
+    expect(registerFeishuWikiToolsMock).toHaveBeenCalledWith(api);
+    expect(registerFeishuDriveToolsMock).toHaveBeenCalledWith(api);
+    expect(registerFeishuPermToolsMock).toHaveBeenCalledWith(api);
+    expect(registerFeishuBitableToolsMock).toHaveBeenCalledWith(api);
   });
 });
 
 describe("createFeishuWSClient proxy handling", () => {
-  it("passes heartbeat wsConfig defaults to Lark.WSClient", async () => {
-    await createFeishuWSClient(baseAccount);
+  it("does not set a ws proxy agent when proxy env is absent", () => {
+    createFeishuWSClient(baseAccount);
 
-    const options = firstWsClientOptions();
-    expect(options.wsConfig).toEqual({
-      PingInterval: 30,
-      PingTimeout: 3,
-    });
-  });
-
-  it("passes lifecycle callbacks while preserving heartbeat wsConfig defaults", async () => {
-    const onError = vi.fn();
-    const onReady = vi.fn();
-    const onReconnected = vi.fn();
-    const onReconnecting = vi.fn();
-
-    await createFeishuWSClient(baseAccount, {
-      onError,
-      onReady,
-      onReconnected,
-      onReconnecting,
-    });
-
-    const options = firstWsClientOptions();
-    expect(options.onError).toBe(onError);
-    expect(options.onReady).toBe(onReady);
-    expect(options.onReconnected).toBe(onReconnected);
-    expect(options.onReconnecting).toBe(onReconnecting);
-    expect(options.wsConfig).toEqual({
-      PingInterval: 30,
-      PingTimeout: 3,
-    });
-  });
-
-  it("does not set a ws proxy agent when proxy env is absent", async () => {
-    await createFeishuWSClient(baseAccount);
-
-    expect(proxyAgentCtorMock).not.toHaveBeenCalled();
+    expect(httpsProxyAgentCtorMock).not.toHaveBeenCalled();
     const options = firstWsClientOptions();
     expect(options.agent).toBeUndefined();
   });
 
-  it("creates a ws proxy agent when lowercase https_proxy is set", async () => {
+  it("uses proxy env precedence: https_proxy first, then HTTPS_PROXY, then http_proxy/HTTP_PROXY", () => {
+    // NOTE: On Windows, environment variables are case-insensitive, so it's not
+    // possible to set both https_proxy and HTTPS_PROXY to different values.
+    // Keep this test cross-platform by asserting precedence via mutually-exclusive
+    // setups.
+    process.env.https_proxy = "http://lower-https:8001";
+    process.env.http_proxy = "http://lower-http:8003";
+    process.env.HTTP_PROXY = "http://upper-http:8004";
+
+    createFeishuWSClient(baseAccount);
+
+    // On Windows env keys are case-insensitive, so setting HTTPS_PROXY may
+    // overwrite https_proxy. We assert https proxies still win over http.
+    const expectedProxy = process.env.https_proxy || process.env.HTTPS_PROXY;
+    expect(expectedProxy).toBeTruthy();
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith(expectedProxy);
+    const options = firstWsClientOptions();
+    expect(options.agent).toEqual({ proxyUrl: expectedProxy });
+  });
+
+  it("accepts lowercase https_proxy when it is the configured HTTPS proxy var", () => {
     process.env.https_proxy = "http://lower-https:8001";
 
-    await createFeishuWSClient(baseAccount);
+    createFeishuWSClient(baseAccount);
 
-    expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    const expectedHttpsProxy = process.env.https_proxy || process.env.HTTPS_PROXY;
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(expectedHttpsProxy).toBeTruthy();
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith(expectedHttpsProxy);
     const options = firstWsClientOptions();
-    expect(options.agent).toEqual({ proxied: true });
+    expect(options.agent).toEqual({ proxyUrl: expectedHttpsProxy });
   });
 
-  it("creates a ws proxy agent when uppercase HTTPS_PROXY is set", async () => {
+  it("uses HTTPS_PROXY when https_proxy is unset", () => {
     process.env.HTTPS_PROXY = "http://upper-https:8002";
+    process.env.http_proxy = "http://lower-http:8003";
 
-    await createFeishuWSClient(baseAccount);
+    createFeishuWSClient(baseAccount);
 
-    expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://upper-https:8002");
     const options = firstWsClientOptions();
-    expect(options.agent).toEqual({ proxied: true });
+    expect(options.agent).toEqual({ proxyUrl: "http://upper-https:8002" });
   });
 
-  it("falls back to HTTP_PROXY for ws proxy agent creation", async () => {
+  it("passes HTTP_PROXY to ws client when https vars are unset", () => {
     process.env.HTTP_PROXY = "http://upper-http:8999";
 
-    await createFeishuWSClient(baseAccount);
+    createFeishuWSClient(baseAccount);
 
-    expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://upper-http:8999");
     const options = firstWsClientOptions();
-    expect(options.agent).toEqual({ proxied: true });
+    expect(options.agent).toEqual({ proxyUrl: "http://upper-http:8999" });
   });
 });

@@ -3,7 +3,7 @@
  * Based on packages/shared/src/urbit/groups.ts from homestead
  */
 
-interface GroupPreviewV7 {
+export interface GroupPreviewV7 {
   meta: {
     title: string;
     description: string;
@@ -17,7 +17,7 @@ interface GroupPreviewV7 {
   };
 }
 
-interface ForeignInvite {
+export interface ForeignInvite {
   flag: string; // group flag e.g. "~host/group-name"
   time: number; // timestamp
   from: string; // ship that sent invite
@@ -27,10 +27,10 @@ interface ForeignInvite {
   valid: boolean; // tracks if invite has been revoked
 }
 
-type Lookup = "preview" | "done" | "error";
-type Progress = "ask" | "join" | "watch" | "done" | "error";
+export type Lookup = "preview" | "done" | "error";
+export type Progress = "ask" | "join" | "watch" | "done" | "error";
 
-interface Foreign {
+export interface Foreign {
   invites: ForeignInvite[];
   lookup: Lookup | null;
   preview: GroupPreviewV7 | null;

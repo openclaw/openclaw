@@ -1,8 +1,7 @@
 import { isIpInCidr } from "../shared/net/ip.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { listExternalInterfaceAddresses, readNetworkInterfaces } from "./network-interfaces.js";
 
-type TailnetAddresses = {
+export type TailnetAddresses = {
   ipv4: string[];
   ipv6: string[];
 };
@@ -35,7 +34,7 @@ export function listTailnetAddresses(): TailnetAddresses {
     }
   }
 
-  return { ipv4: uniqueStrings(ipv4), ipv6: uniqueStrings(ipv6) };
+  return { ipv4: [...new Set(ipv4)], ipv6: [...new Set(ipv6)] };
 }
 
 export function pickPrimaryTailnetIPv4(): string | undefined {

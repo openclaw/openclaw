@@ -1,7 +1,6 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyTogetherConfig, TOGETHER_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildTogetherProvider } from "./provider-catalog.js";
-import { buildTogetherVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "together";
 
@@ -31,12 +30,5 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildTogetherProvider,
     },
-    classifyFailoverReason: ({ errorMessage }) =>
-      /\bconcurrency limit\b.*\b(?:breached|reached)\b/i.test(errorMessage)
-        ? "rate_limit"
-        : undefined,
-  },
-  register(api) {
-    api.registerVideoGenerationProvider(buildTogetherVideoGenerationProvider());
   },
 });

@@ -1,75 +1,7 @@
-import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { SubagentRunOutcome } from "./subagent-announce.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
-
-export type PendingFinalDeliveryPayload = {
-  requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
-  requesterDisplayKey: string;
-  childSessionKey: string;
-  childRunId: string;
-  task: string;
-  label?: string;
-  startedAt?: number;
-  endedAt?: number;
-  outcome?: SubagentRunOutcome;
-  expectsCompletionMessage?: boolean;
-  spawnMode?: SpawnSubagentMode;
-  frozenResultText?: string | null;
-  fallbackFrozenResultText?: string | null;
-  wakeOnDescendantSettle?: boolean;
-};
-
-export type SubagentExecutionState = {
-  status: "running" | "interrupted" | "terminal";
-  startedAt?: number;
-  endedAt?: number;
-  outcome?: SubagentRunOutcome;
-  interruptedAt?: number;
-  interruptionReason?: "gateway-restart" | "lost-execution-context";
-  transcriptFile?: string;
-};
-
-export type SubagentCompletionState = {
-  required: boolean;
-  resultText?: string | null;
-  capturedAt?: number;
-  fallbackResultText?: string | null;
-  fallbackCapturedAt?: number;
-};
-
-export type SubagentCompletionDeliveryState = {
-  status:
-    | "not_required"
-    | "pending"
-    | "in_progress"
-    | "delivered"
-    | "failed"
-    | "suspended"
-    | "discarded";
-  payload?: PendingFinalDeliveryPayload;
-  createdAt?: number;
-  enqueuedAt?: number;
-  deliveredAt?: number;
-  announcedAt?: number;
-  lastAttemptAt?: number;
-  attemptCount?: number;
-  lastError?: string | null;
-  suspendedAt?: number;
-  suspendedReason?: "retry-limit" | "expiry";
-  discardedAt?: number;
-  discardReason?: "expired" | "pressure-pruned";
-  discardedPayloadSummary?: {
-    requesterSessionKey?: string;
-    childSessionKey?: string;
-    childRunId?: string;
-    endedAt?: number;
-    status?: string;
-    lastError?: string | null;
-  };
-  lastDropReason?: "queue_cap" | "parent_run_ended" | "sink_unavailable" | "dedupe";
-};
+import type { SpawnSubagentMode } from "./subagent-spawn.js";
 
 export type SubagentRunRecord = {
   runId: string;
@@ -79,17 +11,18 @@ export type SubagentRunRecord = {
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
-  taskName?: string;
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
-  agentDir?: string;
   workspaceDir?: string;
   runTimeoutSeconds?: number;
   spawnMode?: SpawnSubagentMode;
   createdAt: number;
+  /** Start time of the current run attempt. */
   startedAt?: number;
+  /** Stable start time for the child session across follow-up runs. */
   sessionStartedAt?: number;
+  /** Accumulated runtime from prior completed runs for this child session. */
   accumulatedRuntimeMs?: number;
   endedAt?: number;
   outcome?: SubagentRunOutcome;
@@ -98,15 +31,32 @@ export type SubagentRunRecord = {
   cleanupHandled?: boolean;
   suppressAnnounceReason?: "steer-restart" | "killed";
   expectsCompletionMessage?: boolean;
+  /** Number of announce delivery attempts that returned false (deferred). */
+  announceRetryCount?: number;
+  /** Timestamp of the last announce retry attempt (for backoff). */
+  lastAnnounceRetryAt?: number;
+  /** Terminal lifecycle reason recorded when the run finishes. */
   endedReason?: SubagentLifecycleEndedReason;
-  pauseReason?: "sessions_yield";
+  /** Run ended while descendants were still pending and should be re-invoked once they settle. */
   wakeOnDescendantSettle?: boolean;
-  execution?: SubagentExecutionState;
-  completion?: SubagentCompletionState;
+  /**
+   * Latest frozen completion output captured for announce delivery.
+   * Seeded at first end transition and refreshed by later assistant turns
+   * while completion delivery is still pending for this session.
+   */
+  frozenResultText?: string | null;
+  /** Timestamp when frozenResultText was last captured. */
+  frozenResultCapturedAt?: number;
+  /**
+   * Fallback completion output preserved across wake continuation restarts.
+   * Used when a late wake run replies with NO_REPLY after the real final
+   * summary was already produced by the prior run.
+   */
+  fallbackFrozenResultText?: string | null;
+  /** Timestamp when fallbackFrozenResultText was preserved. */
+  fallbackFrozenResultCapturedAt?: number;
   /** Set after the subagent_ended hook has been emitted successfully once. */
   endedHookEmittedAt?: number;
-  /** Durable outbox marker for parent/external completion delivery. */
-  delivery?: SubagentCompletionDeliveryState;
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;

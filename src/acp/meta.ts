@@ -1,5 +1,3 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-
 export function readString(
   meta: Record<string, unknown> | null | undefined,
   keys: string[],
@@ -8,9 +6,9 @@ export function readString(
     return undefined;
   }
   for (const key of keys) {
-    const value = normalizeOptionalString(meta[key]);
-    if (value) {
-      return value;
+    const value = meta[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
     }
   }
   return undefined;

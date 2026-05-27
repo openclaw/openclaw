@@ -1,6 +1,4 @@
 import { runCommandWithTimeout } from "../process/exec.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { isTailnetIPv4 } from "./tailnet.js";
 import { resolveWideAreaDiscoveryDomain } from "./widearea-dns.js";
 
@@ -111,7 +109,10 @@ function decodeDnsSdEscapes(value: string): string {
 }
 
 function parseDigShortLines(stdout: string): string[] {
-  return normalizeStringEntries(stdout.split("\n"));
+  return stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
 }
 
 function parseDigTxt(stdout: string): string[] {
@@ -189,7 +190,7 @@ function parseTailscaleStatusIPv4s(stdout: string): string[] {
     }
   }
 
-  return uniqueStrings(out);
+  return [...new Set(out)];
 }
 
 function parseIntOrNull(value: string | undefined): number | undefined {
@@ -278,7 +279,7 @@ function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjour
   beacon.gatewayPort = parseIntOrNull(txt.gatewayPort);
   beacon.sshPort = parseIntOrNull(txt.sshPort);
   if (txt.gatewayTls) {
-    const raw = normalizeOptionalLowercaseString(txt.gatewayTls);
+    const raw = txt.gatewayTls.trim().toLowerCase();
     beacon.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
   }
   if (txt.gatewayTlsSha256) {
@@ -456,7 +457,7 @@ async function discoverWideAreaViaTailnetDns(
       cliPath: txtMap.cliPath || undefined,
     };
     if (txtMap.gatewayTls) {
-      const raw = normalizeOptionalLowercaseString(txtMap.gatewayTls);
+      const raw = txtMap.gatewayTls.trim().toLowerCase();
       beacon.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
     }
     if (txtMap.gatewayTlsSha256) {
@@ -540,7 +541,7 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
       current.gatewayPort = parseIntOrNull(txt.gatewayPort);
       current.sshPort = parseIntOrNull(txt.sshPort);
       if (txt.gatewayTls) {
-        const raw = normalizeOptionalLowercaseString(txt.gatewayTls);
+        const raw = txt.gatewayTls.trim().toLowerCase();
         current.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
       }
       if (txt.gatewayTlsSha256) {
@@ -572,7 +573,10 @@ async function discoverViaAvahi(
     args.push("-d", domain.replace(/\.$/, ""));
   }
   const browse = await run(args, { timeoutMs });
-  return parseAvahiBrowse(browse.stdout).map((beacon) => Object.assign({}, beacon, { domain }));
+  return parseAvahiBrowse(browse.stdout).map((beacon) => ({
+    ...beacon,
+    domain,
+  }));
 }
 
 export async function discoverGatewayBeacons(
@@ -584,9 +588,10 @@ export async function discoverGatewayBeacons(
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({ configDomain: opts.wideAreaDomain });
   const domainsRaw = Array.isArray(opts.domains) ? opts.domains : [];
   const defaultDomains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
-  const domains = normalizeStringEntries(domainsRaw.length > 0 ? domainsRaw : defaultDomains).map(
-    (d) => (d.endsWith(".") ? d : `${d}.`),
-  );
+  const domains = (domainsRaw.length > 0 ? domainsRaw : defaultDomains)
+    .map((d) => String(d).trim())
+    .filter(Boolean)
+    .map((d) => (d.endsWith(".") ? d : `${d}.`));
 
   try {
     if (platform === "darwin") {

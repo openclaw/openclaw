@@ -1,5 +1,3 @@
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listMattermostAccountIds, resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -29,7 +27,7 @@ function buildClient(params: {
   return createMattermostClient({
     baseUrl: account.baseUrl,
     botToken: account.botToken,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+    allowPrivateNetwork: account.config?.allowPrivateNetwork === true,
   });
 }
 
@@ -70,7 +68,7 @@ export async function listMattermostDirectoryGroups(
   if (!clients.length) {
     return [];
   }
-  const q = normalizeLowercaseStringOrEmpty(params.query);
+  const q = params.query?.trim().toLowerCase() || "";
   const seenIds = new Set<string>();
   const entries: ChannelDirectoryEntry[] = [];
 
@@ -81,18 +79,12 @@ export async function listMattermostDirectoryGroups(
         `/users/${me.id}/channels?per_page=200`,
       );
       for (const ch of channels) {
-        if (ch.type !== "O" && ch.type !== "P") {
-          continue;
-        }
-        if (seenIds.has(ch.id)) {
-          continue;
-        }
+        if (ch.type !== "O" && ch.type !== "P") continue;
+        if (seenIds.has(ch.id)) continue;
         if (q) {
-          const name = normalizeLowercaseStringOrEmpty(ch.name);
-          const display = normalizeLowercaseStringOrEmpty(ch.display_name);
-          if (!name.includes(q) && !display.includes(q)) {
-            continue;
-          }
+          const name = (ch.name ?? "").toLowerCase();
+          const display = (ch.display_name ?? "").toLowerCase();
+          if (!name.includes(q) && !display.includes(q)) continue;
         }
         seenIds.add(ch.id);
         entries.push({
@@ -141,7 +133,7 @@ export async function listMattermostDirectoryPeers(
     }
     // Uses first team — multi-team setups may need iteration in the future
     const teamId = teams[0].id;
-    const q = normalizeLowercaseStringOrEmpty(params.query);
+    const q = params.query?.trim().toLowerCase() || "";
 
     let users: MattermostUser[];
     if (q) {

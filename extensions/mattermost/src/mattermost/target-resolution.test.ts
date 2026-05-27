@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveMattermostAccount = vi.fn();
 const createMattermostClient = vi.fn();
@@ -16,34 +16,23 @@ vi.mock("./client.js", () => ({
 }));
 
 describe("mattermost target resolution", () => {
-  let isExplicitMattermostTarget: typeof import("./target-resolution.js").isExplicitMattermostTarget;
-  let isMattermostId: typeof import("./target-resolution.js").isMattermostId;
-  let parseMattermostApiStatus: typeof import("./target-resolution.js").parseMattermostApiStatus;
-  let resolveMattermostOpaqueTarget: typeof import("./target-resolution.js").resolveMattermostOpaqueTarget;
-  let resetMattermostOpaqueTargetCacheForTests: typeof import("./target-resolution.js").resetMattermostOpaqueTargetCacheForTests;
-
-  beforeAll(async () => {
-    ({
-      isExplicitMattermostTarget,
-      isMattermostId,
-      parseMattermostApiStatus,
-      resolveMattermostOpaqueTarget,
-      resetMattermostOpaqueTargetCacheForTests,
-    } = await import("./target-resolution.js"));
-  });
-
   beforeEach(() => {
+    vi.resetModules();
     resolveMattermostAccount.mockReset();
     createMattermostClient.mockReset();
     fetchMattermostUser.mockReset();
     normalizeMattermostBaseUrl.mockClear();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { resetMattermostOpaqueTargetCacheForTests } = await import("./target-resolution.js");
     resetMattermostOpaqueTargetCacheForTests();
   });
 
-  it("recognizes explicit targets and ID-shaped values", () => {
+  it("recognizes explicit targets and ID-shaped values", async () => {
+    const { isExplicitMattermostTarget, isMattermostId, parseMattermostApiStatus } =
+      await import("./target-resolution.js");
+
     expect(isExplicitMattermostTarget("@alice")).toBe(true);
     expect(isExplicitMattermostTarget("#town-square")).toBe(true);
     expect(isExplicitMattermostTarget("mattermost:chan")).toBe(true);
@@ -57,6 +46,8 @@ describe("mattermost target resolution", () => {
   it("resolves opaque ids as users and caches the result", async () => {
     createMattermostClient.mockReturnValue({ client: true });
     fetchMattermostUser.mockResolvedValue({ id: "abcd1234abcd1234abcd1234ab" });
+
+    const { resolveMattermostOpaqueTarget } = await import("./target-resolution.js");
     const input = "abcd1234abcd1234abcd1234ab";
 
     await expect(
@@ -90,6 +81,8 @@ describe("mattermost target resolution", () => {
   it("falls back to channel targets on 404 lookups", async () => {
     createMattermostClient.mockReturnValue({ client: true });
     fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
+
+    const { resolveMattermostOpaqueTarget } = await import("./target-resolution.js");
     const input = "bcde1234abcd1234abcd1234ab";
 
     await expect(
@@ -112,6 +105,8 @@ describe("mattermost target resolution", () => {
     });
     createMattermostClient.mockReturnValue({ client: true });
     fetchMattermostUser.mockResolvedValue({ id: "cdef1234abcd1234abcd1234ab" });
+
+    const { resolveMattermostOpaqueTarget } = await import("./target-resolution.js");
     const input = "cdef1234abcd1234abcd1234ab";
 
     await resolveMattermostOpaqueTarget({

@@ -1,9 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileStore } from "./types.js";
 
 vi.mock("../cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
@@ -17,7 +16,8 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
 
-async function loadOAuthModuleForTest() {
+async function loadFreshOAuthModuleForTest() {
+  vi.resetModules();
   ({ resolveApiKeyForProfile } = await import("./oauth.js"));
 }
 
@@ -110,18 +110,11 @@ async function expectResolvedApiKey(params: {
   });
 }
 
-beforeAll(loadOAuthModuleForTest);
-
-afterAll(() => {
-  vi.doUnmock("../cli-credentials.js");
-  vi.doUnmock("../../plugins/provider-runtime.runtime.js");
-});
-
-function createUsableOAuthExpiry(): number {
-  return Date.now() + 30 * 60 * 1000;
-}
-
 describe("resolveApiKeyForProfile config compatibility", () => {
+  beforeEach(async () => {
+    await loadFreshOAuthModuleForTest();
+  });
+
   it("accepts token credentials when config mode is oauth", async () => {
     const profileId = "anthropic:token";
     const store: AuthProfileStore = {
@@ -188,7 +181,7 @@ describe("resolveApiKeyForProfile config compatibility", () => {
           provider: "anthropic",
           access: "access-123",
           refresh: "refresh-123",
-          expires: createUsableOAuthExpiry(),
+          expires: Date.now() + 60_000,
         },
       },
     };
@@ -208,6 +201,10 @@ describe("resolveApiKeyForProfile config compatibility", () => {
 });
 
 describe("resolveApiKeyForProfile token expiry handling", () => {
+  beforeEach(async () => {
+    await loadFreshOAuthModuleForTest();
+  });
+
   it("accepts token credentials when expires is undefined", async () => {
     const profileId = "anthropic:token-no-expiry";
     const result = await resolveWithConfig({
@@ -304,24 +301,8 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
 });
 
 describe("resolveApiKeyForProfile secret refs", () => {
-  it("ignores blank api_key credentials", async () => {
-    const profileId = "openrouter:default";
-    const result = await resolveApiKeyForProfile({
-      cfg: cfgFor(profileId, "openrouter", "api_key"),
-      store: {
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "api_key",
-            provider: "openrouter",
-            key: "   ",
-          },
-        },
-      },
-      profileId,
-    });
-
-    expect(result).toBeNull();
+  beforeEach(async () => {
+    await loadFreshOAuthModuleForTest();
   });
 
   it("resolves api_key keyRef from env", async () => {
@@ -357,30 +338,6 @@ describe("resolveApiKeyForProfile secret refs", () => {
     }
   });
 
-  it("normalizes inline api_key values from auth profiles before header use", async () => {
-    const profileId = "openrouter:masked";
-    const result = await resolveApiKeyForProfile({
-      cfg: cfgFor(profileId, "openrouter", "api_key"),
-      store: {
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "api_key",
-            provider: "openrouter",
-            key: " sk-or-\u202650ec ",
-          },
-        },
-      },
-      profileId,
-    });
-
-    expect(result).toEqual({
-      apiKey: "sk-or-50ec", // pragma: allowlist secret
-      provider: "openrouter",
-      email: undefined,
-    });
-  });
-
   it("resolves token tokenRef from env", async () => {
     const profileId = "github-copilot:default";
     await withEnvVar("GITHUB_TOKEN", "gh-ref-token", async () => {
@@ -405,26 +362,6 @@ describe("resolveApiKeyForProfile secret refs", () => {
         expectedApiKey: "gh-ref-token", // pragma: allowlist secret
       });
     });
-  });
-
-  it("hard-fails when oauth mode is combined with token SecretRef input", async () => {
-    const profileId = "anthropic:oauth-secretref-token";
-    await expect(
-      resolveApiKeyForProfile({
-        cfg: cfgFor(profileId, "anthropic", "oauth"),
-        store: {
-          version: 1,
-          profiles: {
-            [profileId]: {
-              type: "token",
-              provider: "anthropic",
-              tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
-            },
-          },
-        },
-        profileId,
-      }),
-    ).rejects.toThrow(/mode is "oauth"/i);
   });
 
   it("resolves inline ${ENV} api_key values", async () => {

@@ -1,18 +1,29 @@
-import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { classifySessionKind } from "../sessions/classify-session-kind.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
+
+function parseStatusModelRef(
+  raw: string,
+  defaultProvider: string,
+): { provider: string; model: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const slash = trimmed.indexOf("/");
+  if (slash === -1) {
+    return { provider: defaultProvider, model: trimmed };
+  }
+  const provider = trimmed.slice(0, slash).trim();
+  const model = trimmed.slice(slash + 1).trim();
+  if (!provider || !model) {
+    return null;
+  }
+  return { provider, model };
+}
 
 function resolveStatusModelRefFromRaw(params: {
   cfg: OpenClawConfig;
@@ -25,25 +36,21 @@ function resolveStatusModelRefFromRaw(params: {
   }
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   if (!trimmed.includes("/")) {
-    const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
+    const aliasKey = trimmed.toLowerCase();
     for (const [modelKey, entry] of Object.entries(configuredModels)) {
       const aliasValue = (entry as { alias?: unknown } | undefined)?.alias;
-      const alias = normalizeOptionalString(aliasValue) ?? "";
-      if (!alias || normalizeOptionalLowercaseString(alias) !== aliasKey) {
+      const alias = typeof aliasValue === "string" ? aliasValue.trim() : "";
+      if (!alias || alias.toLowerCase() !== aliasKey) {
         continue;
       }
-      const parsed = parseModelRef(modelKey, params.defaultProvider, {
-        allowPluginNormalization: false,
-      });
+      const parsed = parseStatusModelRef(modelKey, params.defaultProvider);
       if (parsed) {
         return parsed;
       }
     }
-    return { provider: params.defaultProvider, model: trimmed };
+    return { provider: "anthropic", model: trimmed };
   }
-  return parseModelRef(trimmed, params.defaultProvider, {
-    allowPluginNormalization: false,
-  });
+  return parseStatusModelRef(trimmed, params.defaultProvider);
 }
 
 function resolveConfiguredStatusModelRef(params: {
@@ -91,7 +98,7 @@ function resolveConfiguredStatusModelRef(params: {
   return { provider: params.defaultProvider, model: params.defaultModel };
 }
 
-function resolveConfiguredProviderContextTokens(
+function resolveConfiguredProviderContextWindow(
   cfg: OpenClawConfig | undefined,
   provider: string,
   model: string,
@@ -106,23 +113,33 @@ function resolveConfiguredProviderContextTokens(
       continue;
     }
     for (const entry of providerConfig.models) {
-      const contextTokens =
-        typeof entry?.contextTokens === "number"
-          ? entry.contextTokens
-          : typeof entry?.contextWindow === "number"
-            ? entry.contextWindow
-            : undefined;
       if (
         typeof entry?.id === "string" &&
         entry.id === model &&
-        typeof contextTokens === "number" &&
-        contextTokens > 0
+        typeof entry.contextWindow === "number" &&
+        entry.contextWindow > 0
       ) {
-        return contextTokens;
+        return entry.contextWindow;
       }
     }
   }
   return undefined;
+}
+
+function classifySessionKey(key: string, entry?: SessionEntry) {
+  if (key === "global") {
+    return "global";
+  }
+  if (key === "unknown") {
+    return "unknown";
+  }
+  if (entry?.chatType === "group" || entry?.chatType === "channel") {
+    return "group";
+  }
+  if (key.includes(":group:") || key.includes(":channel:")) {
+    return "group";
+  }
+  return "direct";
 }
 
 function resolveSessionModelRef(
@@ -138,43 +155,38 @@ function resolveSessionModelRef(
     defaultModel: DEFAULT_MODEL,
     agentId,
   });
-  return (
-    resolvePersistedSelectedModelRef({
-      defaultProvider: resolved.provider || DEFAULT_PROVIDER,
-      runtimeProvider: entry?.modelProvider,
-      runtimeModel: entry?.model,
-      overrideProvider: entry?.providerOverride,
-      overrideModel: entry?.modelOverride,
-      allowPluginNormalization: false,
-    }) ?? resolved
-  );
-}
 
-function resolveSessionRuntimeLabel(params: {
-  cfg: OpenClawConfig;
-  entry?: SessionEntry;
-  provider: string;
-  model: string;
-  agentId?: string;
-  sessionKey: string;
-}): string {
-  const runtime = resolveModelAgentRuntimeMetadata({
-    cfg: params.cfg,
-    agentId: params.agentId ?? "",
-    provider: params.provider,
-    model: params.model,
-    sessionKey: params.sessionKey,
-    acpRuntime: params.entry?.acp != null,
-    acpBackend: params.entry?.acp?.backend,
-  });
-  const id = normalizeOptionalLowercaseString(runtime.id);
-  const resolvedHarness = id && id !== "pi" && id !== "auto" ? id : undefined;
-  return resolveAgentRuntimeLabel({
-    config: params.cfg,
-    sessionEntry: params.entry,
-    resolvedHarness,
-    fallbackProvider: params.provider,
-  });
+  let provider = resolved.provider;
+  let model = resolved.model;
+  const runtimeModel = entry?.model?.trim();
+  const runtimeProvider = entry?.modelProvider?.trim();
+  if (runtimeModel) {
+    if (runtimeProvider) {
+      return { provider: runtimeProvider, model: runtimeModel };
+    }
+    const parsedRuntime = parseStatusModelRef(runtimeModel, provider || DEFAULT_PROVIDER);
+    if (parsedRuntime) {
+      provider = parsedRuntime.provider;
+      model = parsedRuntime.model;
+    } else {
+      model = runtimeModel;
+    }
+    return { provider, model };
+  }
+
+  const storedModelOverride = entry?.modelOverride?.trim();
+  if (storedModelOverride) {
+    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
+    const parsedOverride = parseStatusModelRef(storedModelOverride, overrideProvider);
+    if (parsedOverride) {
+      provider = parsedOverride.provider;
+      model = parsedOverride.model;
+    } else {
+      provider = overrideProvider;
+      model = storedModelOverride;
+    }
+  }
+  return { provider, model };
 }
 
 function resolveContextTokensForModel(params: {
@@ -190,13 +202,13 @@ function resolveContextTokensForModel(params: {
     return params.contextTokensOverride;
   }
   if (params.provider && params.model) {
-    const configuredContextTokens = resolveConfiguredProviderContextTokens(
+    const configuredWindow = resolveConfiguredProviderContextWindow(
       params.cfg,
       params.provider,
       params.model,
     );
-    if (configuredContextTokens !== undefined) {
-      return configuredContextTokens;
+    if (configuredWindow !== undefined) {
+      return configuredWindow;
     }
   }
   return params.fallbackContextTokens ?? DEFAULT_CONTEXT_TOKENS;
@@ -204,8 +216,7 @@ function resolveContextTokensForModel(params: {
 
 export const statusSummaryRuntime = {
   resolveContextTokensForModel,
-  classifySessionKey: classifySessionKind,
+  classifySessionKey,
   resolveSessionModelRef,
-  resolveSessionRuntimeLabel,
   resolveConfiguredStatusModelRef,
 };

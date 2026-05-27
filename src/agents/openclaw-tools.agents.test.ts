@@ -1,19 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
-import { createAgentsListTool } from "./tools/agents-list-tool.js";
 
-let configOverride: ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]> = {
+let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: createPerSenderSessionConfig(),
 };
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
-    getRuntimeConfig: () => configOverride,
+    loadConfig: () => configOverride,
     resolveGatewayPort: () => 18789,
   };
 });
+
+import "./test-helpers/fast-core-tools.js";
+
+let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
 
 describe("agents_list", () => {
   type AgentConfig = NonNullable<NonNullable<typeof configOverride.agents>["list"]>[number];
@@ -27,10 +30,14 @@ describe("agents_list", () => {
     };
   }
 
-  function createTool() {
-    return createAgentsListTool({
+  function requireAgentsListTool() {
+    const tool = createOpenClawTools({
       agentSessionKey: "main",
-    });
+    }).find((candidate) => candidate.name === "agents_list");
+    if (!tool) {
+      throw new Error("missing agents_list tool");
+    }
+    return tool;
   }
 
   function readAgentList(result: unknown) {
@@ -38,20 +45,27 @@ describe("agents_list", () => {
       .details?.agents;
   }
 
-  it("defaults to the requester agent only", async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     configOverride = {
       session: createPerSenderSessionConfig(),
     };
-    const tool = createTool();
+    await import("./test-helpers/fast-core-tools.js");
+    ({ createOpenClawTools } = await import("./openclaw-tools.js"));
+  });
+
+  it("defaults to the requester agent only", async () => {
+    const tool = requireAgentsListTool();
     const result = await tool.execute("call1", {});
-    const details = result.details as { requester?: string; allowAny?: boolean };
-    expect(details.requester).toBe("main");
-    expect(details.allowAny).toBe(false);
+    expect(result.details).toMatchObject({
+      requester: "main",
+      allowAny: false,
+    });
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main"]);
   });
 
-  it("includes configured allowlisted targets", async () => {
+  it("includes allowlisted targets plus requester", async () => {
     setConfigWithAgentList([
       {
         id: "main",
@@ -66,38 +80,10 @@ describe("agents_list", () => {
       },
     ]);
 
-    const tool = createTool();
+    const tool = requireAgentsListTool();
     const result = await tool.execute("call2", {});
     const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["research"]);
-  });
-
-  it("falls back to default allowlist when the requester agent omits allowAgents", async () => {
-    configOverride = {
-      session: createPerSenderSessionConfig(),
-      agents: {
-        defaults: {
-          subagents: {
-            allowAgents: ["research"],
-          },
-        },
-        list: [
-          {
-            id: "main",
-            name: "Main",
-          },
-          {
-            id: "research",
-            name: "Research",
-          },
-        ],
-      },
-    };
-
-    const tool = createTool();
-    const result = await tool.execute("call2b", {});
-    const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["research"]);
+    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
   });
 
   it("returns configured agents when allowlist is *", async () => {
@@ -118,15 +104,16 @@ describe("agents_list", () => {
       },
     ]);
 
-    const tool = createTool();
+    const tool = requireAgentsListTool();
     const result = await tool.execute("call3", {});
-    const details = result.details as { allowAny?: boolean };
-    expect(details.allowAny).toBe(true);
+    expect(result.details).toMatchObject({
+      allowAny: true,
+    });
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "coder", "research"]);
   });
 
-  it("omits allowlisted-but-unconfigured agents", async () => {
+  it("marks allowlisted-but-unconfigured agents", async () => {
     setConfigWithAgentList([
       {
         id: "main",
@@ -136,9 +123,11 @@ describe("agents_list", () => {
       },
     ]);
 
-    const tool = createTool();
+    const tool = requireAgentsListTool();
     const result = await tool.execute("call4", {});
     const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual([]);
+    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
+    const research = agents?.find((agent) => agent.id === "research");
+    expect(research?.configured).toBe(false);
   });
 });

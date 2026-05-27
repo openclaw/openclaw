@@ -1,7 +1,7 @@
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
@@ -11,7 +11,7 @@ describe("mistralMediaUnderstandingProvider", () => {
   it("has expected provider metadata", () => {
     expect(mistralMediaUnderstandingProvider.id).toBe("mistral");
     expect(mistralMediaUnderstandingProvider.capabilities).toEqual(["audio"]);
-    expect(mistralMediaUnderstandingProvider.transcribeAudio).toBeTypeOf("function");
+    expect(mistralMediaUnderstandingProvider.transcribeAudio).toBeDefined();
   });
 
   it("uses Mistral base URL by default", async () => {

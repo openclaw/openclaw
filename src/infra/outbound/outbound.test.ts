@@ -6,6 +6,7 @@ import { typedCases } from "../../test-utils/typed-cases.js";
 import { DirectoryCache } from "./directory-cache.js";
 import { buildOutboundResultEnvelope } from "./envelope.js";
 import type { OutboundDeliveryJson } from "./format.js";
+import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
 
 beforeEach(() => {
   setActivePluginRegistry(createTestRegistry([]));
@@ -60,23 +61,23 @@ describe("DirectoryCache", () => {
 });
 
 describe("buildOutboundResultEnvelope", () => {
-  const directChatDelivery: OutboundDeliveryJson = {
-    channel: "directchat",
+  const whatsappDelivery: OutboundDeliveryJson = {
+    channel: "whatsapp",
     via: "gateway",
     to: "+1",
     messageId: "m1",
     mediaUrl: null,
   };
-  const alphaDelivery: OutboundDeliveryJson = {
-    channel: "alpha",
+  const telegramDelivery: OutboundDeliveryJson = {
+    channel: "telegram",
     via: "direct",
     to: "123",
     messageId: "m2",
     mediaUrl: null,
     chatId: "c1",
   };
-  const richChatDelivery: OutboundDeliveryJson = {
-    channel: "richchat",
+  const discordDelivery: OutboundDeliveryJson = {
+    channel: "discord",
     via: "gateway",
     to: "channel:C1",
     messageId: "m3",
@@ -92,8 +93,8 @@ describe("buildOutboundResultEnvelope", () => {
     }>([
       {
         name: "flatten delivery by default",
-        input: { delivery: directChatDelivery },
-        expected: directChatDelivery,
+        input: { delivery: whatsappDelivery },
+        expected: whatsappDelivery,
       },
       {
         name: "keep payloads + meta",
@@ -108,20 +109,22 @@ describe("buildOutboundResultEnvelope", () => {
       },
       {
         name: "include delivery when payloads exist",
-        input: { payloads: [], delivery: alphaDelivery, meta: { ok: true } },
+        input: { payloads: [], delivery: telegramDelivery, meta: { ok: true } },
         expected: {
           payloads: [],
           meta: { ok: true },
-          delivery: alphaDelivery,
+          delivery: telegramDelivery,
         },
       },
       {
         name: "keep wrapped delivery when flatten disabled",
-        input: { delivery: richChatDelivery, flattenDelivery: false },
-        expected: { delivery: richChatDelivery },
+        input: { delivery: discordDelivery, flattenDelivery: false },
+        expected: { delivery: discordDelivery },
       },
     ]),
   )("$name", ({ input, expected }) => {
     expect(buildOutboundResultEnvelope(input)).toEqual(expected);
   });
 });
+
+runResolveOutboundTargetCoreTests();

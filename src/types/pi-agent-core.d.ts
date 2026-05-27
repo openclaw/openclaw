@@ -1,6 +1,6 @@
-import "@earendil-works/pi-agent-core";
+import "@mariozechner/pi-agent-core";
 
-declare module "@earendil-works/pi-agent-core" {
+declare module "@mariozechner/pi-agent-core" {
   // OpenClaw persists compaction markers alongside normal agent history.
   interface CustomAgentMessages {
     compactionSummary: {

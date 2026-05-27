@@ -1,40 +1,24 @@
-import type { MessageMetadata } from "@slack/types";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  chunkMarkdownTextWithMode,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  type ChunkMode,
-} from "openclaw/plugin-sdk/reply-chunking";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
-  type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackReplyBlocks } from "../reply-blocks.js";
-import { sendMessageSlack, type SlackSendIdentity } from "./send.runtime.js";
+import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
   return resolveSlackReplyBlocks(payload);
 }
 
-export function resolveDeliveredSlackReplyThreadTs(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
-  payloadReplyToId?: string;
-  replyThreadTs?: string;
-}): string | undefined {
-  // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
-  // must not force threading.
-  const inlineReplyToId = params.replyToMode === "off" ? undefined : params.payloadReplyToId;
-  return inlineReplyToId ?? params.replyThreadTs;
-}
-
 export async function deliverReplies(params: {
-  cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
   token: string;
@@ -42,19 +26,14 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   textLimit: number;
   replyThreadTs?: string;
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: "off" | "first" | "all";
   identity?: SlackSendIdentity;
-  metadata?: MessageMetadata;
 }) {
   for (const payload of params.replies) {
-    if (payload.isReasoning === true) {
-      continue;
-    }
-    const threadTs = resolveDeliveredSlackReplyThreadTs({
-      replyToMode: params.replyToMode,
-      payloadReplyToId: payload.replyToId,
-      replyThreadTs: params.replyThreadTs,
-    });
+    // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
+    // must not force threading.
+    const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;
+    const threadTs = inlineReplyToId ?? params.replyThreadTs;
     const reply = resolveSendableOutboundReplyParts(payload);
     const slackBlocks = readSlackReplyBlocks(payload);
     if (!reply.hasContent && !slackBlocks?.length) {
@@ -70,13 +49,11 @@ export async function deliverReplies(params: {
         continue;
       }
       await sendMessageSlack(params.target, trimmed, {
-        cfg: params.cfg,
         token: params.token,
         threadTs,
         accountId: params.accountId,
         ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
         ...(params.identity ? { identity: params.identity } : {}),
-        ...(params.metadata ? { metadata: params.metadata } : {}),
       });
       params.runtime.log?.(`delivered reply to ${params.target}`);
       continue;
@@ -96,23 +73,19 @@ export async function deliverReplies(params: {
         : undefined,
       sendText: async (trimmed) => {
         await sendMessageSlack(params.target, trimmed, {
-          cfg: params.cfg,
           token: params.token,
           threadTs,
           accountId: params.accountId,
           ...(params.identity ? { identity: params.identity } : {}),
-          ...(params.metadata ? { metadata: params.metadata } : {}),
         });
       },
       sendMedia: async ({ mediaUrl, caption }) => {
         await sendMessageSlack(params.target, caption ?? "", {
-          cfg: params.cfg,
           token: params.token,
           mediaUrl,
           threadTs,
           accountId: params.accountId,
           ...(params.identity ? { identity: params.identity } : {}),
-          ...(params.metadata ? { metadata: params.metadata } : {}),
         });
       },
     });
@@ -124,7 +97,6 @@ export async function deliverReplies(params: {
 
 export type SlackRespondFn = (payload: {
   text: string;
-  blocks?: ReturnType<typeof readSlackReplyBlocks>;
   response_type?: "ephemeral" | "in_channel";
 }) => Promise<unknown>;
 
@@ -135,7 +107,7 @@ export type SlackRespondFn = (payload: {
  * - "all": all replies go to thread
  */
 export function resolveSlackThreadTs(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: "off" | "first" | "all";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasReplied: boolean;
@@ -152,24 +124,22 @@ export function resolveSlackThreadTs(params: {
 }
 
 type SlackReplyDeliveryPlan = {
-  peekThreadTs: () => string | undefined;
   nextThreadTs: () => string | undefined;
   markSent: () => void;
 };
 
 function createSlackReplyReferencePlanner(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: "off" | "first" | "all";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasReplied?: boolean;
   isThreadReply?: boolean;
 }) {
-  // Older/internal callers may not pass explicit thread classification. Keep
-  // genuine thread replies sticky, but do not let Slack's auto-populated
-  // top-level thread_ts override the configured replyToMode.
-  const effectiveIsThreadReply =
-    params.isThreadReply ??
-    Boolean(params.incomingThreadTs && params.incomingThreadTs !== params.messageTs);
+  // Keep backward-compatible behavior: when a thread id is present and caller
+  // does not provide explicit classification, stay in thread. Callers that can
+  // distinguish Slack's auto-populated top-level thread_ts should pass
+  // `isThreadReply: false` to preserve replyToMode behavior.
+  const effectiveIsThreadReply = params.isThreadReply ?? Boolean(params.incomingThreadTs);
   const effectiveMode = effectiveIsThreadReply ? "all" : params.replyToMode;
   return createReplyReferencePlanner({
     replyToMode: effectiveMode,
@@ -180,7 +150,7 @@ function createSlackReplyReferencePlanner(params: {
 }
 
 export function createSlackReplyDeliveryPlan(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: "off" | "first" | "all";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasRepliedRef: { value: boolean };
@@ -194,7 +164,6 @@ export function createSlackReplyDeliveryPlan(params: {
     isThreadReply: params.isThreadReply,
   });
   return {
-    peekThreadTs: () => replyReference.peek(),
     nextThreadTs: () => replyReference.use(),
     markSent: () => {
       replyReference.markSent();
@@ -211,22 +180,14 @@ export async function deliverSlackSlashReplies(params: {
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
 }) {
-  const messages: Array<{ text: string; blocks?: ReturnType<typeof readSlackReplyBlocks> }> = [];
+  const messages: string[] = [];
   const chunkLimit = Math.min(params.textLimit, SLACK_TEXT_LIMIT);
   for (const payload of params.replies) {
-    if (payload.isReasoning === true) {
-      continue;
-    }
     const reply = resolveSendableOutboundReplyParts(payload);
-    const slackBlocks = readSlackReplyBlocks(payload);
     const text =
       reply.hasText && !isSilentReplyText(reply.trimmedText, SILENT_REPLY_TOKEN)
         ? reply.trimmedText
         : undefined;
-    if (slackBlocks?.length && !reply.hasMedia) {
-      messages.push({ text: text ?? "", blocks: slackBlocks });
-      continue;
-    }
     const combined = [text ?? "", ...reply.mediaUrls].filter(Boolean).join("\n");
     if (!combined) {
       continue;
@@ -243,7 +204,7 @@ export async function deliverSlackSlashReplies(params: {
       chunks.push(combined);
     }
     for (const chunk of chunks) {
-      messages.push({ text: chunk });
+      messages.push(chunk);
     }
   }
 
@@ -253,7 +214,7 @@ export async function deliverSlackSlashReplies(params: {
 
   // Slack slash command responses can be multi-part by sending follow-ups via response_url.
   const responseType = params.ephemeral ? "ephemeral" : "in_channel";
-  for (const message of messages) {
-    await params.respond({ ...message, response_type: responseType });
+  for (const text of messages) {
+    await params.respond({ text, response_type: responseType });
   }
 }

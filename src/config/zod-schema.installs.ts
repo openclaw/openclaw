@@ -1,14 +1,13 @@
 import { z } from "zod";
 
-const InstallSourceSchema = z.union([
+export const InstallSourceSchema = z.union([
   z.literal("npm"),
   z.literal("archive"),
   z.literal("path"),
   z.literal("clawhub"),
-  z.literal("git"),
 ]);
 
-const PluginInstallSourceSchema = z.union([InstallSourceSchema, z.literal("marketplace")]);
+export const PluginInstallSourceSchema = z.union([InstallSourceSchema, z.literal("marketplace")]);
 
 export const InstallRecordShape = {
   source: InstallSourceSchema,
@@ -29,18 +28,6 @@ export const InstallRecordShape = {
   clawhubChannel: z
     .union([z.literal("official"), z.literal("community"), z.literal("private")])
     .optional(),
-  artifactKind: z.union([z.literal("legacy-zip"), z.literal("npm-pack")]).optional(),
-  artifactFormat: z.union([z.literal("zip"), z.literal("tgz")]).optional(),
-  npmIntegrity: z.string().optional(),
-  npmShasum: z.string().optional(),
-  npmTarballName: z.string().optional(),
-  clawpackSha256: z.string().optional(),
-  clawpackSpecVersion: z.number().int().nonnegative().optional(),
-  clawpackManifestSha256: z.string().optional(),
-  clawpackSize: z.number().int().nonnegative().optional(),
-  gitUrl: z.string().optional(),
-  gitRef: z.string().optional(),
-  gitCommit: z.string().optional(),
 } as const;
 
 export const PluginInstallRecordShape = {

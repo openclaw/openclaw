@@ -1,6 +1,5 @@
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import type { SubagentRunOutcome } from "./subagent-announce.js";
 import {
   SUBAGENT_ENDED_OUTCOME_ERROR,
   SUBAGENT_ENDED_OUTCOME_OK,
@@ -10,8 +9,6 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
-const log = createSubsystemLogger("agents/subagent-registry-completion");
 
 export function runOutcomesEqual(
   a: SubagentRunOutcome | undefined,
@@ -27,31 +24,9 @@ export function runOutcomesEqual(
     return false;
   }
   if (a.status === "error" && b.status === "error") {
-    if ((a.error ?? "") !== (b.error ?? "")) {
-      return false;
-    }
+    return (a.error ?? "") === (b.error ?? "");
   }
-  if (!runOutcomeHasTiming(a) || !runOutcomeHasTiming(b)) {
-    return true;
-  }
-  return a.startedAt === b.startedAt && a.endedAt === b.endedAt && a.elapsedMs === b.elapsedMs;
-}
-
-export function runOutcomeHasTiming(outcome: SubagentRunOutcome | undefined): boolean {
-  return (
-    Number.isFinite(outcome?.startedAt) ||
-    Number.isFinite(outcome?.endedAt) ||
-    Number.isFinite(outcome?.elapsedMs)
-  );
-}
-
-export function shouldUpdateRunOutcome(
-  current: SubagentRunOutcome | undefined,
-  next: SubagentRunOutcome | undefined,
-): boolean {
-  return (
-    !runOutcomesEqual(current, next) || (!runOutcomeHasTiming(current) && runOutcomeHasTiming(next))
-  );
+  return true;
 }
 
 export function resolveLifecycleOutcomeFromRunOutcome(
@@ -116,10 +91,7 @@ export async function emitSubagentEndedHookOnce(params: {
     params.entry.endedHookEmittedAt = Date.now();
     params.persist();
     return true;
-  } catch (err) {
-    log.warn(
-      `failed to emit subagent_ended hook for run ${runId}: ${err instanceof Error ? err.message : String(err)}`,
-    );
+  } catch {
     return false;
   } finally {
     params.inFlightRunIds.delete(runId);

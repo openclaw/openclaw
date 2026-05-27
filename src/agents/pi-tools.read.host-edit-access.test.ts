@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createHostWorkspaceEditTool } from "./pi-tools.read.js";
 
 type CapturedEditOperations = {
   access: (absolutePath: string) => Promise<void>;
@@ -12,10 +11,8 @@ const mocks = vi.hoisted(() => ({
   operations: undefined as CapturedEditOperations | undefined,
 }));
 
-vi.mock("@earendil-works/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
-    "@earendil-works/pi-coding-agent",
-  );
+vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mariozechner/pi-coding-agent")>();
   return {
     ...actual,
     createEditTool: (_cwd: string, options?: { operations?: CapturedEditOperations }) => {
@@ -31,6 +28,8 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
     },
   };
 });
+
+const { createHostWorkspaceEditTool } = await import("./pi-tools.read.js");
 
 describe("createHostWorkspaceEditTool host access mapping", () => {
   let tmpDir = "";
@@ -57,20 +56,14 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
       await fs.symlink(outsideDir, linkDir);
 
       createHostWorkspaceEditTool(workspaceDir, { workspaceOnly: true });
-      if (mocks.operations === undefined) {
-        throw new Error("expected host edit operations mock");
-      }
+      expect(mocks.operations).toBeDefined();
 
       // access must NOT throw for outside-workspace paths; the upstream
       // library replaces any access error with a misleading "File not found".
       // By resolving silently the subsequent readFile call surfaces the real
       // "Path escapes workspace root" / "outside-workspace" error instead.
-      const operations = mocks.operations;
-      if (!operations) {
-        throw new Error("Expected workspace edit operations to be registered.");
-      }
       await expect(
-        operations.access(path.join(workspaceDir, "escape", "secret.txt")),
+        mocks.operations!.access(path.join(workspaceDir, "escape", "secret.txt")),
       ).resolves.toBeUndefined();
     },
   );

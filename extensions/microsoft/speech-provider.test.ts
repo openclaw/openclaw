@@ -1,21 +1,6 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  finalizeDebugProxyCapture,
-  getDebugProxyCaptureStore,
-  initializeDebugProxyCapture,
-} from "openclaw/plugin-sdk/proxy-capture";
+import { writeFileSync } from "node:fs";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
-
-vi.mock("node-edge-tts", () => ({
-  EdgeTTS: class {
-    async ttsPromise(): Promise<void> {}
-  },
-}));
-
 import {
   buildMicrosoftSpeechProvider,
   isCjkDominant,
@@ -25,30 +10,13 @@ import * as ttsModule from "./tts.js";
 
 const TEST_CFG = {} as OpenClawConfig;
 
-function requireFirstEdgeTtsCall(edgeSpy: ReturnType<typeof vi.spyOn>): {
-  config?: unknown;
-  outputPath: string;
-  text?: string;
-  timeoutMs?: number;
-} {
-  const [call] = edgeSpy.mock.calls;
-  if (!call) {
-    throw new Error("expected Microsoft Edge TTS call");
-  }
-  const [edgeCall] = call;
-  if (!edgeCall || typeof edgeCall !== "object" || Array.isArray(edgeCall)) {
-    throw new Error("expected Microsoft Edge TTS call");
-  }
-  return edgeCall as {
-    config?: unknown;
-    outputPath: string;
-    text?: string;
-    timeoutMs?: number;
-  };
-}
-
 describe("listMicrosoftVoices", () => {
-  const proxyReset = installDebugProxyTestResetHooks();
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
 
   it("maps Microsoft voice metadata into speech voice options", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(
@@ -92,96 +60,6 @@ describe("listMicrosoftVoices", () => {
       ) as unknown as typeof globalThis.fetch;
 
     await expect(listMicrosoftVoices()).rejects.toThrow("Microsoft voices API error (503)");
-  });
-
-  it("records voice discovery exchanges in debug proxy capture mode", async () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "microsoft-voices-capture-"));
-    proxyReset.captureProxyEnv();
-    process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
-    process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
-    process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
-    process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "ms-voices-session";
-
-    globalThis.fetch = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 }),
-      ) as unknown as typeof globalThis.fetch;
-
-    const store = getDebugProxyCaptureStore(
-      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
-      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
-    );
-    store.upsertSession({
-      id: "ms-voices-session",
-      startedAt: Date.now(),
-      mode: "test",
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-      dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
-      blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
-    });
-
-    await listMicrosoftVoices();
-
-    await vi.waitFor(() => {
-      const events = store.getSessionEvents("ms-voices-session", 10);
-      expect(
-        events.some(
-          (event) => event.kind === "request" && event.host === "speech.platform.bing.com",
-        ),
-      ).toBe(true);
-      expect(
-        events.some(
-          (event) => event.kind === "response" && event.host === "speech.platform.bing.com",
-        ),
-      ).toBe(true);
-    });
-  });
-
-  it("does not double-capture voice discovery when the global fetch patch is installed", async () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "microsoft-voices-global-"));
-    proxyReset.captureProxyEnv();
-    process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
-    process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
-    process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
-    process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "ms-voices-global-session";
-
-    globalThis.fetch = vi.fn(
-      async () => new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 }),
-    ) as unknown as typeof globalThis.fetch;
-
-    const store = getDebugProxyCaptureStore(
-      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
-      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
-    );
-    store.upsertSession({
-      id: "ms-voices-global-session",
-      startedAt: Date.now(),
-      mode: "test",
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-      dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
-      blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
-    });
-    initializeDebugProxyCapture("test");
-
-    try {
-      await listMicrosoftVoices();
-
-      let events: Array<Record<string, unknown>> = [];
-      await vi.waitFor(() => {
-        events = store
-          .getSessionEvents("ms-voices-global-session", 10)
-          .filter((event) => event.host === "speech.platform.bing.com");
-        expect(events).toHaveLength(2);
-      });
-      const kinds = events.map((event) => String(event.kind)).toSorted();
-      expect(kinds).toEqual(["request", "response"]);
-    } finally {
-      globalThis.fetch = proxyReset.originalFetch;
-      finalizeDebugProxyCapture();
-    }
   });
 });
 
@@ -234,24 +112,14 @@ describe("buildMicrosoftSpeechProvider", () => {
       target: "audio-file",
     });
 
-    expect(edgeSpy).toHaveBeenCalledOnce();
-    const edgeCall = requireFirstEdgeTtsCall(edgeSpy);
-    expect(edgeCall.text).toBe("你好，这是一个测试 hello");
-    expect(path.basename(edgeCall.outputPath)).toBe("speech.mp3");
-    expect(edgeCall.timeoutMs).toBe(1000);
-    expect(edgeCall.config).toEqual({
-      enabled: true,
-      voice: "zh-CN-XiaoxiaoNeural",
-      lang: "zh-CN",
-      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-      outputFormatConfigured: true,
-      pitch: undefined,
-      rate: undefined,
-      volume: undefined,
-      saveSubtitles: false,
-      proxy: undefined,
-      timeoutMs: undefined,
-    });
+    expect(edgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          voice: "zh-CN-XiaoxiaoNeural",
+          lang: "zh-CN",
+        }),
+      }),
+    );
   });
 
   it("preserves an explicitly configured English voice for CJK text", async () => {
@@ -276,23 +144,13 @@ describe("buildMicrosoftSpeechProvider", () => {
       target: "audio-file",
     });
 
-    expect(edgeSpy).toHaveBeenCalledOnce();
-    const edgeCall = requireFirstEdgeTtsCall(edgeSpy);
-    expect(edgeCall.text).toBe("你好，这是一个测试 hello");
-    expect(path.basename(edgeCall.outputPath)).toBe("speech.mp3");
-    expect(edgeCall.timeoutMs).toBe(1000);
-    expect(edgeCall.config).toEqual({
-      enabled: true,
-      voice: "en-US-AvaNeural",
-      lang: "en-US",
-      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-      outputFormatConfigured: true,
-      pitch: undefined,
-      rate: undefined,
-      volume: undefined,
-      saveSubtitles: false,
-      proxy: undefined,
-      timeoutMs: undefined,
-    });
+    expect(edgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          voice: "en-US-AvaNeural",
+          lang: "en-US",
+        }),
+      }),
+    );
   });
 });

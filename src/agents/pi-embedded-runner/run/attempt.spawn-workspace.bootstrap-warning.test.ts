@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   analyzeBootstrapBudget,
-  buildBootstrapPromptWarningNotice,
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
+  prependBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
 import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
 
 describe("runEmbeddedAttempt bootstrap warning prompt assembly", () => {
-  it("keeps bootstrap warnings in system context without raw diagnostics", () => {
+  it("keeps bootstrap warnings in the sent prompt after hook prepend context", () => {
     const analysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({
         bootstrapFiles: [
@@ -28,17 +28,15 @@ describe("runEmbeddedAttempt bootstrap warning prompt assembly", () => {
       analysis,
       mode: "once",
     });
-    const notice = buildBootstrapPromptWarningNotice(warning.lines);
+    const promptWithWarning = prependBootstrapPromptWarning("hello", warning.lines);
     const systemPrompt = composeSystemPromptWithHookContext({
-      baseSystemPrompt: "base system prompt",
+      baseSystemPrompt: promptWithWarning,
       prependSystemContext: "hook context",
-      appendSystemContext: notice,
     });
 
     expect(systemPrompt).toContain("hook context");
     expect(systemPrompt).toContain("[Bootstrap truncation warning]");
-    expect(systemPrompt).toContain("Treat Project Context as partial");
-    expect(systemPrompt).not.toContain("- AGENTS.md: 200 raw -> 20 injected");
-    expect(systemPrompt).toContain("base system prompt");
+    expect(systemPrompt).toContain("- AGENTS.md: 200 raw -> 20 injected");
+    expect(systemPrompt).toContain("hello");
   });
 });

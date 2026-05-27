@@ -1,27 +1,21 @@
 import crypto from "node:crypto";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
   ErrorCodes,
   applyBrowserProxyPaths,
   createBrowserControlContext,
   createBrowserRouteDispatcher,
   errorShape,
-  getRuntimeConfig,
   isNodeCommandAllowed,
   isPersistentBrowserProfileMutation,
+  loadConfig,
   persistBrowserProxyFiles,
   resolveNodeCommandAllowlist,
   resolveRequestedBrowserProfile,
   respondUnavailableOnNodeInvokeError,
   safeParseJson,
   startBrowserControlServiceFromConfig,
-  withTimeout,
   type GatewayRequestHandlers,
   type NodeSession,
-  type OpenClawConfig,
 } from "../core-api.js";
 
 type BrowserRequestParams = {
@@ -50,11 +44,14 @@ function isBrowserNode(node: NodeSession) {
 }
 
 function normalizeNodeKey(value: string) {
-  return normalizeLowercaseStringOrEmpty(value).replace(/[^a-z0-9]+/g, "");
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
 }
 
 function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | null {
-  const q = normalizeOptionalString(query) ?? "";
+  const q = query.trim();
   if (!q) {
     return null;
   }
@@ -89,7 +86,7 @@ function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | 
 }
 
 function resolveBrowserNodeTarget(params: {
-  cfg: OpenClawConfig;
+  cfg: ReturnType<typeof loadConfig>;
   nodes: NodeSession[];
 }): NodeSession | null {
   const policy = params.cfg.gateway?.nodes?.browser;
@@ -99,12 +96,12 @@ function resolveBrowserNodeTarget(params: {
   }
   const browserNodes = params.nodes.filter((node) => isBrowserNode(node));
   if (browserNodes.length === 0) {
-    if (normalizeOptionalString(policy?.node)) {
+    if (policy?.node?.trim()) {
       throw new Error("No connected browser-capable nodes.");
     }
     return null;
   }
-  const requested = normalizeOptionalString(policy?.node) ?? "";
+  const requested = policy?.node?.trim() || "";
   if (requested) {
     const resolved = resolveBrowserNode(browserNodes, requested);
     if (!resolved) {
@@ -135,8 +132,8 @@ export async function handleBrowserGatewayRequest({
   context,
 }: Parameters<GatewayRequestHandlers["browser.request"]>[0]) {
   const typed = params as BrowserRequestParams;
-  const methodRaw = (normalizeOptionalString(typed.method) ?? "").toUpperCase();
-  const path = normalizeOptionalString(typed.path) ?? "";
+  const methodRaw = typeof typed.method === "string" ? typed.method.trim().toUpperCase() : "";
+  const path = typeof typed.path === "string" ? typed.path.trim() : "";
   const query = typed.query && typeof typed.query === "object" ? typed.query : undefined;
   const body = typed.body;
   const timeoutMs =
@@ -172,7 +169,7 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = loadConfig();
   let nodeTarget: NodeSession | null = null;
   try {
     nodeTarget = resolveBrowserNodeTarget({
@@ -248,31 +245,12 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
-  let result;
-  try {
-    result = timeoutMs
-      ? await withTimeout(
-          (signal) =>
-            dispatcher.dispatch({
-              method: methodRaw,
-              path,
-              query,
-              body,
-              signal,
-            }),
-          timeoutMs,
-          "browser request",
-        )
-      : await dispatcher.dispatch({
-          method: methodRaw,
-          path,
-          query,
-          body,
-        });
-  } catch (err) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
-    return;
-  }
+  const result = await dispatcher.dispatch({
+    method: methodRaw,
+    path,
+    query,
+    body,
+  });
 
   if (result.status >= 400) {
     const message =

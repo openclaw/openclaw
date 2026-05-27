@@ -1,15 +1,9 @@
-import net from "node:net";
-import { isPrivateOrLoopbackIpAddress } from "../shared/net/ip.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { isLoopbackHost, normalizeHostHeader, resolveHostName } from "./net.js";
+import { isLoopbackHost, normalizeHostHeader } from "./net.js";
 
 type OriginCheckResult =
   | {
       ok: true;
-      matchedBy: "allowlist" | "host-header-fallback" | "private-same-origin" | "local-loopback";
+      matchedBy: "allowlist" | "host-header-fallback" | "local-loopback";
     }
   | { ok: false; reason: string };
 
@@ -23,9 +17,9 @@ function parseOrigin(
   try {
     const url = new URL(trimmed);
     return {
-      origin: normalizeLowercaseStringOrEmpty(url.origin),
-      host: normalizeLowercaseStringOrEmpty(url.host),
-      hostname: normalizeLowercaseStringOrEmpty(url.hostname),
+      origin: url.origin.toLowerCase(),
+      host: url.host.toLowerCase(),
+      hostname: url.hostname.toLowerCase(),
     };
   } catch {
     return null;
@@ -45,9 +39,7 @@ export function checkBrowserOrigin(params: {
   }
 
   const allowlist = new Set(
-    (params.allowedOrigins ?? [])
-      .map((value) => normalizeOptionalLowercaseString(value))
-      .filter(Boolean),
+    (params.allowedOrigins ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean),
   );
   if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
     return { ok: true, matchedBy: "allowlist" };
@@ -61,13 +53,6 @@ export function checkBrowserOrigin(params: {
   ) {
     return { ok: true, matchedBy: "host-header-fallback" };
   }
-  if (
-    requestHost &&
-    parsedOrigin.host === requestHost &&
-    isTrustedSameOriginHost(requestHost, params.isLocalClient)
-  ) {
-    return { ok: true, matchedBy: "private-same-origin" };
-  }
 
   // Dev fallback only for genuinely local socket clients, not Host-header claims.
   if (params.isLocalClient && isLoopbackHost(parsedOrigin.hostname)) {
@@ -75,18 +60,4 @@ export function checkBrowserOrigin(params: {
   }
 
   return { ok: false, reason: "origin not allowed" };
-}
-
-function isTrustedSameOriginHost(hostHeader: string, isLocalClient?: boolean): boolean {
-  const hostname = resolveHostName(hostHeader);
-  if (!hostname) {
-    return false;
-  }
-  if (isLoopbackHost(hostname)) {
-    return isLocalClient !== false;
-  }
-  if (net.isIP(hostname) !== 0) {
-    return isPrivateOrLoopbackIpAddress(hostname);
-  }
-  return hostname.endsWith(".local") || hostname.endsWith(".ts.net");
 }

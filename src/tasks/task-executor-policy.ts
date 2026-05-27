@@ -1,5 +1,4 @@
 import type { TaskEventRecord, TaskRecord, TaskStatus } from "./task-registry.types.js";
-import { formatTaskStatusTitleText, sanitizeTaskStatusText } from "./task-status.js";
 
 export function isTerminalTaskStatus(status: TaskStatus): boolean {
   return (
@@ -12,13 +11,13 @@ export function isTerminalTaskStatus(status: TaskStatus): boolean {
 }
 
 function resolveTaskDisplayTitle(task: TaskRecord): string {
-  return formatTaskStatusTitleText(
+  return (
     task.label?.trim() ||
-      (task.runtime === "acp"
-        ? "ACP background task"
-        : task.runtime === "subagent"
-          ? "Subagent task"
-          : task.task.trim() || "Background task"),
+    (task.runtime === "acp"
+      ? "ACP background task"
+      : task.runtime === "subagent"
+        ? "Subagent task"
+        : task.task.trim() || "Background task")
   );
 }
 
@@ -26,26 +25,15 @@ function resolveTaskRunLabel(task: TaskRecord): string {
   return task.runId ? ` (run ${task.runId.slice(0, 8)})` : "";
 }
 
-export function formatTaskTerminalMessage(
-  task: TaskRecord,
-  options: { surface?: "direct" | "parent_session" } = {},
-): string {
+export function formatTaskTerminalMessage(task: TaskRecord): string {
   const title = resolveTaskDisplayTitle(task);
   const runLabel = resolveTaskRunLabel(task);
-  const summary = sanitizeTaskStatusText(task.terminalSummary, {
-    errorContext: task.status !== "succeeded" || task.terminalOutcome === "blocked",
-  });
+  const summary = task.terminalSummary?.trim();
   if (task.status === "succeeded") {
     if (task.terminalOutcome === "blocked") {
       return summary
         ? `Background task blocked: ${title}${runLabel}. ${summary}`
         : `Background task blocked: ${title}${runLabel}.`;
-    }
-    if (options.surface === "parent_session") {
-      const reviewNext = "Next: parent will review/verify before calling it done.";
-      return summary
-        ? `Background task ready for review: ${title}${runLabel}. ${summary} ${reviewNext}`
-        : `Background task ready for review: ${title}${runLabel}. ${reviewNext}`;
     }
     return summary
       ? `Background task done: ${title}${runLabel}. ${summary}`
@@ -55,29 +43,15 @@ export function formatTaskTerminalMessage(
     return `Background task timed out: ${title}${runLabel}.`;
   }
   if (task.status === "lost") {
-    const error = sanitizeTaskStatusText(task.error, { errorContext: true });
-    const fallbackSummary = sanitizeTaskStatusText(task.terminalSummary, { errorContext: true });
-    return `Background task lost: ${title}${runLabel}. ${error || fallbackSummary || "Backing session disappeared."}`;
+    return `Background task lost: ${title}${runLabel}. ${task.error ?? "Backing session disappeared."}`;
   }
   if (task.status === "cancelled") {
     return `Background task cancelled: ${title}${runLabel}.`;
   }
-  const error = sanitizeTaskStatusText(task.error, { errorContext: true });
-  const fallbackSummary = sanitizeTaskStatusText(task.terminalSummary, { errorContext: true });
+  const error = task.error?.trim();
   return error
     ? `Background task failed: ${title}${runLabel}. ${error}`
-    : fallbackSummary
-      ? `Background task failed: ${title}${runLabel}. ${fallbackSummary}`
-      : `Background task failed: ${title}${runLabel}.`;
-}
-
-export function shouldUseParentReviewTaskTerminalMessage(task: TaskRecord): boolean {
-  return (
-    task.runtime === "acp" &&
-    task.status === "succeeded" &&
-    task.terminalOutcome !== "blocked" &&
-    Boolean(task.childSessionKey?.trim())
-  );
+    : `Background task failed: ${title}${runLabel}.`;
 }
 
 export function formatTaskBlockedFollowupMessage(task: TaskRecord): string | null {
@@ -86,9 +60,7 @@ export function formatTaskBlockedFollowupMessage(task: TaskRecord): string | nul
   }
   const title = resolveTaskDisplayTitle(task);
   const runLabel = resolveTaskRunLabel(task);
-  const summary =
-    sanitizeTaskStatusText(task.terminalSummary, { errorContext: true }) ||
-    "Task is blocked and needs follow-up.";
+  const summary = task.terminalSummary?.trim() || "Task is blocked and needs follow-up.";
   return `Task needs follow-up: ${title}${runLabel}. ${summary}`;
 }
 
@@ -101,8 +73,7 @@ export function formatTaskStateChangeMessage(
     return `Background task started: ${title}.`;
   }
   if (event.kind === "progress") {
-    const summary = sanitizeTaskStatusText(event.summary);
-    return summary ? `Background task update: ${title}. ${summary}` : null;
+    return event.summary ? `Background task update: ${title}. ${event.summary}` : null;
   }
   return null;
 }

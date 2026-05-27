@@ -1,21 +1,10 @@
-import type { ChannelMessageAdapterShape } from "../message/types.js";
-import type { ChannelSetupWizard, ChannelSetupWizardAdapter } from "./setup-wizard-types.js";
-import type { ChannelConfigSchema } from "./types.config.js";
-export type {
-  ChannelConfigRuntimeIssue,
-  ChannelConfigRuntimeParseResult,
-  ChannelConfigRuntimeSchema,
-  ChannelConfigSchema,
-  ChannelConfigUiHint,
-} from "./types.config.js";
-import type { OperatorScope } from "../../gateway/operator-scopes.js";
+import type { ChannelSetupWizard } from "./setup-wizard.js";
 import type {
-  ChannelApprovalCapability,
+  ChannelApprovalAdapter,
   ChannelAuthAdapter,
   ChannelCommandAdapter,
   ChannelConfigAdapter,
   ChannelConversationBindingSupport,
-  ChannelDoctorAdapter,
   ChannelDirectoryAdapter,
   ChannelResolverAdapter,
   ChannelElevatedAdapter,
@@ -25,7 +14,6 @@ import type {
   ChannelLifecycleAdapter,
   ChannelOutboundAdapter,
   ChannelPairingAdapter,
-  ChannelSecretsAdapter,
   ChannelSecurityAdapter,
   ChannelSetupAdapter,
   ChannelStatusAdapter,
@@ -46,17 +34,45 @@ import type {
   ChannelThreadingAdapter,
 } from "./types.core.js";
 
-/** Full capability contract for a native channel plugin. */
-type ChannelPluginSetupWizard = ChannelSetupWizard | ChannelSetupWizardAdapter;
-
-export type ChannelGatewayMethodDescriptor = {
-  name: string;
-  scope?: OperatorScope;
-  description?: string;
+// Channel docking: implement this contract in src/channels/plugins/<id>.ts.
+export type ChannelConfigUiHint = {
+  label?: string;
+  help?: string;
+  tags?: string[];
+  advanced?: boolean;
+  sensitive?: boolean;
+  placeholder?: string;
+  itemTemplate?: unknown;
 };
 
-// Omitted generic means "plugin with some account shape", not "plugin whose
-// account is literally Record<string, unknown>".
+export type ChannelConfigRuntimeIssue = {
+  path?: Array<string | number>;
+  message?: string;
+  code?: string;
+} & Record<string, unknown>;
+
+export type ChannelConfigRuntimeParseResult =
+  | {
+      success: true;
+      data: unknown;
+    }
+  | {
+      success: false;
+      issues: ChannelConfigRuntimeIssue[];
+    };
+
+export type ChannelConfigRuntimeSchema = {
+  safeParse: (value: unknown) => ChannelConfigRuntimeParseResult;
+};
+
+/** JSON-schema-like config description published by a channel plugin. */
+export type ChannelConfigSchema = {
+  schema: Record<string, unknown>;
+  uiHints?: Record<string, ChannelConfigUiHint>;
+  runtime?: ChannelConfigRuntimeSchema;
+};
+
+/** Full capability contract for a native channel plugin. */
 // oxlint-disable-next-line typescript/no-explicit-any
 export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
   id: ChannelId;
@@ -68,7 +84,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
     };
   };
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
-  setupWizard?: ChannelPluginSetupWizard;
+  setupWizard?: ChannelSetupWizard;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
   setup?: ChannelSetupAdapter;
@@ -79,22 +95,17 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   outbound?: ChannelOutboundAdapter;
   status?: ChannelStatusAdapter<ResolvedAccount, Probe, Audit>;
   gatewayMethods?: string[];
-  gatewayMethodDescriptors?: ChannelGatewayMethodDescriptor[];
   gateway?: ChannelGatewayAdapter<ResolvedAccount>;
-  // Login/logout and channel-auth only. Approval auth lives on approvalCapability.
   auth?: ChannelAuthAdapter;
-  approvalCapability?: ChannelApprovalCapability;
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
   lifecycle?: ChannelLifecycleAdapter;
-  secrets?: ChannelSecretsAdapter;
+  approvals?: ChannelApprovalAdapter;
   allowlist?: ChannelAllowlistAdapter;
-  doctor?: ChannelDoctorAdapter;
   bindings?: ChannelConfiguredBindingProvider;
   conversationBindings?: ChannelConversationBindingSupport;
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
-  message?: ChannelMessageAdapterShape;
   messaging?: ChannelMessagingAdapter;
   agentPrompt?: ChannelAgentPromptAdapter;
   directory?: ChannelDirectoryAdapter;

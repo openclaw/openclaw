@@ -1,13 +1,17 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatErrorMessage } from "../infra/errors.js";
 import { parseRoleRef } from "./pw-role-snapshot.js";
 
 let nextUploadArmId = 0;
+let nextDialogArmId = 0;
 let nextDownloadArmId = 0;
 
 export function bumpUploadArmId(): number {
   nextUploadArmId += 1;
   return nextUploadArmId;
+}
+
+export function bumpDialogArmId(): number {
+  nextDialogArmId += 1;
+  return nextDialogArmId;
 }
 
 export function bumpDownloadArmId(): number {
@@ -16,7 +20,7 @@ export function bumpDownloadArmId(): number {
 }
 
 export function requireRef(value: unknown): string {
-  const raw = normalizeOptionalString(value) ?? "";
+  const raw = typeof value === "string" ? value.trim() : "";
   const roleRef = raw ? parseRoleRef(raw) : null;
   const ref = roleRef ?? (raw.startsWith("@") ? raw.slice(1) : raw);
   if (!ref) {
@@ -29,8 +33,8 @@ export function requireRefOrSelector(
   ref: string | undefined,
   selector: string | undefined,
 ): { ref?: string; selector?: string } {
-  const trimmedRef = normalizeOptionalString(ref) ?? "";
-  const trimmedSelector = normalizeOptionalString(selector) ?? "";
+  const trimmedRef = typeof ref === "string" ? ref.trim() : "";
+  const trimmedSelector = typeof selector === "string" ? selector.trim() : "";
   if (!trimmedRef && !trimmedSelector) {
     throw new Error("ref or selector is required");
   }
@@ -45,7 +49,7 @@ export function normalizeTimeoutMs(timeoutMs: number | undefined, fallback: numb
 }
 
 export function toAIFriendlyError(error: unknown, selector: string): Error {
-  const message = formatErrorMessage(error);
+  const message = error instanceof Error ? error.message : String(error);
 
   if (message.includes("strict mode violation")) {
     const countMatch = message.match(/resolved to (\d+) elements/);
@@ -58,9 +62,7 @@ export function toAIFriendlyError(error: unknown, selector: string): Error {
 
   if (
     (message.includes("Timeout") || message.includes("waiting for")) &&
-    (message.includes("to be visible") ||
-      message.includes("not visible") ||
-      message.includes("waiting for locator("))
+    (message.includes("to be visible") || message.includes("not visible"))
   ) {
     return new Error(
       `Element "${selector}" not found or not visible. ` +

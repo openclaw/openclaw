@@ -1,36 +1,17 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type {
   AnyAgentTool,
-  AgentHarness,
-  AgentPromptGuidance,
-  AgentPromptGuidanceEntry,
-  AgentPromptSurfaceKind,
   MediaUnderstandingProviderPlugin,
-  TranscriptSourceProvider,
-  MigrationApplyResult,
-  MigrationDetection,
-  MigrationItem,
-  MigrationPlan,
-  MigrationProviderContext,
-  MigrationProviderPlugin,
-  MigrationSummary,
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
-  OpenClawPluginHttpRouteHandler,
-  OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
-  OpenClawPluginNodeInvokePolicyContext,
-  OpenClawPluginNodeInvokePolicyResult,
-  OpenClawPluginReloadRegistration,
-  OpenClawPluginSecurityAuditCollector,
-  OpenClawPluginSecurityAuditContext,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
+  PluginInteractiveTelegramHandlerContext,
   PluginLogger,
   ProviderAugmentModelCatalogContext,
   ProviderAuthContext,
@@ -38,7 +19,6 @@ import type {
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
-  ProviderApplyConfigDefaultsContext,
   ProviderBuildMissingAuthMessageContext,
   ProviderBuildUnknownModelHintContext,
   ProviderBuiltInModelSuppressionContext,
@@ -46,14 +26,11 @@ import type {
   ProviderCacheTtlEligibilityContext,
   ProviderCatalogContext,
   ProviderCatalogResult,
-  ProviderDeferSyntheticProfileAuthContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderDiscoveryContext,
-  ProviderFailoverErrorContext,
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeConfigContext,
-  ProviderNormalizeToolSchemasContext,
   ProviderNormalizeTransportContext,
   ProviderResolveConfigApiKeyContext,
   ProviderNormalizeModelIdContext,
@@ -62,129 +39,28 @@ import type {
   ProviderPrepareExtraParamsContext,
   ProviderPrepareRuntimeAuthContext,
   ProviderPreparedRuntimeAuth,
-  ProviderReasoningOutputMode,
-  ProviderReasoningOutputModeContext,
-  ProviderReplayPolicy,
-  ProviderReplayPolicyContext,
-  ProviderReplaySessionEntry,
-  ProviderReplaySessionState,
-  RealtimeTranscriptionProviderPlugin,
   ProviderResolvedUsageAuth,
   ProviderResolveDynamicModelContext,
-  ProviderResolveTransportTurnStateContext,
-  ProviderResolveWebSocketSessionPolicyContext,
-  ProviderSanitizeReplayHistoryContext,
-  ProviderTransportTurnState,
-  ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
-  ProviderThinkingProfile,
+  ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
-  ProviderValidateReplayTurnsContext,
-  ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
-  UnifiedModelCatalogProviderContext,
-  UnifiedModelCatalogProviderPlugin,
-  OpenClawGatewayDiscoveryAdvertiseContext,
-  OpenClawGatewayDiscoveryService,
   SpeechProviderPlugin,
   PluginCommandContext,
-  PluginCommandResult,
-  PluginAgentEventEmitParams,
-  PluginAgentEventEmitResult,
-  PluginAgentEventSubscriptionRegistration,
-  PluginAgentTurnPrepareEvent,
-  PluginAgentTurnPrepareResult,
-  PluginControlUiDescriptor,
-  PluginHeartbeatPromptContributionEvent,
-  PluginHeartbeatPromptContributionResult,
-  PluginJsonValue,
-  PluginNextTurnInjection,
-  PluginNextTurnInjectionEnqueueResult,
-  PluginNextTurnInjectionRecord,
-  PluginRunContextGetParams,
-  PluginRunContextPatch,
-  PluginRuntimeLifecycleRegistration,
-  PluginSessionActionContext,
-  PluginSessionActionRegistration,
-  PluginSessionActionResult,
-  PluginSessionAttachmentParams,
-  PluginSessionAttachmentResult,
-  PluginSessionSchedulerJobHandle,
-  PluginSessionSchedulerJobRegistration,
-  PluginSessionTurnScheduleParams,
-  PluginSessionTurnUnscheduleByTagParams,
-  PluginSessionTurnUnscheduleByTagResult,
-  PluginSessionExtensionRegistration,
-  PluginSessionExtensionProjection,
-  PluginToolMetadataRegistration,
-  PluginTrustedToolPolicyRegistration,
 } from "../plugins/types.js";
-import { createCachedLazyValueGetter } from "./lazy-value.js";
 
 export type {
   AnyAgentTool,
-  AgentHarness,
-  AgentPromptGuidance,
-  AgentPromptGuidanceEntry,
-  AgentPromptSurfaceKind,
   MediaUnderstandingProviderPlugin,
-  TranscriptSourceProvider,
-  MigrationApplyResult,
-  MigrationDetection,
-  MigrationItem,
-  MigrationPlan,
-  MigrationProviderContext,
-  MigrationProviderPlugin,
-  MigrationSummary,
   OpenClawPluginApi,
-  OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
-  OpenClawPluginNodeInvokePolicyContext,
-  OpenClawPluginNodeInvokePolicyResult,
-  OpenClawPluginReloadRegistration,
-  OpenClawPluginSecurityAuditCollector,
-  OpenClawPluginSecurityAuditContext,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   PluginCommandContext,
-  PluginCommandResult,
-  PluginAgentEventEmitParams,
-  PluginAgentEventEmitResult,
-  PluginAgentEventSubscriptionRegistration,
-  PluginAgentTurnPrepareEvent,
-  PluginAgentTurnPrepareResult,
-  PluginControlUiDescriptor,
-  PluginHeartbeatPromptContributionEvent,
-  PluginHeartbeatPromptContributionResult,
-  PluginJsonValue,
-  PluginNextTurnInjection,
-  PluginNextTurnInjectionEnqueueResult,
-  PluginNextTurnInjectionRecord,
-  PluginRunContextGetParams,
-  PluginRunContextPatch,
-  PluginRuntimeLifecycleRegistration,
-  PluginSessionActionContext,
-  PluginSessionActionRegistration,
-  PluginSessionActionResult,
-  PluginSessionSchedulerJobHandle,
-  PluginSessionSchedulerJobRegistration,
-  PluginSessionAttachmentParams,
-  PluginSessionAttachmentResult,
-  PluginSessionTurnScheduleParams,
-  PluginSessionTurnUnscheduleByTagParams,
-  PluginSessionTurnUnscheduleByTagResult,
-  PluginSessionExtensionRegistration,
-  PluginSessionExtensionProjection,
-  PluginToolMetadataRegistration,
-  PluginTrustedToolPolicyRegistration,
   OpenClawPluginConfigSchema,
-  OpenClawPluginHttpRouteHandler,
   ProviderDiscoveryContext,
   ProviderCatalogContext,
   ProviderCatalogResult,
-  ProviderDeferSyntheticProfileAuthContext,
   ProviderAugmentModelCatalogContext,
-  ProviderApplyConfigDefaultsContext,
   ProviderBuiltInModelSuppressionContext,
   ProviderBuiltInModelSuppressionResult,
   ProviderBuildMissingAuthMessageContext,
@@ -192,43 +68,23 @@ export type {
   ProviderCacheTtlEligibilityContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
-  ProviderFailoverErrorContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeConfigContext,
-  ProviderNormalizeToolSchemasContext,
   ProviderNormalizeTransportContext,
   ProviderResolveConfigApiKeyContext,
   ProviderNormalizeModelIdContext,
-  ProviderReplayPolicy,
-  ProviderReplayPolicyContext,
-  ProviderReplaySessionEntry,
-  ProviderReplaySessionState,
   ProviderPreparedRuntimeAuth,
-  ProviderReasoningOutputMode,
-  ProviderReasoningOutputModeContext,
   ProviderResolvedUsageAuth,
-  ProviderToolSchemaDiagnostic,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
   ProviderPrepareRuntimeAuthContext,
-  ProviderSanitizeReplayHistoryContext,
   ProviderResolveUsageAuthContext,
-  ProviderThinkingProfile,
   ProviderResolveDynamicModelContext,
-  ProviderResolveTransportTurnStateContext,
-  ProviderResolveWebSocketSessionPolicyContext,
   ProviderNormalizeResolvedModelContext,
-  RealtimeTranscriptionProviderPlugin,
-  ProviderTransportTurnState,
+  ProviderRuntimeModel,
   SpeechProviderPlugin,
   ProviderThinkingPolicyContext,
-  ProviderValidateReplayTurnsContext,
-  ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
-  UnifiedModelCatalogProviderContext,
-  UnifiedModelCatalogProviderPlugin,
-  OpenClawGatewayDiscoveryAdvertiseContext,
-  OpenClawGatewayDiscoveryService,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   ProviderAuthContext,
@@ -239,47 +95,19 @@ export type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginDefinition,
   PluginLogger,
+  PluginInteractiveTelegramHandlerContext,
 };
-export type {
-  PluginConversationBinding,
-  PluginConversationBindingResolvedEvent,
-  PluginConversationBindingRequestParams,
-  PluginConversationBindingRequestResult,
-} from "../plugins/conversation-binding.types.js";
-export type {
-  PluginHookInboundClaimContext,
-  PluginHookInboundClaimEvent,
-  PluginHookInboundClaimResult,
-} from "../plugins/hook-types.js";
-export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-export type {
-  UnifiedModelCatalogEntry,
-  UnifiedModelCatalogKind,
-  UnifiedModelCatalogSource,
-} from "../model-catalog/types.js";
 export type { OpenClawConfig };
 
-export {
-  buildJsonPluginConfigSchema,
-  buildPluginConfigSchema,
-  emptyPluginConfigSchema,
-} from "../plugins/config-schema.js";
+export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 
 /** Options for a plugin entry that registers providers, tools, commands, or services. */
 type DefinePluginEntryOptions = {
   id: string;
   name: string;
   description: string;
-  /**
-   * @deprecated Declare exclusive plugin kind in `openclaw.plugin.json` via
-   * manifest `kind`. Runtime-entry `kind` remains only as a compatibility
-   * fallback for older plugins.
-   */
   kind?: OpenClawPluginDefinition["kind"];
   configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
-  reload?: OpenClawPluginDefinition["reload"];
-  nodeHostCommands?: OpenClawPluginDefinition["nodeHostCommands"];
-  securityAuditCollectors?: OpenClawPluginDefinition["securityAuditCollectors"];
   register: (api: OpenClawPluginApi) => void;
 };
 
@@ -290,10 +118,14 @@ type DefinedPluginEntry = {
   description: string;
   configSchema: OpenClawPluginConfigSchema;
   register: NonNullable<OpenClawPluginDefinition["register"]>;
-} & Pick<
-  OpenClawPluginDefinition,
-  "kind" | "reload" | "nodeHostCommands" | "securityAuditCollectors"
->;
+} & Pick<OpenClawPluginDefinition, "kind">;
+
+/** Resolve either a concrete config schema or a lazy schema factory. */
+function resolvePluginConfigSchema(
+  configSchema: DefinePluginEntryOptions["configSchema"] = emptyPluginConfigSchema,
+): OpenClawPluginConfigSchema {
+  return typeof configSchema === "function" ? configSchema() : configSchema;
+}
 
 /**
  * Canonical entry helper for non-channel plugins.
@@ -308,23 +140,14 @@ export function definePluginEntry({
   description,
   kind,
   configSchema = emptyPluginConfigSchema,
-  reload,
-  nodeHostCommands,
-  securityAuditCollectors,
   register,
 }: DefinePluginEntryOptions): DefinedPluginEntry {
-  const getConfigSchema = createCachedLazyValueGetter(configSchema);
   return {
     id,
     name,
     description,
     ...(kind ? { kind } : {}),
-    ...(reload ? { reload } : {}),
-    ...(nodeHostCommands ? { nodeHostCommands } : {}),
-    ...(securityAuditCollectors ? { securityAuditCollectors } : {}),
-    get configSchema() {
-      return getConfigSchema();
-    },
+    configSchema: resolvePluginConfigSchema(configSchema),
     register,
   };
 }

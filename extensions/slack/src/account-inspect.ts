@@ -7,7 +7,6 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import {
   mergeSlackAccountConfig,
@@ -129,7 +128,7 @@ export function inspectSlackAccount(params: {
   return {
     accountId,
     enabled,
-    name: normalizeOptionalString(merged.name),
+    name: merged.name?.trim() || undefined,
     mode,
     botToken,
     appToken,

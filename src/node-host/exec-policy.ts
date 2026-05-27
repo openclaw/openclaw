@@ -1,8 +1,8 @@
 import { requiresExecApproval, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
 
-type ExecApprovalDecision = "allow-once" | "allow-always" | null;
+export type ExecApprovalDecision = "allow-once" | "allow-always" | null;
 
-type SystemRunPolicyDecision = {
+export type SystemRunPolicyDecision = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   shellWrapperBlocked: boolean;
@@ -54,23 +54,15 @@ export function evaluateSystemRunPolicy(params: {
   ask: ExecAsk;
   analysisOk: boolean;
   allowlistSatisfied: boolean;
-  durableApprovalSatisfied?: boolean;
   approvalDecision: ExecApprovalDecision;
   approved?: boolean;
   isWindows: boolean;
   cmdInvocation: boolean;
   shellWrapperInvocation: boolean;
 }): SystemRunPolicyDecision {
-  // POSIX node execution intentionally uses `/bin/sh -lc` as a transport wrapper.
-  // Keep allowlist decisions based on the analyzed inner shell payload there.
-  // Windows `cmd.exe /c` wrappers still require explicit approval because they
-  // change execution semantics for builtins and quoting/parsing behavior.
+  const shellWrapperBlocked = params.security === "allowlist" && params.shellWrapperInvocation;
   const windowsShellWrapperBlocked =
-    params.security === "allowlist" &&
-    params.shellWrapperInvocation &&
-    params.isWindows &&
-    params.cmdInvocation;
-  const shellWrapperBlocked = windowsShellWrapperBlocked;
+    shellWrapperBlocked && params.isWindows && params.cmdInvocation;
   const analysisOk = shellWrapperBlocked ? false : params.analysisOk;
   const allowlistSatisfied = shellWrapperBlocked ? false : params.allowlistSatisfied;
   const approvedByAsk = params.approvalDecision !== null || params.approved === true;
@@ -95,7 +87,6 @@ export function evaluateSystemRunPolicy(params: {
     security: params.security,
     analysisOk,
     allowlistSatisfied,
-    durableApprovalSatisfied: params.durableApprovalSatisfied,
   });
   if (requiresAsk && !approvedByAsk) {
     return {
@@ -113,18 +104,6 @@ export function evaluateSystemRunPolicy(params: {
   }
 
   if (params.security === "allowlist" && (!analysisOk || !allowlistSatisfied) && !approvedByAsk) {
-    if (params.durableApprovalSatisfied) {
-      return {
-        allowed: true,
-        analysisOk,
-        allowlistSatisfied,
-        shellWrapperBlocked,
-        windowsShellWrapperBlocked,
-        requiresAsk,
-        approvalDecision: params.approvalDecision,
-        approvedByAsk,
-      };
-    }
     return {
       allowed: false,
       eventReason: "allowlist-miss",

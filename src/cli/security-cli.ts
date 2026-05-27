@@ -1,13 +1,8 @@
 import type { Command } from "commander";
-import { getRuntimeConfig } from "../config/config.js";
-import type { GatewayAuthMode } from "../config/types.gateway.js";
+import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
 import { fixSecurityFootguns } from "../security/fix.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
@@ -20,44 +15,9 @@ type SecurityAuditOptions = {
   json?: boolean;
   deep?: boolean;
   fix?: boolean;
-  auth?: string;
   token?: string;
   password?: string;
 };
-
-function parseGatewayAuthMode(value: string | undefined): GatewayAuthMode | undefined {
-  const mode = normalizeOptionalLowercaseString(value);
-  if (!mode) {
-    return undefined;
-  }
-  if (mode === "none" || mode === "token" || mode === "password" || mode === "trusted-proxy") {
-    return mode;
-  }
-  throw new Error(
-    'Invalid --auth value. Expected "none", "token", "password", or "trusted-proxy".',
-  );
-}
-
-function buildAuditGatewayAuthOverride(params: {
-  mode?: GatewayAuthMode;
-  token?: string;
-  password?: string;
-}) {
-  if (!params.mode) {
-    return undefined;
-  }
-  if (params.mode === "token" && !params.token) {
-    throw new Error("Invalid --auth token: pass --token <token> for audit auth override.");
-  }
-  if (params.mode === "password" && !params.password) {
-    throw new Error("Invalid --auth password: pass --password <password> for audit auth override.");
-  }
-  return {
-    mode: params.mode,
-    ...(params.token ? { token: params.token } : {}),
-    ...(params.password ? { password: params.password } : {}),
-  };
-}
 
 function formatSummary(summary: { critical: number; warn: number; info: number }): string {
   const rich = isRich();
@@ -80,18 +40,11 @@ export function registerSecurityCli(program: Command) {
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw security audit", "Run a local security audit."],
-          [
-            "openclaw security audit --deep",
-            "Include best-effort live Gateway probes and plugin-owned security audit collectors.",
-          ],
+          ["openclaw security audit --deep", "Include best-effort live Gateway probe checks."],
           ["openclaw security audit --deep --token <token>", "Use explicit token for deep probe."],
           [
             "openclaw security audit --deep --password <password>",
             "Use explicit password for deep probe.",
-          ],
-          [
-            "openclaw security audit --auth password --password <password>",
-            "Audit a runtime-only password-mode Gateway secret.",
           ],
           ["openclaw security audit --fix", "Apply safe remediations and file-permission fixes."],
           ["openclaw security audit --json", "Output machine-readable JSON."],
@@ -101,27 +54,15 @@ export function registerSecurityCli(program: Command) {
   security
     .command("audit")
     .description("Audit config + local state for common security foot-guns")
-    .option("--deep", "Attempt live Gateway probes and plugin-owned collector checks", false)
-    .option(
-      "--auth <mode>",
-      'Runtime gateway auth mode ("none"|"token"|"password"|"trusted-proxy")',
-    )
+    .option("--deep", "Attempt live Gateway probe (best-effort)", false)
     .option("--token <token>", "Use explicit gateway token for deep probe auth")
     .option("--password <password>", "Use explicit gateway password for deep probe auth")
     .option("--fix", "Apply safe fixes (tighten defaults + chmod state/config)", false)
     .option("--json", "Print JSON", false)
     .action(async (opts: SecurityAuditOptions) => {
-      const authMode = parseGatewayAuthMode(opts.auth);
-      const token = normalizeOptionalString(opts.token);
-      const password = normalizeOptionalString(opts.password);
-      const auditGatewayAuthOverride = buildAuditGatewayAuthOverride({
-        mode: authMode,
-        token,
-        password,
-      });
       const fixResult = opts.fix ? await fixSecurityFootguns().catch((_err) => null) : null;
 
-      const sourceConfig = getRuntimeConfig();
+      const sourceConfig = loadConfig();
       const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
         await resolveCommandSecretRefsViaGateway({
           config: sourceConfig,
@@ -136,13 +77,12 @@ export function registerSecurityCli(program: Command) {
         includeFilesystem: true,
         includeChannelSecurity: true,
         deepProbeAuth:
-          token || password
+          opts.token?.trim() || opts.password?.trim()
             ? {
-                ...(token ? { token } : {}),
-                ...(password ? { password } : {}),
+                ...(opts.token?.trim() ? { token: opts.token } : {}),
+                ...(opts.password?.trim() ? { password: opts.password } : {}),
               }
             : undefined,
-        auditGatewayAuthOverride,
       });
 
       if (opts.json) {
@@ -161,9 +101,6 @@ export function registerSecurityCli(program: Command) {
       const lines: string[] = [];
       lines.push(heading("OpenClaw security audit"));
       lines.push(muted(`Summary: ${formatSummary(report.summary)}`));
-      if ((report.suppressedFindings?.length ?? 0) > 0) {
-        lines.push(muted(`Suppressed: ${report.suppressedFindings?.length ?? 0} configured`));
-      }
       lines.push(muted(`Run deeper: ${formatCliCommand("openclaw security audit --deep")}`));
       for (const diagnostic of secretDiagnostics) {
         lines.push(muted(`[secrets] ${diagnostic}`));

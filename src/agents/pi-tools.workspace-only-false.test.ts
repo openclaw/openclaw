@@ -1,20 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createReadTool } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@earendil-works/pi-ai", async () => {
-  const original =
-    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
   return {
     ...original,
   };
 });
 
-vi.mock("@earendil-works/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
-    "@earendil-works/pi-ai/oauth",
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
   );
   return {
     ...actual,
@@ -23,14 +21,7 @@ vi.mock("@earendil-works/pi-ai/oauth", async () => {
   };
 });
 
-import {
-  createHostWorkspaceEditTool,
-  createHostWorkspaceWriteTool,
-  createOpenClawReadTool,
-  wrapToolMemoryFlushAppendOnlyWrite,
-  wrapToolWorkspaceRootGuard,
-} from "./pi-tools.read.js";
-import type { AnyAgentTool } from "./tools/common.js";
+import { createOpenClawCodingTools } from "./pi-tools.js";
 
 describe("FS tools with workspaceOnly=false", () => {
   let tmpDir: string;
@@ -45,23 +36,20 @@ describe("FS tools with workspaceOnly=false", () => {
       return content.text?.toLowerCase().includes("error") ?? false;
     });
 
-  const toolsFor = (workspaceOnly: boolean | undefined): AnyAgentTool[] => {
-    const read = createOpenClawReadTool(createReadTool(workspaceDir) as unknown as AnyAgentTool);
-    const write = createHostWorkspaceWriteTool(workspaceDir, { workspaceOnly });
-    const edit = createHostWorkspaceEditTool(workspaceDir, { workspaceOnly });
-    const tools = [read, write, edit];
-    return workspaceOnly
-      ? tools.map((tool) => wrapToolWorkspaceRootGuard(tool, workspaceDir))
-      : tools;
-  };
-
-  const requireTool = (tools: AnyAgentTool[], toolName: "write" | "edit" | "read") => {
-    const tool = tools.find((candidate) => candidate.name === toolName);
-    if (!tool) {
-      throw new Error(`expected ${toolName} tool`);
-    }
-    return tool;
-  };
+  const toolsFor = (workspaceOnly: boolean | undefined) =>
+    createOpenClawCodingTools({
+      workspaceDir,
+      config:
+        workspaceOnly === undefined
+          ? {}
+          : {
+              tools: {
+                fs: {
+                  workspaceOnly,
+                },
+              },
+            },
+    });
 
   const runFsTool = async (
     toolName: "write" | "edit" | "read",
@@ -69,8 +57,9 @@ describe("FS tools with workspaceOnly=false", () => {
     input: Record<string, unknown>,
     workspaceOnly: boolean | undefined,
   ) => {
-    const tool = requireTool(toolsFor(workspaceOnly), toolName);
-    const result = await tool.execute(callId, input);
+    const tool = toolsFor(workspaceOnly).find((candidate) => candidate.name === toolName);
+    expect(tool).toBeDefined();
+    const result = await tool!.execute(callId, input);
     expect(hasToolError(result)).toBe(false);
     return result;
   };
@@ -125,7 +114,8 @@ describe("FS tools with workspaceOnly=false", () => {
       "test-call-2",
       {
         path: outsideFile,
-        edits: [{ oldText: "old content", newText: "new content" }],
+        oldText: "old content",
+        newText: "new content",
       },
       false,
     );
@@ -143,7 +133,8 @@ describe("FS tools with workspaceOnly=false", () => {
       "test-call-2b",
       {
         path: relativeOutsidePath,
-        edits: [{ oldText: "old relative content", newText: "new relative content" }],
+        oldText: "old relative content",
+        newText: "new relative content",
       },
       false,
     );
@@ -154,7 +145,7 @@ describe("FS tools with workspaceOnly=false", () => {
   it("should allow read outside workspace when workspaceOnly=false", async () => {
     await fs.writeFile(outsideFile, "test read content");
 
-    const result = await runFsTool(
+    await runFsTool(
       "read",
       "test-call-3",
       {
@@ -162,41 +153,6 @@ describe("FS tools with workspaceOnly=false", () => {
       },
       false,
     );
-    expect(JSON.stringify(result.content)).toContain("test read content");
-  });
-
-  it("returns optional not-found context for missing date-only daily memory reads", async () => {
-    const result = await runFsTool(
-      "read",
-      "test-call-missing-daily-memory",
-      {
-        path: "memory/2026-05-15.md",
-      },
-      undefined,
-    );
-    expect(result).toStrictEqual({
-      content: [
-        {
-          type: "text",
-          text: "No daily memory file exists yet at memory/2026-05-15.md.",
-        },
-      ],
-      details: {
-        status: "not_found",
-        path: "memory/2026-05-15.md",
-        optional: true,
-      },
-    });
-  });
-
-  it("still throws for ordinary missing read paths", async () => {
-    const readTool = requireTool(toolsFor(undefined), "read");
-
-    await expect(
-      readTool.execute("test-call-missing-ordinary-file", {
-        path: "notes/missing.md",
-      }),
-    ).rejects.toThrow(/ENOENT|no such file|not found/i);
   });
 
   it("should allow write outside workspace when workspaceOnly is unset", async () => {
@@ -222,7 +178,8 @@ describe("FS tools with workspaceOnly=false", () => {
       "test-call-3b",
       {
         path: outsideUnsetFile,
-        edits: [{ oldText: "before", newText: "after" }],
+        oldText: "before",
+        newText: "after",
       },
       undefined,
     );
@@ -232,11 +189,12 @@ describe("FS tools with workspaceOnly=false", () => {
 
   it("should block write outside workspace when workspaceOnly=true", async () => {
     const tools = toolsFor(true);
-    const writeTool = requireTool(tools, "write");
+    const writeTool = tools.find((t) => t.name === "write");
+    expect(writeTool).toBeDefined();
 
     // When workspaceOnly=true, the guard throws an error
     await expect(
-      writeTool.execute("test-call-4", {
+      writeTool!.execute("test-call-4", {
         path: outsideFile,
         content: "test content",
       }),
@@ -249,35 +207,40 @@ describe("FS tools with workspaceOnly=false", () => {
     await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
     await fs.writeFile(allowedAbsolutePath, "seed");
 
-    const tools = [
-      createOpenClawReadTool(createReadTool(workspaceDir) as unknown as AnyAgentTool),
-      wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(workspaceDir), {
-        root: workspaceDir,
-        relativePath: allowedRelativePath,
-      }),
-    ];
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      trigger: "memory",
+      memoryFlushWritePath: allowedRelativePath,
+      config: {
+        tools: {
+          exec: {
+            applyPatch: {},
+          },
+        },
+      },
+      modelProvider: "openai",
+      modelId: "gpt-5",
+    });
 
-    const writeTool = requireTool(tools, "write");
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
     expect(tools.map((tool) => tool.name).toSorted()).toEqual(["read", "write"]);
 
     await expect(
-      writeTool.execute("test-call-memory-deny", {
+      writeTool!.execute("test-call-memory-deny", {
         path: outsideFile,
         content: "should not write here",
       }),
     ).rejects.toThrow(/Memory flush writes are restricted to memory\/2026-03-07\.md/);
 
-    const result = await writeTool.execute("test-call-memory-append", {
+    const result = await writeTool!.execute("test-call-memory-append", {
       path: allowedRelativePath,
       content: "new note",
     });
     expect(hasToolError(result)).toBe(false);
-    expect(result).toStrictEqual({
-      content: [{ type: "text", text: "Appended content to memory/2026-03-07.md." }],
-      details: {
-        path: "memory/2026-03-07.md",
-        appendOnly: true,
-      },
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: "Appended content to memory/2026-03-07.md.",
     });
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
   });

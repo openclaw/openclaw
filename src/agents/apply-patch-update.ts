@@ -53,13 +53,10 @@ function computeReplacements(
 
     if (chunk.oldLines.length === 0) {
       const insertionIndex =
-        chunk.changeContext && !chunk.isEndOfFile
-          ? lineIndex
-          : originalLines.length > 0 && originalLines[originalLines.length - 1] === ""
-            ? originalLines.length - 1
-            : originalLines.length;
+        originalLines.length > 0 && originalLines[originalLines.length - 1] === ""
+          ? originalLines.length - 1
+          : originalLines.length;
       replacements.push([insertionIndex, 0, chunk.newLines]);
-      lineIndex = insertionIndex;
       continue;
     }
 

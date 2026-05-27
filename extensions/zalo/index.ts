@@ -1,20 +1,14 @@
-import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { zaloPlugin } from "./src/channel.js";
+import { setZaloRuntime } from "./src/runtime.js";
 
-export default defineBundledChannelEntry({
+export { zaloPlugin } from "./src/channel.js";
+export { setZaloRuntime } from "./src/runtime.js";
+
+export default defineChannelPluginEntry({
   id: "zalo",
   name: "Zalo",
   description: "Zalo channel plugin",
-  importMetaUrl: import.meta.url,
-  plugin: {
-    specifier: "./channel-plugin-api.js",
-    exportName: "zaloPlugin",
-  },
-  secrets: {
-    specifier: "./secret-contract-api.js",
-    exportName: "channelSecrets",
-  },
-  runtime: {
-    specifier: "./runtime-api.js",
-    exportName: "setZaloRuntime",
-  },
+  plugin: zaloPlugin,
+  setRuntime: setZaloRuntime,
 });

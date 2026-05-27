@@ -43,11 +43,3 @@ export function buildUserAgent(): string {
   cachedUserAgent = `teams.ts[apps]/${resolveTeamsSdkVersion()} OpenClaw/${resolveOpenClawVersion()}`;
   return cachedUserAgent;
 }
-
-export function ensureUserAgentHeader(headers?: HeadersInit): Headers {
-  const nextHeaders = new Headers(headers);
-  if (!nextHeaders.has("User-Agent")) {
-    nextHeaders.set("User-Agent", buildUserAgent());
-  }
-  return nextHeaders;
-}

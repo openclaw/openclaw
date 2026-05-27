@@ -67,29 +67,8 @@ describe("createTypingCallbacks", () => {
     });
 
     await callbacks.onReplyStart();
-    await flushMicrotasks();
 
     expect(onStartError).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not block reply start on a pending typing request", async () => {
-    let resolveStart: (() => void) | undefined;
-    const { start, callbacks } = createTypingHarness({
-      start: vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            resolveStart = resolve;
-          }),
-      ),
-    });
-
-    await callbacks.onReplyStart();
-
-    expect(start).toHaveBeenCalledTimes(1);
-    if (!resolveStart) {
-      throw new Error("Expected typing start resolver to be initialized");
-    }
-    resolveStart();
   });
 
   it("invokes stop on idle and reports stop errors", async () => {
@@ -134,7 +113,6 @@ describe("createTypingCallbacks", () => {
         start: vi.fn().mockRejectedValue(new Error("gone")),
       });
       await callbacks.onReplyStart();
-      await flushMicrotasks();
       expect(start).toHaveBeenCalledTimes(1);
       expect(onStartError).toHaveBeenCalledTimes(1);
 
@@ -155,7 +133,6 @@ describe("createTypingCallbacks", () => {
       });
 
       await callbacks.onReplyStart();
-      await flushMicrotasks();
       expect(start).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(9_000);
@@ -177,7 +154,6 @@ describe("createTypingCallbacks", () => {
         maxConsecutiveFailures: 2,
       });
       await callbacks.onReplyStart(); // fail
-      await flushMicrotasks();
       await vi.advanceTimersByTimeAsync(3_000); // success
       await vi.advanceTimersByTimeAsync(3_000); // fail
       await vi.advanceTimersByTimeAsync(3_000); // success
@@ -232,9 +208,7 @@ describe("createTypingCallbacks", () => {
 
         // Should auto-stop
         expect(stop).toHaveBeenCalledTimes(1);
-        expect(consoleWarn).toHaveBeenCalledWith(
-          "[typing] TTL exceeded (10000ms), auto-stopping typing indicator",
-        );
+        expect(consoleWarn).toHaveBeenCalledWith(expect.stringContaining("TTL exceeded"));
 
         consoleWarn.mockRestore();
       });

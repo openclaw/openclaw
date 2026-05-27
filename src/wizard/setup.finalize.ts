@@ -1,8 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
-import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
-import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -25,17 +22,15 @@ import {
   resolveControlUiLinks,
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
-import { launchTuiCli } from "../tui/tui-launch.js";
+import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
-import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
@@ -52,34 +47,11 @@ type FinalizeOnboardingOptions = {
   runtime: RuntimeEnv;
 };
 
-type OnboardSearchModule = typeof import("../commands/onboard-search.js");
-
-let onboardSearchModulePromise: Promise<OnboardSearchModule> | undefined;
-const HATCH_TUI_TIMEOUT_MS = 5 * 60 * 1000;
-
-function getLocalizedGatewayDaemonRuntimeOptions() {
-  return GATEWAY_DAEMON_RUNTIME_OPTIONS.map((option) => ({
-    hint:
-      option.value === "node"
-        ? t("wizard.finalize.daemonRuntimeNodeHint")
-        : (option.hint ?? undefined),
-    label: option.value === "node" ? t("wizard.finalize.daemonRuntimeNode") : option.label,
-    value: option.value,
-  }));
-}
-
-function loadOnboardSearchModule(): Promise<OnboardSearchModule> {
-  onboardSearchModulePromise ??= import("../commands/onboard-search.js");
-  return onboardSearchModulePromise;
-}
-
 export async function finalizeSetupWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
   const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
-  const suppressGatewayTokenOutput = opts.suppressGatewayTokenOutput === true;
   let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
-  let resolvedGatewayPassword = "";
 
   const withWizardProgress = async <T>(
     label: string,
@@ -99,7 +71,10 @@ export async function finalizeSetupWizard(
   const systemdAvailable =
     process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
   if (process.platform === "linux" && !systemdAvailable) {
-    await prompter.note(t("wizard.finalize.systemdUnavailable"), "Systemd");
+    await prompter.note(
+      "Systemd user services are unavailable. Skipping lingering checks and service install.",
+      "Systemd",
+    );
   }
 
   if (process.platform === "linux" && systemdAvailable) {
@@ -110,7 +85,8 @@ export async function finalizeSetupWizard(
         confirm: prompter.confirm,
         note: prompter.note,
       },
-      reason: t("wizard.finalize.systemdLingerReason"),
+      reason:
+        "Linux installs use a systemd user service by default. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
       requireConfirm: false,
     });
   }
@@ -126,15 +102,15 @@ export async function finalizeSetupWizard(
     installDaemon = true;
   } else {
     installDaemon = await prompter.confirm({
-      message: t("wizard.finalize.installGateway"),
+      message: "Install Gateway service (recommended)",
       initialValue: true,
     });
   }
 
   if (process.platform === "linux" && !systemdAvailable && installDaemon) {
     await prompter.note(
-      t("wizard.finalize.systemdInstallSkipped"),
-      t("wizard.finalize.gatewayService"),
+      "Systemd user services are unavailable; skipping service install. Use your container supervisor or `docker compose up -d`.",
+      "Gateway service",
     );
     installDaemon = false;
   }
@@ -144,14 +120,14 @@ export async function finalizeSetupWizard(
       flow === "quickstart"
         ? DEFAULT_GATEWAY_DAEMON_RUNTIME
         : await prompter.select({
-            message: t("wizard.finalize.daemonRuntime"),
-            options: getLocalizedGatewayDaemonRuntimeOptions(),
+            message: "Gateway service runtime",
+            options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
             initialValue: opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME,
           });
     if (flow === "quickstart") {
       await prompter.note(
-        t("wizard.finalize.quickstartNodeRuntime"),
-        t("wizard.finalize.daemonRuntime"),
+        "QuickStart uses Node for the Gateway service (stable + supported).",
+        "Gateway service runtime",
       );
     }
     const service = resolveGatewayService();
@@ -159,37 +135,35 @@ export async function finalizeSetupWizard(
     let restartWasScheduled = false;
     if (loaded) {
       const action = await prompter.select({
-        message: t("wizard.finalize.alreadyInstalled"),
+        message: "Gateway service already installed",
         options: [
-          { value: "restart", label: t("wizard.finalize.restart") },
-          { value: "reinstall", label: t("wizard.finalize.reinstall") },
-          { value: "skip", label: t("common.skip") },
+          { value: "restart", label: "Restart" },
+          { value: "reinstall", label: "Reinstall" },
+          { value: "skip", label: "Skip" },
         ],
       });
       if (action === "restart") {
-        let restartDoneMessage = t("wizard.finalize.gatewayServiceRestarted");
+        let restartDoneMessage = "Gateway service restarted.";
         await withWizardProgress(
-          t("wizard.finalize.gatewayService"),
+          "Gateway service",
           { doneMessage: () => restartDoneMessage },
           async (progress) => {
-            progress.update(t("wizard.finalize.gatewayServiceRestarting"));
+            progress.update("Restarting Gateway service…");
             const restartResult = await service.restart({
               env: process.env,
               stdout: process.stdout,
             });
             const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
-            restartDoneMessage = restartStatus.scheduled
-              ? t("wizard.finalize.gatewayServiceRestartScheduled")
-              : t("wizard.finalize.gatewayServiceRestarted");
+            restartDoneMessage = restartStatus.progressMessage;
             restartWasScheduled = restartStatus.scheduled;
           },
         );
       } else if (action === "reinstall") {
         await withWizardProgress(
-          t("wizard.finalize.gatewayService"),
-          { doneMessage: t("wizard.finalize.gatewayServiceUninstalled") },
+          "Gateway service",
+          { doneMessage: "Gateway service uninstalled." },
           async (progress) => {
-            progress.update(t("wizard.finalize.gatewayServiceUninstalling"));
+            progress.update("Uninstalling Gateway service…");
             await service.uninstall({ env: process.env, stdout: process.stdout });
           },
         );
@@ -200,10 +174,10 @@ export async function finalizeSetupWizard(
       !loaded ||
       (!restartWasScheduled && loaded && !(await service.isLoaded({ env: process.env })))
     ) {
-      const progress = prompter.progress(t("wizard.finalize.gatewayService"));
+      const progress = prompter.progress("Gateway service");
       let installError: string | null = null;
       try {
-        progress.update(t("wizard.finalize.gatewayServicePreparing"));
+        progress.update("Preparing Gateway service…");
         const tokenResolution = await resolveGatewayInstallToken({
           config: nextConfig,
           env: process.env,
@@ -213,9 +187,9 @@ export async function finalizeSetupWizard(
         }
         if (tokenResolution.unavailableReason) {
           installError = [
-            t("wizard.finalize.gatewayInstallBlocked"),
+            "Gateway install blocked:",
             tokenResolution.unavailableReason,
-            t("wizard.finalize.gatewayInstallFixAuth"),
+            "Fix gateway auth config/token input and rerun setup.",
           ].join(" ");
         } else {
           const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan(
@@ -228,7 +202,7 @@ export async function finalizeSetupWizard(
             },
           );
 
-          progress.update(t("wizard.finalize.gatewayServiceInstalling"));
+          progress.update("Installing Gateway service…");
           await service.install({
             env: process.env,
             stdout: process.stdout,
@@ -238,41 +212,16 @@ export async function finalizeSetupWizard(
           });
         }
       } catch (err) {
-        installError = formatErrorMessage(err);
+        installError = err instanceof Error ? err.message : String(err);
       } finally {
         progress.stop(
-          installError
-            ? t("wizard.finalize.gatewayServiceInstallFailed")
-            : t("wizard.finalize.gatewayServiceInstalled"),
+          installError ? "Gateway service install failed." : "Gateway service installed.",
         );
       }
       if (installError) {
-        await prompter.note(
-          t("wizard.finalize.gatewayServiceInstallFailedWithError", { error: installError }),
-          "Gateway",
-        );
+        await prompter.note(`Gateway service install failed: ${installError}`, "Gateway");
         await prompter.note(gatewayInstallErrorHint(), "Gateway");
       }
-    }
-  }
-
-  if (settings.authMode === "password") {
-    try {
-      resolvedGatewayPassword =
-        (await resolveSetupSecretInputString({
-          config: nextConfig,
-          value: nextConfig.gateway?.auth?.password,
-          path: "gateway.auth.password",
-          env: process.env,
-        })) ?? "";
-    } catch (error) {
-      await prompter.note(
-        [
-          t("wizard.finalize.secretRefAuthFailed", { field: "gateway.auth.password" }),
-          formatErrorMessage(error),
-        ].join("\n"),
-        t("wizard.gateway.auth"),
-      );
     }
   }
 
@@ -282,50 +231,25 @@ export async function finalizeSetupWizard(
       port: settings.port,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: undefined,
-      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
     // Daemon install/restart can briefly flap the WS; wait a bit so health check doesn't false-fail.
     gatewayProbe = await waitForGatewayReachable({
       url: probeLinks.wsUrl,
-      token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-      password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
+      token: settings.gatewayToken,
       deadlineMs: 15_000,
     });
     if (gatewayProbe.ok) {
       try {
-        const healthConfig: OpenClawConfig =
-          settings.authMode === "token" && settings.gatewayToken
-            ? {
-                ...nextConfig,
-                gateway: {
-                  ...nextConfig.gateway,
-                  auth: {
-                    ...nextConfig.gateway?.auth,
-                    mode: "token",
-                    token: settings.gatewayToken,
-                  },
-                },
-              }
-            : nextConfig;
-        await healthCommand(
-          {
-            json: false,
-            timeoutMs: 10_000,
-            config: healthConfig,
-            token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-            password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
-          },
-          runtime,
-        );
+        await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
       } catch (err) {
         runtime.error(formatHealthCheckFailure(err));
         await prompter.note(
           [
-            t("common.docs"),
+            "Docs:",
             "https://docs.openclaw.ai/gateway/health",
             "https://docs.openclaw.ai/gateway/troubleshooting",
           ].join("\n"),
-          t("wizard.finalize.healthCheckHelp"),
+          "Health check help",
         );
       }
     } else if (installDaemon) {
@@ -338,26 +262,20 @@ export async function finalizeSetupWizard(
       );
       await prompter.note(
         [
-          t("common.docs"),
+          "Docs:",
           "https://docs.openclaw.ai/gateway/health",
           "https://docs.openclaw.ai/gateway/troubleshooting",
         ].join("\n"),
-        t("wizard.finalize.healthCheckHelp"),
+        "Health check help",
       );
     } else {
       await prompter.note(
         [
-          t("wizard.finalize.gatewayNotDetected"),
-          t("wizard.finalize.noBackgroundGatewayExpected"),
-          t("wizard.finalize.startGatewayNow", {
-            command: formatCliCommand("openclaw gateway run"),
-          }),
-          t("wizard.finalize.rerunInstallDaemon", {
-            command: formatCliCommand("openclaw onboard --install-daemon"),
-          }),
-          t("wizard.finalize.skipHealthNextTime", {
-            command: formatCliCommand("openclaw onboard --skip-health"),
-          }),
+          "Gateway not detected yet.",
+          "Setup was run without Gateway service install, so no background gateway is expected.",
+          `Start now: ${formatCliCommand("openclaw gateway run")}`,
+          `Or rerun with: ${formatCliCommand("openclaw onboard --install-daemon")}`,
+          `Or skip this probe next time: ${formatCliCommand("openclaw onboard --skip-health")}`,
         ].join("\n"),
         "Gateway",
       );
@@ -375,12 +293,12 @@ export async function finalizeSetupWizard(
 
   await prompter.note(
     [
-      t("wizard.finalize.addNodes"),
-      `- ${t("wizard.finalize.nodeMac")}`,
-      `- ${t("wizard.finalize.nodeIos")}`,
-      `- ${t("wizard.finalize.nodeAndroid")}`,
+      "Add nodes for extra features:",
+      "- macOS app (system + notifications)",
+      "- iOS app (camera/canvas)",
+      "- Android app (camera/canvas)",
     ].join("\n"),
-    t("wizard.finalize.optionalApps"),
+    "Optional apps",
   );
 
   const controlUiBasePath =
@@ -390,12 +308,32 @@ export async function finalizeSetupWizard(
     port: settings.port,
     customBindHost: settings.customBindHost,
     basePath: controlUiBasePath,
-    tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
   });
   const authedUrl =
-    settings.authMode === "token" && settings.gatewayToken && !suppressGatewayTokenOutput
+    settings.authMode === "token" && settings.gatewayToken
       ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
       : links.httpUrl;
+  let resolvedGatewayPassword = "";
+  if (settings.authMode === "password") {
+    try {
+      resolvedGatewayPassword =
+        (await resolveSetupSecretInputString({
+          config: nextConfig,
+          value: nextConfig.gateway?.auth?.password,
+          path: "gateway.auth.password",
+          env: process.env,
+        })) ?? "";
+    } catch (error) {
+      await prompter.note(
+        [
+          "Could not resolve gateway.auth.password SecretRef for setup auth.",
+          error instanceof Error ? error.message : String(error),
+        ].join("\n"),
+        "Gateway auth",
+      );
+    }
+  }
+
   if (opts.skipHealth || !gatewayProbe.ok) {
     gatewayProbe = await probeGatewayReachable({
       url: links.wsUrl,
@@ -404,10 +342,8 @@ export async function finalizeSetupWizard(
     });
   }
   const gatewayStatusLine = gatewayProbe.ok
-    ? t("wizard.finalize.gatewayReachable")
-    : t("wizard.finalize.gatewayNotDetectedStatus", {
-        detail: gatewayProbe.detail ? ` (${gatewayProbe.detail})` : "",
-      });
+    ? "Gateway: reachable"
+    : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
   const bootstrapPath = path.join(
     resolveUserPath(options.workspaceDir),
     DEFAULT_BOOTSTRAP_FILENAME,
@@ -419,13 +355,13 @@ export async function finalizeSetupWizard(
 
   await prompter.note(
     [
-      t("wizard.finalize.webUiUrl", { url: links.httpUrl }),
-      settings.authMode === "token" && settings.gatewayToken && !suppressGatewayTokenOutput
-        ? t("wizard.finalize.webUiWithTokenUrl", { url: authedUrl })
+      `Web UI: ${links.httpUrl}`,
+      settings.authMode === "token" && settings.gatewayToken
+        ? `Web UI (with token): ${authedUrl}`
         : undefined,
-      t("wizard.finalize.gatewayWsUrl", { url: links.wsUrl }),
+      `Gateway WS: ${links.wsUrl}`,
       gatewayStatusLine,
-      t("wizard.finalize.controlUiDocs"),
+      "Docs: https://docs.openclaw.ai/web/control-ui",
     ]
       .filter(Boolean)
       .join("\n"),
@@ -438,63 +374,52 @@ export async function finalizeSetupWizard(
   let hatchChoice: "tui" | "web" | "later" | null = null;
   let launchedTui = false;
 
-  if (!opts.skipUi) {
+  if (!opts.skipUi && gatewayProbe.ok) {
     if (hasBootstrap) {
       await prompter.note(
         [
-          t("wizard.finalize.workspaceReady"),
-          t("wizard.finalize.firstTerminalChat"),
-          t("wizard.finalize.editBootstrap"),
+          "This is the defining action that makes your agent you.",
+          "Please take your time.",
+          "The more you tell it, the better the experience will be.",
+          'We will send: "Wake up, my friend!"',
         ].join("\n"),
-        t("wizard.finalize.hatchYourAgent"),
+        "Start TUI (best option!)",
       );
     }
 
-    if (gatewayProbe.ok) {
-      const tokenNotes = [
-        t("wizard.finalize.gatewayTokenShared"),
-        t("wizard.finalize.gatewayTokenStored"),
-        t("wizard.finalize.gatewayTokenView", {
-          command: formatCliCommand("openclaw config get gateway.auth.token"),
-        }),
-        t("wizard.finalize.gatewayTokenGenerate", {
-          command: formatCliCommand("openclaw doctor --generate-gateway-token"),
-        }),
-        suppressGatewayTokenOutput ? undefined : t("wizard.finalize.dashboardTokenMemory"),
-        t("wizard.finalize.dashboardOpenAnytime", {
-          command: formatCliCommand("openclaw dashboard --no-open"),
-        }),
-        suppressGatewayTokenOutput ? undefined : t("wizard.finalize.dashboardTokenPrompt"),
-      ].filter(Boolean);
-      await prompter.note(tokenNotes.join("\n"), "Token");
-    }
-
-    const hatchOptions: { value: "tui" | "web" | "later"; label: string }[] = [
-      { value: "tui", label: t("wizard.finalize.terminalHatch") },
-      ...(gatewayProbe.ok
-        ? [{ value: "web" as const, label: t("wizard.finalize.browserHatch") }]
-        : []),
-      { value: "later", label: t("wizard.finalize.hatchLater") },
-    ];
+    await prompter.note(
+      [
+        "Gateway token: shared auth for the Gateway + Control UI.",
+        "Stored in: ~/.openclaw/openclaw.json (gateway.auth.token) or OPENCLAW_GATEWAY_TOKEN.",
+        `View token: ${formatCliCommand("openclaw config get gateway.auth.token")}`,
+        `Generate token: ${formatCliCommand("openclaw doctor --generate-gateway-token")}`,
+        "Web UI keeps dashboard URL tokens in memory for the current tab and strips them from the URL after load.",
+        `Open the dashboard anytime: ${formatCliCommand("openclaw dashboard --no-open")}`,
+        "If prompted: paste the token into Control UI settings (or use the tokenized dashboard URL).",
+      ].join("\n"),
+      "Token",
+    );
 
     hatchChoice = await prompter.select({
-      message: t("wizard.finalize.hatchPrompt"),
-      options: hatchOptions,
+      message: "How do you want to hatch your bot?",
+      options: [
+        { value: "tui", label: "Hatch in TUI (recommended)" },
+        { value: "web", label: "Open the Web UI" },
+        { value: "later", label: "Do this later" },
+      ],
       initialValue: "tui",
     });
 
     if (hatchChoice === "tui") {
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
-      try {
-        await launchTuiCli({
-          local: true,
-          deliver: false,
-          message: hasBootstrap ? t("wizard.finalize.bootstrapHatchMessage") : undefined,
-          timeoutMs: HATCH_TUI_TIMEOUT_MS,
-        });
-      } finally {
-        restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
-      }
+      await runTui({
+        url: links.wsUrl,
+        token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+        password: settings.authMode === "password" ? resolvedGatewayPassword : "",
+        // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
+        deliver: false,
+        message: hasBootstrap ? "Wake up, my friend!" : undefined,
+      });
       launchedTui = true;
     } else if (hatchChoice === "web") {
       const browserSupport = await detectBrowserOpenSupport();
@@ -504,52 +429,50 @@ export async function finalizeSetupWizard(
           controlUiOpenHint = formatControlUiSshHint({
             port: settings.port,
             basePath: controlUiBasePath,
-            token:
-              settings.authMode === "token" && !suppressGatewayTokenOutput
-                ? settings.gatewayToken
-                : undefined,
+            token: settings.authMode === "token" ? settings.gatewayToken : undefined,
           });
         }
       } else {
         controlUiOpenHint = formatControlUiSshHint({
           port: settings.port,
           basePath: controlUiBasePath,
-          token:
-            settings.authMode === "token" && !suppressGatewayTokenOutput
-              ? settings.gatewayToken
-              : undefined,
+          token: settings.authMode === "token" ? settings.gatewayToken : undefined,
         });
       }
       await prompter.note(
         [
-          t("wizard.finalize.dashboardLinkWithToken", { url: authedUrl }),
+          `Dashboard link (with token): ${authedUrl}`,
           controlUiOpened
-            ? t("wizard.finalize.dashboardOpened")
-            : t("wizard.finalize.dashboardCopyPaste"),
+            ? "Opened in your browser. Keep that tab to control OpenClaw."
+            : "Copy/paste this URL in a browser on this machine to control OpenClaw.",
           controlUiOpenHint,
         ]
           .filter(Boolean)
           .join("\n"),
-        t("wizard.finalize.dashboardReady"),
+        "Dashboard ready",
       );
     } else {
       await prompter.note(
-        t("wizard.finalize.dashboardWhenReady", {
-          command: formatCliCommand("openclaw dashboard --no-open"),
-        }),
-        t("wizard.finalize.laterTitle"),
+        `When you're ready: ${formatCliCommand("openclaw dashboard --no-open")}`,
+        "Later",
       );
     }
   } else if (opts.skipUi) {
-    await prompter.note(t("wizard.finalize.skipControlUi"), t("wizard.finalize.controlUiTitle"));
+    await prompter.note("Skipping Control UI/TUI prompts.", "Control UI");
   }
 
   await prompter.note(
-    [t("wizard.finalize.backupWorkspace"), t("wizard.finalize.workspaceDocs")].join("\n"),
-    t("wizard.finalize.workspaceBackupTitle"),
+    [
+      "Back up your agent workspace.",
+      "Docs: https://docs.openclaw.ai/concepts/agent-workspace",
+    ].join("\n"),
+    "Workspace backup",
   );
 
-  await prompter.note(t("wizard.finalize.securityReminder"), t("wizard.security.title"));
+  await prompter.note(
+    "Running agents on your computer is risky — harden your setup: https://docs.openclaw.ai/security",
+    "Security",
+  );
 
   await setupWizardShellCompletion({ flow, prompter });
 
@@ -558,7 +481,6 @@ export async function finalizeSetupWizard(
     gatewayProbe.ok &&
     settings.authMode === "token" &&
     Boolean(settings.gatewayToken) &&
-    !suppressGatewayTokenOutput &&
     hatchChoice === null;
   if (shouldOpenControlUi) {
     const browserSupport = await detectBrowserOpenSupport();
@@ -581,164 +503,121 @@ export async function finalizeSetupWizard(
 
     await prompter.note(
       [
-        t("wizard.finalize.dashboardLinkWithToken", { url: authedUrl }),
+        `Dashboard link (with token): ${authedUrl}`,
         controlUiOpened
-          ? t("wizard.finalize.dashboardOpened")
-          : t("wizard.finalize.dashboardCopyPaste"),
+          ? "Opened in your browser. Keep that tab to control OpenClaw."
+          : "Copy/paste this URL in a browser on this machine to control OpenClaw.",
         controlUiOpenHint,
       ]
         .filter(Boolean)
         .join("\n"),
-      t("wizard.finalize.dashboardReady"),
+      "Dashboard ready",
     );
   }
 
-  const codexNativeSummary = describeCodexNativeWebSearch(nextConfig);
   const webSearchProvider = nextConfig.tools?.web?.search?.provider;
   const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
   const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
   if (webSearchProvider) {
-    const { resolveExistingKey, hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
+    const { resolveExistingKey, hasExistingKey, hasKeyInEnv } =
+      await import("../commands/onboard-search.js");
     const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
     const label = entry?.label ?? webSearchProvider;
     const storedKey = entry ? resolveExistingKey(nextConfig, webSearchProvider) : undefined;
     const keyConfigured = entry ? hasExistingKey(nextConfig, webSearchProvider) : false;
     const envAvailable = entry ? hasKeyInEnv(entry) : false;
     const hasKey = keyConfigured || envAvailable;
-    const agentDir = resolveDefaultAgentDir(nextConfig);
-    const authProviderId = entry?.authProviderId?.trim();
-    const authProviderLabel = authProviderId === "xai" ? "xAI" : authProviderId;
-    const providerAuthProfileAvailable = authProviderId
-      ? hasAuthProfileForProvider({
-          provider: authProviderId,
-          agentDir,
-        })
-      : false;
-    const oauthAuthProfileAvailable =
-      authProviderId && providerAuthProfileAvailable
-        ? hasAuthProfileForProvider({
-            provider: authProviderId,
-            agentDir,
-            type: "oauth",
-          })
-        : false;
-    const hasCredential = hasKey || providerAuthProfileAvailable;
     const keySource = storedKey
-      ? t("wizard.finalize.webSearchKeyStored")
+      ? "API key: stored in config."
       : keyConfigured
-        ? t("wizard.finalize.webSearchKeyRef")
+        ? "API key: configured via secret reference."
         : envAvailable
-          ? t("wizard.finalize.webSearchKeyEnv", { env: entry?.envVars.join(" / ") ?? "" })
-          : oauthAuthProfileAvailable && authProviderLabel
-            ? t("wizard.finalize.webSearchOAuthProfile", { provider: authProviderLabel })
-            : providerAuthProfileAvailable && authProviderLabel
-              ? t("wizard.finalize.webSearchAuthProfile", { provider: authProviderLabel })
-              : undefined;
+          ? `API key: provided via ${entry?.envVars.join(" / ")} env var.`
+          : undefined;
     if (!entry) {
       await prompter.note(
         [
-          t("wizard.finalize.webSearchProviderUnavailable", { provider: label }),
-          t("wizard.finalize.webSearchUnavailableAction"),
+          `Web search provider ${label} is selected but unavailable under the current plugin policy.`,
+          "web_search will not work until the provider is re-enabled or a different provider is selected.",
           `  ${formatCliCommand("openclaw configure --section web")}`,
           "",
-          t("wizard.finalize.webDocs"),
+          "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
-        t("wizard.finalize.webSearchTitle"),
+        "Web search",
       );
-    } else if (webSearchEnabled !== false && hasCredential) {
+    } else if (webSearchEnabled !== false && hasKey) {
       await prompter.note(
         [
-          t("wizard.finalize.webSearchEnabled"),
+          "Web search is enabled, so your agent can look things up online when needed.",
           "",
-          t("wizard.finalize.webSearchProvider", { provider: label }),
+          `Provider: ${label}`,
           ...(keySource ? [keySource] : []),
-          t("wizard.finalize.webDocs"),
+          "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
-        t("wizard.finalize.webSearchTitle"),
+        "Web search",
       );
-    } else if (!hasCredential) {
+    } else if (!hasKey) {
       await prompter.note(
         [
-          t("wizard.finalize.webSearchNoKey", { provider: label }),
-          t("wizard.finalize.webSearchNeedsKey"),
+          `Provider ${label} is selected but no API key was found.`,
+          "web_search will not work until a key is added.",
           `  ${formatCliCommand("openclaw configure --section web")}`,
           "",
-          t("wizard.finalize.webSearchGetKey", {
-            url: entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web",
-          }),
-          t("wizard.finalize.webDocs"),
+          `Get your key at: ${entry?.signupUrl ?? "https://docs.openclaw.ai/tools/web"}`,
+          "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
-        t("wizard.finalize.webSearchTitle"),
+        "Web search",
       );
     } else {
       await prompter.note(
         [
-          t("wizard.finalize.webSearchDisabled", { provider: label }),
-          t("wizard.finalize.webSearchReenable", {
-            command: formatCliCommand("openclaw configure --section web"),
-          }),
+          `Web search (${label}) is configured but disabled.`,
+          `Re-enable: ${formatCliCommand("openclaw configure --section web")}`,
           "",
-          t("wizard.finalize.webDocs"),
+          "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
-        t("wizard.finalize.webSearchTitle"),
+        "Web search",
       );
     }
   } else {
     // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
     // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
-    const { hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
+    const { hasExistingKey, hasKeyInEnv } = await import("../commands/onboard-search.js");
     const legacyDetected = configuredSearchProviders.find(
       (e) => hasExistingKey(nextConfig, e.id) || hasKeyInEnv(e),
     );
     if (legacyDetected) {
       await prompter.note(
         [
-          t("wizard.finalize.webSearchAutoDetected", { provider: legacyDetected.label }),
-          t("wizard.finalize.webDocs"),
+          `Web search is available via ${legacyDetected.label} (auto-detected).`,
+          "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
-        t("wizard.finalize.webSearchTitle"),
-      );
-    } else if (codexNativeSummary) {
-      await prompter.note(
-        [
-          t("wizard.finalize.managedWebSearchSkipped"),
-          codexNativeSummary,
-          t("wizard.finalize.webDocs"),
-        ].join("\n"),
-        t("wizard.finalize.webSearchTitle"),
+        "Web search",
       );
     } else {
       await prompter.note(
         [
-          t("wizard.finalize.webSearchSkipped"),
+          "Web search was skipped. You can enable it later:",
           `  ${formatCliCommand("openclaw configure --section web")}`,
           "",
-          t("wizard.finalize.webDocs"),
+          "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
-        t("wizard.finalize.webSearchTitle"),
+        "Web search",
       );
     }
   }
 
-  if (codexNativeSummary) {
-    await prompter.note(
-      [
-        codexNativeSummary,
-        t("wizard.finalize.codexNativeSearchOnly"),
-        t("wizard.finalize.webDocs"),
-      ].join("\n"),
-      t("wizard.finalize.codexNativeSearchTitle"),
-    );
-  }
-
-  await prompter.note(t("wizard.finalize.whatNow"), t("wizard.finalize.whatNowTitle"));
+  await prompter.note(
+    'What now: https://openclaw.ai/showcase ("What People Are Building").',
+    "What now",
+  );
 
   await prompter.outro(
     controlUiOpened
-      ? t("wizard.finalize.outroDashboardOpened")
+      ? "Onboarding complete. Dashboard opened; keep that tab to control OpenClaw."
       : seededInBackground
-        ? t("wizard.finalize.outroSeeded")
-        : t("wizard.finalize.outroDashboardLink"),
+        ? "Onboarding complete. Web UI seeded in the background; open it anytime with the dashboard link above."
+        : "Onboarding complete. Use the dashboard link above to control OpenClaw.",
   );
 
   return { launchedTui };

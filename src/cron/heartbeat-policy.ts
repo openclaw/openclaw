@@ -1,13 +1,10 @@
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 
-type HeartbeatDeliveryPayload = {
+export type HeartbeatDeliveryPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
-  presentation?: unknown;
-  interactive?: unknown;
-  channelData?: unknown;
 };
 
 export function shouldSkipHeartbeatOnlyDelivery(
@@ -17,10 +14,10 @@ export function shouldSkipHeartbeatOnlyDelivery(
   if (payloads.length === 0) {
     return true;
   }
-  const hasAnyNonTextContent = payloads.some((payload) =>
-    hasOutboundReplyContent({ ...payload, text: undefined }, { trimText: true }),
+  const hasAnyMedia = payloads.some(
+    (payload) => resolveSendableOutboundReplyParts(payload).hasMedia,
   );
-  if (hasAnyNonTextContent) {
+  if (hasAnyMedia) {
     return false;
   }
   return payloads.some((payload) => {

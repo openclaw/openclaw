@@ -1,7 +1,4 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createConfigIO: vi.fn().mockReturnValue({
@@ -14,16 +11,11 @@ vi.mock("./io.js", () => ({
 }));
 
 let formatConfigPath: typeof import("./logging.js").formatConfigPath;
-let formatConfigUpdatedMessage: typeof import("./logging.js").formatConfigUpdatedMessage;
 let logConfigUpdated: typeof import("./logging.js").logConfigUpdated;
 
-beforeAll(async () => {
-  ({ formatConfigPath, formatConfigUpdatedMessage, logConfigUpdated } =
-    await import("./logging.js"));
-});
-
-beforeEach(() => {
-  mocks.createConfigIO.mockClear();
+beforeEach(async () => {
+  vi.resetModules();
+  ({ formatConfigPath, logConfigUpdated } = await import("./logging.js"));
 });
 
 describe("config logging", () => {
@@ -34,19 +26,6 @@ describe("config logging", () => {
   it("logs the live config path when no explicit path is provided", () => {
     const runtime = { log: vi.fn() };
     logConfigUpdated(runtime as never);
-    expect(runtime.log).toHaveBeenCalledWith("Updated config: /tmp/openclaw-dev/openclaw.json");
-  });
-
-  it("formats backup as an indented detail when present", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-log-"));
-    const configPath = path.join(dir, "openclaw.json");
-    const backupPath = `${configPath}.bak`;
-    fs.writeFileSync(backupPath, "{}", "utf8");
-
-    expect(
-      formatConfigUpdatedMessage(configPath, {
-        backupPath,
-      }),
-    ).toBe(`Updated config: ${configPath}\n  Backup: ${backupPath}`);
+    expect(runtime.log).toHaveBeenCalledWith("Updated /tmp/openclaw-dev/openclaw.json");
   });
 });

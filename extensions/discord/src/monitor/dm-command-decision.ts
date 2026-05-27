@@ -1,9 +1,9 @@
-import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
+import type { DiscordDmCommandAccess } from "./dm-command-auth.js";
 
 export async function handleDiscordDmCommandDecision(params: {
-  senderAccess: Pick<ResolvedChannelMessageIngress["senderAccess"], "decision">;
+  dmAccess: DiscordDmCommandAccess;
   accountId: string;
   sender: {
     id: string;
@@ -14,11 +14,11 @@ export async function handleDiscordDmCommandDecision(params: {
   onUnauthorized: () => Promise<void>;
   upsertPairingRequest?: typeof upsertChannelPairingRequest;
 }): Promise<boolean> {
-  if (params.senderAccess.decision === "allow") {
+  if (params.dmAccess.decision === "allow") {
     return true;
   }
 
-  if (params.senderAccess.decision === "pairing") {
+  if (params.dmAccess.decision === "pairing") {
     const upsertPairingRequest = params.upsertPairingRequest ?? upsertChannelPairingRequest;
     const result = await createChannelPairingChallengeIssuer({
       channel: "discord",

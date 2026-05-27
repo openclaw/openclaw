@@ -1,5 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-
 type DiscordSessionKeyContext = {
   ChatType?: string;
   From?: string;
@@ -7,7 +5,7 @@ type DiscordSessionKeyContext = {
 };
 
 function normalizeDiscordChatType(raw?: string): "direct" | "group" | "channel" | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  const normalized = (raw ?? "").trim().toLowerCase();
   if (!normalized) {
     return undefined;
   }
@@ -24,7 +22,7 @@ export function normalizeExplicitDiscordSessionKey(
   sessionKey: string,
   ctx: DiscordSessionKeyContext,
 ): string {
-  let normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  let normalized = sessionKey.trim().toLowerCase();
   if (normalizeDiscordChatType(ctx.ChatType) !== "direct") {
     return normalized;
   }
@@ -36,8 +34,8 @@ export function normalizeExplicitDiscordSessionKey(
     return normalized;
   }
 
-  const from = normalizeLowercaseStringOrEmpty(ctx.From);
-  const senderId = normalizeLowercaseStringOrEmpty(ctx.SenderId);
+  const from = (ctx.From ?? "").trim().toLowerCase();
+  const senderId = (ctx.SenderId ?? "").trim().toLowerCase();
   const fromDiscordId =
     from.startsWith("discord:") && !from.includes(":channel:") && !from.includes(":group:")
       ? from.slice("discord:".length)

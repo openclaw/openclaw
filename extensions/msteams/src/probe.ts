@@ -6,7 +6,7 @@ import {
 import { formatUnknownError } from "./errors.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
-import { loadDelegatedTokens, resolveMSTeamsCredentials } from "./token.js";
+import { resolveMSTeamsCredentials } from "./token.js";
 
 export type ProbeMSTeamsResult = BaseProbeResult<string> & {
   appId?: string;
@@ -15,12 +15,6 @@ export type ProbeMSTeamsResult = BaseProbeResult<string> & {
     error?: string;
     roles?: string[];
     scopes?: string[];
-  };
-  delegatedAuth?: {
-    ok: boolean;
-    error?: string;
-    scopes?: string[];
-    userPrincipalName?: string;
   };
 };
 
@@ -53,7 +47,10 @@ function readScopes(value: unknown): string[] | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const out = normalizeStringEntries(value.split(/\s+/));
+  const out = value
+    .split(/\s+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
   return out.length > 0 ? out : undefined;
 }
 
@@ -94,31 +91,7 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
     } catch (err) {
       graph = { ok: false, error: formatUnknownError(err) };
     }
-    let delegatedAuth: ProbeMSTeamsResult["delegatedAuth"];
-    if (cfg?.delegatedAuth?.enabled) {
-      try {
-        const tokens = loadDelegatedTokens();
-        if (tokens) {
-          const isExpired = tokens.expiresAt <= Date.now();
-          delegatedAuth = {
-            ok: !isExpired,
-            scopes: tokens.scopes,
-            userPrincipalName: tokens.userPrincipalName,
-            ...(isExpired ? { error: "token expired (will auto-refresh on next use)" } : {}),
-          };
-        } else {
-          delegatedAuth = { ok: false, error: "no delegated tokens found (run setup wizard)" };
-        }
-      } catch {
-        delegatedAuth = { ok: false, error: "failed to load delegated tokens" };
-      }
-    }
-    return {
-      ok: true,
-      appId: creds.appId,
-      ...(graph ? { graph } : {}),
-      ...(delegatedAuth ? { delegatedAuth } : {}),
-    };
+    return { ok: true, appId: creds.appId, ...(graph ? { graph } : {}) };
   } catch (err) {
     return {
       ok: false,

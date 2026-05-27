@@ -1,4 +1,4 @@
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 
 export function makeDirectPlugin(params: {
   id: string;

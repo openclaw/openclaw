@@ -1,6 +1,6 @@
 ---
 name: gemini
-description: "Gemini CLI one-shot prompts, summaries, generation, skills, hooks, MCP, or Gemma routing."
+description: Gemini CLI for one-shot Q&A, summaries, and generation.
 homepage: https://ai.google.dev/
 metadata:
   {
@@ -24,22 +24,18 @@ metadata:
 
 # Gemini CLI
 
-Use Gemini in headless one-shot mode. Positional text starts interactive mode; use `-p/--prompt`.
+Use Gemini in one-shot mode with a positional prompt (avoid interactive mode).
 
 Quick start
 
-- `gemini -p "Answer this question..."`
-- `gemini -m <model> -p "Prompt..."`
-- `gemini -p "Return JSON" --output-format json`
-- stdin appends to `-p`: `cat notes.md | gemini -p "Summarize"`
+- `gemini "Answer this question..."`
+- `gemini --model <name> "Prompt..."`
+- `gemini --output-format json "Return JSON"`
 
 Extensions
 
 - List: `gemini --list-extensions`
 - Manage: `gemini extensions <command>`
-- Skills: `gemini skills <command>`
-- Hooks: `gemini hooks <command>`
-- MCP: `gemini mcp <command>`
 
 Notes
 

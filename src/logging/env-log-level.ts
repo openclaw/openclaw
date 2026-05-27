@@ -1,9 +1,9 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { ALLOWED_LOG_LEVELS, type LogLevel, tryParseLogLevel } from "./levels.js";
 import { loggingState } from "./state.js";
 
 export function resolveEnvLogLevelOverride(): LogLevel | undefined {
-  const trimmed = normalizeOptionalString(process.env.OPENCLAW_LOG_LEVEL) ?? "";
+  const raw = process.env.OPENCLAW_LOG_LEVEL;
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
   if (!trimmed) {
     loggingState.invalidEnvLogLevelValue = null;
     return undefined;

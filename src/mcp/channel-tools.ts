@@ -5,7 +5,6 @@ import {
   extractAttachmentsFromMessage,
   resolveMessageId,
   summarizeResult,
-  summarizeStructuredResult,
   toText,
 } from "./channel-shared.js";
 
@@ -35,7 +34,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     async (args) => {
       const conversations = await bridge.listConversations(args);
       return {
-        ...summarizeStructuredResult("conversations", conversations.length, { conversations }),
+        ...summarizeResult("conversations", conversations.length),
         structuredContent: { conversations },
       };
     },
@@ -70,7 +69,7 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     async ({ session_key, limit }) => {
       const messages = await bridge.readMessages(session_key, limit ?? 20);
       return {
-        ...summarizeStructuredResult("messages", messages.length, { messages }),
+        ...summarizeResult("messages", messages.length),
         structuredContent: { messages },
       };
     },

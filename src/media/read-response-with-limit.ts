@@ -16,12 +16,12 @@ async function readChunkWithIdleTimeout(
 
     timeoutId = setTimeout(() => {
       timedOut = true;
-      const error =
-        onIdleTimeout?.({ chunkTimeoutMs }) ??
-        new Error(`Media download stalled: no data received for ${chunkTimeoutMs}ms`);
       clear();
-      void reader.cancel(error).catch(() => undefined);
-      reject(error);
+      void reader.cancel().catch(() => undefined);
+      reject(
+        onIdleTimeout?.({ chunkTimeoutMs }) ??
+          new Error(`Media download stalled: no data received for ${chunkTimeoutMs}ms`),
+      );
     }, chunkTimeoutMs);
 
     void reader.read().then(

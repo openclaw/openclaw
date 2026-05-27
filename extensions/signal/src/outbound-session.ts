@@ -1,7 +1,10 @@
 import { type RoutePeer } from "openclaw/plugin-sdk/routing";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveSignalPeerId, resolveSignalRecipient, resolveSignalSender } from "./identity.js";
-import { looksLikeUuid } from "./uuid.js";
+import {
+  looksLikeUuid,
+  resolveSignalPeerId,
+  resolveSignalRecipient,
+  resolveSignalSender,
+} from "./identity.js";
 
 export type ResolvedSignalOutboundTarget = {
   peer: RoutePeer;
@@ -12,7 +15,7 @@ export type ResolvedSignalOutboundTarget = {
 
 export function resolveSignalOutboundTarget(target: string): ResolvedSignalOutboundTarget | null {
   const stripped = target.replace(/^signal:/i, "").trim();
-  const lowered = normalizeLowercaseStringOrEmpty(stripped);
+  const lowered = stripped.toLowerCase();
   if (lowered.startsWith("group:")) {
     const groupId = stripped.slice("group:".length).trim();
     if (!groupId) {
@@ -36,7 +39,7 @@ export function resolveSignalOutboundTarget(target: string): ResolvedSignalOutbo
     return null;
   }
 
-  const uuidCandidate = normalizeLowercaseStringOrEmpty(recipient).startsWith("uuid:")
+  const uuidCandidate = recipient.toLowerCase().startsWith("uuid:")
     ? recipient.slice("uuid:".length)
     : recipient;
   const sender = resolveSignalSender({

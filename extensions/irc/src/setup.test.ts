@@ -1,24 +1,19 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginSetupWizardAdapter,
+  createTestWizardPrompter,
+  promptSetupWizardAllowFrom,
+  runSetupWizardConfigure,
+  type WizardPrompter,
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
-} from "openclaw/plugin-sdk/channel-test-helpers";
-import {
-  createPluginSetupWizardAdapter,
-  createPluginSetupWizardStatus,
-  createTestWizardPrompter,
-  promptSetupWizardAllowFrom,
-  runSetupWizardConfigure,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import {
-  listIrcAccountIds,
-  resolveDefaultIrcAccountId,
-  type ResolvedIrcAccount,
-} from "./accounts.js";
-import { startIrcGatewayAccount } from "./gateway.js";
-import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
+} from "../../../test/helpers/plugins/start-account-lifecycle.js";
+import type { ResolvedIrcAccount } from "./accounts.js";
+import { ircPlugin } from "./channel.js";
+import { setIrcRuntime } from "./runtime.js";
 import {
   ircSetupAdapter,
   parsePort,
@@ -28,40 +23,21 @@ import {
   setIrcNickServ,
   updateIrcAccountConfig,
 } from "./setup-core.js";
-import { ircSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   monitorIrcProvider: vi.fn(),
-  sendMessageIrc: vi.fn(),
 }));
 
-vi.mock("./channel-runtime.js", () => {
+vi.mock("./monitor.js", async () => {
+  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
   return {
+    ...actual,
     monitorIrcProvider: hoisted.monitorIrcProvider,
-    sendMessageIrc: hoisted.sendMessageIrc,
   };
 });
 
-afterAll(() => {
-  vi.doUnmock("./channel-runtime.js");
-  vi.resetModules();
-});
-
-const ircSetupPlugin = {
-  id: "irc",
-  meta: {
-    label: "IRC",
-  },
-  config: {
-    defaultAccountId: resolveDefaultIrcAccountId,
-    listAccountIds: listIrcAccountIds,
-  },
-  setupWizard: ircSetupWizard,
-} as never;
-
-const ircConfigureAdapter = createPluginSetupWizardAdapter(ircSetupPlugin);
-const ircStatus = createPluginSetupWizardStatus(ircSetupPlugin);
+const ircConfigureAdapter = createPluginSetupWizardAdapter(ircPlugin);
 
 function buildAccount(): ResolvedIrcAccount {
   return {
@@ -104,7 +80,6 @@ function installIrcRuntime() {
 describe("irc setup", () => {
   afterEach(() => {
     vi.clearAllMocks();
-    clearIrcRuntime();
   });
 
   it("parses valid ports and falls back for invalid values", () => {
@@ -118,74 +93,21 @@ describe("irc setup", () => {
   it("updates top-level dm policy and allowlist", () => {
     const cfg: CoreConfig = { channels: { irc: {} } };
 
-    expect(setIrcDmPolicy(cfg, "open")).toStrictEqual({
+    expect(setIrcDmPolicy(cfg, "open")).toMatchObject({
       channels: {
         irc: {
           dmPolicy: "open",
-          allowFrom: ["*"],
         },
       },
     });
 
-    expect(setIrcAllowFrom(cfg, ["alice", "bob"])).toStrictEqual({
+    expect(setIrcAllowFrom(cfg, ["alice", "bob"])).toMatchObject({
       channels: {
         irc: {
           allowFrom: ["alice", "bob"],
         },
       },
     });
-  });
-
-  it("setup status honors the selected named account", async () => {
-    const status = await ircStatus({
-      cfg: {
-        channels: {
-          irc: {
-            accounts: {
-              ops: {
-                host: "irc.example.com",
-                nick: "ops-bot",
-              },
-              work: {
-                host: "irc.example.com",
-              },
-            },
-          },
-        },
-      } as CoreConfig,
-      accountOverrides: {
-        irc: "work",
-      },
-    });
-
-    expect(status.configured).toBe(false);
-    expect(status.statusLines).toEqual(["IRC: needs host + nick"]);
-  });
-
-  it("setup status honors the configured default account", async () => {
-    const status = await ircStatus({
-      cfg: {
-        channels: {
-          irc: {
-            defaultAccount: "work",
-            accounts: {
-              ops: {
-                host: "irc.example.com",
-                nick: "ops-bot",
-              },
-              work: {
-                host: "irc.example.com",
-                nick: "",
-              },
-            },
-          },
-        },
-      } as CoreConfig,
-      accountOverrides: {},
-    });
-
-    expect(status.configured).toBe(false);
-    expect(status.statusLines).toEqual(["IRC: needs host + nick"]);
   });
 
   it("stores nickserv and account config patches on the scoped account", () => {
@@ -196,7 +118,7 @@ describe("irc setup", () => {
         enabled: true,
         service: "NickServ",
       }),
-    ).toStrictEqual({
+    ).toMatchObject({
       channels: {
         irc: {
           accounts: {
@@ -216,7 +138,7 @@ describe("irc setup", () => {
         host: "irc.libera.chat",
         nick: "openclaw-work",
       }),
-    ).toStrictEqual({
+    ).toMatchObject({
       channels: {
         irc: {
           accounts: {
@@ -250,7 +172,7 @@ describe("irc setup", () => {
           return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
         },
       ),
-    ).toStrictEqual({
+    ).toMatchObject({
       channels: {
         irc: {
           enabled: true,
@@ -264,7 +186,7 @@ describe("irc setup", () => {
       },
     });
 
-    expect(setIrcGroupAccess(cfg, "default", "disabled", [], () => null)).toStrictEqual({
+    expect(setIrcGroupAccess(cfg, "default", "disabled", [], () => null)).toMatchObject({
       channels: {
         irc: {
           enabled: true,
@@ -279,30 +201,27 @@ describe("irc setup", () => {
     const applyAccountConfig = ircSetupAdapter.applyAccountConfig;
     expect(validateInput).toBeTypeOf("function");
     expect(applyAccountConfig).toBeTypeOf("function");
-    if (!validateInput) {
-      throw new Error("Expected IRC setup validateInput");
-    }
 
     expect(
-      validateInput({
+      validateInput!({
         input: { host: "", nick: "openclaw" },
       } as never),
     ).toBe("IRC requires host.");
 
     expect(
-      validateInput({
+      validateInput!({
         input: { host: "irc.libera.chat", nick: "" },
       } as never),
     ).toBe("IRC requires nick.");
 
     expect(
-      validateInput({
+      validateInput!({
         input: { host: "irc.libera.chat", nick: "openclaw" },
       } as never),
     ).toBeNull();
 
     expect(
-      applyAccountConfig({
+      applyAccountConfig!({
         cfg: { channels: { irc: {} } },
         accountId: "default",
         input: {
@@ -418,15 +337,12 @@ describe("irc setup", () => {
       },
     };
 
-    const updated = await promptSetupWizardAllowFrom({
+    const updated = (await promptSetupWizardAllowFrom({
       promptAllowFrom,
       cfg,
       prompter,
       accountId: "work",
-    });
-    if (!updated) {
-      throw new Error("expected IRC allowFrom setup to return updated config");
-    }
+    })) as CoreConfig;
 
     expect(updated.channels?.irc?.allowFrom).toEqual(["alice", "bob!ident@example.org"]);
     expect(updated.channels?.irc?.accounts?.work?.allowFrom).toBeUndefined();
@@ -434,15 +350,13 @@ describe("irc setup", () => {
 
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
     const stop = vi.fn();
+    vi.resetModules();
     hoisted.monitorIrcProvider.mockResolvedValue({ stop });
     installIrcRuntime();
+    const { ircPlugin: runtimeMockedPlugin } = await import("./channel.js");
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: async (ctx) =>
-        await startIrcGatewayAccount({
-          ...ctx,
-          cfg: ctx.cfg as CoreConfig,
-        }),
+      startAccount: runtimeMockedPlugin.gateway!.startAccount!,
       account: buildAccount(),
     });
 

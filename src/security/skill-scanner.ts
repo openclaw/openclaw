@@ -23,17 +23,11 @@ export type SkillScanSummary = {
   critical: number;
   warn: number;
   info: number;
-  truncated: boolean;
   findings: SkillScanFinding[];
 };
 
 export type SkillScanOptions = {
-  excludeTestFiles?: boolean;
-  includeHiddenDirectories?: boolean;
-  includeNestedNodeModulesTestFiles?: boolean;
-  includeNodeModules?: boolean;
   includeFiles?: string[];
-  onlyIncludeFiles?: boolean;
   maxFiles?: number;
   maxFileBytes?: number;
 };
@@ -57,8 +51,6 @@ const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const FILE_SCAN_CACHE_MAX = 5000;
 const DIR_ENTRY_CACHE_MAX = 5000;
-const TEST_DIRECTORY_NAMES = new Set(["__fixtures__", "__mocks__", "__tests__", "test", "tests"]);
-const TEST_FILE_NAME_PATTERN = /\.(?:mock|spec|test)\.[^.]+$/i;
 
 type FileScanCacheEntry = {
   size: number;
@@ -72,10 +64,6 @@ const FILE_SCAN_CACHE = new Map<string, FileScanCacheEntry>();
 type CachedDirEntry = {
   name: string;
   kind: "file" | "dir";
-};
-type CollectedScannableFiles = {
-  files: string[];
-  truncated: boolean;
 };
 type DirEntryCacheEntry = {
   mtimeMs: number;
@@ -154,8 +142,6 @@ type SourceRule = {
   pattern: RegExp;
   /** Secondary context pattern; both must match for the rule to fire. */
   requiresContext?: RegExp;
-  /** If set, secondary context must be within this many lines of the primary match. */
-  requiresContextWindowLines?: number;
 };
 
 const LINE_RULES: LineRule[] = [
@@ -187,7 +173,6 @@ const LINE_RULES: LineRule[] = [
 ];
 
 const STANDARD_PORTS = new Set([80, 443, 8080, 8443, 3000]);
-const NETWORK_SEND_CONTEXT_PATTERN = /\bfetch\s*\(|\bpost\s*\(|\.\s*post\s*\(|http\.request\s*\(/i;
 
 const SOURCE_RULES: SourceRule[] = [
   {
@@ -195,7 +180,7 @@ const SOURCE_RULES: SourceRule[] = [
     severity: "warn",
     message: "File read combined with network send — possible data exfiltration",
     pattern: /readFileSync|readFile/,
-    requiresContext: NETWORK_SEND_CONTEXT_PATTERN,
+    requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
   },
   {
     ruleId: "obfuscated-code",
@@ -215,8 +200,7 @@ const SOURCE_RULES: SourceRule[] = [
     message:
       "Environment variable access combined with network send — possible credential harvesting",
     pattern: /process\.env/,
-    requiresContext: NETWORK_SEND_CONTEXT_PATTERN,
-    requiresContextWindowLines: 8,
+    requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
   },
 ];
 
@@ -231,123 +215,9 @@ function truncateEvidence(evidence: string, maxLen = 120): string {
   return `${evidence.slice(0, maxLen)}…`;
 }
 
-function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean {
-  const command = match[1];
-  if (command !== "exec") {
-    return false;
-  }
-
-  const matchIndex = match.index;
-  if (matchIndex <= 0 || line[matchIndex - 1] !== ".") {
-    return false;
-  }
-
-  return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
-}
-
-function stripCommentsForHeuristics(source: string): string {
-  let stripped = "";
-  let quote: "'" | '"' | "`" | null = null;
-  let escaped = false;
-  let inBlockComment = false;
-
-  for (let i = 0; i < source.length; i++) {
-    const ch = source[i] ?? "";
-    const next = source[i + 1] ?? "";
-
-    if (inBlockComment) {
-      if (ch === "*" && next === "/") {
-        inBlockComment = false;
-        i++;
-        continue;
-      }
-      if (ch === "\n") {
-        stripped += "\n";
-      }
-      continue;
-    }
-
-    if (quote) {
-      stripped += ch;
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === quote) {
-        quote = null;
-      }
-      continue;
-    }
-
-    if (ch === "'" || ch === '"' || ch === "`") {
-      quote = ch;
-      stripped += ch;
-      continue;
-    }
-
-    if (ch === "/" && next === "/") {
-      while (i < source.length && source[i] !== "\n") {
-        i++;
-      }
-      if (source[i] === "\n") {
-        stripped += "\n";
-      }
-      continue;
-    }
-
-    if (ch === "/" && next === "*") {
-      inBlockComment = true;
-      i++;
-      continue;
-    }
-
-    stripped += ch;
-  }
-
-  return stripped;
-}
-
-function findSourceRuleMatch(params: {
-  rule: SourceRule;
-  source: string;
-  lines: string[];
-}): { line: number; evidence: string } | null {
-  if (!params.rule.pattern.test(params.source)) {
-    return null;
-  }
-  if (params.rule.requiresContext && !params.rule.requiresContext.test(params.source)) {
-    return null;
-  }
-
-  for (let i = 0; i < params.lines.length; i++) {
-    if (!params.rule.pattern.test(params.lines[i] ?? "")) {
-      continue;
-    }
-
-    if (params.rule.requiresContext && params.rule.requiresContextWindowLines !== undefined) {
-      const start = Math.max(0, i - params.rule.requiresContextWindowLines);
-      const end = Math.min(params.lines.length, i + params.rule.requiresContextWindowLines + 1);
-      const windowSource = params.lines.slice(start, end).join("\n");
-      if (!params.rule.requiresContext.test(windowSource)) {
-        continue;
-      }
-    }
-
-    return { line: i + 1, evidence: params.lines[i] ?? "" };
-  }
-
-  if (params.rule.requiresContextWindowLines !== undefined) {
-    return null;
-  }
-
-  return { line: 1, evidence: params.source.slice(0, 120) };
-}
-
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
   const findings: SkillScanFinding[] = [];
   const lines = source.split("\n");
-  const heuristicSource = stripCommentsForHeuristics(source);
-  const heuristicLines = heuristicSource.split("\n");
   const matchedLineRules = new Set<string>();
 
   // --- Line rules ---
@@ -368,13 +238,9 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
         continue;
       }
 
-      if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
-        continue;
-      }
-
       // Special handling for suspicious-network: check port
       if (rule.ruleId === "suspicious-network") {
-        const port = Number.parseInt(match[1], 10);
+        const port = parseInt(match[1], 10);
         if (STANDARD_PORTS.has(port)) {
           continue;
         }
@@ -403,22 +269,38 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       continue;
     }
 
-    const match = findSourceRuleMatch({
-      rule,
-      source: heuristicSource,
-      lines: heuristicLines,
-    });
-    if (!match) {
+    if (!rule.pattern.test(source)) {
       continue;
+    }
+    if (rule.requiresContext && !rule.requiresContext.test(source)) {
+      continue;
+    }
+
+    // Find the first matching line for evidence + line number
+    let matchLine = 0;
+    let matchEvidence = "";
+    for (let i = 0; i < lines.length; i++) {
+      if (rule.pattern.test(lines[i])) {
+        matchLine = i + 1;
+        matchEvidence = lines[i].trim();
+        break;
+      }
+    }
+
+    // For source rules, if we can't find a line match the pattern might span
+    // lines. Report line 0 with truncated source as evidence.
+    if (matchLine === 0) {
+      matchLine = 1;
+      matchEvidence = source.slice(0, 120);
     }
 
     findings.push({
       ruleId: rule.ruleId,
       severity: rule.severity,
       file: filePath,
-      line: match.line,
+      line: matchLine,
       message: rule.message,
-      evidence: truncateEvidence(lines[match.line - 1]?.trim() ?? match.evidence.trim()),
+      evidence: truncateEvidence(matchEvidence),
     });
     matchedSourceRules.add(ruleKey);
   }
@@ -432,42 +314,17 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
 
 function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOptions> {
   return {
-    excludeTestFiles: opts?.excludeTestFiles ?? false,
-    includeHiddenDirectories: opts?.includeHiddenDirectories ?? false,
-    includeNestedNodeModulesTestFiles: opts?.includeNestedNodeModulesTestFiles ?? false,
-    includeNodeModules: opts?.includeNodeModules ?? false,
     includeFiles: opts?.includeFiles ?? [],
-    onlyIncludeFiles: opts?.onlyIncludeFiles ?? false,
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
     maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
   };
 }
 
-function isExcludedTestDirectoryName(name: string): boolean {
-  return TEST_DIRECTORY_NAMES.has(name);
-}
-
-function isExcludedTestFileName(name: string): boolean {
-  return TEST_FILE_NAME_PATTERN.test(name);
-}
-
-function pathContainsNodeModulesSegment(relativePath: string): boolean {
-  return relativePath.split(/[\\/]+/u).includes("node_modules");
-}
-
-async function walkDirWithLimit(
-  rootDir: string,
-  dirPath: string,
-  candidateLimit: number,
-  excludeTestFiles: boolean,
-  includeHiddenDirectories: boolean,
-  includeNestedNodeModulesTestFiles: boolean,
-  includeNodeModules: boolean,
-): Promise<CollectedScannableFiles> {
+async function walkDirWithLimit(dirPath: string, maxFiles: number): Promise<string[]> {
   const files: string[] = [];
   const stack: string[] = [dirPath];
 
-  while (stack.length > 0 && files.length < candidateLimit) {
+  while (stack.length > 0 && files.length < maxFiles) {
     const currentDir = stack.pop();
     if (!currentDir) {
       break;
@@ -475,30 +332,15 @@ async function walkDirWithLimit(
 
     const entries = await readDirEntriesWithCache(currentDir);
     for (const entry of entries) {
-      if (files.length >= candidateLimit) {
+      if (files.length >= maxFiles) {
         break;
       }
-      if (
-        (!includeHiddenDirectories && entry.name.startsWith(".")) ||
-        (!includeNodeModules && entry.name === "node_modules")
-      ) {
+      // Skip hidden dirs and node_modules
+      if (entry.name.startsWith(".") || entry.name === "node_modules") {
         continue;
       }
+
       const fullPath = path.join(currentDir, entry.name);
-      const isExcludedTestPath =
-        entry.kind === "dir"
-          ? isExcludedTestDirectoryName(entry.name)
-          : isExcludedTestFileName(entry.name);
-      if (
-        excludeTestFiles &&
-        isExcludedTestPath &&
-        !(
-          includeNestedNodeModulesTestFiles &&
-          pathContainsNodeModulesSegment(path.relative(rootDir, fullPath))
-        )
-      ) {
-        continue;
-      }
       if (entry.kind === "dir") {
         stack.push(fullPath);
       } else if (entry.kind === "file" && isScannable(entry.name)) {
@@ -507,7 +349,7 @@ async function walkDirWithLimit(
     }
   }
 
-  return { files, truncated: files.length >= candidateLimit };
+  return files;
 }
 
 async function readDirEntriesWithCache(dirPath: string): Promise<CachedDirEntry[]> {
@@ -588,47 +430,30 @@ async function resolveForcedFiles(params: {
   return out;
 }
 
-async function collectScannableFiles(
-  dirPath: string,
-  opts: Required<SkillScanOptions>,
-): Promise<CollectedScannableFiles> {
+async function collectScannableFiles(dirPath: string, opts: Required<SkillScanOptions>) {
   const forcedFiles = await resolveForcedFiles({
     rootDir: dirPath,
     includeFiles: opts.includeFiles,
   });
-  if (opts.onlyIncludeFiles) {
-    return {
-      files: forcedFiles.slice(0, opts.maxFiles),
-      truncated: forcedFiles.length > opts.maxFiles,
-    };
-  }
-  if (forcedFiles.length > opts.maxFiles) {
-    return { files: forcedFiles.slice(0, opts.maxFiles), truncated: true };
+  if (forcedFiles.length >= opts.maxFiles) {
+    return forcedFiles.slice(0, opts.maxFiles);
   }
 
-  const walked = await walkDirWithLimit(
-    dirPath,
-    dirPath,
-    opts.maxFiles + 1,
-    opts.excludeTestFiles,
-    opts.includeHiddenDirectories,
-    opts.includeNestedNodeModulesTestFiles,
-    opts.includeNodeModules,
-  );
+  const walkedFiles = await walkDirWithLimit(dirPath, opts.maxFiles);
   const seen = new Set(forcedFiles.map((f) => path.resolve(f)));
   const out = [...forcedFiles];
-  for (const walkedFile of walked.files) {
+  for (const walkedFile of walkedFiles) {
+    if (out.length >= opts.maxFiles) {
+      break;
+    }
     const resolved = path.resolve(walkedFile);
     if (seen.has(resolved)) {
       continue;
     }
-    if (out.length >= opts.maxFiles) {
-      return { files: out.slice(0, opts.maxFiles), truncated: true };
-    }
     out.push(walkedFile);
     seen.add(resolved);
   }
-  return { files: out, truncated: false };
+  return out;
 }
 
 async function scanFileWithCache(params: {
@@ -698,7 +523,7 @@ export async function scanDirectory(
   opts?: SkillScanOptions,
 ): Promise<SkillScanFinding[]> {
   const scanOptions = normalizeScanOptions(opts);
-  const { files } = await collectScannableFiles(dirPath, scanOptions);
+  const files = await collectScannableFiles(dirPath, scanOptions);
   const allFindings: SkillScanFinding[] = [];
 
   for (const file of files) {
@@ -720,7 +545,7 @@ export async function scanDirectoryWithSummary(
   opts?: SkillScanOptions,
 ): Promise<SkillScanSummary> {
   const scanOptions = normalizeScanOptions(opts);
-  const { files, truncated } = await collectScannableFiles(dirPath, scanOptions);
+  const files = await collectScannableFiles(dirPath, scanOptions);
   const allFindings: SkillScanFinding[] = [];
   let scannedFiles = 0;
   let critical = 0;
@@ -753,7 +578,6 @@ export async function scanDirectoryWithSummary(
     critical,
     warn,
     info,
-    truncated,
     findings: allFindings,
   };
 }

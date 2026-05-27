@@ -1,22 +1,18 @@
-import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
-import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
-import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
+export type SubCliDescriptor = {
+  name: string;
+  description: string;
+  hasSubcommands: boolean;
+};
 
-export type SubCliDescriptor = NamedCommandDescriptor;
-
-const subCliCommandCatalog = defineCommandDescriptorCatalog([
-  { name: "acp", description: "Run and manage ACP-backed coding agents", hasSubcommands: true },
+export const SUB_CLI_DESCRIPTORS = [
+  { name: "acp", description: "Agent Control Protocol tools", hasSubcommands: true },
   {
     name: "gateway",
-    description: "Run, inspect, and query the OpenClaw Gateway",
+    description: "Run, inspect, and query the WebSocket Gateway",
     hasSubcommands: true,
   },
-  {
-    name: "daemon",
-    description: "Manage the Gateway service (legacy alias)",
-    hasSubcommands: true,
-  },
-  { name: "logs", description: "Tail Gateway logs locally or via RPC", hasSubcommands: false },
+  { name: "daemon", description: "Gateway service (legacy alias)", hasSubcommands: true },
+  { name: "logs", description: "Tail gateway file logs via RPC", hasSubcommands: false },
   {
     name: "system",
     description: "System events, heartbeat, and presence",
@@ -24,40 +20,23 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "models",
-    description: "List, scan, and set model providers",
-    hasSubcommands: true,
-  },
-  {
-    name: "infer",
-    description: "Run provider-backed model, media, search, and embedding commands",
-    hasSubcommands: true,
-  },
-  {
-    name: "capability",
-    description: "Run provider capability commands (fallback alias: infer)",
+    description: "Discover, scan, and configure models",
     hasSubcommands: true,
   },
   {
     name: "approvals",
     description: "Manage exec approvals (gateway or node host)",
     hasSubcommands: true,
-    parentDefaultHelp: true,
-  },
-  {
-    name: "exec-policy",
-    description: "Show or synchronize requested exec policy with host approvals",
-    hasSubcommands: true,
   },
   {
     name: "nodes",
-    description: "Pair nodes and run node-host commands through the Gateway",
+    description: "Manage gateway-owned node pairing and node commands",
     hasSubcommands: true,
   },
   {
     name: "devices",
     description: "Device pairing + token management",
     hasSubcommands: true,
-    parentDefaultHelp: true,
   },
   {
     name: "node",
@@ -75,20 +54,9 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
-    name: "terminal",
-    description: "Open a local terminal UI (alias for tui --local)",
-    hasSubcommands: false,
-  },
-  {
-    name: "chat",
-    description: "Open a local terminal UI (alias for tui --local)",
-    hasSubcommands: false,
-  },
-  {
     name: "cron",
-    description: "Schedule and inspect Gateway background jobs",
+    description: "Manage cron jobs via the Gateway scheduler",
     hasSubcommands: true,
-    parentDefaultHelp: true,
   },
   {
     name: "dns",
@@ -99,16 +67,6 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "docs",
     description: "Search the live OpenClaw docs",
     hasSubcommands: false,
-  },
-  {
-    name: "qa",
-    description: "Run QA scenarios and launch the private QA debugger UI",
-    hasSubcommands: true,
-  },
-  {
-    name: "proxy",
-    description: "Run the OpenClaw debug proxy and inspect captured traffic",
-    hasSubcommands: true,
   },
   {
     name: "hooks",
@@ -122,7 +80,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "qr",
-    description: "Generate mobile pairing QR/setup code",
+    description: "Generate iOS pairing QR/setup code",
     hasSubcommands: false,
   },
   {
@@ -137,15 +95,13 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "plugins",
-    description: "Install, enable, disable, and inspect plugins",
+    description: "Manage OpenClaw plugins and extensions",
     hasSubcommands: true,
-    parentDefaultHelp: true,
   },
   {
     name: "channels",
-    description: "Add, remove, login, and inspect messaging channels",
+    description: "Manage connected chat channels (Telegram, Discord, etc.)",
     hasSubcommands: true,
-    parentDefaultHelp: true,
   },
   {
     name: "directory",
@@ -159,12 +115,12 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "secrets",
-    description: "Audit, apply, and reload SecretRef-backed credentials",
+    description: "Secrets runtime reload controls",
     hasSubcommands: true,
   },
   {
     name: "skills",
-    description: "List, inspect, and install agent skills",
+    description: "List and inspect available skills",
     hasSubcommands: true,
   },
   {
@@ -177,44 +133,12 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Generate shell completion script",
     hasSubcommands: false,
   },
-] as const satisfies ReadonlyArray<SubCliDescriptor>);
-
-function filterPrivateQaItems<T>(
-  items: ReadonlyArray<T>,
-  getName: (item: T) => string,
-): ReadonlyArray<T> {
-  if (isPrivateQaCliEnabled()) {
-    return items;
-  }
-  return items.filter((item) => getName(item) !== "qa");
-}
-
-export const SUB_CLI_DESCRIPTORS = filterPrivateQaItems(
-  subCliCommandCatalog.descriptors,
-  (descriptor) => descriptor.name,
-);
+] as const satisfies ReadonlyArray<SubCliDescriptor>;
 
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
-  return filterPrivateQaItems(
-    subCliCommandCatalog.getDescriptors(),
-    (descriptor) => descriptor.name,
-  );
+  return SUB_CLI_DESCRIPTORS;
 }
 
 export function getSubCliCommandsWithSubcommands(): string[] {
-  return [
-    ...filterPrivateQaItems(
-      subCliCommandCatalog.getCommandsWithSubcommands(),
-      (command) => command,
-    ),
-  ];
-}
-
-export function getSubCliParentDefaultHelpCommands(): string[] {
-  return [
-    ...filterPrivateQaItems(
-      subCliCommandCatalog.getParentDefaultHelpCommands(),
-      (command) => command,
-    ),
-  ];
+  return SUB_CLI_DESCRIPTORS.filter((entry) => entry.hasSubcommands).map((entry) => entry.name);
 }

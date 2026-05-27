@@ -166,7 +166,6 @@ describe("binding target drivers", () => {
         cfg: {} as never,
         sessionKey: "agent:codex:test-driver",
         reason: "reset",
-        commandSource: "discord:native",
       }),
     ).resolves.toEqual({ ok: true });
 
@@ -175,7 +174,6 @@ describe("binding target drivers", () => {
       cfg: {} as never,
       sessionKey: "agent:codex:test-driver",
       reason: "reset",
-      commandSource: "discord:native",
       bindingTarget: {
         kind: "stateful",
         driverId: "test-driver",

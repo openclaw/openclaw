@@ -4,13 +4,6 @@ import OpenClawKit
 
 @MainActor
 protocol MacNodeRuntimeMainActorServices: Sendable {
-    func snapshotScreen(
-        screenIndex: Int?,
-        maxWidth: Int?,
-        quality: Double?,
-        format: OpenClawScreenSnapshotFormat?) async throws
-        -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
-
     func recordScreen(
         screenIndex: Int?,
         durationMs: Int?,
@@ -28,23 +21,8 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
 
 @MainActor
 final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
-    private let screenSnapshotter = ScreenSnapshotService()
     private let screenRecorder = ScreenRecordService()
     private let locationService = MacNodeLocationService()
-
-    func snapshotScreen(
-        screenIndex: Int?,
-        maxWidth: Int?,
-        quality: Double?,
-        format: OpenClawScreenSnapshotFormat?) async throws
-        -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
-    {
-        try await self.screenSnapshotter.snapshot(
-            screenIndex: screenIndex,
-            maxWidth: maxWidth,
-            quality: quality,
-            format: format)
-    }
 
     func recordScreen(
         screenIndex: Int?,

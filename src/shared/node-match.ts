@@ -1,9 +1,3 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "./string-coerce.js";
-
 export type NodeMatchCandidate = {
   nodeId: string;
   displayName?: string;
@@ -19,7 +13,8 @@ type ScoredNodeMatch = {
 };
 
 export function normalizeNodeKey(value: string) {
-  return normalizeLowercaseStringOrEmpty(value)
+  return value
+    .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");
@@ -35,20 +30,19 @@ function listKnownNodes(nodes: NodeMatchCandidate[]): string {
 function formatNodeCandidateLabel(node: NodeMatchCandidate): string {
   const label = node.displayName || node.remoteIp || node.nodeId;
   const details = [`node=${node.nodeId}`];
-  const clientId = normalizeOptionalString(node.clientId);
-  if (clientId) {
-    details.push(`client=${clientId}`);
+  if (typeof node.clientId === "string" && node.clientId.trim()) {
+    details.push(`client=${node.clientId.trim()}`);
   }
   return `${label} [${details.join(", ")}]`;
 }
 
 function isCurrentOpenClawClient(clientId: string | undefined): boolean {
-  const normalized = normalizeOptionalLowercaseString(clientId) ?? "";
+  const normalized = clientId?.trim().toLowerCase() ?? "";
   return normalized.startsWith("openclaw-");
 }
 
 function isLegacyClawdbotClient(clientId: string | undefined): boolean {
-  const normalized = normalizeOptionalLowercaseString(clientId) ?? "";
+  const normalized = clientId?.trim().toLowerCase() ?? "";
   return normalized.startsWith("clawdbot-") || normalized.startsWith("moldbot-");
 }
 
@@ -101,7 +95,7 @@ function scoreNodeCandidate(node: NodeMatchCandidate, matchScore: number): numbe
 }
 
 function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): ScoredNodeMatch[] {
-  const trimmed = normalizeOptionalString(query);
+  const trimmed = query.trim();
   if (!trimmed) {
     return [];
   }

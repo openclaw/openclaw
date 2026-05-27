@@ -11,9 +11,7 @@ export function removeCommand(program: Command, command: Command): boolean {
 }
 
 export function removeCommandByName(program: Command, name: string): boolean {
-  const existing = program.commands.find(
-    (command) => command.name() === name || command.aliases().includes(name),
-  );
+  const existing = program.commands.find((command) => command.name() === name);
   if (!existing) {
     return false;
   }

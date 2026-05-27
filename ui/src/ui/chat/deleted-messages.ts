@@ -4,7 +4,7 @@ const PREFIX = "openclaw:deleted:";
 
 export class DeletedMessages {
   private key: string;
-  private keys = new Set<string>();
+  private _keys = new Set<string>();
 
   constructor(sessionKey: string) {
     this.key = PREFIX + sessionKey;
@@ -12,21 +12,21 @@ export class DeletedMessages {
   }
 
   has(key: string): boolean {
-    return this.keys.has(key);
+    return this._keys.has(key);
   }
 
   delete(key: string): void {
-    this.keys.add(key);
+    this._keys.add(key);
     this.save();
   }
 
   restore(key: string): void {
-    this.keys.delete(key);
+    this._keys.delete(key);
     this.save();
   }
 
   clear(): void {
-    this.keys.clear();
+    this._keys.clear();
     this.save();
   }
 
@@ -38,7 +38,7 @@ export class DeletedMessages {
       }
       const arr = JSON.parse(raw);
       if (Array.isArray(arr)) {
-        this.keys = new Set(arr.filter((s) => typeof s === "string"));
+        this._keys = new Set(arr.filter((s) => typeof s === "string"));
       }
     } catch {
       // ignore
@@ -47,7 +47,7 @@ export class DeletedMessages {
 
   private save(): void {
     try {
-      getSafeLocalStorage()?.setItem(this.key, JSON.stringify([...this.keys]));
+      getSafeLocalStorage()?.setItem(this.key, JSON.stringify([...this._keys]));
     } catch {
       // ignore
     }

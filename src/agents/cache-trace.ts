@@ -1,21 +1,17 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
-import { stableStringify } from "./stable-stringify.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 
-type CacheTraceStage =
-  | "cache:result"
-  | "cache:state"
+export type CacheTraceStage =
   | "session:loaded"
-  | "session:raw-model-run"
   | "session:sanitized"
   | "session:limited"
   | "prompt:before"
@@ -23,7 +19,7 @@ type CacheTraceStage =
   | "stream:context"
   | "session:after";
 
-type CacheTraceEvent = {
+export type CacheTraceEvent = {
   ts: string;
   seq: number;
   stage: CacheTraceStage;
@@ -48,7 +44,7 @@ type CacheTraceEvent = {
   error?: string;
 };
 
-type CacheTrace = {
+export type CacheTrace = {
   enabled: true;
   filePath: string;
   recordStage: (stage: CacheTraceStage, payload?: Partial<CacheTraceEvent>) => void;
@@ -106,6 +102,57 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
 
 function getWriter(filePath: string): CacheTraceWriter {
   return getQueuedFileWriter(writers, filePath);
+}
+
+function stableStringify(value: unknown, seen: WeakSet<object> = new WeakSet()): string {
+  if (value === null || value === undefined) {
+    return String(value);
+  }
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    return JSON.stringify(String(value));
+  }
+  if (typeof value === "bigint") {
+    return JSON.stringify(value.toString());
+  }
+  if (typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (seen.has(value)) {
+    return JSON.stringify("[Circular]");
+  }
+  seen.add(value);
+  if (value instanceof Error) {
+    return stableStringify(
+      {
+        name: value.name,
+        message: value.message,
+        stack: value.stack,
+      },
+      seen,
+    );
+  }
+  if (value instanceof Uint8Array) {
+    return stableStringify(
+      {
+        type: "Uint8Array",
+        data: Buffer.from(value).toString("base64"),
+      },
+      seen,
+    );
+  }
+  if (Array.isArray(value)) {
+    const serializedEntries: string[] = [];
+    for (const entry of value) {
+      serializedEntries.push(stableStringify(entry, seen));
+    }
+    return `[${serializedEntries.join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  const serializedFields: string[] = [];
+  for (const key of Object.keys(record).toSorted()) {
+    serializedFields.push(`${JSON.stringify(key)}:${stableStringify(record[key], seen)}`);
+  }
+  return `{${serializedFields.join(",")}}`;
 }
 
 function digest(value: unknown): string {
@@ -189,19 +236,14 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
 
   const wrapStreamFn: CacheTrace["wrapStreamFn"] = (streamFn) => {
     const wrapped: StreamFn = (model, context, options) => {
-      const traceContext = context as {
-        messages?: AgentMessage[];
-        system?: unknown;
-        systemPrompt?: unknown;
-      };
       recordStage("stream:context", {
         model: {
           id: model?.id,
           provider: model?.provider,
           api: model?.api,
         },
-        system: traceContext.systemPrompt ?? traceContext.system,
-        messages: traceContext.messages ?? [],
+        system: (context as { system?: unknown }).system,
+        messages: (context as { messages?: AgentMessage[] }).messages ?? [],
         options: (options ?? {}) as Record<string, unknown>,
       });
       return streamFn(model, context, options);

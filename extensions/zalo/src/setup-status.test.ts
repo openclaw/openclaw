@@ -1,15 +1,9 @@
-import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
+import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { zaloSetupWizard } from "./setup-surface.js";
+import { zaloPlugin } from "./channel.js";
 
-const zaloGetStatus = createPluginSetupWizardStatus({
-  id: "zalo",
-  meta: {
-    label: "Zalo",
-  },
-  setupWizard: zaloSetupWizard,
-} as never);
+const zaloGetStatus = createPluginSetupWizardStatus(zaloPlugin);
 
 describe("zalo setup wizard status", () => {
   it("treats SecretRef botToken as configured", async () => {

@@ -1,22 +1,17 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/routing";
+import {
+  buildChannelOutboundSessionRoute,
+  type ChannelOutboundSessionRouteParams,
+} from "openclaw/plugin-sdk/core";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 
-type NextcloudTalkOutboundSessionRouteParams = {
-  cfg: OpenClawConfig;
-  agentId: string;
-  accountId?: string | null;
-  target: string;
-};
-
 export function resolveNextcloudTalkOutboundSessionRoute(
-  params: NextcloudTalkOutboundSessionRouteParams,
+  params: ChannelOutboundSessionRouteParams,
 ) {
   const roomId = stripNextcloudTalkTargetPrefix(params.target);
   if (!roomId) {
     return null;
   }
-  const baseSessionKey = buildOutboundBaseSessionKey({
+  return buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "nextcloud-talk",
@@ -25,16 +20,8 @@ export function resolveNextcloudTalkOutboundSessionRoute(
       kind: "group",
       id: roomId,
     },
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer: {
-      kind: "group" as const,
-      id: roomId,
-    },
-    chatType: "group" as const,
+    chatType: "group",
     from: `nextcloud-talk:room:${roomId}`,
     to: `nextcloud-talk:${roomId}`,
-  };
+  });
 }

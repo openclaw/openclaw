@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { performMatrixRequestMock } = vi.hoisted(() => ({
   performMatrixRequestMock: vi.fn(),
@@ -11,11 +11,9 @@ vi.mock("./transport.js", () => ({
 let MatrixAuthedHttpClient: typeof import("./http-client.js").MatrixAuthedHttpClient;
 
 describe("MatrixAuthedHttpClient", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ MatrixAuthedHttpClient } = await import("./http-client.js"));
-  });
-
-  beforeEach(() => {
     performMatrixRequestMock.mockReset();
   });
 
@@ -48,21 +46,18 @@ describe("MatrixAuthedHttpClient", () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(performMatrixRequestMock).toHaveBeenCalledWith({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-      method: "GET",
-      endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
-      qs: undefined,
-      body: undefined,
-      timeoutMs: 5000,
-      ssrfPolicy: { allowPrivateNetwork: true },
-      dispatcherPolicy: {
-        mode: "explicit-proxy",
-        proxyUrl: "http://proxy.internal:8080",
-      },
-      allowAbsoluteEndpoint: true,
-    });
+    expect(performMatrixRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "GET",
+        endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
+        allowAbsoluteEndpoint: true,
+        ssrfPolicy: { allowPrivateNetwork: true },
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://proxy.internal:8080",
+        },
+      }),
+    );
   });
 
   it("returns plain text when response is not JSON", async () => {
@@ -123,20 +118,15 @@ describe("MatrixAuthedHttpClient", () => {
       homeserver: "https://matrix.example.org",
       accessToken: "token",
     });
-    let rejection: unknown;
-    try {
-      await client.requestJson({
+    await expect(
+      client.requestJson({
         method: "GET",
         endpoint: "/_matrix/client/v3/rooms",
         timeoutMs: 5000,
-      });
-    } catch (error) {
-      rejection = error;
-    }
-
-    expect(rejection).toBeInstanceOf(Error);
-    const httpError = rejection as Error & { statusCode?: unknown };
-    expect(httpError.message).toBe("forbidden");
-    expect(httpError.statusCode).toBe(403);
+      }),
+    ).rejects.toMatchObject({
+      message: "forbidden",
+      statusCode: 403,
+    });
   });
 });

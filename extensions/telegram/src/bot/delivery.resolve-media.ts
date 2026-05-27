@@ -1,19 +1,16 @@
 import path from "node:path";
 import { GrammyError } from "grammy";
-import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
-import type { TelegramTransport } from "../fetch.js";
-import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
+import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { retryAsync } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  formatErrorMessage,
-  logVerbose,
-  MediaFetchError,
   resolveTelegramApiBase,
-  retryAsync,
-  saveMediaBuffer,
-  saveRemoteMedia,
   shouldRetryTelegramTransportFallback,
-  warn,
-} from "./delivery.resolve-media.runtime.js";
+  type TelegramTransport,
+} from "../fetch.js";
+import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
 
@@ -21,7 +18,7 @@ const FILE_TOO_BIG_RE = /file is too big/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
-function buildTelegramMediaSsrfPolicy(apiRoot?: string, dangerouslyAllowPrivateNetwork?: boolean) {
+function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
   const hostnames = ["api.telegram.org"];
   let allowedHostnames: string[] | undefined;
   if (apiRoot) {
@@ -35,8 +32,8 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string, dangerouslyAllowPrivateN
         // still enforcing resolved-IP checks for the default public host.
         allowedHostnames = [customHost];
       }
-    } catch (err) {
-      logVerbose(`telegram: invalid apiRoot URL "${apiRoot}": ${String(err)}`);
+    } catch {
+      // invalid URL; fall through to default
     }
   }
   return {
@@ -44,8 +41,7 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string, dangerouslyAllowPrivateN
     // enforcing SSRF checks on the resolved and redirected targets.
     hostnameAllowlist: hostnames,
     ...(allowedHostnames ? { allowedHostnames } : {}),
-    ...(dangerouslyAllowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
-    allowRfc2544BenchmarkRange: true,
+    allowRfc2544BenchmarkRange: false,
   };
 }
 
@@ -74,39 +70,24 @@ function isRetryableGetFileError(err: unknown): boolean {
   return true;
 }
 
-interface MediaMetadata {
-  fileRef?:
-    | NonNullable<TelegramContext["message"]["photo"]>[number]
-    | TelegramContext["message"]["video"]
-    | TelegramContext["message"]["video_note"]
-    | TelegramContext["message"]["document"]
-    | TelegramContext["message"]["audio"]
-    | TelegramContext["message"]["voice"];
-  fileName?: string;
-  mimeType?: string;
+function resolveMediaFileRef(msg: TelegramContext["message"]) {
+  return (
+    msg.photo?.[msg.photo.length - 1] ??
+    msg.video ??
+    msg.video_note ??
+    msg.document ??
+    msg.audio ??
+    msg.voice
+  );
 }
 
-function resolveMediaMetadata(msg: TelegramContext["message"]): MediaMetadata {
-  return {
-    fileRef:
-      msg.photo?.[msg.photo.length - 1] ??
-      msg.video ??
-      msg.video_note ??
-      msg.document ??
-      msg.audio ??
-      msg.voice,
-    fileName:
-      msg.document?.file_name ??
-      msg.audio?.file_name ??
-      msg.video?.file_name ??
-      msg.animation?.file_name,
-    mimeType:
-      msg.audio?.mime_type ??
-      msg.voice?.mime_type ??
-      msg.video?.mime_type ??
-      msg.document?.mime_type ??
-      msg.animation?.mime_type,
-  };
+function resolveTelegramFileName(msg: TelegramContext["message"]): string | undefined {
+  return (
+    msg.document?.file_name ??
+    msg.audio?.file_name ??
+    msg.video?.file_name ??
+    msg.animation?.file_name
+  );
 }
 
 async function resolveTelegramFileWithRetry(
@@ -151,113 +132,51 @@ function resolveRequiredTelegramTransport(transport?: TelegramTransport): Telegr
   return {
     fetch: resolvedFetch,
     sourceFetch: resolvedFetch,
-    // Caller-owned transport constructed from the globalThis fetch — it owns
-    // no dispatcher lifecycle of its own, so close() is a no-op.
-    close: async () => {},
   };
+}
+
+function resolveOptionalTelegramTransport(transport?: TelegramTransport): TelegramTransport | null {
+  try {
+    return resolveRequiredTelegramTransport(transport);
+  } catch {
+    return null;
+  }
 }
 
 /** Default idle timeout for Telegram media downloads (30 seconds). */
 const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
-function usesTrustedTelegramExplicitProxy(transport: TelegramTransport): boolean {
-  return (
-    transport.dispatcherAttempts?.some(
-      (attempt) => attempt.dispatcherPolicy?.mode === "explicit-proxy",
-    ) ?? false
-  );
-}
-
-function resolveTrustedLocalTelegramRoot(
-  filePath: string,
-  trustedLocalFileRoots?: readonly string[],
-): { rootDir: string; relativePath: string } | null {
-  if (!path.isAbsolute(filePath)) {
-    return null;
-  }
-  for (const rootDir of trustedLocalFileRoots ?? []) {
-    const relativePath = path.relative(rootDir, filePath);
-    if (
-      relativePath === "" ||
-      relativePath === ".." ||
-      relativePath.startsWith(`..${path.sep}`) ||
-      path.isAbsolute(relativePath)
-    ) {
-      continue;
-    }
-    return { rootDir, relativePath };
-  }
-  return null;
-}
-
 async function downloadAndSaveTelegramFile(params: {
   filePath: string;
   token: string;
-  transport?: TelegramTransport;
+  transport: TelegramTransport;
   maxBytes: number;
   telegramFileName?: string;
-  mimeType?: string;
   apiRoot?: string;
-  trustedLocalFileRoots?: readonly string[];
-  dangerouslyAllowPrivateNetwork?: boolean;
 }) {
-  const trustedLocalFile = resolveTrustedLocalTelegramRoot(
-    params.filePath,
-    params.trustedLocalFileRoots,
-  );
-  if (trustedLocalFile) {
-    let localFile;
-    try {
-      const root = await fsRoot(trustedLocalFile.rootDir);
-      localFile = await root.read(trustedLocalFile.relativePath, {
-        maxBytes: params.maxBytes,
-      });
-    } catch (err) {
-      throw new MediaFetchError(
-        "fetch_failed",
-        `Failed to read local Telegram Bot API media from ${params.filePath}: ${formatErrorMessage(err)}`,
-        { cause: err },
-      );
-    }
-    return await saveMediaBuffer(
-      localFile.buffer,
-      params.mimeType,
-      "inbound",
-      params.maxBytes,
-      params.telegramFileName ?? path.basename(localFile.realPath),
-    );
-  }
   if (path.isAbsolute(params.filePath)) {
-    throw new MediaFetchError(
-      "fetch_failed",
-      `Telegram Bot API returned absolute file path ${params.filePath} outside trustedLocalFileRoots`,
-    );
+    return { path: params.filePath, contentType: undefined };
   }
-  const transport = resolveRequiredTelegramTransport(params.transport);
   const apiBase = resolveTelegramApiBase(params.apiRoot);
   const url = `${apiBase}/file/bot${params.token}/${params.filePath}`;
-  return await saveRemoteMedia({
+  const fetched = await fetchRemoteMedia({
     url,
-    fetchImpl: transport.sourceFetch,
-    dispatcherAttempts: transport.dispatcherAttempts,
-    trustExplicitProxyDns: usesTrustedTelegramExplicitProxy(transport),
+    fetchImpl: params.transport.sourceFetch,
+    dispatcherAttempts: params.transport.dispatcherAttempts,
     shouldRetryFetchError: shouldRetryTelegramTransportFallback,
-    retry: {
-      attempts: 3,
-      minDelayMs: 1000,
-      maxDelayMs: 4000,
-      jitter: 0.2,
-      label: "telegram:media-download",
-      onRetry: ({ attempt, maxAttempts }) =>
-        logVerbose(`telegram: media download retry ${attempt}/${maxAttempts}`),
-    },
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
-    ssrfPolicy: buildTelegramMediaSsrfPolicy(params.apiRoot, params.dangerouslyAllowPrivateNetwork),
-    fallbackContentType: params.mimeType,
-    originalFilename: params.telegramFileName,
+    ssrfPolicy: buildTelegramMediaSsrfPolicy(params.apiRoot),
   });
+  const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
+  return saveMediaBuffer(
+    fetched.buffer,
+    fetched.contentType,
+    "inbound",
+    params.maxBytes,
+    originalName,
+  );
 }
 
 async function resolveStickerMedia(params: {
@@ -267,8 +186,6 @@ async function resolveStickerMedia(params: {
   token: string;
   transport?: TelegramTransport;
   apiRoot?: string;
-  trustedLocalFileRoots?: readonly string[];
-  dangerouslyAllowPrivateNetwork?: boolean;
 }): Promise<
   | {
       path: string;
@@ -299,14 +216,17 @@ async function resolveStickerMedia(params: {
       logVerbose("telegram: getFile returned no file_path for sticker");
       return null;
     }
+    const resolvedTransport = resolveOptionalTelegramTransport(transport);
+    if (!resolvedTransport) {
+      logVerbose("telegram: fetch not available for sticker download");
+      return null;
+    }
     const saved = await downloadAndSaveTelegramFile({
       filePath: file.file_path,
       token,
-      transport,
+      transport: resolvedTransport,
       maxBytes,
       apiRoot: params.apiRoot,
-      trustedLocalFileRoots: params.trustedLocalFileRoots,
-      dangerouslyAllowPrivateNetwork: params.dangerouslyAllowPrivateNetwork,
     });
 
     // Check sticker cache for existing description
@@ -357,29 +277,18 @@ async function resolveStickerMedia(params: {
   }
 }
 
-export async function resolveMedia(params: {
-  ctx: TelegramContext;
-  maxBytes: number;
-  token: string;
-  transport?: TelegramTransport;
-  apiRoot?: string;
-  trustedLocalFileRoots?: readonly string[];
-  dangerouslyAllowPrivateNetwork?: boolean;
-}): Promise<{
+export async function resolveMedia(
+  ctx: TelegramContext,
+  maxBytes: number,
+  token: string,
+  transport?: TelegramTransport,
+  apiRoot?: string,
+): Promise<{
   path: string;
   contentType?: string;
   placeholder: string;
   stickerMetadata?: StickerMetadata;
 } | null> {
-  const {
-    ctx,
-    maxBytes,
-    token,
-    transport,
-    apiRoot,
-    trustedLocalFileRoots,
-    dangerouslyAllowPrivateNetwork,
-  } = params;
   const msg = ctx.message;
   const stickerResolved = await resolveStickerMedia({
     msg,
@@ -388,15 +297,12 @@ export async function resolveMedia(params: {
     token,
     transport,
     apiRoot,
-    trustedLocalFileRoots,
-    dangerouslyAllowPrivateNetwork,
   });
   if (stickerResolved !== undefined) {
     return stickerResolved;
   }
 
-  const metadata = resolveMediaMetadata(msg);
-  const m = metadata.fileRef;
+  const m = resolveMediaFileRef(msg);
   if (!m?.file_id) {
     return null;
   }
@@ -411,13 +317,10 @@ export async function resolveMedia(params: {
   const saved = await downloadAndSaveTelegramFile({
     filePath: file.file_path,
     token,
-    transport,
+    transport: resolveRequiredTelegramTransport(transport),
     maxBytes,
-    telegramFileName: metadata.fileName,
-    mimeType: metadata.mimeType,
+    telegramFileName: resolveTelegramFileName(msg),
     apiRoot,
-    trustedLocalFileRoots,
-    dangerouslyAllowPrivateNetwork,
   });
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };

@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let collectTelegramUnmentionedGroupIds: typeof import("./audit.js").collectTelegramUnmentionedGroupIds;
 let auditTelegramGroupMembership: typeof import("./audit.js").auditTelegramGroupMembership;
@@ -6,21 +6,13 @@ const fetchWithTimeoutMock = vi.hoisted(() => vi.fn());
 const resolveTelegramFetchMock = vi.hoisted(() => vi.fn(() => fetchWithTimeoutMock));
 const resolveTelegramApiBaseMock = vi.hoisted(() => vi.fn(() => "https://api.telegram.org"));
 
-vi.mock("openclaw/plugin-sdk/text-utility-runtime", () => ({
-  fetchWithTimeout: fetchWithTimeoutMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
-  isRecord: (value: unknown): value is Record<string, unknown> =>
-    typeof value === "object" && value !== null,
-  normalizeOptionalString: (value: unknown) => {
-    if (typeof value !== "string") {
-      return undefined;
-    }
-    const trimmed = value.trim();
-    return trimmed ? trimmed : undefined;
-  },
-}));
+vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+  return {
+    ...actual,
+    fetchWithTimeout: fetchWithTimeoutMock,
+  };
+});
 
 function mockGetChatMemberStatus(status: string) {
   fetchWithTimeoutMock.mockResolvedValueOnce(
@@ -41,22 +33,20 @@ async function auditSingleGroup() {
 }
 
 describe("telegram audit", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.doMock("./fetch.js", () => ({
       resolveTelegramApiBase: resolveTelegramApiBaseMock,
       resolveTelegramFetch: resolveTelegramFetchMock,
     }));
     ({ collectTelegramUnmentionedGroupIds, auditTelegramGroupMembership } =
       await import("./audit.js"));
-  });
-
-  beforeEach(() => {
     fetchWithTimeoutMock.mockReset();
     resolveTelegramFetchMock.mockClear();
     resolveTelegramApiBaseMock.mockClear();
   });
 
-  it("collects unmentioned numeric group ids and flags wildcard", () => {
+  it("collects unmentioned numeric group ids and flags wildcard", async () => {
     const res = collectTelegramUnmentionedGroupIds({
       "*": { requireMention: false },
       "-1001": { requireMention: false },

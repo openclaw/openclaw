@@ -1,22 +1,48 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import {
-  cleanupCommandLogMessages,
-  createCleanupCommandRuntime,
-  resetCleanupCommandMocks,
-  silenceCleanupCommandRuntime,
-} from "./cleanup-command.test-support.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createNonExitingRuntime } from "../runtime.js";
+
+const resolveCleanupPlanFromDisk = vi.fn();
+const removePath = vi.fn();
+const listAgentSessionDirs = vi.fn();
+const removeStateAndLinkedPaths = vi.fn();
+const removeWorkspaceDirs = vi.fn();
+
+vi.mock("../config/config.js", () => ({
+  isNixMode: false,
+}));
+
+vi.mock("./cleanup-plan.js", () => ({
+  resolveCleanupPlanFromDisk,
+}));
+
+vi.mock("./cleanup-utils.js", () => ({
+  removePath,
+  listAgentSessionDirs,
+  removeStateAndLinkedPaths,
+  removeWorkspaceDirs,
+}));
+
+const { resetCommand } = await import("./reset.js");
 
 describe("resetCommand", () => {
-  const runtime = createCleanupCommandRuntime();
-  let resetCommand: typeof import("./reset.js").resetCommand;
-
-  beforeAll(async () => {
-    ({ resetCommand } = await import("./reset.js"));
-  });
+  const runtime = createNonExitingRuntime();
 
   beforeEach(() => {
-    resetCleanupCommandMocks();
-    silenceCleanupCommandRuntime(runtime);
+    vi.clearAllMocks();
+    resolveCleanupPlanFromDisk.mockReturnValue({
+      stateDir: "/tmp/.openclaw",
+      configPath: "/tmp/.openclaw/openclaw.json",
+      oauthDir: "/tmp/.openclaw/credentials",
+      configInsideState: true,
+      oauthInsideState: true,
+      workspaceDirs: ["/tmp/.openclaw/workspace"],
+    });
+    removePath.mockResolvedValue({ ok: true });
+    listAgentSessionDirs.mockResolvedValue(["/tmp/.openclaw/agents/main/sessions"]);
+    removeStateAndLinkedPaths.mockResolvedValue(undefined);
+    removeWorkspaceDirs.mockResolvedValue(undefined);
+    vi.spyOn(runtime, "log").mockImplementation(() => {});
+    vi.spyOn(runtime, "error").mockImplementation(() => {});
   });
 
   it("recommends creating a backup before state-destructive reset scopes", async () => {
@@ -27,11 +53,7 @@ describe("resetCommand", () => {
       dryRun: true,
     });
 
-    expect(
-      cleanupCommandLogMessages(runtime).some((message) =>
-        message.includes("openclaw backup create"),
-      ),
-    ).toBe(true);
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("openclaw backup create"));
   });
 
   it("does not recommend backup for config-only reset", async () => {
@@ -42,10 +64,6 @@ describe("resetCommand", () => {
       dryRun: true,
     });
 
-    expect(
-      cleanupCommandLogMessages(runtime).some((message) =>
-        message.includes("openclaw backup create"),
-      ),
-    ).toBe(false);
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("openclaw backup create"));
   });
 });

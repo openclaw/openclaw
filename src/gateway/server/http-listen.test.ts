@@ -17,7 +17,7 @@ function createFakeHttpServer(outcomes: ListenOutcome[]) {
     public closeCalls = 0;
     private attempt = 0;
 
-    listen(_port: number, hostValue: string) {
+    listen(_port: number, _host: string) {
       const outcome = outcomes[this.attempt] ?? { kind: "listening" };
       this.attempt += 1;
       setImmediate(() => {
@@ -63,9 +63,14 @@ describe("listenGatewayHttpServer", () => {
 
   it("throws GatewayLockError after EADDRINUSE retries are exhausted", async () => {
     sleepMock.mockClear();
-    const fake = createFakeHttpServer(
-      Array.from({ length: 22 }, () => ({ kind: "error" as const, code: "EADDRINUSE" })),
-    );
+    const fake = createFakeHttpServer([
+      { kind: "error", code: "EADDRINUSE" },
+      { kind: "error", code: "EADDRINUSE" },
+      { kind: "error", code: "EADDRINUSE" },
+      { kind: "error", code: "EADDRINUSE" },
+      { kind: "error", code: "EADDRINUSE" },
+      { kind: "error", code: "EADDRINUSE" },
+    ]);
 
     await expect(
       listenGatewayHttpServer({
@@ -75,7 +80,7 @@ describe("listenGatewayHttpServer", () => {
       }),
     ).rejects.toBeInstanceOf(GatewayLockError);
 
-    expect(fake.closeCalls).toBe(20);
+    expect(fake.closeCalls).toBe(4);
   });
 
   it("wraps non-EADDRINUSE errors as GatewayLockError", async () => {

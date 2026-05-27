@@ -1,6 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { LineChannelData, OpenClawPluginApi, ReplyPayload } from "../api.js";
 import {
   createActionCard,
   createImageCard,
@@ -9,8 +7,7 @@ import {
   createReceiptCard,
   type CardAction,
   type ListItem,
-} from "./flex-templates.js";
-import type { LineChannelData } from "./types.js";
+} from "../api.js";
 
 const CARD_USAGE = `Usage: /card <type> "title" "body" [options]
 
@@ -137,7 +134,7 @@ function parseCardArgs(argsStr: string): {
   // Extract type (first word)
   const typeMatch = argsStr.match(/^(\w+)/);
   if (typeMatch) {
-    result.type = normalizeLowercaseStringOrEmpty(typeMatch[1]);
+    result.type = typeMatch[1].toLowerCase();
     argsStr = argsStr.slice(typeMatch[0].length).trim();
   }
 

@@ -1,48 +1,34 @@
-import readline from "node:readline/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { isYes, setVerbose, setYes } from "../globals.js";
-import { PromptInputClosedError, promptYesNo } from "./prompt.js";
 
-const readlineState = vi.hoisted(() => {
-  const question = vi.fn(async () => "");
-  const close = vi.fn();
-  const listeners = new Map<string, Set<() => void>>();
-  const once = vi.fn((event: string, listener: () => void) => {
-    const current = listeners.get(event) ?? new Set<() => void>();
-    current.add(listener);
-    listeners.set(event, current);
-  });
-  const off = vi.fn((event: string, listener: () => void) => {
-    listeners.get(event)?.delete(listener);
-  });
-  const emit = (event: string) => {
-    const current = [...(listeners.get(event) ?? [])];
-    listeners.delete(event);
-    for (const listener of current) {
-      listener();
-    }
+type ReadlineMock = {
+  default: {
+    createInterface: () => {
+      question: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+    };
   };
-  const resetListeners = () => {
-    listeners.clear();
-  };
-  const createInterface = vi.fn(() => ({ question, close, once, off }));
-  return { question, close, createInterface, emit, off, once, resetListeners };
-});
+};
 
-vi.mock("node:readline/promises", () => ({
-  default: { createInterface: readlineState.createInterface },
-}));
+type PromptModule = typeof import("./prompt.js");
+type GlobalsModule = typeof import("../globals.js");
 
-beforeEach(() => {
-  setYes(false);
-  setVerbose(false);
-  readlineState.question.mockReset();
-  readlineState.question.mockResolvedValue("");
-  readlineState.close.mockClear();
-  readlineState.createInterface.mockClear();
-  readlineState.off.mockClear();
-  readlineState.once.mockClear();
-  readlineState.resetListeners();
+let promptYesNo: PromptModule["promptYesNo"];
+let readline: ReadlineMock;
+let isYes: GlobalsModule["isYes"];
+let setVerbose: GlobalsModule["setVerbose"];
+let setYes: GlobalsModule["setYes"];
+
+beforeEach(async () => {
+  vi.resetModules();
+  vi.doMock("node:readline/promises", () => {
+    const question = vi.fn(async () => "");
+    const close = vi.fn();
+    const createInterface = vi.fn(() => ({ question, close }));
+    return { default: { createInterface } };
+  });
+  ({ promptYesNo } = await import("./prompt.js"));
+  ({ isYes, setVerbose, setYes } = await import("../globals.js"));
+  readline = (await import("node:readline/promises")) as unknown as ReadlineMock;
 });
 
 describe("promptYesNo", () => {
@@ -57,27 +43,17 @@ describe("promptYesNo", () => {
   it("asks the question and respects default", async () => {
     setYes(false);
     setVerbose(false);
-    expect(readline.createInterface).toBe(readlineState.createInterface);
-    readlineState.question.mockResolvedValueOnce("");
+    const { question: questionMock } = readline.default.createInterface();
+    questionMock.mockResolvedValueOnce("");
     const resultDefaultYes = await promptYesNo("Continue?", true);
     expect(resultDefaultYes).toBe(true);
 
-    readlineState.question.mockResolvedValueOnce("n");
+    questionMock.mockResolvedValueOnce("n");
     const resultNo = await promptYesNo("Continue?", true);
     expect(resultNo).toBe(false);
 
-    readlineState.question.mockResolvedValueOnce("y");
+    questionMock.mockResolvedValueOnce("y");
     const resultYes = await promptYesNo("Continue?", false);
     expect(resultYes).toBe(true);
-  });
-
-  it("rejects when input closes before an answer is received", async () => {
-    readlineState.question.mockReturnValueOnce(new Promise<string>(() => undefined));
-
-    const result = promptYesNo("Continue?");
-    readlineState.emit("close");
-
-    await expect(result).rejects.toThrow(PromptInputClosedError);
-    expect(readlineState.close).toHaveBeenCalledTimes(1);
   });
 });

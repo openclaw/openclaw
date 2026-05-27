@@ -1,5 +1,4 @@
 import { formatToolSummary, resolveToolDisplay } from "../agents/tool-display.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 
 type ToolAggregateOptions = {
@@ -24,12 +23,9 @@ export function formatToolAggregate(
 ): string {
   const filtered = (metas ?? []).filter(Boolean).map(shortenMeta);
   const display = resolveToolDisplay({ name: toolName });
-  const normalizedToolName = normalizeLowercaseStringOrEmpty(toolName);
-  const compactCommandSummary =
-    filtered.length > 0 && (normalizedToolName === "exec" || normalizedToolName === "bash");
-  const prefix = compactCommandSummary ? display.emoji : `${display.emoji} ${display.label}`;
+  const prefix = `${display.emoji} ${display.label}`;
   if (!filtered.length) {
-    return `${display.emoji} ${display.label}`;
+    return prefix;
   }
 
   const rawSegments: string[] = [];
@@ -70,8 +66,7 @@ export function formatToolAggregate(
 
   const allSegments = [...rawSegments, ...segments];
   const meta = allSegments.join("; ");
-  const formattedMeta = formatMetaForDisplay(toolName, meta, options?.markdown);
-  return compactCommandSummary ? `${prefix} ${formattedMeta}` : `${prefix}: ${formattedMeta}`;
+  return `${prefix}: ${formatMetaForDisplay(toolName, meta, options?.markdown)}`;
 }
 
 export function formatToolPrefix(toolName?: string, meta?: string) {
@@ -85,7 +80,7 @@ function formatMetaForDisplay(
   meta: string,
   markdown?: boolean,
 ): string {
-  const normalized = normalizeLowercaseStringOrEmpty(toolName);
+  const normalized = (toolName ?? "").trim().toLowerCase();
   if (normalized === "exec" || normalized === "bash") {
     const { flags, body } = splitExecFlags(meta);
     if (flags.length > 0) {
@@ -141,21 +136,8 @@ function maybeWrapMarkdown(value: string, markdown?: boolean): string {
   if (!markdown) {
     return value;
   }
-  const delimiter = "`".repeat(longestBacktickRun(value) + 1);
-  const padding = value.startsWith("`") || value.endsWith("`") || value.includes("\n") ? " " : "";
-  return `${delimiter}${padding}${value}${padding}${delimiter}`;
-}
-
-function longestBacktickRun(value: string): number {
-  let longest = 0;
-  let current = 0;
-  for (const char of value) {
-    if (char === "`") {
-      current += 1;
-      longest = Math.max(longest, current);
-      continue;
-    }
-    current = 0;
+  if (value.includes("`")) {
+    return value;
   }
-  return longest;
+  return `\`${value}\``;
 }

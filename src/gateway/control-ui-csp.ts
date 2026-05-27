@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const SCRIPT_ATTRIBUTE_NAME_RE = /\s([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g;
 
@@ -28,7 +27,7 @@ export function computeInlineScriptHashes(html: string): string[] {
 
 function hasScriptSrcAttribute(openTag: string): boolean {
   return Array.from(openTag.matchAll(SCRIPT_ATTRIBUTE_NAME_RE)).some(
-    (match) => normalizeLowercaseStringOrEmpty(match[1]) === "src",
+    (match) => (match[1] ?? "").toLowerCase() === "src",
   );
 }
 
@@ -44,10 +43,8 @@ export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }
     "frame-ancestors 'none'",
     scriptSrc,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: blob:",
-    "media-src 'self' data: blob:",
+    "img-src 'self' data: https:",
     "font-src 'self' https://fonts.gstatic.com",
-    "worker-src 'self'",
-    "connect-src 'self' ws: wss: https://api.openai.com https://tweakcn.com",
+    "connect-src 'self' ws: wss:",
   ].join("; ");
 }

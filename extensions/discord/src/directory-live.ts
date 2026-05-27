@@ -2,7 +2,6 @@ import type {
   ChannelDirectoryEntry,
   DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import { fetchDiscord } from "./api.js";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
@@ -13,10 +12,10 @@ type DiscordGuild = { id: string; name: string };
 type DiscordUser = { id: string; username: string; global_name?: string; bot?: boolean };
 type DiscordMember = { user: DiscordUser; nick?: string | null };
 type DiscordChannel = { id: string; name?: string | null };
-type DiscordDirectoryAccess = { token: string; query: string; accountId: string };
+type DiscordDirectoryAccess = { token: string; query: string };
 
 function normalizeQuery(value?: string | null): string {
-  return normalizeOptionalLowercaseString(value) ?? "";
+  return value?.trim().toLowerCase() ?? "";
 }
 
 function buildUserRank(user: DiscordUser): number {
@@ -31,7 +30,7 @@ function resolveDiscordDirectoryAccess(
   if (!token) {
     return null;
   }
-  return { token, query: normalizeQuery(params.query), accountId: account.accountId };
+  return { token, query: normalizeQuery(params.query) };
 }
 
 async function listDiscordGuilds(token: string): Promise<DiscordGuild[]> {
@@ -83,7 +82,7 @@ export async function listDiscordDirectoryPeersLive(
   if (!access) {
     return [];
   }
-  const { token, query, accountId } = access;
+  const { token, query } = access;
   if (!query) {
     return [];
   }
@@ -107,7 +106,7 @@ export async function listDiscordDirectoryPeersLive(
         continue;
       }
       rememberDiscordDirectoryUser({
-        accountId,
+        accountId: params.accountId,
         userId: user.id,
         handles: [
           user.username,

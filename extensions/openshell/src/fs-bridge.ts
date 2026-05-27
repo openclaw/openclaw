@@ -1,14 +1,13 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
+  SandboxContext,
   SandboxFsBridge,
   SandboxFsStat,
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
-import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
-import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
+import type { OpenShellSandboxBackend } from "./backend.js";
 import { movePathWithCopyFallback } from "./mirror.js";
 
 type ResolvedMountPath = SandboxResolvedPath & {
@@ -18,7 +17,7 @@ type ResolvedMountPath = SandboxResolvedPath & {
 };
 
 export function createOpenShellFsBridge(params: {
-  sandbox: OpenShellFsBridgeContext;
+  sandbox: SandboxContext;
   backend: OpenShellSandboxBackend;
 }): SandboxFsBridge {
   return new OpenShellFsBridge(params.sandbox, params.backend);
@@ -31,7 +30,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
   );
 
   constructor(
-    private readonly sandbox: OpenShellFsBridgeContext,
+    private readonly sandbox: SandboxContext,
     private readonly backend: OpenShellSandboxBackend,
   ) {}
 
@@ -51,29 +50,13 @@ class OpenShellFsBridge implements SandboxFsBridge {
   }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
-    let opened: Awaited<ReturnType<Awaited<ReturnType<typeof fsRoot>>["open"]>>;
-    try {
-      await assertLocalPathSafety({
-        target,
-        root: target.mountHostRoot,
-        allowMissingLeaf: false,
-        allowFinalSymlinkForUnlink: false,
-      });
-      const root = await fsRoot(target.mountHostRoot);
-      opened = await root.open(path.relative(target.mountHostRoot, hostPath), {
-        hardlinks: "reject",
-      });
-      try {
-        return (await opened.handle.readFile()) as Buffer;
-      } finally {
-        await opened.handle.close();
-      }
-    } catch (err) {
-      throw new Error(
-        `Sandbox boundary checks failed; cannot read files: ${target.containerPath}`,
-        { cause: err },
-      );
-    }
+    await assertLocalPathSafety({
+      target,
+      root: target.mountHostRoot,
+      allowMissingLeaf: false,
+      allowFinalSymlinkForUnlink: false,
+    });
+    return await fsPromises.readFile(hostPath);
   }
 
   async writeFile(params: {
@@ -96,10 +79,16 @@ class OpenShellFsBridge implements SandboxFsBridge {
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    const root = await fsRoot(target.mountHostRoot);
-    await root.write(path.relative(target.mountHostRoot, hostPath), buffer, {
-      mkdir: params.mkdir,
-    });
+    const parentDir = path.dirname(hostPath);
+    if (params.mkdir !== false) {
+      await fsPromises.mkdir(parentDir, { recursive: true });
+    }
+    const tempPath = path.join(
+      parentDir,
+      `.openclaw-openshell-write-${path.basename(hostPath)}-${process.pid}-${Date.now()}`,
+    );
+    await fsPromises.writeFile(tempPath, buffer);
+    await fsPromises.rename(tempPath, hostPath);
     await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
   }
 
@@ -301,6 +290,11 @@ class OpenShellFsBridge implements SandboxFsBridge {
   }
 }
 
+function isPathInside(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 async function assertLocalPathSafety(params: {
   target: ResolvedMountPath;
   root: string;
@@ -327,7 +321,7 @@ async function assertLocalPathSafety(params: {
     .slice(0, Math.max(0, relative.split(path.sep).filter(Boolean).length));
   let cursor = params.root;
   for (let index = 0; index < segments.length; index += 1) {
-    cursor = path.join(cursor, segments[index]);
+    cursor = path.join(cursor, segments[index]!);
     const stats = await fsPromises.lstat(cursor).catch(() => null);
     if (!stats) {
       if (index === segments.length - 1 && params.allowMissingLeaf) {
@@ -361,10 +355,4 @@ async function resolveCanonicalCandidate(targetPath: string): Promise<string> {
     missing.unshift(path.basename(cursor));
     cursor = parent;
   }
-}
-
-export function setReadOpenFlagsResolverForTest(
-  _resolver: (() => { flags: number; supportsNoFollow: boolean }) | undefined,
-): void {
-  // Retained for older OpenShell tests; pinned reads now delegate to fs-safe.
 }

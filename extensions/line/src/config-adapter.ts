@@ -1,19 +1,20 @@
 import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   listLineAccountIds,
   resolveDefaultLineAccountId,
   resolveLineAccount,
+  type OpenClawConfig,
   type ResolvedLineAccount,
-} from "./channel-api.js";
+} from "../runtime-api.js";
 
-function normalizeLineAllowFrom(entry: string): string {
+export function normalizeLineAllowFrom(entry: string): string {
   return entry.replace(/^line:(?:user:)?/i, "");
 }
 
 export const lineConfigAdapter = createScopedChannelConfigAdapter<
   ResolvedLineAccount,
-  ResolvedLineAccount
+  ResolvedLineAccount,
+  OpenClawConfig
 >({
   sectionKey: "line",
   listAccountIds: listLineAccountIds,
@@ -22,5 +23,9 @@ export const lineConfigAdapter = createScopedChannelConfigAdapter<
   defaultAccountId: resolveDefaultLineAccountId,
   clearBaseFields: ["channelSecret", "tokenFile", "secretFile"],
   resolveAllowFrom: (account) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) => normalizeStringEntries(allowFrom).map(normalizeLineAllowFrom),
+  formatAllowFrom: (allowFrom) =>
+    allowFrom
+      .map((entry) => String(entry).trim())
+      .filter(Boolean)
+      .map(normalizeLineAllowFrom),
 });

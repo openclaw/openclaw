@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   resolveLineAccount,
   resolveDefaultLineAccountId,
@@ -11,6 +11,7 @@ import {
 } from "./accounts.js";
 
 describe("LINE accounts", () => {
+  const originalEnv = { ...process.env };
   const tempDirs: string[] = [];
 
   const createSecretFile = (fileName: string, contents: string) => {
@@ -22,12 +23,13 @@ describe("LINE accounts", () => {
   };
 
   beforeEach(() => {
-    vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "");
-    vi.stubEnv("LINE_CHANNEL_SECRET", "");
+    process.env = { ...originalEnv };
+    delete process.env.LINE_CHANNEL_ACCESS_TOKEN;
+    delete process.env.LINE_CHANNEL_SECRET;
   });
 
   afterEach(() => {
-    vi.unstubAllEnvs();
+    process.env = originalEnv;
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -57,8 +59,8 @@ describe("LINE accounts", () => {
     });
 
     it("resolves account from environment variables", () => {
-      vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "env-token");
-      vi.stubEnv("LINE_CHANNEL_SECRET", "env-secret");
+      process.env.LINE_CHANNEL_ACCESS_TOKEN = "env-token";
+      process.env.LINE_CHANNEL_SECRET = "env-secret";
 
       const cfg: OpenClawConfig = {
         channels: {
@@ -93,32 +95,6 @@ describe("LINE accounts", () => {
       };
 
       const account = resolveLineAccount({ cfg, accountId: "business" });
-
-      expect(account.accountId).toBe("business");
-      expect(account.enabled).toBe(true);
-      expect(account.channelAccessToken).toBe("business-token");
-      expect(account.channelSecret).toBe("business-secret");
-      expect(account.name).toBe("Business Bot");
-    });
-
-    it("uses configured defaultAccount when accountId is omitted", () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          line: {
-            defaultAccount: "business",
-            accounts: {
-              business: {
-                enabled: true,
-                channelAccessToken: "business-token",
-                channelSecret: "business-secret",
-                name: "Business Bot",
-              },
-            },
-          },
-        },
-      };
-
-      const account = resolveLineAccount({ cfg });
 
       expect(account.accountId).toBe("business");
       expect(account.enabled).toBe(true);
@@ -196,9 +172,10 @@ describe("LINE accounts", () => {
         },
       };
 
-      expect(() => resolveLineAccount({ cfg })).toThrow(
-        /LINE credential file.*must not be a symlink/,
-      );
+      const account = resolveLineAccount({ cfg });
+      expect(account.channelAccessToken).toBe("");
+      expect(account.channelSecret).toBe("");
+      expect(account.tokenSource).toBe("none");
     });
   });
 

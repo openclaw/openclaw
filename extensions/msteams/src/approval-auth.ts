@@ -1,8 +1,7 @@
 import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-auth-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+} from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { normalizeMSTeamsMessagingTarget } from "./resolve-allowlist.js";
 
@@ -13,10 +12,7 @@ function normalizeMSTeamsApproverId(value: string | number): string | undefined 
   if (!normalized?.startsWith("user:")) {
     return undefined;
   }
-  const id = normalizeOptionalLowercaseString(normalized.slice("user:".length));
-  if (!id) {
-    return undefined;
-  }
+  const id = normalized.slice("user:".length).trim().toLowerCase();
   return MSTEAMS_ID_RE.test(id) ? id : undefined;
 }
 
@@ -35,10 +31,7 @@ export const msTeamsApprovalAuth = createResolvedApproverActionAuthAdapter({
     });
   },
   normalizeSenderId: (value) => {
-    const trimmed = normalizeOptionalLowercaseString(value);
-    if (!trimmed) {
-      return undefined;
-    }
+    const trimmed = value.trim().toLowerCase();
     return MSTEAMS_ID_RE.test(trimmed) ? trimmed : undefined;
   },
 });

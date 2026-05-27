@@ -1,8 +1,8 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { privateFileStore } from "../infra/private-file-store.js";
-import { safeParseWithSchema } from "../utils/zod-parse.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
+import { ensureAuthProfileStore } from "./auth-profiles.js";
 import {
   piCredentialsEqual,
   resolvePiCredentialMapFromStore,
@@ -26,12 +26,10 @@ const PiCredentialSchema: z.ZodType<PiCredential> = z.discriminatedUnion("type",
 
 const AuthJsonShapeSchema = z.record(z.string(), z.unknown());
 
-async function readAuthJson(rootDir: string, filePath: string): Promise<AuthJsonShape> {
+async function readAuthJson(filePath: string): Promise<AuthJsonShape> {
   try {
-    const parsed = await privateFileStore(rootDir).readJsonIfExists(
-      path.relative(rootDir, filePath),
-    );
-    return safeParseWithSchema(AuthJsonShapeSchema, parsed) ?? {};
+    const raw = await fs.readFile(filePath, "utf8");
+    return safeParseJsonWithSchema(AuthJsonShapeSchema, raw) ?? {};
   } catch {
     return {};
   }
@@ -60,7 +58,7 @@ export async function ensurePiAuthJsonFromAuthProfiles(agentDir: string): Promis
     return { wrote: false, authPath };
   }
 
-  const existing = await readAuthJson(agentDir, authPath);
+  const existing = await readAuthJson(authPath);
   let changed = false;
 
   for (const [provider, cred] of Object.entries(providerCredentials)) {
@@ -75,9 +73,8 @@ export async function ensurePiAuthJsonFromAuthProfiles(agentDir: string): Promis
     return { wrote: false, authPath };
   }
 
-  await privateFileStore(agentDir).writeJson(path.basename(authPath), existing, {
-    trailingNewline: true,
-  });
+  await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(authPath, `${JSON.stringify(existing, null, 2)}\n`, { mode: 0o600 });
 
   return { wrote: true, authPath };
 }

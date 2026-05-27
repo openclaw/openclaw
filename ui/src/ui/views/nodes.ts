@@ -1,17 +1,50 @@
 import { html, nothing } from "lit";
-import {
-  resolvePendingDeviceApprovalState,
-  type DevicePairingAccessSummary,
-  type PendingDeviceApprovalKind,
-} from "../../../../src/shared/device-pairing-access.js";
-import { t } from "../../i18n/index.ts";
-import type { DeviceTokenSummary, PairedDevice, PendingDevice } from "../controllers/devices.ts";
+import type {
+  DevicePairingList,
+  DeviceTokenSummary,
+  PairedDevice,
+  PendingDevice,
+} from "../controllers/devices.ts";
+import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../controllers/exec-approvals.ts";
 import { formatRelativeTimestamp, formatList } from "../format.ts";
-import { normalizeOptionalString } from "../string-coerce.ts";
 import { renderExecApprovals, resolveExecApprovalsState } from "./nodes-exec-approvals.ts";
 import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./nodes-shared.ts";
-export type { NodesProps } from "./nodes.types.ts";
-import type { NodesProps } from "./nodes.types.ts";
+export type NodesProps = {
+  loading: boolean;
+  nodes: Array<Record<string, unknown>>;
+  devicesLoading: boolean;
+  devicesError: string | null;
+  devicesList: DevicePairingList | null;
+  configForm: Record<string, unknown> | null;
+  configLoading: boolean;
+  configSaving: boolean;
+  configDirty: boolean;
+  configFormMode: "form" | "raw";
+  execApprovalsLoading: boolean;
+  execApprovalsSaving: boolean;
+  execApprovalsDirty: boolean;
+  execApprovalsSnapshot: ExecApprovalsSnapshot | null;
+  execApprovalsForm: ExecApprovalsFile | null;
+  execApprovalsSelectedAgent: string | null;
+  execApprovalsTarget: "gateway" | "node";
+  execApprovalsTargetNodeId: string | null;
+  onRefresh: () => void;
+  onDevicesRefresh: () => void;
+  onDeviceApprove: (requestId: string) => void;
+  onDeviceReject: (requestId: string) => void;
+  onDeviceRotate: (deviceId: string, role: string, scopes?: string[]) => void;
+  onDeviceRevoke: (deviceId: string, role: string) => void;
+  onLoadConfig: () => void;
+  onLoadExecApprovals: () => void;
+  onBindDefault: (nodeId: string | null) => void;
+  onBindAgent: (agentIndex: number, nodeId: string | null) => void;
+  onSaveBindings: () => void;
+  onExecApprovalsTargetChange: (kind: "gateway" | "node", nodeId: string | null) => void;
+  onExecApprovalsSelectAgent: (agentId: string) => void;
+  onExecApprovalsPatch: (path: Array<string | number>, value: unknown) => void;
+  onExecApprovalsRemove: (path: Array<string | number>) => void;
+  onSaveExecApprovals: () => void;
+};
 
 export function renderNodes(props: NodesProps) {
   const bindingState = resolveBindingsState(props);
@@ -25,7 +58,7 @@ export function renderNodes(props: NodesProps) {
           <div class="card-sub">Paired devices and live links.</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? t("common.loading") : t("common.refresh")}
+          ${props.loading ? "Loading…" : "Refresh"}
         </button>
       </div>
       <div class="list" style="margin-top: 16px;">
@@ -41,11 +74,6 @@ function renderDevices(props: NodesProps) {
   const list = props.devicesList ?? { pending: [], paired: [] };
   const pending = Array.isArray(list.pending) ? list.pending : [];
   const paired = Array.isArray(list.paired) ? list.paired : [];
-  const pairedByDeviceId = new Map(
-    paired
-      .map((device) => [normalizeOptionalString(device.deviceId), device] as const)
-      .filter((entry): entry is [string, PairedDevice] => Boolean(entry[0])),
-  );
   return html`
     <section class="card">
       <div class="row" style="justify-content: space-between;">
@@ -54,7 +82,7 @@ function renderDevices(props: NodesProps) {
           <div class="card-sub">Pairing requests + role tokens.</div>
         </div>
         <button class="btn" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
-          ${props.devicesLoading ? t("common.loading") : t("common.refresh")}
+          ${props.devicesLoading ? "Loading…" : "Refresh"}
         </button>
       </div>
       ${props.devicesError
@@ -64,9 +92,7 @@ function renderDevices(props: NodesProps) {
         ${pending.length > 0
           ? html`
               <div class="muted" style="margin-bottom: 8px;">Pending</div>
-              ${pending.map((req) =>
-                renderPendingDevice(req, props, lookupPairedDevice(pairedByDeviceId, req)),
-              )}
+              ${pending.map((req) => renderPendingDevice(req, props))}
             `
           : nothing}
         ${paired.length > 0
@@ -83,53 +109,11 @@ function renderDevices(props: NodesProps) {
   `;
 }
 
-function lookupPairedDevice(
-  pairedByDeviceId: ReadonlyMap<string, PairedDevice>,
-  request: Pick<PendingDevice, "deviceId" | "publicKey">,
-): PairedDevice | undefined {
-  const deviceId = normalizeOptionalString(request.deviceId);
-  if (!deviceId) {
-    return undefined;
-  }
-  const paired = pairedByDeviceId.get(deviceId);
-  if (!paired) {
-    return undefined;
-  }
-  const requestPublicKey = normalizeOptionalString(request.publicKey);
-  const pairedPublicKey = normalizeOptionalString(paired.publicKey);
-  if (requestPublicKey && pairedPublicKey && requestPublicKey !== pairedPublicKey) {
-    return undefined;
-  }
-  return paired;
-}
-
-function formatAccessSummary(access: DevicePairingAccessSummary | null): string {
-  if (!access) {
-    return "none";
-  }
-  return `roles: ${formatList(access.roles)} · scopes: ${formatList(access.scopes)}`;
-}
-
-function renderPendingApprovalNote(kind: PendingDeviceApprovalKind) {
-  switch (kind) {
-    case "scope-upgrade":
-      return "scope upgrade requires approval";
-    case "role-upgrade":
-      return "role upgrade requires approval";
-    case "re-approval":
-      return "reconnect details changed; approval required";
-    case "new-pairing":
-      return "new device pairing request";
-  }
-  const exhaustiveKind: never = kind;
-  void exhaustiveKind;
-  throw new Error("unsupported pending approval kind");
-}
-
-function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: PairedDevice) {
-  const name = normalizeOptionalString(req.displayName) || req.deviceId;
-  const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : t("common.na");
-  const approval = resolvePendingDeviceApprovalState(req, paired);
+function renderPendingDevice(req: PendingDevice, props: NodesProps) {
+  const name = req.displayName?.trim() || req.deviceId;
+  const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : "n/a";
+  const roleValue = req.role?.trim() || formatList(req.roles);
+  const scopesValue = formatList(req.scopes);
   const repair = req.isRepair ? " · repair" : "";
   const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
   return html`
@@ -138,18 +122,8 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: Pai
         <div class="list-title">${name}</div>
         <div class="list-sub">${req.deviceId}${ip}</div>
         <div class="muted" style="margin-top: 6px;">
-          ${renderPendingApprovalNote(approval.kind)} · requested ${age}${repair}
+          role: ${roleValue} · scopes: ${scopesValue} · requested ${age}${repair}
         </div>
-        <div class="muted" style="margin-top: 6px;">
-          requested: ${formatAccessSummary(approval.requested)}
-        </div>
-        ${approval.approved
-          ? html`
-              <div class="muted" style="margin-top: 6px;">
-                approved now: ${formatAccessSummary(approval.approved)}
-              </div>
-            `
-          : nothing}
       </div>
       <div class="list-meta">
         <div class="row" style="justify-content: flex-end; gap: 8px; flex-wrap: wrap;">
@@ -166,7 +140,7 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: Pai
 }
 
 function renderPairedDevice(device: PairedDevice, props: NodesProps) {
-  const name = normalizeOptionalString(device.displayName) || device.deviceId;
+  const name = device.displayName?.trim() || device.deviceId;
   const ip = device.remoteIp ? ` · ${device.remoteIp}` : "";
   const roles = `roles: ${formatList(device.roles)}`;
   const scopes = `scopes: ${formatList(device.scopes)}`;
@@ -277,42 +251,44 @@ function renderBindings(state: BindingState) {
     <section class="card">
       <div class="row" style="justify-content: space-between; align-items: center;">
         <div>
-          <div class="card-title">${t("nodes.binding.execNodeBinding")}</div>
-          <div class="card-sub">${t("nodes.binding.execNodeBindingSubtitle")}</div>
+          <div class="card-title">Exec node binding</div>
+          <div class="card-sub">
+            Pin agents to a specific node when using <span class="mono">exec host=node</span>.
+          </div>
         </div>
         <button
           class="btn"
           ?disabled=${state.disabled || !state.configDirty}
           @click=${state.onSave}
         >
-          ${state.configSaving ? t("common.saving") : t("common.save")}
+          ${state.configSaving ? "Saving…" : "Save"}
         </button>
       </div>
 
       ${state.formMode === "raw"
         ? html`
             <div class="callout warn" style="margin-top: 12px">
-              ${t("nodes.binding.formModeHint")}
+              Switch the Config tab to <strong>Form</strong> mode to edit bindings here.
             </div>
           `
         : nothing}
       ${!state.ready
         ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
-            <div class="muted">${t("nodes.binding.loadConfigHint")}</div>
+            <div class="muted">Load config to edit bindings.</div>
             <button class="btn" ?disabled=${state.configLoading} @click=${state.onLoadConfig}>
-              ${state.configLoading ? t("common.loading") : t("common.loadConfig")}
+              ${state.configLoading ? "Loading…" : "Load config"}
             </button>
           </div>`
         : html`
             <div class="list" style="margin-top: 16px;">
               <div class="list-item">
                 <div class="list-main">
-                  <div class="list-title">${t("nodes.binding.defaultBinding")}</div>
-                  <div class="list-sub">${t("nodes.binding.defaultBindingHint")}</div>
+                  <div class="list-title">Default binding</div>
+                  <div class="list-sub">Used when agents do not override a node binding.</div>
                 </div>
                 <div class="list-meta">
                   <label class="field">
-                    <span>${t("nodes.binding.node")}</span>
+                    <span>Node</span>
                     <select
                       ?disabled=${state.disabled || !supportsBinding}
                       @change=${(event: Event) => {

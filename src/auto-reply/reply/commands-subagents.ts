@@ -1,68 +1,26 @@
+import { listControlledSubagentRuns } from "../../agents/subagent-control.js";
 import { logVerbose } from "../../globals.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { handleSubagentsAgentsAction } from "./commands-subagents/action-agents.js";
+import { handleSubagentsFocusAction } from "./commands-subagents/action-focus.js";
+import { handleSubagentsHelpAction } from "./commands-subagents/action-help.js";
+import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
+import { handleSubagentsKillAction } from "./commands-subagents/action-kill.js";
+import { handleSubagentsListAction } from "./commands-subagents/action-list.js";
+import { handleSubagentsLogAction } from "./commands-subagents/action-log.js";
+import { handleSubagentsSendAction } from "./commands-subagents/action-send.js";
+import { handleSubagentsSpawnAction } from "./commands-subagents/action-spawn.js";
+import { handleSubagentsUnfocusAction } from "./commands-subagents/action-unfocus.js";
 import {
+  type SubagentsCommandContext,
+  extractMessageText,
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
   stopWithText,
-  type SubagentsCommandContext,
-} from "./commands-subagents-dispatch.js";
+} from "./commands-subagents/shared.js";
 import type { CommandHandler } from "./commands-types.js";
 
-const actionAgentsLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-agents.js"),
-);
-const actionFocusLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-focus.js"),
-);
-const actionHelpLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-help.js"),
-);
-const actionInfoLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-info.js"),
-);
-const actionListLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-list.js"),
-);
-const actionLogLoader = createLazyImportLoader(() => import("./commands-subagents/action-log.js"));
-const actionUnfocusLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-unfocus.js"),
-);
-const controlRuntimeLoader = createLazyImportLoader(
-  () => import("./commands-subagents-control.runtime.js"),
-);
-
-function loadAgentsAction() {
-  return actionAgentsLoader.load();
-}
-
-function loadFocusAction() {
-  return actionFocusLoader.load();
-}
-
-function loadHelpAction() {
-  return actionHelpLoader.load();
-}
-
-function loadInfoAction() {
-  return actionInfoLoader.load();
-}
-
-function loadListAction() {
-  return actionListLoader.load();
-}
-
-function loadLogAction() {
-  return actionLogLoader.load();
-}
-
-function loadUnfocusAction() {
-  return actionUnfocusLoader.load();
-}
-
-function loadControlRuntime() {
-  return controlRuntimeLoader.load();
-}
+export { extractMessageText };
 
 export const handleSubagentsCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -86,10 +44,15 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
   const restTokens = rest.split(/\s+/).filter(Boolean);
   const action = resolveSubagentsAction({ handledPrefix, restTokens });
   if (!action) {
-    return (await loadHelpAction()).handleSubagentsHelpAction();
+    return handleSubagentsHelpAction();
   }
 
-  const requesterKey = resolveRequesterSessionKey(params);
+  const requesterKey =
+    action === "spawn"
+      ? resolveRequesterSessionKey(params, {
+          preferCommandTarget: true,
+        })
+      : resolveRequesterSessionKey(params);
   if (!requesterKey) {
     return stopWithText("⚠️ Missing session key.");
   }
@@ -98,26 +61,34 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     params,
     handledPrefix,
     requesterKey,
-    runs: (await loadControlRuntime()).listControlledSubagentRuns(requesterKey),
+    runs: listControlledSubagentRuns(requesterKey),
     restTokens,
   };
 
   switch (action) {
     case "help":
-      return (await loadHelpAction()).handleSubagentsHelpAction();
+      return handleSubagentsHelpAction();
     case "agents":
-      return (await loadAgentsAction()).handleSubagentsAgentsAction(ctx);
+      return handleSubagentsAgentsAction(ctx);
     case "focus":
-      return await (await loadFocusAction()).handleSubagentsFocusAction(ctx);
+      return await handleSubagentsFocusAction(ctx);
     case "unfocus":
-      return await (await loadUnfocusAction()).handleSubagentsUnfocusAction(ctx);
+      return await handleSubagentsUnfocusAction(ctx);
     case "list":
-      return (await loadListAction()).handleSubagentsListAction(ctx);
+      return handleSubagentsListAction(ctx);
+    case "kill":
+      return await handleSubagentsKillAction(ctx);
     case "info":
-      return (await loadInfoAction()).handleSubagentsInfoAction(ctx);
+      return handleSubagentsInfoAction(ctx);
     case "log":
-      return await (await loadLogAction()).handleSubagentsLogAction(ctx);
+      return await handleSubagentsLogAction(ctx);
+    case "send":
+      return await handleSubagentsSendAction(ctx, false);
+    case "steer":
+      return await handleSubagentsSendAction(ctx, true);
+    case "spawn":
+      return await handleSubagentsSpawnAction(ctx);
     default:
-      return (await loadHelpAction()).handleSubagentsHelpAction();
+      return handleSubagentsHelpAction();
   }
 };

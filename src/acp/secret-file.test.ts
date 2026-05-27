@@ -1,19 +1,12 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { readSecretFromFile } from "./secret-file.js";
+import { MAX_SECRET_FILE_BYTES, readSecretFromFile } from "./secret-file.js";
 
 describe("readSecretFromFile", () => {
-  it("reads and trims secrets from regular files", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-secret-"));
-    const file = path.join(dir, "secret.txt");
-    try {
-      await fs.writeFile(file, " token-value \n", "utf8");
+  it("keeps the shared secret-file limit", () => {
+    expect(MAX_SECRET_FILE_BYTES).toBe(16 * 1024);
+  });
 
-      expect(readSecretFromFile(file, "ACP secret")).toBe("token-value");
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
+  it("exposes the hardened secret reader", () => {
+    expect(typeof readSecretFromFile).toBe("function");
   });
 });

@@ -1,8 +1,12 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type {
+  MarkdownTableMode,
+  OpenClawConfig,
+  ReplyPayload,
+  RuntimeEnv,
+} from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { chunkMatrixText, sendMessageMatrix } from "../send.js";
-import type { MarkdownTableMode, OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 const THINKING_BLOCK_RE =
@@ -16,7 +20,7 @@ function shouldSuppressReasoningReplyText(text?: string): boolean {
   if (!trimmedStart) {
     return false;
   }
-  if (normalizeLowercaseStringOrEmpty(trimmedStart).startsWith("reasoning:")) {
+  if (trimmedStart.toLowerCase().startsWith("reasoning:")) {
     return true;
   }
   THINKING_TAG_RE.lastIndex = 0;
@@ -36,12 +40,12 @@ export async function deliverMatrixReplies(params: {
   client: MatrixClient;
   runtime: RuntimeEnv;
   textLimit: number;
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: "off" | "first" | "all";
   threadId?: string;
   accountId?: string;
   mediaLocalRoots?: readonly string[];
   tableMode?: MarkdownTableMode;
-}): Promise<boolean> {
+}): Promise<void> {
   const core = getMatrixRuntime();
   const tableMode =
     params.tableMode ??
@@ -56,7 +60,6 @@ export async function deliverMatrixReplies(params: {
     }
   };
   let hasReplied = false;
-  let deliveredAny = false;
   for (const reply of params.replies) {
     if (reply.isReasoning === true || shouldSuppressReasoningReplyText(reply.text)) {
       logVerbose("matrix reply suppressed as reasoning-only");
@@ -103,7 +106,6 @@ export async function deliverMatrixReplies(params: {
           threadId: params.threadId,
           accountId: params.accountId,
         });
-        deliveredAny = true;
         sentTextChunk = true;
       }
       if (replyToIdForReply && !hasReplied && sentTextChunk) {
@@ -125,12 +127,10 @@ export async function deliverMatrixReplies(params: {
         audioAsVoice: reply.audioAsVoice,
         accountId: params.accountId,
       });
-      deliveredAny = true;
       first = false;
     }
     if (replyToIdForReply && !hasReplied) {
       hasReplied = true;
     }
   }
-  return deliveredAny;
 }

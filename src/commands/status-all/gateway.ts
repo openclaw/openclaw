@@ -1,6 +1,4 @@
 import fs from "node:fs/promises";
-import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
   const raw = await fs.readFile(filePath, "utf8").catch(() => "");
@@ -116,10 +114,13 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
             return null;
           }
         })();
-        const code = normalizeOptionalString(parsed?.error?.code) ?? null;
-        const msg = normalizeOptionalString(parsed?.error?.message) ?? null;
-        const refreshReason = classifyOAuthRefreshFailureReason(msg ?? "");
-        const msgShort = msg ? (refreshReason ? "re-auth required" : shorten(msg, 52)) : null;
+        const code = parsed?.error?.code?.trim() || null;
+        const msg = parsed?.error?.message?.trim() || null;
+        const msgShort = msg
+          ? msg.toLowerCase().includes("signing in again")
+            ? "re-auth required"
+            : shorten(msg, 52)
+          : null;
         const base = `[${tag}] token refresh ${status}${code ? ` ${code}` : ""}${msgShort ? ` · ${msgShort}` : ""}`;
         addGroup(`token:${tag}:${status}:${code ?? ""}:${msgShort ?? ""}`, base);
         continue;
@@ -131,7 +132,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
       /^Embedded agent failed before reply:\s+OAuth token refresh failed for ([^:]+):/,
     );
     if (embedded) {
-      const provider = normalizeOptionalString(embedded[1]) || "unknown";
+      const provider = embedded[1]?.trim() || "unknown";
       addGroup(`embedded:${provider}`, `Embedded agent: OAuth token refresh failed (${provider})`);
       continue;
     }
@@ -178,3 +179,5 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
   ];
   return kept;
 }
+
+export { pickGatewaySelfPresence } from "../gateway-presence.js";

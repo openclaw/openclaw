@@ -1,1 +1,1 @@
-export { getReplyFromConfig } from "./get-reply.js";
+export { getReplyFromConfig } from "../reply.js";

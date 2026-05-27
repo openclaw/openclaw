@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TlonResolvedAccount } from "../types.js";
-import {
-  applyTlonSettingsOverrides,
-  buildTlonSettingsMigrations,
-  shouldMigrateTlonSetting,
-} from "./settings-helpers.js";
+import { applyTlonSettingsOverrides } from "./settings-helpers.js";
 
 const baseAccount: TlonResolvedAccount = {
   accountId: "default",
@@ -14,7 +10,7 @@ const baseAccount: TlonResolvedAccount = {
   ship: "~sampel-palnet",
   url: "https://example.com",
   code: "lidlut-tabwed-pillex-ridrup",
-  dangerouslyAllowPrivateNetwork: false,
+  allowPrivateNetwork: false,
   groupChannels: ["chat/~host/general"],
   dmAllowlist: ["~zod"],
   groupInviteAllowlist: ["~bus"],
@@ -26,44 +22,6 @@ const baseAccount: TlonResolvedAccount = {
   ownerShip: "~marzod",
 };
 
-function allowlistMigrationDecisions(currentSettings: Record<string, unknown>) {
-  const allowlistKeys = new Set(["dmAllowlist", "groupInviteAllowlist", "defaultAuthorizedShips"]);
-  return Object.fromEntries(
-    buildTlonSettingsMigrations(baseAccount, currentSettings)
-      .filter((migration) => allowlistKeys.has(migration.key))
-      .map((migration) => [
-        migration.key,
-        shouldMigrateTlonSetting(migration.fileValue, migration.settingsValue),
-      ]),
-  );
-}
-
-describe("shouldMigrateTlonSetting", () => {
-  it("does not rehydrate explicit empty-array revocations during startup migration", () => {
-    const decisions = allowlistMigrationDecisions({
-      dmAllowlist: [],
-      groupInviteAllowlist: [],
-      defaultAuthorizedShips: [],
-    });
-
-    expect(decisions).toEqual({
-      dmAllowlist: false,
-      groupInviteAllowlist: false,
-      defaultAuthorizedShips: false,
-    });
-  });
-
-  it("still seeds file-config allowlists on first run when settings are missing", () => {
-    const decisions = allowlistMigrationDecisions({});
-
-    expect(decisions).toEqual({
-      dmAllowlist: true,
-      groupInviteAllowlist: true,
-      defaultAuthorizedShips: true,
-    });
-  });
-});
-
 describe("applyTlonSettingsOverrides", () => {
   it("treats explicit empty settings allowlists as authoritative deny-all", () => {
     const result = applyTlonSettingsOverrides({
@@ -74,8 +32,8 @@ describe("applyTlonSettingsOverrides", () => {
       },
     });
 
-    expect(result.effectiveDmAllowlist).toStrictEqual([]);
-    expect(result.effectiveGroupInviteAllowlist).toStrictEqual([]);
+    expect(result.effectiveDmAllowlist).toEqual([]);
+    expect(result.effectiveGroupInviteAllowlist).toEqual([]);
   });
 
   it("falls back to file config when settings fields are removed", () => {
@@ -108,6 +66,6 @@ describe("applyTlonSettingsOverrides", () => {
     expect(result.effectiveAutoAcceptGroupInvites).toBe(false);
     expect(result.effectiveShowModelSig).toBe(true);
     expect(result.effectiveOwnerShip).toBe("~nec");
-    expect(result.pendingApprovals).toStrictEqual([]);
+    expect(result.pendingApprovals).toEqual([]);
   });
 });

@@ -2,11 +2,6 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import {
   deliveryContextFromSession,
   deliveryContextKey,
   normalizeDeliveryContext,
@@ -28,7 +23,7 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
   if (!parsed?.rest) {
     return undefined;
   }
-  const head = normalizeOptionalLowercaseString(parsed.rest.split(":")[0]);
+  const head = parsed.rest.split(":")[0]?.trim().toLowerCase();
   if (!head || head === "main" || head === "cron" || head === "subagent" || head === "acp") {
     return undefined;
   }
@@ -38,16 +33,16 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
 function isMainSessionKey(sessionKey?: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
-    return normalizeLowercaseStringOrEmpty(sessionKey) === "main";
+    return (sessionKey ?? "").trim().toLowerCase() === "main";
   }
-  return normalizeLowercaseStringOrEmpty(parsed.rest) === "main";
+  return parsed.rest.trim().toLowerCase() === "main";
 }
 
 const DIRECT_SESSION_MARKERS = new Set(["direct", "dm"]);
 const THREAD_SESSION_MARKERS = new Set(["thread", "topic"]);
 
 function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boolean {
-  const peerId = normalizeOptionalString(parts[markerIndex + 1]);
+  const peerId = parts[markerIndex + 1]?.trim();
   if (!peerId) {
     return false;
   }
@@ -55,15 +50,11 @@ function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boole
   if (tail.length === 0) {
     return true;
   }
-  return (
-    tail.length === 2 &&
-    THREAD_SESSION_MARKERS.has(tail[0] ?? "") &&
-    Boolean(normalizeOptionalString(tail[1]))
-  );
+  return tail.length === 2 && THREAD_SESSION_MARKERS.has(tail[0] ?? "") && Boolean(tail[1]?.trim());
 }
 
 function isDirectSessionKey(sessionKey?: string): boolean {
-  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
+  const raw = (sessionKey ?? "").trim().toLowerCase();
   if (!raw) {
     return false;
   }
@@ -82,7 +73,7 @@ function isDirectSessionKey(sessionKey?: string): boolean {
   if (DIRECT_SESSION_MARKERS.has(parts[1] ?? "")) {
     return hasStrictDirectSessionTail(parts, 1);
   }
-  return Boolean(normalizeOptionalString(parts[1])) && DIRECT_SESSION_MARKERS.has(parts[2] ?? "")
+  return Boolean(parts[1]?.trim()) && DIRECT_SESSION_MARKERS.has(parts[2] ?? "")
     ? hasStrictDirectSessionTail(parts, 2)
     : false;
 }
@@ -97,7 +88,6 @@ export function resolveLastChannelRaw(params: {
   originatingChannelRaw?: string;
   persistedLastChannel?: string;
   sessionKey?: string;
-  isInterSession?: boolean;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
   // WebChat should own reply routing for direct-session UI turns, but only when
@@ -110,14 +100,6 @@ export function resolveLastChannelRaw(params: {
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   const hasEstablishedExternalRoute =
     isExternalRoutingChannel(persistedChannel) || isExternalRoutingChannel(sessionKeyChannelHint);
-  // Inter-session messages (sessions_send) always arrive with channel=webchat,
-  // but must never overwrite an already-established external delivery route.
-  // Without this guard, a sessions_send call resets lastChannel to webchat,
-  // causing subsequent Discord (or other external) deliveries to be lost.
-  // See: https://github.com/openclaw/openclaw/issues/54441
-  if (params.isInterSession && hasEstablishedExternalRoute) {
-    return persistedChannel || sessionKeyChannelHint;
-  }
   if (
     originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
     !hasEstablishedExternalRoute &&
@@ -145,20 +127,12 @@ export function resolveLastToRaw(params: {
   persistedLastTo?: string;
   persistedLastChannel?: string;
   sessionKey?: string;
-  isInterSession?: boolean;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   const hasEstablishedExternalRouteForTo =
     isExternalRoutingChannel(persistedChannel) || isExternalRoutingChannel(sessionKeyChannelHint);
-  // Inter-session messages must not replace a persisted external `to` with
-  // webchat-scoped identifiers (e.g. session keys). Preserve the established
-  // external destination so deliveries continue routing to the correct channel.
-  // See: https://github.com/openclaw/openclaw/issues/54441
-  if (params.isInterSession && hasEstablishedExternalRouteForTo && params.persistedLastTo) {
-    return params.persistedLastTo;
-  }
   if (
     originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
     !hasEstablishedExternalRouteForTo &&
@@ -196,7 +170,7 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
   const canonicalMainSessionKey = buildAgentMainSessionKey({
     agentId: params.agentId,
     mainKey: params.mainKey,
-  });
+  }).toLowerCase();
   if (params.sessionKey === canonicalMainSessionKey) {
     return undefined;
   }
@@ -220,7 +194,6 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
     return undefined;
   }
   if (
-    legacyMain.route === undefined &&
     legacyMain.deliveryContext === undefined &&
     legacyMain.lastChannel === undefined &&
     legacyMain.lastTo === undefined &&
@@ -233,7 +206,6 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
     key: canonicalMainSessionKey,
     entry: {
       ...legacyMain,
-      route: undefined,
       deliveryContext: undefined,
       lastChannel: undefined,
       lastTo: undefined,

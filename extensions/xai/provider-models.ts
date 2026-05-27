@@ -1,18 +1,15 @@
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/plugin-entry";
+} from "openclaw/plugin-sdk/core";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { applyXaiModelCompat } from "./api.js";
 import { resolveXaiCatalogEntry, XAI_BASE_URL } from "./model-definitions.js";
-import { normalizeXaiModelId } from "./model-id.js";
-import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 
-const XAI_MODERN_MODEL_PREFIXES = ["grok-build-0.1", "grok-4.3", "grok-4.20"] as const;
+const XAI_MODERN_MODEL_PREFIXES = ["grok-3", "grok-4", "grok-code-fast"] as const;
 
 export function isModernXaiModel(modelId: string): boolean {
-  const normalized = normalizeXaiModelId(modelId.trim());
-  const lower = normalizeOptionalLowercaseString(normalized) ?? "";
+  const lower = modelId.trim().toLowerCase();
   if (!lower || lower.includes("multi-agent")) {
     return false;
   }
@@ -22,13 +19,13 @@ export function isModernXaiModel(modelId: string): boolean {
 export function resolveXaiForwardCompatModel(params: {
   providerId: string;
   ctx: ProviderResolveDynamicModelContext;
-}) {
+}): ProviderRuntimeModel | undefined {
   const definition = resolveXaiCatalogEntry(params.ctx.modelId);
   if (!definition) {
     return undefined;
   }
 
-  return applyXaiRuntimeModelCompat(
+  return applyXaiModelCompat(
     normalizeModelCompat({
       id: definition.id,
       name: definition.name,

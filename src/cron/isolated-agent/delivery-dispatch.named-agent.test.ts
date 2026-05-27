@@ -1,18 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import { sourceDeliveryTargetsMatch } from "../../infra/outbound/source-delivery-plan.js";
+import { matchesMessagingToolDeliveryTarget } from "./delivery-dispatch.js";
 
 // Mock the announce flow dependencies to test the fallback behavior.
 vi.mock("../../agents/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
-vi.mock("../../agents/subagent-registry-read.js", () => ({
+vi.mock("../../agents/subagent-registry.js", () => ({
   countActiveDescendantRuns: vi.fn().mockReturnValue(0),
 }));
 
-describe("sourceDeliveryTargetsMatch", () => {
+describe("matchesMessagingToolDeliveryTarget", () => {
   it("matches when channel and to agree", () => {
     expect(
-      sourceDeliveryTargetsMatch(
+      matchesMessagingToolDeliveryTarget(
         { provider: "telegram", to: "123456" },
         { channel: "telegram", to: "123456" },
       ),
@@ -21,7 +21,7 @@ describe("sourceDeliveryTargetsMatch", () => {
 
   it("rejects when channel differs", () => {
     expect(
-      sourceDeliveryTargetsMatch(
+      matchesMessagingToolDeliveryTarget(
         { provider: "whatsapp", to: "123456" },
         { channel: "telegram", to: "123456" },
       ),
@@ -30,7 +30,7 @@ describe("sourceDeliveryTargetsMatch", () => {
 
   it("rejects when to is missing from delivery", () => {
     expect(
-      sourceDeliveryTargetsMatch(
+      matchesMessagingToolDeliveryTarget(
         { provider: "telegram", to: "123456" },
         { channel: "telegram", to: undefined },
       ),
@@ -39,34 +39,25 @@ describe("sourceDeliveryTargetsMatch", () => {
 
   it("rejects when channel is missing from delivery", () => {
     expect(
-      sourceDeliveryTargetsMatch(
+      matchesMessagingToolDeliveryTarget(
         { provider: "telegram", to: "123456" },
         { channel: undefined, to: "123456" },
       ),
     ).toBe(false);
   });
 
-  it("matches topic suffixes against the resolved delivery thread", () => {
+  it("strips :topic:NNN suffix from target.to before comparing", () => {
     expect(
-      sourceDeliveryTargetsMatch(
+      matchesMessagingToolDeliveryTarget(
         { provider: "telegram", to: "-1003597428309:topic:462" },
-        { channel: "telegram", to: "-1003597428309", threadId: 462 },
+        { channel: "telegram", to: "-1003597428309" },
       ),
     ).toBe(true);
   });
 
-  it("rejects matching room targets when thread ids differ", () => {
-    expect(
-      sourceDeliveryTargetsMatch(
-        { provider: "telegram", to: "-1003597428309", threadId: "111" },
-        { channel: "telegram", to: "-1003597428309", threadId: 462 },
-      ),
-    ).toBe(false);
-  });
-
   it("matches when provider is 'message' (generic)", () => {
     expect(
-      sourceDeliveryTargetsMatch(
+      matchesMessagingToolDeliveryTarget(
         { provider: "message", to: "123456" },
         { channel: "telegram", to: "123456" },
       ),
@@ -75,29 +66,11 @@ describe("sourceDeliveryTargetsMatch", () => {
 
   it("rejects when accountIds differ", () => {
     expect(
-      sourceDeliveryTargetsMatch(
+      matchesMessagingToolDeliveryTarget(
         { provider: "telegram", to: "123456", accountId: "bot-a" },
         { channel: "telegram", to: "123456", accountId: "bot-b" },
       ),
     ).toBe(false);
-  });
-
-  it("matches when delivery has accountId and target omits it (tool fills accountId at exec)", () => {
-    expect(
-      sourceDeliveryTargetsMatch(
-        { provider: "message", to: "123456" },
-        { channel: "telegram", to: "123456", accountId: "bot-a" },
-      ),
-    ).toBe(true);
-  });
-
-  it("matches when delivery and target carry the same accountId", () => {
-    expect(
-      sourceDeliveryTargetsMatch(
-        { provider: "telegram", to: "123456", accountId: "bot-a" },
-        { channel: "telegram", to: "123456", accountId: "bot-a" },
-      ),
-    ).toBe(true);
   });
 });
 
@@ -113,5 +86,23 @@ describe("resolveCronDeliveryBestEffort", () => {
     const { resolveCronDeliveryBestEffort } = await import("./delivery-dispatch.js");
     const job = { delivery: { bestEffort: true }, payload: { kind: "agentTurn" } } as never;
     expect(resolveCronDeliveryBestEffort(job)).toBe(true);
+  });
+
+  it("returns true when payload.bestEffortDeliver is true and no delivery.bestEffort", async () => {
+    const { resolveCronDeliveryBestEffort } = await import("./delivery-dispatch.js");
+    const job = {
+      delivery: {},
+      payload: { kind: "agentTurn", bestEffortDeliver: true },
+    } as never;
+    expect(resolveCronDeliveryBestEffort(job)).toBe(true);
+  });
+
+  it("lets explicit delivery.bestEffort=false override legacy payload bestEffortDeliver=true", async () => {
+    const { resolveCronDeliveryBestEffort } = await import("./delivery-dispatch.js");
+    const job = {
+      delivery: { bestEffort: false },
+      payload: { kind: "agentTurn", bestEffortDeliver: true },
+    } as never;
+    expect(resolveCronDeliveryBestEffort(job)).toBe(false);
   });
 });

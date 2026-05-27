@@ -4,8 +4,7 @@
  * Handles tool-based actions for Twitch, such as sending messages.
  */
 
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveTwitchAccountContext } from "./config.js";
+import { DEFAULT_ACCOUNT_ID, resolveTwitchAccountContext } from "./config.js";
 import { twitchOutbound } from "./outbound.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionContext } from "./types.js";
 
@@ -131,7 +130,7 @@ export const twitchMessageActions: ChannelMessageActionAdapter = {
 
     const message = readStringParam(ctx.params, "message", { required: true });
     const to = readStringParam(ctx.params, "to", { required: false });
-    const accountId = ctx.accountId ?? resolveTwitchAccountContext(ctx.cfg).accountId;
+    const accountId = ctx.accountId ?? DEFAULT_ACCOUNT_ID;
 
     const { account, availableAccountIds } = resolveTwitchAccountContext(ctx.cfg, accountId);
     if (!account) {
@@ -168,7 +167,7 @@ export const twitchMessageActions: ChannelMessageActionAdapter = {
         details: { ok: true },
       };
     } catch (error) {
-      const errorMsg = formatErrorMessage(error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
       return errorResponse(errorMsg);
     }
   },

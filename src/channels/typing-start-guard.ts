@@ -1,4 +1,4 @@
-type TypingStartGuard = {
+export type TypingStartGuard = {
   run: (start: () => Promise<void> | void) => Promise<"started" | "skipped" | "failed" | "tripped">;
   reset: () => void;
   isTripped: () => boolean;

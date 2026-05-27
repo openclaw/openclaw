@@ -16,7 +16,7 @@ function createMockState(jobs: CronJob[]): CronServiceState {
         error: vi.fn(),
       },
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
       runHeartbeatOnce: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
       onEvent: vi.fn(),
@@ -47,20 +47,6 @@ function createJob(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
-function requireTimestamp(value: number | undefined, label: string): number {
-  if (value === undefined) {
-    throw new Error(`expected ${label} timestamp`);
-  }
-  return value;
-}
-
-function requireString(value: string | undefined, label: string): string {
-  if (!value) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
-
 describe("cron schedule error isolation", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -86,12 +72,8 @@ describe("cron schedule error isolation", () => {
 
     expect(changed).toBe(true);
     // Good jobs should have their nextRunAtMs computed
-    expect(requireTimestamp(goodJob1.state.nextRunAtMs, "good-1 next run")).toBeGreaterThan(
-      Date.now(),
-    );
-    expect(requireTimestamp(goodJob2.state.nextRunAtMs, "good-2 next run")).toBeGreaterThan(
-      Date.now(),
-    );
+    expect(goodJob1.state.nextRunAtMs).toBeDefined();
+    expect(goodJob2.state.nextRunAtMs).toBeDefined();
     // Bad job should have undefined nextRunAtMs and an error recorded
     expect(badJob.state.nextRunAtMs).toBeUndefined();
     expect(badJob.state.lastError).toMatch(/schedule error/);
@@ -111,13 +93,12 @@ describe("cron schedule error isolation", () => {
     recomputeNextRuns(state);
 
     expect(state.deps.log.warn).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
         jobId: "bad-job",
         name: "Bad Job",
         errorCount: 1,
-        err: "TypeError: CronPattern: invalid configuration format ('not valid'), exactly five, six, or seven space separated parts are required.",
-      },
-      "cron: failed to compute next run for job (skipping)",
+      }),
+      expect.stringContaining("failed to compute next run"),
     );
   });
 
@@ -136,13 +117,12 @@ describe("cron schedule error isolation", () => {
     expect(badJob.enabled).toBe(false);
     expect(badJob.state.scheduleErrorCount).toBe(3);
     expect(state.deps.log.error).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
         jobId: "bad-job",
         name: "Bad Job",
         errorCount: 3,
-        err: "TypeError: CronPattern: invalid configuration format ('garbage'), exactly five, six, or seven space separated parts are required.",
-      },
-      "cron: auto-disabled job after repeated schedule errors",
+      }),
+      expect.stringContaining("auto-disabled job"),
     );
   });
 
@@ -158,9 +138,7 @@ describe("cron schedule error isolation", () => {
     const changed = recomputeNextRuns(state);
 
     expect(changed).toBe(true);
-    expect(requireTimestamp(job.state.nextRunAtMs, "recovering next run")).toBeGreaterThan(
-      Date.now(),
-    );
+    expect(job.state.nextRunAtMs).toBeDefined();
     expect(job.state.scheduleErrorCount).toBeUndefined();
   });
 
@@ -206,7 +184,7 @@ describe("cron schedule error isolation", () => {
     recomputeNextRuns(state);
 
     expect(badJob.state.lastError).toMatch(/^schedule error:/);
-    expect(requireString(badJob.state.lastError, "schedule error")).toContain("schedule error:");
+    expect(badJob.state.lastError).toBeTruthy();
   });
 
   it("records a clear schedule error when cron expr is missing", () => {

@@ -1,26 +1,24 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getRuntimeConfig } from "../../config/config.js";
+import { createJiti } from "jiti";
+import { loadConfig } from "../../config/config.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import {
-  isJavaScriptModulePath,
-  tryNativeRequireJavaScriptModule,
-} from "../native-module-require.js";
-import {
-  getCachedPluginSourceModuleLoader,
-  type PluginModuleLoaderCache,
-} from "../plugin-module-loader-cache.js";
-import type { PluginOrigin } from "../plugin-origin.types.js";
+  buildPluginLoaderJitiOptions,
+  resolvePluginSdkAliasFile,
+  resolvePluginSdkScopedAliasMap,
+  shouldPreferNativeJiti,
+} from "../sdk-alias.js";
 
 type PluginRuntimeRecord = {
-  origin?: PluginOrigin;
+  origin?: string;
   rootDir?: string;
   source: string;
 };
 
 export function readPluginBoundaryConfigSafely() {
   try {
-    return getRuntimeConfig();
+    return loadConfig();
   } catch {
     return {};
   }
@@ -32,6 +30,7 @@ export function resolvePluginRuntimeRecord(
 ): PluginRuntimeRecord | null {
   const manifestRegistry = loadPluginManifestRegistry({
     config: readPluginBoundaryConfigSafely(),
+    cache: true,
   });
   const record = manifestRegistry.plugins.find((plugin) => plugin.id === pluginId);
   if (!record?.source) {
@@ -40,45 +39,6 @@ export function resolvePluginRuntimeRecord(
     }
     return null;
   }
-  return {
-    ...(record.origin ? { origin: record.origin } : {}),
-    rootDir: record.rootDir,
-    source: record.source,
-  };
-}
-
-export function resolvePluginRuntimeRecordByEntryBaseNames(
-  entryBaseNames: string[],
-  onMissing?: () => never,
-): PluginRuntimeRecord | null {
-  const manifestRegistry = loadPluginManifestRegistry({
-    config: readPluginBoundaryConfigSafely(),
-  });
-  const matches = manifestRegistry.plugins.filter((plugin) => {
-    if (!plugin?.source) {
-      return false;
-    }
-    const record = {
-      rootDir: plugin.rootDir,
-      source: plugin.source,
-    };
-    return entryBaseNames.every(
-      (entryBaseName) => resolvePluginRuntimeModulePath(record, entryBaseName) !== null,
-    );
-  });
-  if (matches.length === 0) {
-    if (onMissing) {
-      onMissing();
-    }
-    return null;
-  }
-  if (matches.length > 1) {
-    const pluginIds = matches.map((plugin) => plugin.id).join(", ");
-    throw new Error(
-      `plugin runtime boundary is ambiguous for entries [${entryBaseNames.join(", ")}]: ${pluginIds}`,
-    );
-  }
-  const record = matches[0];
   return {
     ...(record.origin ? { origin: record.origin } : {}),
     rootDir: record.rootDir,
@@ -112,35 +72,35 @@ export function resolvePluginRuntimeModulePath(
   return null;
 }
 
-function getPluginBoundarySourceLoader(modulePath: string, loaders: PluginModuleLoaderCache) {
-  return getCachedPluginSourceModuleLoader({
-    cache: loaders,
+export function getPluginBoundaryJiti(
+  modulePath: string,
+  loaders: Map<boolean, ReturnType<typeof createJiti>>,
+) {
+  const tryNative = shouldPreferNativeJiti(modulePath);
+  const cached = loaders.get(tryNative);
+  if (cached) {
+    return cached;
+  }
+  const pluginSdkAlias = resolvePluginSdkAliasFile({
+    srcFile: "root-alias.cjs",
+    distFile: "root-alias.cjs",
     modulePath,
-    importerUrl: import.meta.url,
-    loaderFilename: import.meta.url,
   });
+  const aliasMap = {
+    ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
+    ...resolvePluginSdkScopedAliasMap({ modulePath }),
+  };
+  const loader = createJiti(import.meta.url, {
+    ...buildPluginLoaderJitiOptions(aliasMap),
+    tryNative,
+  });
+  loaders.set(tryNative, loader);
+  return loader;
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic plugin boundary loaders use caller-supplied module types.
-export function loadPluginBoundaryModule<TModule>(
+export function loadPluginBoundaryModuleWithJiti<TModule>(
   modulePath: string,
-  loaders: PluginModuleLoaderCache,
-  options: { origin?: PluginOrigin } = {},
+  loaders: Map<boolean, ReturnType<typeof createJiti>>,
 ): TModule {
-  if (isJavaScriptModulePath(modulePath)) {
-    const native = tryNativeRequireJavaScriptModule(modulePath, {
-      allowWindows: true,
-      fallbackOnNativeError: options.origin !== "bundled",
-    });
-    if (native.ok) {
-      return native.moduleExport as TModule;
-    }
-    if (options.origin === "bundled") {
-      throw new Error(`bundled plugin runtime module must load natively: ${modulePath}`);
-    }
-  } else if (options.origin === "bundled") {
-    throw new Error(`bundled plugin runtime module must be built JavaScript: ${modulePath}`);
-  }
-
-  return getPluginBoundarySourceLoader(modulePath, loaders)(modulePath) as TModule;
+  return getPluginBoundaryJiti(modulePath, loaders)(modulePath) as TModule;
 }

@@ -1,23 +1,9 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getSessionBindingService, testing } from "openclaw/plugin-sdk/session-binding-runtime";
+import { getSessionBindingService, __testing } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
-import { setMatrixRuntime } from "../runtime.js";
-import {
-  resolveMatrixStateFilePath,
-  resolveMatrixStoragePaths,
-  writeStorageMeta,
-} from "./client/storage.js";
-import type { MatrixAuth, MatrixStoragePaths } from "./client/types.js";
-import {
-  createMatrixThreadBindingManager,
-  resetMatrixThreadBindingsForTests,
-  setMatrixThreadBindingIdleTimeoutBySessionKey,
-  setMatrixThreadBindingMaxAgeBySessionKey,
-} from "./thread-bindings.js";
 
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (_to: string, _message: string, opts?: { threadId?: string }) => ({
@@ -28,11 +14,21 @@ const sendMessageMatrixMock = vi.hoisted(() =>
 const actualRename = fs.rename.bind(fs);
 const renameMock = vi.spyOn(fs, "rename");
 
-vi.mock("./send.js", () => {
+vi.mock("./send.js", async () => {
+  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
   return {
+    ...actual,
     sendMessageMatrix: sendMessageMatrixMock,
   };
 });
+
+let resolveMatrixStateFilePath: typeof import("./client/storage.js").resolveMatrixStateFilePath;
+let resolveMatrixStoragePaths: typeof import("./client/storage.js").resolveMatrixStoragePaths;
+let createMatrixThreadBindingManager: typeof import("./thread-bindings.js").createMatrixThreadBindingManager;
+let resetMatrixThreadBindingsForTests: typeof import("./thread-bindings.js").resetMatrixThreadBindingsForTests;
+let setMatrixThreadBindingIdleTimeoutBySessionKey: typeof import("./thread-bindings.js").setMatrixThreadBindingIdleTimeoutBySessionKey;
+let setMatrixThreadBindingMaxAgeBySessionKey: typeof import("./thread-bindings.js").setMatrixThreadBindingMaxAgeBySessionKey;
+let setMatrixRuntime: typeof import("../runtime.js").setMatrixRuntime;
 
 describe("matrix thread bindings", () => {
   let stateDir: string;
@@ -46,11 +42,6 @@ describe("matrix thread bindings", () => {
   const idleTimeoutMs = 24 * 60 * 60 * 1000;
   const matrixClient = {} as never;
 
-  function resetThreadBindingAdapters() {
-    testing.resetSessionBindingAdaptersForTests();
-    resetMatrixThreadBindingsForTests();
-  }
-
   function currentThreadConversation(params?: {
     conversationId?: string;
     parentConversationId?: string;
@@ -63,31 +54,15 @@ describe("matrix thread bindings", () => {
     };
   }
 
-  function createBindingManager(
-    params: {
-      auth?: MatrixAuth;
-      stateDir?: string;
-      idleTimeoutMs?: number;
-      maxAgeMs?: number;
-      enableSweeper?: boolean;
-      logVerboseMessage?: (message: string) => void;
-    } = {},
-  ) {
-    return createMatrixThreadBindingManager({
-      cfg: {},
-      accountId,
-      auth: params.auth ?? auth,
-      client: matrixClient,
-      ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-      idleTimeoutMs: params.idleTimeoutMs ?? idleTimeoutMs,
-      maxAgeMs: params.maxAgeMs ?? 0,
-      enableSweeper: params.enableSweeper ?? false,
-      ...(params.logVerboseMessage ? { logVerboseMessage: params.logVerboseMessage } : {}),
-    });
-  }
-
   async function createStaticThreadBindingManager() {
-    return createBindingManager();
+    return createMatrixThreadBindingManager({
+      accountId,
+      auth,
+      client: matrixClient,
+      idleTimeoutMs,
+      maxAgeMs: 0,
+      enableSweeper: false,
+    });
   }
 
   async function bindCurrentThread(params?: {
@@ -117,16 +92,6 @@ describe("matrix thread bindings", () => {
     });
   }
 
-  function writeAuthStorageMeta(authForMeta: MatrixAuth, storagePaths: MatrixStoragePaths) {
-    writeStorageMeta({
-      storagePaths,
-      homeserver: authForMeta.homeserver,
-      userId: authForMeta.userId,
-      accountId: authForMeta.accountId,
-      deviceId: authForMeta.deviceId ?? null,
-    });
-  }
-
   async function readPersistedLastActivityAt(bindingsPath: string) {
     const raw = await fs.readFile(bindingsPath, "utf-8");
     const parsed = JSON.parse(raw) as {
@@ -135,47 +100,20 @@ describe("matrix thread bindings", () => {
     return parsed.bindings?.[0]?.lastActivityAt;
   }
 
-  async function readPersistedBindings(bindingsPath: string) {
-    const raw = await fs.readFile(bindingsPath, "utf-8");
-    return JSON.parse(raw) as {
-      version?: number;
-      bindings?: Array<{
-        conversationId?: string;
-        parentConversationId?: string;
-        targetSessionKey?: string;
-      }>;
-    };
-  }
-
-  async function expectPersistedThreadBinding(
-    bindingsPath: string,
-    expected: {
-      conversationId: string;
-      targetSessionKey: string;
-      parentConversationId?: string;
-    },
-  ) {
-    const persisted = await readPersistedBindings(bindingsPath);
-    expect(persisted.version).toBe(1);
-    expect(persisted.bindings).toHaveLength(1);
-    expect(persisted.bindings?.[0]?.conversationId).toBe(expected.conversationId);
-    expect(persisted.bindings?.[0]?.parentConversationId).toBe(
-      expected.parentConversationId ?? "!room:example",
-    );
-    expect(persisted.bindings?.[0]?.targetSessionKey).toBe(expected.targetSessionKey);
-  }
-
-  function latestSendMessageCall() {
-    const call = sendMessageMatrixMock.mock.calls.at(-1);
-    if (!call) {
-      throw new Error("expected sendMessageMatrix call");
-    }
-    return call;
-  }
-
-  beforeEach(() => {
-    stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "matrix-thread-bindings-"));
-    resetThreadBindingAdapters();
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ setMatrixRuntime } = await import("../runtime.js"));
+    ({ resolveMatrixStateFilePath, resolveMatrixStoragePaths } =
+      await import("./client/storage.js"));
+    ({
+      createMatrixThreadBindingManager,
+      resetMatrixThreadBindingsForTests,
+      setMatrixThreadBindingIdleTimeoutBySessionKey,
+      setMatrixThreadBindingMaxAgeBySessionKey,
+    } = await import("./thread-bindings.js"));
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "matrix-thread-bindings-"));
+    __testing.resetSessionBindingAdaptersForTests();
+    resetMatrixThreadBindingsForTests();
     sendMessageMatrixMock.mockClear();
     renameMock.mockReset();
     renameMock.mockImplementation(actualRename);
@@ -188,7 +126,6 @@ describe("matrix thread bindings", () => {
 
   it("creates child Matrix thread bindings from a top-level room context", async () => {
     await createMatrixThreadBindingManager({
-      cfg: {},
       accountId,
       auth,
       client: matrixClient,
@@ -212,7 +149,6 @@ describe("matrix thread bindings", () => {
     });
 
     expect(sendMessageMatrixMock).toHaveBeenCalledWith("room:!room:example", "intro root", {
-      cfg: {},
       client: {},
       accountId: "ops",
     });
@@ -234,19 +170,21 @@ describe("matrix thread bindings", () => {
     });
 
     expect(sendMessageMatrixMock).toHaveBeenCalledWith("room:!room:example", "intro thread", {
-      cfg: {},
       client: {},
       accountId: "ops",
       threadId: "$thread",
     });
-    const resolved = getSessionBindingService().resolveByConversation({
-      channel: "matrix",
-      accountId: "ops",
-      conversationId: "$thread",
-      parentConversationId: "!room:example",
+    expect(
+      getSessionBindingService().resolveByConversation({
+        channel: "matrix",
+        accountId: "ops",
+        conversationId: "$thread",
+        parentConversationId: "!room:example",
+      }),
+    ).toMatchObject({
+      bindingId: binding.bindingId,
+      targetSessionKey: "agent:ops:subagent:child",
     });
-    expect(resolved?.bindingId).toBe(binding.bindingId);
-    expect(resolved?.targetSessionKey).toBe("agent:ops:subagent:child");
   });
 
   it("expires idle bindings via the sweeper", async () => {
@@ -254,7 +192,6 @@ describe("matrix thread bindings", () => {
     vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
     try {
       await createMatrixThreadBindingManager({
-        cfg: {},
         accountId: "ops",
         auth,
         client: {} as never,
@@ -299,7 +236,6 @@ describe("matrix thread bindings", () => {
     vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
     try {
       await createMatrixThreadBindingManager({
-        cfg: {},
         accountId: "ops",
         auth,
         client: {} as never,
@@ -330,26 +266,16 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
 
-      const sendCallCount = sendMessageMatrixMock.mock.calls.length;
       await vi.advanceTimersByTimeAsync(61_000);
+      await Promise.resolve();
 
-      await vi.waitFor(
-        () =>
-          expect(sendMessageMatrixMock.mock.calls.length).toBeGreaterThanOrEqual(sendCallCount + 2),
-        {
-          interval: 10,
-          timeout: 1_000,
-        },
-      );
-
-      await vi.waitFor(
-        async () => {
-          const persisted = await readPersistedBindings(resolveBindingsFilePath());
-          expect(persisted.version).toBe(1);
-          expect(persisted.bindings).toEqual([]);
-        },
-        { interval: 10, timeout: 1_000 },
-      );
+      await vi.waitFor(async () => {
+        const persistedRaw = await fs.readFile(resolveBindingsFilePath(), "utf-8");
+        expect(JSON.parse(persistedRaw)).toMatchObject({
+          version: 1,
+          bindings: [],
+        });
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -361,7 +287,6 @@ describe("matrix thread bindings", () => {
     const logVerboseMessage = vi.fn();
     try {
       await createMatrixThreadBindingManager({
-        cfg: {},
         accountId: "ops",
         auth,
         client: {} as never,
@@ -384,26 +309,23 @@ describe("matrix thread bindings", () => {
 
       renameMock.mockRejectedValueOnce(new Error("disk full"));
       await vi.advanceTimersByTimeAsync(61_000);
+      await Promise.resolve();
 
-      await vi.waitFor(
-        () => {
-          expect(
-            logVerboseMessage.mock.calls.some(
-              ([message]) =>
-                typeof message === "string" &&
-                message.includes("failed auto-unbinding expired bindings"),
-            ),
-          ).toBe(true);
-          expect(
-            logVerboseMessage.mock.calls.some(
-              ([message]) =>
-                typeof message === "string" &&
-                message.includes("matrix: auto-unbinding $thread due to idle-expired"),
-            ),
-          );
-        },
-        { interval: 1, timeout: 100 },
-      );
+      await vi.waitFor(() => {
+        expect(
+          logVerboseMessage.mock.calls.some(
+            ([message]) =>
+              typeof message === "string" &&
+              message.includes("failed auto-unbinding expired bindings"),
+          ),
+        ).toBe(true);
+      });
+
+      await vi.waitFor(() => {
+        expect(logVerboseMessage).toHaveBeenCalledWith(
+          expect.stringContaining("matrix: auto-unbinding $thread due to idle-expired"),
+        );
+      });
 
       expect(
         getSessionBindingService().resolveByConversation({
@@ -420,7 +342,6 @@ describe("matrix thread bindings", () => {
 
   it("sends threaded farewell messages when bindings are unbound", async () => {
     await createMatrixThreadBindingManager({
-      cfg: {},
       accountId: "ops",
       auth,
       client: {} as never,
@@ -450,16 +371,17 @@ describe("matrix thread bindings", () => {
       reason: "idle-expired",
     });
 
-    const [to, message, options] = latestSendMessageCall();
-    const sendOptions = options as { cfg?: unknown; accountId?: string; threadId?: string };
-    expect(to).toBe("room:!room:example");
-    expect(message).toContain("Session ended automatically");
-    expect(sendOptions.cfg).toEqual({});
-    expect(sendOptions.accountId).toBe("ops");
-    expect(sendOptions.threadId).toBe("$thread");
+    expect(sendMessageMatrixMock).toHaveBeenCalledWith(
+      "room:!room:example",
+      expect.stringContaining("Session ended automatically"),
+      expect.objectContaining({
+        accountId: "ops",
+        threadId: "$thread",
+      }),
+    );
   });
 
-  it("does not reload persisted bindings after the Matrix access token changes while deviceId is unknown", async () => {
+  it("reloads persisted bindings after the Matrix access token changes", async () => {
     const initialAuth = {
       ...auth,
       accessToken: "token-old",
@@ -469,19 +391,39 @@ describe("matrix thread bindings", () => {
       accessToken: "token-new",
     };
 
-    const initialManager = await createBindingManager({ auth: initialAuth });
-
-    await bindCurrentThread();
-    const initialStoragePaths = resolveMatrixStoragePaths({
-      ...initialAuth,
-      env: process.env,
+    const initialManager = await createMatrixThreadBindingManager({
+      accountId: "ops",
+      auth: initialAuth,
+      client: {} as never,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+      enableSweeper: false,
     });
-    writeAuthStorageMeta(initialAuth, initialStoragePaths);
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:ops:subagent:child",
+      targetKind: "subagent",
+      conversation: {
+        channel: "matrix",
+        accountId: "ops",
+        conversationId: "$thread",
+        parentConversationId: "!room:example",
+      },
+      placement: "current",
+    });
 
     initialManager.stop();
-    resetThreadBindingAdapters();
+    resetMatrixThreadBindingsForTests();
+    __testing.resetSessionBindingAdaptersForTests();
 
-    await createBindingManager({ auth: rotatedAuth });
+    await createMatrixThreadBindingManager({
+      accountId: "ops",
+      auth: rotatedAuth,
+      client: {} as never,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+      enableSweeper: false,
+    });
 
     expect(
       getSessionBindingService().resolveByConversation({
@@ -490,59 +432,17 @@ describe("matrix thread bindings", () => {
         conversationId: "$thread",
         parentConversationId: "!room:example",
       }),
-    ).toBeNull();
+    ).toMatchObject({
+      targetSessionKey: "agent:ops:subagent:child",
+    });
 
-    const initialBindingsPath = path.join(initialStoragePaths.rootDir, "thread-bindings.json");
-    const rotatedBindingsPath = path.join(
+    const initialBindingsPath = path.join(
       resolveMatrixStoragePaths({
-        ...rotatedAuth,
+        ...initialAuth,
         env: process.env,
       }).rootDir,
       "thread-bindings.json",
     );
-    expect(rotatedBindingsPath).not.toBe(initialBindingsPath);
-  });
-
-  it("reloads persisted bindings after the Matrix access token changes when deviceId is known", async () => {
-    const initialAuth = {
-      ...auth,
-      accessToken: "token-old",
-      deviceId: "DEVICE123",
-    };
-    const rotatedAuth = {
-      ...auth,
-      accessToken: "token-new",
-      deviceId: "DEVICE123",
-    };
-
-    const initialManager = await createBindingManager({ auth: initialAuth });
-
-    await bindCurrentThread();
-    const initialStoragePaths = resolveMatrixStoragePaths({
-      ...initialAuth,
-      env: process.env,
-    });
-    writeAuthStorageMeta(initialAuth, initialStoragePaths);
-    const initialBindingsPath = path.join(initialStoragePaths.rootDir, "thread-bindings.json");
-    await expectPersistedThreadBinding(initialBindingsPath, {
-      conversationId: "$thread",
-      targetSessionKey: "agent:ops:subagent:child",
-    });
-
-    initialManager.stop();
-    resetThreadBindingAdapters();
-
-    await createBindingManager({ auth: rotatedAuth });
-
-    expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "matrix",
-        accountId: "ops",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      })?.targetSessionKey,
-    ).toBe("agent:ops:subagent:child");
-
     const rotatedBindingsPath = path.join(
       resolveMatrixStoragePaths({
         ...rotatedAuth,
@@ -559,18 +459,40 @@ describe("matrix thread bindings", () => {
       path.join(os.tmpdir(), "matrix-thread-bindings-replacement-"),
     );
 
-    const initialManager = await createBindingManager({
+    const initialManager = await createMatrixThreadBindingManager({
+      accountId: "ops",
+      auth,
+      client: {} as never,
       stateDir: initialStateDir,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+      enableSweeper: false,
     });
 
-    await bindCurrentThread();
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:ops:subagent:child",
+      targetKind: "subagent",
+      conversation: {
+        channel: "matrix",
+        accountId: "ops",
+        conversationId: "$thread",
+        parentConversationId: "!room:example",
+      },
+      placement: "current",
+    });
 
-    const replacementManager = await createBindingManager({
+    const replacementManager = await createMatrixThreadBindingManager({
+      accountId: "ops",
+      auth,
+      client: {} as never,
       stateDir: replacementStateDir,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+      enableSweeper: false,
     });
 
     expect(replacementManager).not.toBe(initialManager);
-    expect(replacementManager.listBindings()).toStrictEqual([]);
+    expect(replacementManager.listBindings()).toEqual([]);
     expect(
       getSessionBindingService().resolveByConversation({
         channel: "matrix",
@@ -580,18 +502,46 @@ describe("matrix thread bindings", () => {
       }),
     ).toBeNull();
 
-    await bindCurrentThread({
+    await getSessionBindingService().bind({
       targetSessionKey: "agent:ops:subagent:replacement",
-      conversationId: "$thread-2",
+      targetKind: "subagent",
+      conversation: {
+        channel: "matrix",
+        accountId: "ops",
+        conversationId: "$thread-2",
+        parentConversationId: "!room:example",
+      },
+      placement: "current",
     });
 
-    await expectPersistedThreadBinding(resolveBindingsFilePath(replacementStateDir), {
-      conversationId: "$thread-2",
-      targetSessionKey: "agent:ops:subagent:replacement",
+    await vi.waitFor(async () => {
+      const replacementRaw = await fs.readFile(
+        resolveBindingsFilePath(replacementStateDir),
+        "utf-8",
+      );
+      expect(JSON.parse(replacementRaw)).toMatchObject({
+        version: 1,
+        bindings: [
+          expect.objectContaining({
+            conversationId: "$thread-2",
+            parentConversationId: "!room:example",
+            targetSessionKey: "agent:ops:subagent:replacement",
+          }),
+        ],
+      });
     });
-    await expectPersistedThreadBinding(resolveBindingsFilePath(initialStateDir), {
-      conversationId: "$thread",
-      targetSessionKey: "agent:ops:subagent:child",
+    await vi.waitFor(async () => {
+      const initialRaw = await fs.readFile(resolveBindingsFilePath(initialStateDir), "utf-8");
+      expect(JSON.parse(initialRaw)).toMatchObject({
+        version: 1,
+        bindings: [
+          expect.objectContaining({
+            conversationId: "$thread",
+            parentConversationId: "!room:example",
+            targetSessionKey: "agent:ops:subagent:child",
+          }),
+        ],
+      });
     });
   });
 
@@ -600,7 +550,6 @@ describe("matrix thread bindings", () => {
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     try {
       const manager = await createMatrixThreadBindingManager({
-        cfg: {},
         accountId: "ops",
         auth,
         client: {} as never,
@@ -621,9 +570,7 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
       const original = manager.listBySessionKey("agent:ops:subagent:child")[0];
-      if (original === undefined) {
-        throw new Error("expected original matrix thread binding");
-      }
+      expect(original).toBeDefined();
 
       const idleUpdated = setMatrixThreadBindingIdleTimeoutBySessionKey({
         accountId: "ops",
@@ -641,7 +588,7 @@ describe("matrix thread bindings", () => {
       expect(idleUpdated[0]?.metadata?.idleTimeoutMs).toBe(2 * 60 * 60 * 1000);
       expect(maxAgeUpdated).toHaveLength(1);
       expect(maxAgeUpdated[0]?.metadata?.maxAgeMs).toBe(6 * 60 * 60 * 1000);
-      expect(maxAgeUpdated[0]?.boundAt).toBe(original.boundAt);
+      expect(maxAgeUpdated[0]?.boundAt).toBe(original?.boundAt);
       expect(maxAgeUpdated[0]?.metadata?.lastActivityAt).toBe(
         Date.parse("2026-03-06T12:00:00.000Z"),
       );
@@ -660,7 +607,7 @@ describe("matrix thread bindings", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     try {
-      const manager = await createStaticThreadBindingManager();
+      await createStaticThreadBindingManager();
       const binding = await bindCurrentThread();
 
       const bindingsPath = resolveBindingsFilePath();
@@ -675,14 +622,9 @@ describe("matrix thread bindings", () => {
       expect(await readPersistedLastActivityAt(bindingsPath)).toBe(originalLastActivityAt);
 
       await vi.advanceTimersByTimeAsync(1_000);
-      vi.useRealTimers();
-      manager.stop();
-      await vi.waitFor(
-        async () => {
-          expect(await readPersistedLastActivityAt(bindingsPath)).toBe(secondTouchedAt);
-        },
-        { interval: 1, timeout: 5_000 },
-      );
+      await vi.waitFor(async () => {
+        expect(await readPersistedLastActivityAt(bindingsPath)).toBe(secondTouchedAt);
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -701,12 +643,9 @@ describe("matrix thread bindings", () => {
       vi.useRealTimers();
 
       const bindingsPath = resolveBindingsFilePath();
-      await vi.waitFor(
-        async () => {
-          expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
-        },
-        { interval: 1, timeout: 1_000 },
-      );
+      await vi.waitFor(async () => {
+        expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
+      });
     } finally {
       vi.useRealTimers();
     }

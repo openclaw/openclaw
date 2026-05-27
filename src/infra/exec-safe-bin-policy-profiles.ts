@@ -1,6 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
-
 export type SafeBinProfile = {
   minPositional?: number;
   maxPositional?: number;
@@ -225,7 +222,7 @@ export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> =
   compileSafeBinProfiles(SAFE_BIN_PROFILE_FIXTURES);
 
 function normalizeSafeBinProfileName(raw: string): string | null {
-  const name = normalizeLowercaseStringOrEmpty(raw);
+  const name = raw.trim().toLowerCase();
   return name.length > 0 ? name : null;
 }
 
@@ -296,12 +293,12 @@ export function resolveSafeBinProfiles(
   };
 }
 
-function resolveSafeBinDeniedFlags(
+export function resolveSafeBinDeniedFlags(
   fixtures: Readonly<Record<string, SafeBinProfileFixture>> = SAFE_BIN_PROFILE_FIXTURES,
 ): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const [name, fixture] of Object.entries(fixtures)) {
-    const denied = sortUniqueStrings(fixture.deniedFlags ?? []);
+    const denied = Array.from(new Set(fixture.deniedFlags ?? [])).toSorted();
     if (denied.length > 0) {
       out[name] = denied;
     }

@@ -1,8 +1,7 @@
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  type ChatSenderAllowParams,
   createAllowedChatSenderMatcher,
+  type ChatSenderAllowParams,
   type ParsedChatTarget,
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedChatTarget,
@@ -33,7 +32,7 @@ export function normalizeIMessageHandle(raw: string): string {
   if (!trimmed) {
     return "";
   }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const lowered = trimmed.toLowerCase();
   if (lowered.startsWith("imessage:")) {
     return normalizeIMessageHandle(trimmed.slice(9));
   }
@@ -65,7 +64,7 @@ export function normalizeIMessageHandle(raw: string): string {
   }
 
   if (trimmed.includes("@")) {
-    return normalizeLowercaseStringOrEmpty(trimmed);
+    return trimmed.toLowerCase();
   }
   const normalized = normalizeE164(trimmed);
   if (normalized) {
@@ -79,7 +78,7 @@ export function parseIMessageTarget(raw: string): IMessageTarget {
   if (!trimmed) {
     throw new Error("iMessage target is required");
   }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  const lower = trimmed.toLowerCase();
 
   const servicePrefixed = resolveServicePrefixedChatTarget({
     trimmed,
@@ -113,7 +112,7 @@ export function looksLikeIMessageExplicitTargetId(raw: string): boolean {
   if (!trimmed) {
     return false;
   }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  const lower = trimmed.toLowerCase();
   if (/^(imessage:|sms:|auto:)/.test(lower)) {
     return true;
   }
@@ -141,7 +140,7 @@ export function parseIMessageAllowTarget(raw: string): IMessageAllowTarget {
   if (!trimmed) {
     return { kind: "handle", handle: "" };
   }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  const lower = trimmed.toLowerCase();
 
   const servicePrefixed = resolveServicePrefixedOrChatAllowTarget({
     trimmed,
@@ -162,21 +161,10 @@ export function parseIMessageAllowTarget(raw: string): IMessageAllowTarget {
 const isAllowedIMessageSenderMatcher = createAllowedChatSenderMatcher({
   normalizeSender: normalizeIMessageHandle,
   parseAllowTarget: parseIMessageAllowTarget,
-  allowConversationTargets: false,
 });
 
 export function isAllowedIMessageSender(params: ChatSenderAllowParams): boolean {
-  return isAllowedIMessageSenderMatcher({ ...params, allowConversationTargets: false });
-}
-
-const isAllowedIMessageReplyContextSenderMatcher = createAllowedChatSenderMatcher({
-  normalizeSender: normalizeIMessageHandle,
-  parseAllowTarget: parseIMessageAllowTarget,
-  allowConversationTargets: true,
-});
-
-export function isAllowedIMessageReplyContextSender(params: ChatSenderAllowParams): boolean {
-  return isAllowedIMessageReplyContextSenderMatcher(params);
+  return isAllowedIMessageSenderMatcher(params);
 }
 
 export function formatIMessageChatTarget(chatId?: number | null): string {

@@ -7,7 +7,7 @@ export function toStringEnv(env?: NodeJS.ProcessEnv): Record<string, string> {
     if (value === undefined) {
       continue;
     }
-    out[key] = value;
+    out[key] = String(value);
   }
   return out;
 }

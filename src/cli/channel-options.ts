@@ -1,8 +1,19 @@
-import { uniqueStrings } from "../shared/string-normalization.js";
-import { readCliStartupMetadata } from "./startup-metadata.js";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { CHAT_CHANNEL_ORDER } from "../channels/registry.js";
 
 function dedupe(values: string[]): string[] {
-  return uniqueStrings(values.filter(Boolean));
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    resolved.push(value);
+  }
+  return resolved;
 }
 
 let precomputedChannelOptions: string[] | null | undefined;
@@ -12,15 +23,21 @@ function loadPrecomputedChannelOptions(): string[] | null {
     return precomputedChannelOptions;
   }
   try {
-    const parsed = readCliStartupMetadata(import.meta.url) as { channelOptions?: unknown } | null;
-    if (parsed && Array.isArray(parsed.channelOptions)) {
+    const metadataPath = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "cli-startup-metadata.json",
+    );
+    const raw = fs.readFileSync(metadataPath, "utf8");
+    const parsed = JSON.parse(raw) as { channelOptions?: unknown };
+    if (Array.isArray(parsed.channelOptions)) {
       precomputedChannelOptions = dedupe(
         parsed.channelOptions.filter((value): value is string => typeof value === "string"),
       );
       return precomputedChannelOptions;
     }
   } catch {
-    // Source checkouts may not have generated startup metadata yet.
+    // Fall back to dynamic catalog resolution.
   }
   precomputedChannelOptions = null;
   return null;
@@ -28,17 +45,15 @@ function loadPrecomputedChannelOptions(): string[] | null {
 
 export function resolveCliChannelOptions(): string[] {
   const precomputed = loadPrecomputedChannelOptions();
-  return precomputed ?? [];
+  return precomputed ?? [...CHAT_CHANNEL_ORDER];
 }
 
 export function formatCliChannelOptions(extra: string[] = []): string {
-  const options = [...extra, ...resolveCliChannelOptions()];
-  return options.length > 0 ? options.join("|") : "channel";
+  return [...extra, ...resolveCliChannelOptions()].join("|");
 }
 
-export const testing = {
+export const __testing = {
   resetPrecomputedChannelOptionsForTests(): void {
     precomputedChannelOptions = undefined;
   },
 };
-export { testing as __testing };

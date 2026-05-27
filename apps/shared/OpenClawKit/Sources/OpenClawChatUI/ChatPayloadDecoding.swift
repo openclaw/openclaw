@@ -1,5 +1,5 @@
-import Foundation
 import OpenClawKit
+import Foundation
 
 enum ChatPayloadDecoding {
     static func decode<T: Decodable>(_ payload: AnyCodable, as _: T.Type = T.self) throws -> T {

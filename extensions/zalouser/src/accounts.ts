@@ -4,26 +4,14 @@ import {
   normalizeAccountId,
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
-
-let zalouserAccountsRuntimePromise: Promise<typeof import("./accounts.runtime.js")> | undefined;
-
-async function loadZalouserAccountsRuntime() {
-  zalouserAccountsRuntimePromise ??= import("./accounts.runtime.js");
-  return await zalouserAccountsRuntimePromise;
-}
+import { checkZaloAuthenticated, getZaloUserInfo } from "./zalo-js.js";
 
 const {
   listAccountIds: listZalouserAccountIds,
   resolveDefaultAccountId: resolveDefaultZalouserAccountId,
-} = createAccountListHelpers("zalouser", {
-  implicitDefaultAccount: {
-    channelKeys: ["profile"],
-    envVars: ["ZALOUSER_PROFILE", "ZCA_PROFILE"],
-  },
-});
+} = createAccountListHelpers("zalouser");
 export { listZalouserAccountIds, resolveDefaultZalouserAccountId };
 
 function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): ZalouserAccountConfig {
@@ -59,9 +47,7 @@ function resolveProfile(config: ZalouserAccountConfig, accountId: string): strin
 }
 
 function resolveZalouserAccountBase(params: { cfg: OpenClawConfig; accountId?: string | null }) {
-  const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultZalouserAccountId(params.cfg),
-  );
+  const accountId = normalizeAccountId(params.accountId);
   const baseEnabled =
     (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
   const merged = mergeZalouserAccountConfig(params.cfg, accountId);
@@ -78,11 +64,11 @@ export async function resolveZalouserAccount(params: {
   accountId?: string | null;
 }): Promise<ResolvedZalouserAccount> {
   const { accountId, enabled, merged, profile } = resolveZalouserAccountBase(params);
-  const authenticated = await (await loadZalouserAccountsRuntime()).checkZaloAuthenticated(profile);
+  const authenticated = await checkZaloAuthenticated(profile);
 
   return {
     accountId,
-    name: normalizeOptionalString(merged.name),
+    name: merged.name?.trim() || undefined,
     enabled,
     profile,
     authenticated,
@@ -98,7 +84,7 @@ export function resolveZalouserAccountSync(params: {
 
   return {
     accountId,
-    name: normalizeOptionalString(merged.name),
+    name: merged.name?.trim() || undefined,
     enabled,
     profile,
     authenticated: false,
@@ -119,7 +105,7 @@ export async function listEnabledZalouserAccounts(
 export async function getZcaUserInfo(
   profile: string,
 ): Promise<{ userId?: string; displayName?: string } | null> {
-  const info = await (await loadZalouserAccountsRuntime()).getZaloUserInfo(profile);
+  const info = await getZaloUserInfo(profile);
   if (!info) {
     return null;
   }
@@ -129,8 +115,6 @@ export async function getZcaUserInfo(
   };
 }
 
-export async function checkZcaAuthenticated(profile: string): Promise<boolean> {
-  return await (await loadZalouserAccountsRuntime()).checkZaloAuthenticated(profile);
-}
+export { checkZaloAuthenticated as checkZcaAuthenticated };
 
 export type { ResolvedZalouserAccount } from "./types.js";

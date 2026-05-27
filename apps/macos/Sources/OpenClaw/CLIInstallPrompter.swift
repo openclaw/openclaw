@@ -26,7 +26,7 @@ final class CLIInstallPrompter {
         case .alertFirstButtonReturn:
             Task { await self.installCLI() }
         case .alertThirdButtonReturn:
-            self.openSettings(tab: .connection)
+            self.openSettings(tab: .general)
         default:
             break
         }

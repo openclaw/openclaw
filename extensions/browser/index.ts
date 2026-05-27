@@ -1,17 +1,28 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  browserPluginNodeHostCommands,
-  browserPluginReload,
-  browserSecurityAuditCollectors,
-  registerBrowserPlugin,
-} from "./plugin-registration.js";
+  createBrowserPluginService,
+  createBrowserTool,
+  definePluginEntry,
+  handleBrowserGatewayRequest,
+  registerBrowserCli,
+  type OpenClawPluginToolContext,
+  type OpenClawPluginToolFactory,
+} from "./runtime-api.js";
 
 export default definePluginEntry({
   id: "browser",
   name: "Browser",
   description: "Default browser tool plugin",
-  reload: browserPluginReload,
-  nodeHostCommands: browserPluginNodeHostCommands,
-  securityAuditCollectors: [...browserSecurityAuditCollectors],
-  register: registerBrowserPlugin,
+  register(api) {
+    api.registerTool(((ctx: OpenClawPluginToolContext) =>
+      createBrowserTool({
+        sandboxBridgeUrl: ctx.browser?.sandboxBridgeUrl,
+        allowHostControl: ctx.browser?.allowHostControl,
+        agentSessionKey: ctx.sessionKey,
+      })) as OpenClawPluginToolFactory);
+    api.registerCli(({ program }) => registerBrowserCli(program), { commands: ["browser"] });
+    api.registerGatewayMethod("browser.request", handleBrowserGatewayRequest, {
+      scope: "operator.write",
+    });
+    api.registerService(createBrowserPluginService());
+  },
 });

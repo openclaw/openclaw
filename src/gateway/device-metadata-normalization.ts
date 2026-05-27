@@ -27,6 +27,5 @@ export function normalizeDeviceMetadataForPolicy(value?: string | null): string 
   }
   // Policy classification should collapse Unicode confusables to stable ASCII-ish
   // tokens where possible before matching platform/family rules.
-  return normalizeLowercaseStringOrEmpty(trimmed.normalize("NFKD").replace(/\p{M}/gu, ""));
+  return trimmed.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
 }
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";

@@ -69,7 +69,9 @@ describe("cron protocol conformance", () => {
     for (const relPath of UI_FILES) {
       const content = await fs.readFile(path.join(cwd, relPath), "utf-8");
       for (const mode of modes) {
-        expect(content, `${relPath} missing delivery mode ${mode}`).toContain(`"${mode}"`);
+        expect(content.includes(`"${mode}"`), `${relPath} missing delivery mode ${mode}`).toBe(
+          true,
+        );
       }
     }
 
@@ -78,7 +80,7 @@ describe("cron protocol conformance", () => {
       const content = await fs.readFile(path.join(cwd, relPath), "utf-8");
       for (const mode of modes) {
         const pattern = new RegExp(`\\bcase\\s+${mode}\\b`);
-        expect(content, `${relPath} missing case ${mode}`).toMatch(pattern);
+        expect(pattern.test(content), `${relPath} missing case ${mode}`).toBe(true);
       }
     }
   });
@@ -86,34 +88,28 @@ describe("cron protocol conformance", () => {
   it("cron status shape matches gateway fields in UI + Swift", async () => {
     const cwd = process.cwd();
     const uiTypes = await fs.readFile(path.join(cwd, "ui/src/ui/types.ts"), "utf-8");
-    expect(uiTypes).toContain("export type CronStatus");
-    expect(uiTypes).toContain("jobs:");
-    expect(uiTypes).not.toContain("jobCount");
+    expect(uiTypes.includes("export type CronStatus")).toBe(true);
+    expect(uiTypes.includes("jobs:")).toBe(true);
+    expect(uiTypes.includes("jobCount")).toBe(false);
 
     const [swiftRelPath] = await resolveSwiftFiles(cwd, SWIFT_STATUS_CANDIDATES);
     const swiftPath = path.join(cwd, swiftRelPath);
     const swift = await fs.readFile(swiftPath, "utf-8");
-    expect(swift).toContain("struct CronSchedulerStatus");
-    expect(swift).toContain("let jobs:");
+    expect(swift.includes("struct CronSchedulerStatus")).toBe(true);
+    expect(swift.includes("let jobs:")).toBe(true);
   });
 
   it("cron job state schema keeps the full failover reason set", () => {
     const properties = (CronJobStateSchema as SchemaLike).properties ?? {};
     const lastErrorReason = properties.lastErrorReason as SchemaLike | undefined;
-    if (lastErrorReason === undefined) {
-      throw new Error("missing lastErrorReason schema");
-    }
-    expect(extractConstUnionValues(lastErrorReason)).toEqual([
+    expect(lastErrorReason).toBeDefined();
+    expect(extractConstUnionValues(lastErrorReason ?? {})).toEqual([
       "auth",
       "format",
       "rate_limit",
       "billing",
-      "server_error",
       "timeout",
       "model_not_found",
-      "empty_response",
-      "no_error_details",
-      "unclassified",
       "unknown",
     ]);
   });

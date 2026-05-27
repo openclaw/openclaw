@@ -1,12 +1,7 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromPrivateNetworkOptIn,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
 import type { BaseProbeResult } from "./runtime-api.js";
 
-type MattermostProbe = BaseProbeResult & {
+export type MattermostProbe = BaseProbeResult & {
   status?: number | null;
   elapsedMs?: number | null;
   bot?: MattermostUser;
@@ -16,7 +11,6 @@ export async function probeMattermost(
   baseUrl: string,
   botToken: string,
   timeoutMs = 2500,
-  allowPrivateNetwork = false,
 ): Promise<MattermostProbe> {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
   if (!normalized) {
@@ -30,38 +24,29 @@ export async function probeMattermost(
     timer = setTimeout(() => controller.abort(), timeoutMs);
   }
   try {
-    const { response: res, release } = await fetchWithSsrFGuard({
-      url,
-      init: {
-        headers: { Authorization: `Bearer ${botToken}` },
-        signal: controller?.signal,
-      },
-      auditContext: "mattermost-probe",
-      policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${botToken}` },
+      signal: controller?.signal,
     });
-    try {
-      const elapsedMs = Date.now() - start;
-      if (!res.ok) {
-        const detail = await readMattermostError(res);
-        return {
-          ok: false,
-          status: res.status,
-          error: detail || res.statusText,
-          elapsedMs,
-        };
-      }
-      const bot = (await res.json()) as MattermostUser;
+    const elapsedMs = Date.now() - start;
+    if (!res.ok) {
+      const detail = await readMattermostError(res);
       return {
-        ok: true,
+        ok: false,
         status: res.status,
+        error: detail || res.statusText,
         elapsedMs,
-        bot,
       };
-    } finally {
-      await release();
     }
+    const bot = (await res.json()) as MattermostUser;
+    return {
+      ok: true,
+      status: res.status,
+      elapsedMs,
+      bot,
+    };
   } catch (err) {
-    const message = formatErrorMessage(err);
+    const message = err instanceof Error ? err.message : String(err);
     return {
       ok: false,
       status: null,

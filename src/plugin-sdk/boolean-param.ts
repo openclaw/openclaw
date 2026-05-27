@@ -1,5 +1,3 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-
 /** Read loose boolean params from tool input that may arrive as booleans or "true"/"false" strings. */
 export function readBooleanParam(
   params: Record<string, unknown>,
@@ -9,12 +7,14 @@ export function readBooleanParam(
   if (typeof raw === "boolean") {
     return raw;
   }
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (normalized === "true") {
-    return true;
-  }
-  if (normalized === "false") {
-    return false;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim().toLowerCase();
+    if (trimmed === "true") {
+      return true;
+    }
+    if (trimmed === "false") {
+      return false;
+    }
   }
   return undefined;
 }

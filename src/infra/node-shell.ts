@@ -1,7 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-
 export function buildNodeShellCommand(command: string, platform?: string | null) {
-  const normalized = normalizeLowercaseStringOrEmpty((platform ?? "").trim());
+  const normalized = String(platform ?? "")
+    .trim()
+    .toLowerCase();
   if (normalized.startsWith("win")) {
     return ["cmd.exe", "/d", "/s", "/c", command];
   }

@@ -1,39 +1,12 @@
-import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
-  resolveDiscordMemberAllowed,
+  buildUntrustedChannelMetadata,
+  wrapExternalContent,
+} from "openclaw/plugin-sdk/security-runtime";
+import {
   resolveDiscordOwnerAllowFrom,
   type DiscordChannelConfigResolved,
   type DiscordGuildEntryResolved,
 } from "./allow-list.js";
-
-type DiscordSupplementalContextSender = {
-  id?: string;
-  name?: string;
-  tag?: string;
-  memberRoleIds?: string[];
-};
-
-export function createDiscordSupplementalContextAccessChecker(params: {
-  channelConfig?: DiscordChannelConfigResolved | null;
-  guildInfo?: DiscordGuildEntryResolved | null;
-  allowNameMatching?: boolean;
-  isGuild: boolean;
-}) {
-  return (sender: DiscordSupplementalContextSender): boolean => {
-    if (!params.isGuild) {
-      return true;
-    }
-    return resolveDiscordMemberAllowed({
-      userAllowList: params.channelConfig?.users ?? params.guildInfo?.users,
-      roleAllowList: params.channelConfig?.roles ?? params.guildInfo?.roles,
-      memberRoleIds: sender.memberRoleIds ?? [],
-      userId: sender.id ?? "",
-      userName: sender.name,
-      userTag: sender.tag,
-      allowNameMatching: params.allowNameMatching,
-    });
-  };
-}
 
 export function buildDiscordGroupSystemPrompt(
   channelConfig?: DiscordChannelConfigResolved | null,
@@ -47,21 +20,24 @@ export function buildDiscordGroupSystemPrompt(
 export function buildDiscordUntrustedContext(params: {
   isGuild: boolean;
   channelTopic?: string;
-}): MsgContext["UntrustedStructuredContext"] | undefined {
+  messageBody?: string;
+}): string[] | undefined {
   if (!params.isGuild) {
     return undefined;
   }
-  const entries: NonNullable<MsgContext["UntrustedStructuredContext"]> = [];
-  if (typeof params.channelTopic === "string" && params.channelTopic.trim().length > 0) {
-    entries.push({
-      label: "Discord channel metadata",
+  const entries = [
+    buildUntrustedChannelMetadata({
       source: "discord",
-      type: "channel_metadata",
-      payload: {
-        topic: params.channelTopic.trim(),
-      },
-    });
-  }
+      label: "Discord channel topic",
+      entries: [params.channelTopic],
+    }),
+    typeof params.messageBody === "string" && params.messageBody.trim().length > 0
+      ? wrapExternalContent(`UNTRUSTED Discord message body\n${params.messageBody.trim()}`, {
+          source: "unknown",
+          includeWarning: false,
+        })
+      : undefined,
+  ].filter((entry): entry is string => Boolean(entry));
   return entries.length > 0 ? entries : undefined;
 }
 
@@ -76,6 +52,7 @@ export function buildDiscordInboundAccessContext(params: {
   allowNameMatching?: boolean;
   isGuild: boolean;
   channelTopic?: string;
+  messageBody?: string;
 }) {
   return {
     groupSystemPrompt: params.isGuild
@@ -84,6 +61,7 @@ export function buildDiscordInboundAccessContext(params: {
     untrustedContext: buildDiscordUntrustedContext({
       isGuild: params.isGuild,
       channelTopic: params.channelTopic,
+      messageBody: params.messageBody,
     }),
     ownerAllowFrom: resolveDiscordOwnerAllowFrom({
       channelConfig: params.channelConfig,

@@ -8,8 +8,6 @@ struct HostEnvOverrideDiagnostics: Equatable {
 enum HostEnvSanitizer {
     /// Generated from src/infra/host-env-security-policy.json via scripts/generate-host-env-security-policy-swift.mjs.
     /// Parity is validated by src/infra/host-env-security.policy-parity.test.ts.
-    private static let blockedInheritedKeys = HostEnvSecurityPolicy.blockedInheritedKeys
-    private static let blockedInheritedPrefixes = HostEnvSecurityPolicy.blockedInheritedPrefixes
     private static let blockedKeys = HostEnvSecurityPolicy.blockedKeys
     private static let blockedPrefixes = HostEnvSecurityPolicy.blockedPrefixes
     private static let blockedOverrideKeys = HostEnvSecurityPolicy.blockedOverrideKeys
@@ -28,11 +26,6 @@ enum HostEnvSanitizer {
     private static func isBlocked(_ upperKey: String) -> Bool {
         if self.blockedKeys.contains(upperKey) { return true }
         return self.blockedPrefixes.contains(where: { upperKey.hasPrefix($0) })
-    }
-
-    private static func isBlockedInherited(_ upperKey: String) -> Bool {
-        if self.blockedInheritedKeys.contains(upperKey) { return true }
-        return self.blockedInheritedPrefixes.contains(where: { upperKey.hasPrefix($0) })
     }
 
     private static func isBlockedOverride(_ upperKey: String) -> Bool {
@@ -120,7 +113,7 @@ enum HostEnvSanitizer {
             let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else { continue }
             let upper = key.uppercased()
-            if self.isBlockedInherited(upper) { continue }
+            if self.isBlocked(upper) { continue }
             merged[key] = value
         }
 

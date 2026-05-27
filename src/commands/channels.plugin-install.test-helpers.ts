@@ -1,11 +1,10 @@
 import { vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { ChannelsConfig } from "../config/types.channels.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 
 export function createMockChannelSetupPluginInstallModule(
-  actual?: Partial<typeof import("./channel-setup/plugin-install.js")>,
+  actual: typeof import("./channel-setup/plugin-install.js"),
 ) {
   return {
     ...actual,
@@ -14,38 +13,38 @@ export function createMockChannelSetupPluginInstallModule(
   };
 }
 
-export function createExternalChatCatalogEntry(): ChannelPluginCatalogEntry {
+export function createMSTeamsCatalogEntry(): ChannelPluginCatalogEntry {
   return {
-    id: "external-chat",
-    pluginId: "@vendor/external-chat-plugin",
+    id: "msteams",
+    pluginId: "@openclaw/msteams-plugin",
     meta: {
-      id: "external-chat",
-      label: "External Chat",
-      selectionLabel: "External Chat",
-      docsPath: "/channels/external-chat",
-      blurb: "external chat channel",
+      id: "msteams",
+      label: "Microsoft Teams",
+      selectionLabel: "Microsoft Teams",
+      docsPath: "/channels/msteams",
+      blurb: "teams channel",
     },
     install: {
-      npmSpec: "@vendor/external-chat",
+      npmSpec: "@openclaw/msteams",
     },
   };
 }
 
-export function createExternalChatSetupPlugin(): ChannelPlugin {
+export function createMSTeamsSetupPlugin(): ChannelPlugin {
   return {
     ...createChannelTestPluginBase({
-      id: "external-chat",
-      label: "External Chat",
-      docsPath: "/channels/external-chat",
+      id: "msteams",
+      label: "Microsoft Teams",
+      docsPath: "/channels/msteams",
     }),
     setup: {
       applyAccountConfig: vi.fn(({ cfg, input }) => ({
         ...cfg,
         channels: {
           ...cfg.channels,
-          "external-chat": {
+          msteams: {
             enabled: true,
-            token: input.token,
+            tenantId: input.token,
           },
         },
       })),
@@ -53,26 +52,26 @@ export function createExternalChatSetupPlugin(): ChannelPlugin {
   } as ChannelPlugin;
 }
 
-export function createExternalChatDeletePlugin(): ChannelPlugin {
+export function createMSTeamsDeletePlugin(): ChannelPlugin {
   return {
     ...createChannelTestPluginBase({
-      id: "external-chat",
-      label: "External Chat",
-      docsPath: "/channels/external-chat",
+      id: "msteams",
+      label: "Microsoft Teams",
+      docsPath: "/channels/msteams",
     }),
     config: {
       ...createChannelTestPluginBase({
-        id: "external-chat",
-        label: "External Chat",
-        docsPath: "/channels/external-chat",
+        id: "msteams",
+        label: "Microsoft Teams",
+        docsPath: "/channels/msteams",
       }).config,
       deleteAccount: vi.fn(({ cfg }: { cfg: Record<string, unknown> }) => {
         const channels = (cfg.channels as Record<string, unknown> | undefined) ?? {};
         const nextChannels = { ...channels };
-        delete nextChannels["external-chat"];
+        delete nextChannels.msteams;
         return {
           ...cfg,
-          channels: nextChannels as ChannelsConfig,
+          channels: nextChannels,
         };
       }),
     },

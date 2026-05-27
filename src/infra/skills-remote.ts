@@ -1,15 +1,10 @@
-import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
-import type { SkillEligibilityContext, SkillEntry } from "../agents/skills/types.js";
-import { loadWorkspaceSkillEntries } from "../agents/skills/workspace.js";
+import type { SkillEligibilityContext, SkillEntry } from "../agents/skills.js";
+import { loadWorkspaceSkillEntries } from "../agents/skills.js";
+import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { NodeRegistry } from "../gateway/node-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
 
 type RemoteNodeRecord = {
@@ -19,13 +14,11 @@ type RemoteNodeRecord = {
   deviceFamily?: string;
   commands?: string[];
   bins: Set<string>;
-  connected: boolean;
   remoteIp?: string;
 };
 
 const log = createSubsystemLogger("gateway/skills-remote");
 const remoteNodes = new Map<string, RemoteNodeRecord>();
-const remoteBinProbeInflight = new Map<string, Promise<void>>();
 let remoteRegistry: NodeRegistry | null = null;
 
 function describeNode(nodeId: string): string {
@@ -65,65 +58,29 @@ function extractErrorMessage(err: unknown): string | undefined {
   return undefined;
 }
 
-function logRemoteBinProbeFailure(
-  nodeId: string,
-  err: unknown,
-  context?: { command?: string; timeoutMs?: number; requiredBinCount?: number },
-) {
+function logRemoteBinProbeFailure(nodeId: string, err: unknown) {
   const message = extractErrorMessage(err);
   const label = describeNode(nodeId);
-  const details = [
-    context?.command ? `command=${context.command}` : undefined,
-    typeof context?.timeoutMs === "number" ? `timeoutMs=${context.timeoutMs}` : undefined,
-    typeof context?.requiredBinCount === "number"
-      ? `requiredBins=${context.requiredBinCount}`
-      : undefined,
-    `connected=${remoteNodes.get(nodeId)?.connected === true ? "yes" : "no"}`,
-  ]
-    .filter(Boolean)
-    .join(" ");
   // Node unavailable errors (not connected or disconnected mid-operation) are expected
   // when nodes have transient connections - log at info level instead of warn
   if (message?.includes("node not connected") || message?.includes("node disconnected")) {
-    log.info(`remote bin probe skipped: node unavailable (${label}; ${details})`);
+    log.info(`remote bin probe skipped: node unavailable (${label})`);
     return;
   }
   if (message?.includes("invoke timed out") || message?.includes("timeout")) {
-    log.warn(
-      `remote bin probe timed out (${label}; ${details}); check node connectivity for ${label}`,
-    );
+    log.warn(`remote bin probe timed out (${label}); check node connectivity for ${label}`);
     return;
   }
-  log.warn(`remote bin probe error (${label}; ${details}): ${message ?? "unknown"}`);
-}
-
-function logRemoteBinProbePreflightFailure(
-  nodeId: string,
-  err: unknown,
-  context?: { command?: string; timeoutMs?: number; requiredBinCount?: number },
-) {
-  const message = extractErrorMessage(err);
-  const label = describeNode(nodeId);
-  const details = [
-    context?.command ? `command=${context.command}` : undefined,
-    typeof context?.timeoutMs === "number" ? `timeoutMs=${context.timeoutMs}` : undefined,
-    typeof context?.requiredBinCount === "number"
-      ? `requiredBins=${context.requiredBinCount}`
-      : undefined,
-    `connected=${remoteNodes.get(nodeId)?.connected === true ? "yes" : "no"}`,
-  ]
-    .filter(Boolean)
-    .join(" ");
-  log.info(
-    `remote bin probe skipped: node connectivity unavailable (${label}; ${details}): ${
-      message ?? "unknown"
-    }`,
-  );
+  log.warn(`remote bin probe error (${label}): ${message ?? "unknown"}`);
 }
 
 function isMacPlatform(platform?: string, deviceFamily?: string): boolean {
-  const platformNorm = normalizeLowercaseStringOrEmpty(platform);
-  const familyNorm = normalizeLowercaseStringOrEmpty(deviceFamily);
+  const platformNorm = String(platform ?? "")
+    .trim()
+    .toLowerCase();
+  const familyNorm = String(deviceFamily ?? "")
+    .trim()
+    .toLowerCase();
   if (platformNorm.includes("mac")) {
     return true;
   }
@@ -152,7 +109,6 @@ function upsertNode(record: {
   commands?: string[];
   remoteIp?: string;
   bins?: string[];
-  connected?: boolean;
 }) {
   const existing = remoteNodes.get(record.nodeId);
   const bins = new Set<string>(record.bins ?? existing?.bins ?? []);
@@ -164,17 +120,7 @@ function upsertNode(record: {
     commands: record.commands ?? existing?.commands,
     remoteIp: record.remoteIp ?? existing?.remoteIp,
     bins,
-    connected: record.connected ?? existing?.connected ?? false,
   });
-}
-
-function clearRemoteNodeBins(nodeId: string): boolean {
-  const existing = remoteNodes.get(nodeId);
-  if (!existing || existing.bins.size === 0) {
-    return false;
-  }
-  existing.bins = new Set();
-  return true;
 }
 
 export function setSkillsRemoteRegistry(registry: NodeRegistry | null) {
@@ -194,14 +140,8 @@ export async function primeRemoteSkillsCache() {
         commands: node.commands,
         remoteIp: node.remoteIp,
         bins: node.bins,
-        connected: false,
       });
-      if (
-        node.bins &&
-        node.bins.length > 0 &&
-        isMacPlatform(node.platform, node.deviceFamily) &&
-        supportsSystemRun(node.commands)
-      ) {
+      if (isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands)) {
         sawMac = true;
       }
     }
@@ -221,7 +161,7 @@ export function recordRemoteNodeInfo(node: {
   commands?: string[];
   remoteIp?: string;
 }) {
-  upsertNode({ ...node, connected: true });
+  upsertNode(node);
 }
 
 export function recordRemoteNodeBins(nodeId: string, bins: string[]) {
@@ -277,18 +217,12 @@ function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: 
       ? (JSON.parse(payloadJSON) as { stdout?: unknown; bins?: unknown })
       : (payload as { stdout?: unknown; bins?: unknown });
     if (Array.isArray(parsed.bins)) {
-      return normalizeStringEntries(parsed.bins);
-    }
-    if (parsed.bins && typeof parsed.bins === "object") {
-      return Object.entries(parsed.bins)
-        .filter(([, resolvedPath]) => normalizeOptionalString(resolvedPath) !== undefined)
-        .map(([bin]) => normalizeOptionalString(bin) ?? "")
-        .filter(Boolean);
+      return parsed.bins.map((bin) => String(bin).trim()).filter(Boolean);
     }
     if (typeof parsed.stdout === "string") {
       return parsed.stdout
         .split(/\r?\n/)
-        .map((line) => normalizeOptionalString(line) ?? "")
+        .map((line) => line.trim())
         .filter(Boolean);
     }
   } catch {
@@ -320,28 +254,6 @@ export async function refreshRemoteNodeBins(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
 }) {
-  const existing = remoteBinProbeInflight.get(params.nodeId);
-  if (existing) {
-    await existing;
-    return;
-  }
-  const run = refreshRemoteNodeBinsUncoalesced(params).finally(() => {
-    if (remoteBinProbeInflight.get(params.nodeId) === run) {
-      remoteBinProbeInflight.delete(params.nodeId);
-    }
-  });
-  remoteBinProbeInflight.set(params.nodeId, run);
-  await run;
-}
-
-async function refreshRemoteNodeBinsUncoalesced(params: {
-  nodeId: string;
-  platform?: string;
-  deviceFamily?: string;
-  commands?: string[];
-  cfg: OpenClawConfig;
-  timeoutMs?: number;
-}) {
   if (!remoteRegistry) {
     return;
   }
@@ -366,66 +278,27 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     return;
   }
 
-  const binsList = [...requiredBins];
-  const timeoutMs = params.timeoutMs ?? 15_000;
-  const command = canWhich ? "system.which" : "system.run";
-  const logContext = { command, timeoutMs, requiredBinCount: binsList.length };
-  const connectivityTimeoutMs = Math.min(timeoutMs, 2_000);
-  if (typeof remoteRegistry.checkConnectivity === "function") {
-    const preflightConnId = remoteRegistry.get(params.nodeId)?.connId;
-    const connectivity = await remoteRegistry.checkConnectivity(
-      params.nodeId,
-      connectivityTimeoutMs,
-    );
-    if (!connectivity.ok) {
-      const latestSession = remoteRegistry.get(params.nodeId);
-      if (preflightConnId && latestSession && latestSession.connId !== preflightConnId) {
-        await refreshRemoteNodeBinsUncoalesced({
-          nodeId: latestSession.nodeId,
-          platform: latestSession.platform,
-          deviceFamily: latestSession.deviceFamily,
-          commands: latestSession.commands,
-          cfg: params.cfg,
-          timeoutMs: params.timeoutMs,
-        });
-        return;
-      }
-      const cleared = clearRemoteNodeBins(params.nodeId);
-      logRemoteBinProbePreflightFailure(params.nodeId, connectivity.error.message, {
-        command: "websocket.ping",
-        timeoutMs: connectivityTimeoutMs,
-        requiredBinCount: binsList.length,
-      });
-      if (cleared) {
-        bumpSkillsSnapshotVersion({ reason: "remote-node" });
-      }
-      return;
-    }
-  }
   try {
+    const binsList = [...requiredBins];
     const res = await remoteRegistry.invoke(
       canWhich
         ? {
             nodeId: params.nodeId,
-            command,
+            command: "system.which",
             params: { bins: binsList },
-            timeoutMs,
+            timeoutMs: params.timeoutMs ?? 15_000,
           }
         : {
             nodeId: params.nodeId,
-            command,
+            command: "system.run",
             params: {
               command: ["/bin/sh", "-lc", buildBinProbeScript(binsList)],
             },
-            timeoutMs,
+            timeoutMs: params.timeoutMs ?? 15_000,
           },
     );
     if (!res.ok) {
-      const cleared = clearRemoteNodeBins(params.nodeId);
-      logRemoteBinProbeFailure(params.nodeId, res.error?.message ?? "unknown", logContext);
-      if (cleared) {
-        bumpSkillsSnapshotVersion({ reason: "remote-node" });
-      }
+      logRemoteBinProbeFailure(params.nodeId, res.error?.message ?? "unknown");
       return;
     }
     const bins = parseBinProbePayload(res.payloadJSON, res.payload);
@@ -439,22 +312,13 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     await updatePairedNodeMetadata(params.nodeId, { bins });
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   } catch (err) {
-    const cleared = clearRemoteNodeBins(params.nodeId);
-    logRemoteBinProbeFailure(params.nodeId, err, logContext);
-    if (cleared) {
-      bumpSkillsSnapshotVersion({ reason: "remote-node" });
-    }
+    logRemoteBinProbeFailure(params.nodeId, err);
   }
 }
 
-export function getRemoteSkillEligibility(options?: {
-  advertiseExecNode?: boolean;
-}): SkillEligibilityContext["remote"] | undefined {
+export function getRemoteSkillEligibility(): SkillEligibilityContext["remote"] | undefined {
   const macNodes = [...remoteNodes.values()].filter(
-    (node) =>
-      node.connected &&
-      isMacPlatform(node.platform, node.deviceFamily) &&
-      supportsSystemRun(node.commands),
+    (node) => isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands),
   );
   if (macNodes.length === 0) {
     return undefined;
@@ -467,16 +331,14 @@ export function getRemoteSkillEligibility(options?: {
   }
   const labels = macNodes.map((node) => node.displayName ?? node.nodeId).filter(Boolean);
   const note =
-    options?.advertiseExecNode === false
-      ? undefined
-      : labels.length > 0
-        ? `Remote macOS node available (${labels.join(", ")}). Run macOS-only skills via exec host=node on that node.`
-        : "Remote macOS node available. Run macOS-only skills via exec host=node on that node.";
+    labels.length > 0
+      ? `Remote macOS node available (${labels.join(", ")}). Run macOS-only skills via exec host=node on that node.`
+      : "Remote macOS node available. Run macOS-only skills via exec host=node on that node.";
   return {
     platforms: ["darwin"],
     hasBin: (bin) => bins.has(bin),
     hasAnyBin: (required) => required.some((bin) => bins.has(bin)),
-    ...(note ? { note } : {}),
+    note,
   };
 }
 

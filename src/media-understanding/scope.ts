@@ -1,11 +1,10 @@
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { MediaUnderstandingScopeConfig } from "../config/types.tools.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
-type MediaUnderstandingScopeDecision = "allow" | "deny";
+export type MediaUnderstandingScopeDecision = "allow" | "deny";
 
 function normalizeDecision(value?: string | null): MediaUnderstandingScopeDecision | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
+  const normalized = value?.trim().toLowerCase();
   if (normalized === "allow") {
     return "allow";
   }
@@ -13,6 +12,11 @@ function normalizeDecision(value?: string | null): MediaUnderstandingScopeDecisi
     return "deny";
   }
   return undefined;
+}
+
+function normalizeMatch(value?: string | null): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || undefined;
 }
 
 export function normalizeMediaUnderstandingChatType(raw?: string | null): string | undefined {
@@ -30,9 +34,9 @@ export function resolveMediaUnderstandingScope(params: {
     return "allow";
   }
 
-  const channel = normalizeOptionalLowercaseString(params.channel);
+  const channel = normalizeMatch(params.channel);
   const chatType = normalizeMediaUnderstandingChatType(params.chatType);
-  const sessionKey = normalizeOptionalLowercaseString(params.sessionKey) ?? "";
+  const sessionKey = normalizeMatch(params.sessionKey) ?? "";
 
   for (const rule of scope.rules ?? []) {
     if (!rule) {
@@ -40,9 +44,9 @@ export function resolveMediaUnderstandingScope(params: {
     }
     const action = normalizeDecision(rule.action) ?? "allow";
     const match = rule.match ?? {};
-    const matchChannel = normalizeOptionalLowercaseString(match.channel);
+    const matchChannel = normalizeMatch(match.channel);
     const matchChatType = normalizeMediaUnderstandingChatType(match.chatType);
-    const matchPrefix = normalizeOptionalLowercaseString(match.keyPrefix);
+    const matchPrefix = normalizeMatch(match.keyPrefix);
 
     if (matchChannel && matchChannel !== channel) {
       continue;

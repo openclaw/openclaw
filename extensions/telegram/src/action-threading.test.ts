@@ -1,27 +1,38 @@
+import type { ChannelThreadingToolContext } from "openclaw/plugin-sdk/channel-contract";
 import { describe, expect, it } from "vitest";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 
-describe("resolveTelegramAutoThreadId", () => {
-  it("keeps current DM topic threadId even when replyToId-like flow is active", () => {
-    expect(
-      resolveTelegramAutoThreadId({
-        to: "telegram:1234",
-        toolContext: {
-          currentChannelId: "telegram:1234",
-          currentThreadTs: "533274",
-        },
-      }),
-    ).toBe("533274");
-  });
+function createToolContext(
+  overrides: Partial<ChannelThreadingToolContext> = {},
+): ChannelThreadingToolContext {
+  return {
+    currentChannelId: "tg:group:-100123",
+    currentThreadTs: "thread-1",
+    replyToMode: "all",
+    ...overrides,
+  };
+}
 
-  it("does not override an explicit target topic", () => {
+describe("resolveTelegramAutoThreadId", () => {
+  it("matches chats across Telegram target formats", () => {
     expect(
       resolveTelegramAutoThreadId({
-        to: "telegram:-1001:topic:99",
-        toolContext: {
-          currentChannelId: "telegram:-1001:topic:77",
-          currentThreadTs: "77",
-        },
+        to: "telegram:group:-100123:topic:77",
+        toolContext: createToolContext(),
+      }),
+    ).toBe("thread-1");
+
+    expect(
+      resolveTelegramAutoThreadId({
+        to: "-100999:77",
+        toolContext: createToolContext(),
+      }),
+    ).toBeUndefined();
+
+    expect(
+      resolveTelegramAutoThreadId({
+        to: "-100123",
+        toolContext: createToolContext({ currentChannelId: undefined }),
       }),
     ).toBeUndefined();
   });

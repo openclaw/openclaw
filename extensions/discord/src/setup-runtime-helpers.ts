@@ -1,6 +1,7 @@
 export {
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
+  createAllowlistSetupWizardProxy,
   createLegacyCompatChannelDmPolicy,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,

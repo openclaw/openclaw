@@ -1,7 +1,7 @@
 const RACE_TIMEOUT = Symbol("race-timeout");
 const RACE_ABORT = Symbol("race-abort");
 
-type RaceWithTimeoutAndAbortResult<T> =
+export type RaceWithTimeoutAndAbortResult<T> =
   | { status: "resolved"; value: T }
   | { status: "timeout" }
   | { status: "aborted" };
@@ -70,35 +70,17 @@ export function waitForAbortableDelay(
   }
 
   return new Promise((resolve) => {
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let handleAbort: (() => void) | undefined;
-
-    const finish = (value: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (handleAbort) {
-        abortSignal?.removeEventListener("abort", handleAbort);
-      }
-      resolve(value);
+    const handleAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
     };
 
-    handleAbort = () => {
-      finish(false);
-    };
+    const timer = setTimeout(() => {
+      abortSignal?.removeEventListener("abort", handleAbort);
+      resolve(true);
+    }, delayMs);
+    timer.unref?.();
 
     abortSignal?.addEventListener("abort", handleAbort, { once: true });
-    if (abortSignal?.aborted) {
-      finish(false);
-      return;
-    }
-
-    timer = setTimeout(() => finish(true), delayMs);
-    timer.unref?.();
   });
 }

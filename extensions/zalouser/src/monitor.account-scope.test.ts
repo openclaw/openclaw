@@ -1,19 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import "./monitor.send-mocks.js";
-import { testing } from "./monitor.js";
 import "./zalo-js.test-mocks.js";
+import { __testing } from "./monitor.js";
 import { sendMessageZalouserMock } from "./monitor.send-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
 
 describe("zalouser monitor pairing account scoping", () => {
   it("scopes DM pairing-store reads and pairing requests to accountId", async () => {
@@ -35,12 +28,7 @@ describe("zalouser monitor pairing account scoping", () => {
         return scopedAccountId === "beta" ? [] : ["attacker"];
       },
     );
-    const upsertPairingRequest = vi.fn(
-      async (_params: { channel: string; id: string; accountId?: string }) => ({
-        code: "PAIRME88",
-        created: true,
-      }),
-    );
+    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIRME88", created: true }));
 
     setZalouserRuntime({
       logging: {
@@ -94,29 +82,26 @@ describe("zalouser monitor pairing account scoping", () => {
       raw: { source: "test" },
     };
 
-    await testing.processMessage({
+    await __testing.processMessage({
       message,
       account,
       config,
       runtime: createZalouserRuntimeEnv(),
     });
 
-    expect(readAllowFromStore).toHaveBeenCalledOnce();
-    const allowStoreParams = requireRecord(
-      readAllowFromStore.mock.calls[0]?.[0],
-      "allow store params",
+    expect(readAllowFromStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "zalouser",
+        accountId: "beta",
+      }),
     );
-    expect(allowStoreParams.channel).toBe("zalouser");
-    expect(allowStoreParams.accountId).toBe("beta");
-
-    expect(upsertPairingRequest).toHaveBeenCalledOnce();
-    const pairingRequest = requireRecord(
-      upsertPairingRequest.mock.calls[0]?.[0],
-      "pairing request params",
+    expect(upsertPairingRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "zalouser",
+        id: "attacker",
+        accountId: "beta",
+      }),
     );
-    expect(pairingRequest.channel).toBe("zalouser");
-    expect(pairingRequest.id).toBe("attacker");
-    expect(pairingRequest.accountId).toBe("beta");
     expect(sendMessageZalouserMock).toHaveBeenCalled();
   });
 });

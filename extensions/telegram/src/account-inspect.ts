@@ -1,16 +1,14 @@
 import { resolveAccountWithDefaultFallback } from "openclaw/plugin-sdk/account-core";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/channel-core";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { coerceSecretRef } from "openclaw/plugin-sdk/config-runtime";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
-import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
-import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/telegram-core";
 import {
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
@@ -35,25 +33,13 @@ function inspectTokenFile(pathValue: unknown): {
   tokenSource: "tokenFile" | "none";
   tokenStatus: TelegramCredentialStatus;
 } | null {
-  const tokenFile = normalizeOptionalString(pathValue) ?? "";
+  const tokenFile = typeof pathValue === "string" ? pathValue.trim() : "";
   if (!tokenFile) {
     return null;
   }
-  let token: string | undefined;
-  try {
-    token = tryReadSecretFileSync(tokenFile, "Telegram bot token", {
-      rejectSymlink: true,
-    });
-  } catch (error) {
-    if (!(error instanceof FsSafeError)) {
-      throw error;
-    }
-    return {
-      token: "",
-      tokenSource: "tokenFile",
-      tokenStatus: "configured_unavailable",
-    };
-  }
+  const token = tryReadSecretFileSync(tokenFile, "Telegram bot token", {
+    rejectSymlink: true,
+  });
   return {
     token: token ?? "",
     tokenSource: "tokenFile",
@@ -98,10 +84,10 @@ function inspectTokenValue(params: { cfg: OpenClawConfig; value: unknown }): {
         tokenStatus: "configured_unavailable",
       };
     }
-    const envValue = normalizeOptionalString(process.env[ref.id]);
-    if (envValue) {
+    const envValue = process.env[ref.id];
+    if (envValue && envValue.trim()) {
       return {
-        token: envValue,
+        token: envValue.trim(),
         tokenSource: "env",
         tokenStatus: "available",
       };
@@ -145,7 +131,7 @@ function inspectTelegramAccountPrimary(params: {
     return {
       accountId,
       enabled,
-      name: normalizeOptionalString(merged.name),
+      name: merged.name?.trim() || undefined,
       token: accountTokenFile.token,
       tokenSource: accountTokenFile.tokenSource,
       tokenStatus: accountTokenFile.tokenStatus,
@@ -159,7 +145,7 @@ function inspectTelegramAccountPrimary(params: {
     return {
       accountId,
       enabled,
-      name: normalizeOptionalString(merged.name),
+      name: merged.name?.trim() || undefined,
       token: accountToken.token,
       tokenSource: accountToken.tokenSource,
       tokenStatus: accountToken.tokenStatus,
@@ -173,7 +159,7 @@ function inspectTelegramAccountPrimary(params: {
     return {
       accountId,
       enabled,
-      name: normalizeOptionalString(merged.name),
+      name: merged.name?.trim() || undefined,
       token: channelTokenFile.token,
       tokenSource: channelTokenFile.tokenSource,
       tokenStatus: channelTokenFile.tokenStatus,
@@ -190,7 +176,7 @@ function inspectTelegramAccountPrimary(params: {
     return {
       accountId,
       enabled,
-      name: normalizeOptionalString(merged.name),
+      name: merged.name?.trim() || undefined,
       token: channelToken.token,
       tokenSource: channelToken.tokenSource,
       tokenStatus: channelToken.tokenStatus,
@@ -200,16 +186,12 @@ function inspectTelegramAccountPrimary(params: {
   }
 
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
-  const envToken = allowEnv
-    ? (normalizeOptionalString(params.envToken) ??
-      normalizeOptionalString(process.env.TELEGRAM_BOT_TOKEN) ??
-      "")
-    : "";
+  const envToken = allowEnv ? (params.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim() : "";
   if (envToken) {
     return {
       accountId,
       enabled,
-      name: normalizeOptionalString(merged.name),
+      name: merged.name?.trim() || undefined,
       token: envToken,
       tokenSource: "env",
       tokenStatus: "available",
@@ -221,7 +203,7 @@ function inspectTelegramAccountPrimary(params: {
   return {
     accountId,
     enabled,
-    name: normalizeOptionalString(merged.name),
+    name: merged.name?.trim() || undefined,
     token: "",
     tokenSource: "none",
     tokenStatus: "missing",

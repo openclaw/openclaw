@@ -1,7 +1,6 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
-import { isRecord } from "../shared/record-coerce.js";
+import { openBoundaryFileSync } from "./boundary-file-read.js";
 
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
@@ -25,42 +24,23 @@ export function expectedIntegrityForUpdate(
   return integrity;
 }
 
-function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
-  const result = readRootJsonObjectSync({
-    rootDir: dir,
-    relativePath: "package.json",
+export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
+  const manifestPath = path.join(dir, "package.json");
+  const opened = openBoundaryFileSync({
+    absolutePath: manifestPath,
+    rootPath: dir,
     boundaryLabel: "installed package directory",
   });
-  return result.ok ? result.value : undefined;
-}
-
-export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
-  const manifest = readInstalledPackageManifest(dir);
-  return typeof manifest?.version === "string" ? manifest.version : undefined;
-}
-
-export function readInstalledPackagePeerDependencies(dir: string): Record<string, string> {
-  const manifest = readInstalledPackageManifest(dir);
-  const peerDependencies = isRecord(manifest?.peerDependencies) ? manifest.peerDependencies : {};
-  return Object.fromEntries(
-    Object.entries(peerDependencies).filter((entry): entry is [string, string] => {
-      const [, value] = entry;
-      return typeof value === "string";
-    }),
-  );
-}
-
-export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
-  const peerDependencies = readInstalledPackagePeerDependencies(dir);
-  if (!Object.hasOwn(peerDependencies, "openclaw")) {
-    return false;
+  if (!opened.ok) {
+    return undefined;
   }
-
   try {
-    fsSync.statSync(path.join(dir, "node_modules", "openclaw"));
-    return false;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    return code === "ENOENT" || code === "ENOTDIR";
+    const raw = fsSync.readFileSync(opened.fd, "utf-8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === "string" ? parsed.version : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    fsSync.closeSync(opened.fd);
   }
 }

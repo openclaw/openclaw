@@ -145,7 +145,10 @@ final class OnboardingWizardModel {
         self.sessionId = res.sessionid
         self.status = wizardStatusString(res.status) ?? (res.done ? "done" : "running")
         self.errorMessage = res.error
-        self.currentStep = res.step
+        self.currentStep = decodeWizardStep(res.step)
+        if self.currentStep == nil, res.step != nil {
+            onboardingWizardLogger.error("wizard step decode failed")
+        }
         if res.done { self.currentStep = nil }
         self.restartAttempts = 0
     }
@@ -154,7 +157,10 @@ final class OnboardingWizardModel {
         let status = wizardStatusString(res.status)
         self.status = status ?? self.status
         self.errorMessage = res.error
-        self.currentStep = res.step
+        self.currentStep = decodeWizardStep(res.step)
+        if self.currentStep == nil, res.step != nil {
+            onboardingWizardLogger.error("wizard step decode failed")
+        }
         if res.done { self.currentStep = nil }
         if res.done || status == "done" || status == "cancelled" || status == "error" {
             self.sessionId = nil

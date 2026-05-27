@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { GatewayClient } from "../gateway/client.js";
@@ -19,12 +19,7 @@ import {
   type ExecHostResponse,
 } from "../infra/exec-host.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
-import {
-  decodeWindowsOutputBuffer,
-  resolveWindowsConsoleEncoding,
-} from "../infra/windows-encoding.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { runBrowserProxyCommand } from "../plugin-sdk/browser-runtime.js";
 import { buildSystemRunApprovalPlan, handleSystemRunInvoke } from "./invoke-system-run.js";
 import type {
   ExecEventPayload,
@@ -33,16 +28,24 @@ import type {
   SkillBinsProvider,
   SystemRunParams,
 } from "./invoke-types.js";
-import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
 
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
+  65001: "utf-8",
+  54936: "gb18030",
+  936: "gbk",
+  950: "big5",
+  932: "shift_jis",
+  949: "euc-kr",
+  1252: "windows-1252",
+};
+let cachedWindowsConsoleEncoding: string | null | undefined;
 
-const execHostEnforced =
-  normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_HOST ?? "") === "app";
+const execHostEnforced = process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
 const execHostFallbackAllowed =
-  normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_FALLBACK ?? "") !== "0";
+  process.env.OPENCLAW_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
 const preferMacAppExecHost = process.platform === "darwin" && execHostEnforced;
 
 type SystemWhichParams = {
@@ -61,7 +64,7 @@ type ExecApprovalsSnapshot = {
   file: ExecApprovalsFile;
 };
 
-type NodeInvokeRequestPayload = {
+export type NodeInvokeRequestPayload = {
   id: string;
   nodeId: string;
   command: string;
@@ -81,7 +84,7 @@ function isCmdExeInvocation(argv: string[]): boolean {
   if (!token) {
     return false;
   }
-  const base = normalizeLowercaseStringOrEmpty(path.win32.basename(token));
+  const base = path.win32.basename(token).toLowerCase();
   return base === "cmd.exe" || base === "cmd";
 }
 
@@ -100,12 +103,63 @@ function truncateOutput(raw: string, maxChars: number): { text: string; truncate
   return { text: `... (truncated) ${raw.slice(raw.length - maxChars)}`, truncated: true };
 }
 
+export function parseWindowsCodePage(raw: string): number | null {
+  if (!raw) {
+    return null;
+  }
+  const match = raw.match(/\b(\d{3,5})\b/);
+  if (!match?.[1]) {
+    return null;
+  }
+  const codePage = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(codePage) || codePage <= 0) {
+    return null;
+  }
+  return codePage;
+}
+
+function resolveWindowsConsoleEncoding(): string | null {
+  if (process.platform !== "win32") {
+    return null;
+  }
+  if (cachedWindowsConsoleEncoding !== undefined) {
+    return cachedWindowsConsoleEncoding;
+  }
+  try {
+    const result = spawnSync("cmd.exe", ["/d", "/s", "/c", "chcp"], {
+      windowsHide: true,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+    const codePage = parseWindowsCodePage(raw);
+    cachedWindowsConsoleEncoding =
+      codePage !== null ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
+  } catch {
+    cachedWindowsConsoleEncoding = null;
+  }
+  return cachedWindowsConsoleEncoding;
+}
+
 export function decodeCapturedOutputBuffer(params: {
   buffer: Buffer;
   platform?: NodeJS.Platform;
   windowsEncoding?: string | null;
 }): string {
-  return decodeWindowsOutputBuffer(params);
+  const utf8 = params.buffer.toString("utf8");
+  const platform = params.platform ?? process.platform;
+  if (platform !== "win32") {
+    return utf8;
+  }
+  const encoding = params.windowsEncoding ?? resolveWindowsConsoleEncoding();
+  if (!encoding || encoding.toLowerCase() === "utf-8") {
+    return utf8;
+  }
+  try {
+    return new TextDecoder(encoding).decode(params.buffer);
+  } catch {
+    return utf8;
+  }
 }
 
 function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
@@ -244,7 +298,7 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
     process.platform === "win32"
       ? (process.env.PATHEXT ?? process.env.PathExt ?? ".EXE;.CMD;.BAT;.COM")
           .split(";")
-          .map((ext) => normalizeLowercaseStringOrEmpty(ext))
+          .map((ext) => ext.toLowerCase())
       : [""];
   for (const dir of resolveEnvPath(env)) {
     for (const ext of extensions) {
@@ -258,7 +312,7 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
 }
 
 async function handleSystemWhich(params: SystemWhichParams, env?: Record<string, string>) {
-  const bins = normalizeStringEntries(params.bins);
+  const bins = params.bins.map((bin) => bin.trim()).filter(Boolean);
   const found: Record<string, string> = {};
   for (const bin of bins) {
     const path = resolveExecutable(bin, env);
@@ -365,7 +419,7 @@ export async function handleInvoke(
   client: GatewayClient,
   skillBins: SkillBinsProvider,
 ) {
-  const command = frame.command ?? "";
+  const command = String(frame.command ?? "");
   if (command === "system.execApprovals.get") {
     try {
       ensureExecApprovals();
@@ -379,9 +433,7 @@ export async function handleInvoke(
       await sendJsonPayloadResult(client, frame, payload);
     } catch (err) {
       const message = String(err);
-      const code = normalizeLowercaseStringOrEmpty(message).includes("timed out")
-        ? "TIMEOUT"
-        : "INVALID_REQUEST";
+      const code = message.toLowerCase().includes("timed out") ? "TIMEOUT" : "INVALID_REQUEST";
       await sendErrorResult(client, frame, code, message);
     }
     return;
@@ -428,14 +480,13 @@ export async function handleInvoke(
     return;
   }
 
-  try {
-    const pluginNodeHostResult = await invokeRegisteredNodeHostCommand(command, frame.paramsJSON);
-    if (pluginNodeHostResult !== null) {
-      await sendRawPayloadResult(client, frame, pluginNodeHostResult);
-      return;
+  if (command === "browser.proxy") {
+    try {
+      const payload = await runBrowserProxyCommand(frame.paramsJSON);
+      await sendRawPayloadResult(client, frame, payload);
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
     }
-  } catch (err) {
-    await sendInvalidRequestResult(client, frame, err);
     return;
   }
 
@@ -504,16 +555,11 @@ export async function handleInvoke(
   });
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
 function decodeParams<T>(raw?: string | null): T {
   if (!raw) {
     throw new Error("INVALID_REQUEST: paramsJSON required");
   }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
-  }
+  return JSON.parse(raw) as T;
 }
 
 export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayload | null {

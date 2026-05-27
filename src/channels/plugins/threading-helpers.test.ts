@@ -37,12 +37,10 @@ describe("createScopedAccountReplyToModeResolver", () => {
       resolveAccount: (cfg, accountId) =>
         ((
           cfg.channels as {
-            demo?: {
-              accounts?: Record<string, { replyToMode?: "off" | "first" | "all" | "batched" }>;
-            };
+            demo?: { accounts?: Record<string, { replyToMode?: "off" | "first" | "all" }> };
           }
         ).demo?.accounts?.[accountId?.toLowerCase() ?? "default"] ?? {}) as {
-          replyToMode?: "off" | "first" | "all" | "batched";
+          replyToMode?: "off" | "first" | "all";
         },
       resolveReplyToMode: (account) => account.replyToMode,
     });

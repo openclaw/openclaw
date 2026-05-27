@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import {
   PROTECTED_PLUGIN_ROUTE_PREFIXES,
   canonicalizePathForSecurity,
@@ -14,7 +13,7 @@ export type PluginRoutePathContext = {
 };
 
 function normalizeProtectedPrefix(prefix: string): string {
-  const collapsed = normalizeLowercaseStringOrEmpty(prefix).replace(/\/{2,}/g, "/");
+  const collapsed = prefix.toLowerCase().replace(/\/{2,}/g, "/");
   if (collapsed.length <= 1) {
     return collapsed || "/";
   }

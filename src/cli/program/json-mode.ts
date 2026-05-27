@@ -27,10 +27,10 @@ function getDeclaredCommandJsonMode(command: Command): JsonMode | null {
 
 function commandSelectedJsonFlag(command: Command, argv: string[]): boolean {
   const commandWithGlobals = command as Command & {
-    optsWithGlobals?: () => Record<string, unknown>;
+    optsWithGlobals?: <T extends Record<string, unknown>>() => T;
   };
   if (typeof commandWithGlobals.optsWithGlobals === "function") {
-    const resolved = commandWithGlobals.optsWithGlobals().json;
+    const resolved = commandWithGlobals.optsWithGlobals<Record<string, unknown>>().json;
     if (resolved === true) {
       return true;
     }
@@ -43,7 +43,10 @@ export function setCommandJsonMode(command: Command, mode: JsonMode): Command {
   return command;
 }
 
-function getCommandJsonMode(command: Command, argv: string[] = process.argv): JsonMode | null {
+export function getCommandJsonMode(
+  command: Command,
+  argv: string[] = process.argv,
+): JsonMode | null {
   if (!commandSelectedJsonFlag(command, argv)) {
     return null;
   }

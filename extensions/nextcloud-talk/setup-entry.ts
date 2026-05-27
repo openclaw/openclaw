@@ -1,13 +1,4 @@
-import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { nextcloudTalkPlugin } from "./src/channel.js";
 
-export default defineBundledChannelSetupEntry({
-  importMetaUrl: import.meta.url,
-  plugin: {
-    specifier: "./api.js",
-    exportName: "nextcloudTalkPlugin",
-  },
-  secrets: {
-    specifier: "./secret-contract-api.js",
-    exportName: "channelSecrets",
-  },
-});
+export default defineSetupPluginEntry(nextcloudTalkPlugin);

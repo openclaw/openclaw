@@ -14,8 +14,6 @@ export type MatrixLegacyCryptoInspectionResult = {
   decryptionKeyBase64: string | null;
 };
 
-const MATRIX_CRYPTO_STORE_SQLITE = 0;
-
 function resolveLegacyMachineStorePath(params: {
   cryptoRootDir: string;
   deviceId: string;
@@ -58,7 +56,7 @@ export async function inspectLegacyMatrixCryptoStore(params: {
     log: params.log,
   });
 
-  const { DeviceId, OlmMachine, UserId } = requireFn(
+  const { DeviceId, OlmMachine, StoreType, UserId } = requireFn(
     "@matrix-org/matrix-sdk-crypto-nodejs",
   ) as typeof import("@matrix-org/matrix-sdk-crypto-nodejs");
   const machine = await OlmMachine.initialize(
@@ -66,7 +64,7 @@ export async function inspectLegacyMatrixCryptoStore(params: {
     new DeviceId(params.deviceId),
     machineStorePath,
     "",
-    MATRIX_CRYPTO_STORE_SQLITE,
+    StoreType.Sqlite,
   );
 
   try {

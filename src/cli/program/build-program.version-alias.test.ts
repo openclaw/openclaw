@@ -1,6 +1,7 @@
 import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildProgram } from "./build-program.js";
+
+const { buildProgram } = await import("./build-program.js");
 
 describe("buildProgram version alias handling", () => {
   let originalArgv: string[];
@@ -32,7 +33,7 @@ describe("buildProgram version alias handling", () => {
       throw new Error(`unexpected process.exit:${String(code)}`);
     }) as typeof process.exit);
 
-    buildProgram();
+    expect(() => buildProgram()).not.toThrow();
     expect(exitSpy).not.toHaveBeenCalled();
   });
 });

@@ -1,23 +1,16 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
-  resolveRuntimePluginDiscoveryProviders,
+  resolvePluginDiscoveryProviders,
   runProviderCatalog,
-  runProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
-import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
-import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
-import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
-import { mergeProviderModels } from "./models-config.merge.js";
 import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
@@ -27,7 +20,7 @@ import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "./models-config.providers.secrets.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
+import { findNormalizedProviderValue } from "./provider-id.js";
 
 const log = createSubsystemLogger("agents/model-providers");
 
@@ -48,10 +41,6 @@ type ImplicitProviderParams = {
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
-  providerDiscoveryProviderIds?: readonly string[];
-  providerDiscoveryTimeoutMs?: number;
-  providerDiscoveryEntriesOnly?: boolean;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -75,168 +64,21 @@ function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | n
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
 }
 
-function resolveProviderDiscoveryFilter(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  resolveOwners?: (provider: string) => readonly string[] | undefined;
-  providerIds?: readonly string[];
-}): string[] | undefined {
-  const { config, workspaceDir, env } = params;
-  const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
-  if (testRaw) {
-    const ids = normalizeStringEntries(testRaw.split(","));
-    return ids.length > 0 ? uniqueStrings(ids) : undefined;
-  }
-  const scopedProviderIds = params.providerIds
-    ? normalizeStringEntries([...params.providerIds])
-    : undefined;
-  if (scopedProviderIds) {
-    return resolveProviderPluginScopeFromProviderIds({
-      providerIds: scopedProviderIds,
-      config,
-      workspaceDir,
-      env,
-      resolveOwners: params.resolveOwners,
-    });
-  }
+function resolveLiveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | undefined {
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
   if (!live) {
     return undefined;
   }
-  const rawValues = [
-    env.OPENCLAW_LIVE_PROVIDERS?.trim(),
-    env.OPENCLAW_LIVE_GATEWAY_PROVIDERS?.trim(),
-  ].filter((value): value is string => Boolean(value && value !== "all"));
-  if (rawValues.length === 0) {
+  const raw = env.OPENCLAW_LIVE_PROVIDERS?.trim();
+  if (!raw || raw === "all") {
     return undefined;
   }
-  const ids = normalizeStringEntries(rawValues.flatMap((value) => value.split(",")));
-  if (ids.length === 0) {
-    return undefined;
-  }
-  return resolveProviderPluginScopeFromProviderIds({
-    providerIds: ids,
-    config,
-    workspaceDir,
-    env,
-    resolveOwners: params.resolveOwners,
-  });
-}
-
-function resolveProviderPluginScopeFromProviderIds(params: {
-  providerIds: readonly string[];
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  resolveOwners?: (provider: string) => readonly string[] | undefined;
-}): string[] {
-  const pluginIds = new Set<string>();
-  for (const id of params.providerIds) {
-    const owners =
-      params.resolveOwners?.(id) ??
-      resolveOwningPluginIdsForProvider({
-        provider: id,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      }) ??
-      [];
-    if (owners.length > 0) {
-      for (const owner of owners) {
-        pluginIds.add(owner);
-      }
-      continue;
-    }
-    pluginIds.add(id);
-  }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
-}
-
-function resolvePluginMetadataProviderOwners(
-  pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
-  provider: string,
-): readonly string[] | undefined {
-  if (!pluginMetadataSnapshot) {
-    return undefined;
-  }
-  const normalizedProvider = normalizeProviderId(provider);
-  if (!normalizedProvider) {
-    return undefined;
-  }
-  const owners = new Set<string>();
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.providers ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.modelCatalogProviders ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.setupProviders ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  appendNormalizedPluginMetadataOwners(
-    owners,
-    pluginMetadataSnapshot.owners.cliBackends ?? new Map(),
-    provider,
-    normalizedProvider,
-  );
-  return owners.size > 0
-    ? [...owners].toSorted((left, right) => left.localeCompare(right))
-    : undefined;
-}
-
-function appendNormalizedPluginMetadataOwners(
-  target: Set<string>,
-  ownerMap: ReadonlyMap<string, readonly string[]>,
-  provider: string,
-  normalizedProvider: string,
-): void {
-  for (const owner of ownerMap.get(provider) ?? []) {
-    target.add(owner);
-  }
-  if (normalizedProvider !== provider) {
-    for (const owner of ownerMap.get(normalizedProvider) ?? []) {
-      target.add(owner);
-    }
-  }
-  for (const [ownedId, owners] of ownerMap.entries()) {
-    if (
-      ownedId !== provider &&
-      ownedId !== normalizedProvider &&
-      normalizeProviderId(ownedId) === normalizedProvider
-    ) {
-      for (const owner of owners) {
-        target.add(owner);
-      }
-    }
-  }
-}
-
-export function resolveProviderDiscoveryFilterForTest(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  resolveOwners?: (provider: string) => readonly string[] | undefined;
-  providerIds?: readonly string[];
-}): string[] | undefined {
-  return resolveProviderDiscoveryFilter(params);
-}
-
-export function resolvePluginMetadataProviderOwnersForTest(
-  pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
-  provider: string,
-): readonly string[] | undefined {
-  return resolvePluginMetadataProviderOwners(pluginMetadataSnapshot, provider);
+  const ids = raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return ids.length > 0 ? [...new Set(ids)] : undefined;
 }
 
 function mergeImplicitProviderSet(
@@ -255,7 +97,6 @@ function mergeImplicitProviderConfig(params: {
   providerId: string;
   existing: ProviderConfig | undefined;
   implicit: ProviderConfig;
-  dynamicProviderModels?: boolean;
 }): ProviderConfig {
   const { providerId, existing, implicit } = params;
   if (!existing) {
@@ -264,9 +105,6 @@ function mergeImplicitProviderConfig(params: {
   const merge = PROVIDER_IMPLICIT_MERGERS[providerId];
   if (merge) {
     return merge({ existing, implicit });
-  }
-  if (params.dynamicProviderModels) {
-    return mergeProviderModels(implicit, existing);
   }
   return {
     ...implicit,
@@ -310,20 +148,17 @@ function resolveExistingImplicitProviderFromContext(params: {
   );
 }
 
-function hasProviderWildcardVisibility(params: {
-  config?: OpenClawConfig;
-  providerId: string;
-}): boolean {
-  return parseConfiguredModelVisibilityEntries({ cfg: params.config }).providerWildcards.has(
-    normalizeProviderId(params.providerId),
-  );
-}
-
 async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
-  providers: import("../plugins/types.js").ProviderPlugin[],
   order: import("../plugins/types.js").ProviderDiscoveryOrder,
 ): Promise<Record<string, ProviderConfig> | undefined> {
+  const onlyPluginIds = resolveLiveProviderDiscoveryFilter(ctx.env);
+  const providers = await resolvePluginDiscoveryProviders({
+    config: ctx.config,
+    workspaceDir: ctx.workspaceDir,
+    env: ctx.env,
+    onlyPluginIds,
+  });
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
   const catalogConfig = buildPluginCatalogConfig(ctx);
@@ -366,27 +201,17 @@ async function resolvePluginImplicitProviders(
       };
     };
 
-    const result =
-      ctx.providerDiscoveryEntriesOnly === true && provider.staticCatalog
-        ? await runProviderStaticCatalog({
-            provider,
-            config: catalogConfig,
-            agentDir: ctx.agentDir,
-            workspaceDir: ctx.workspaceDir,
-            env: ctx.env,
-          })
-        : await runProviderCatalogWithTimeout({
-            provider,
-            config: catalogConfig,
-            agentDir: ctx.agentDir,
-            workspaceDir: ctx.workspaceDir,
-            env: ctx.env,
-            resolveProviderApiKey: resolveCatalogProviderApiKey,
-            resolveProviderAuth: (providerId, options) =>
-              ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
-            timeoutMs:
-              ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
-          });
+    const result = await runProviderCatalogWithTimeout({
+      provider,
+      config: catalogConfig,
+      agentDir: ctx.agentDir,
+      workspaceDir: ctx.workspaceDir,
+      env: ctx.env,
+      resolveProviderApiKey: resolveCatalogProviderApiKey,
+      resolveProviderAuth: (providerId, options) =>
+        ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+      timeoutMs: resolveLiveProviderCatalogTimeoutMs(ctx.env),
+    });
     if (!result) {
       continue;
     }
@@ -409,10 +234,6 @@ async function resolvePluginImplicitProviders(
             ],
           }),
         implicit: implicitProvider,
-        dynamicProviderModels: hasProviderWildcardVisibility({
-          config: ctx.config,
-          providerId,
-        }),
       });
     }
   }
@@ -460,7 +281,7 @@ async function runProviderCatalogWithTimeout(
       }),
     ]);
   } catch (error) {
-    const message = formatErrorMessage(error);
+    const message = error instanceof Error ? error.message : String(error);
     if (message.includes("provider catalog timed out after")) {
       log.warn(`${message}; skipping provider discovery`);
       return undefined;
@@ -478,45 +299,19 @@ export async function resolveImplicitProviders(
 ): Promise<NonNullable<OpenClawConfig["models"]>["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
   const env = params.env ?? process.env;
-  let authStore: ReturnType<typeof ensureAuthProfileStore> | undefined;
-  const getAuthStore = () =>
-    (authStore ??= ensureAuthProfileStore(params.agentDir, {
-      allowKeychainPrompt: false,
-      externalCliProviderIds: params.providerDiscoveryProviderIds,
-    }));
+  const authStore = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
   const context: ImplicitProviderContext = {
     ...params,
-    get authStore() {
-      return getAuthStore();
-    },
+    authStore,
     env,
-    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, params.config),
-    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, params.config),
+    resolveProviderApiKey: createProviderApiKeyResolver(env, authStore, params.config),
+    resolveProviderAuth: createProviderAuthResolver(env, authStore, params.config),
   };
-  const discoveryProviders = await resolveRuntimePluginDiscoveryProviders({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env,
-    onlyPluginIds: resolveProviderDiscoveryFilter({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env,
-      resolveOwners: params.pluginMetadataSnapshot
-        ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
-        : undefined,
-      providerIds: params.providerDiscoveryProviderIds,
-    }),
-    ...(params.pluginMetadataSnapshot
-      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-      : {}),
-    ...(params.providerDiscoveryEntriesOnly === true ? { discoveryEntriesOnly: true } : {}),
-  });
 
   for (const order of PLUGIN_DISCOVERY_ORDERS) {
-    mergeImplicitProviderSet(
-      providers,
-      await resolvePluginImplicitProviders(context, discoveryProviders, order),
-    );
+    mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, order));
   }
 
   return providers;

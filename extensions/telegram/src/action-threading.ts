@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseTelegramTarget } from "./targets.js";
 
 export function resolveTelegramAutoThreadId(params: {
@@ -10,14 +9,8 @@ export function resolveTelegramAutoThreadId(params: {
     return undefined;
   }
   const parsedTo = parseTelegramTarget(params.to);
-  if (parsedTo.messageThreadId != null) {
-    return undefined;
-  }
   const parsedChannel = parseTelegramTarget(context.currentChannelId);
-  if (
-    normalizeLowercaseStringOrEmpty(parsedTo.chatId) !==
-    normalizeLowercaseStringOrEmpty(parsedChannel.chatId)
-  ) {
+  if (parsedTo.chatId.toLowerCase() !== parsedChannel.chatId.toLowerCase()) {
     return undefined;
   }
   return context.currentThreadTs;

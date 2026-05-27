@@ -78,26 +78,13 @@ export function resolveMissingOs(params: {
   if (params.required.length === 0) {
     return [];
   }
-  const localPlatform = normalizeOsRequirementPlatform(params.localPlatform);
-  const requiredPlatforms = new Set(
-    params.required.map((platform) => normalizeOsRequirementPlatform(platform)),
-  );
-  if (requiredPlatforms.has(localPlatform)) {
+  if (params.required.includes(params.localPlatform)) {
     return [];
   }
-  if (
-    params.remotePlatforms?.some((platform) =>
-      requiredPlatforms.has(normalizeOsRequirementPlatform(platform)),
-    )
-  ) {
+  if (params.remotePlatforms?.some((platform) => params.required.includes(platform))) {
     return [];
   }
   return params.required;
-}
-
-function normalizeOsRequirementPlatform(platform: string): string {
-  const normalized = platform.trim().toLowerCase();
-  return normalized === "macos" ? "darwin" : normalized;
 }
 
 export function resolveMissingEnv(params: {

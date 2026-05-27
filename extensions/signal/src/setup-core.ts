@@ -4,29 +4,24 @@ import {
   createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
-  DEFAULT_ACCOUNT_ID,
-  mergeAllowFromEntries,
+  createTopLevelChannelDmPolicy,
   parseSetupEntriesAllowingWildcard,
-  patchChannelConfigForAccount,
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
   setSetupChannelEnabled,
+  type OpenClawConfig,
+  type WizardPrompter,
   type ChannelSetupAdapter,
   type ChannelSetupWizard,
   type ChannelSetupWizardTextInput,
-  type OpenClawConfig,
-  createSetupTranslator,
-  type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
-
-const t = createSetupTranslator();
+  listSignalAccountIds,
+  resolveDefaultSignalAccountId,
+  resolveSignalAccount,
+} from "./accounts.js";
 
 const channel = "signal" as const;
 const MIN_E164_DIGITS = 5;
@@ -36,7 +31,7 @@ const INVALID_SIGNAL_ACCOUNT_ERROR =
   "Invalid E.164 phone number (must start with + and country code, e.g. +15555550123)";
 
 export function normalizeSignalAccountInput(value: string | null | undefined): string | null {
-  const trimmed = normalizeOptionalString(value);
+  const trimmed = value?.trim();
   if (!trimmed) {
     return null;
   }
@@ -57,7 +52,7 @@ function isUuidLike(value: string): boolean {
 
 export function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: string } {
   return parseSetupEntriesAllowingWildcard(raw, (entry) => {
-    if (normalizeLowercaseStringOrEmpty(entry).startsWith("uuid:")) {
+    if (entry.toLowerCase().startsWith("uuid:")) {
       const id = entry.slice("uuid:".length).trim();
       if (!id) {
         return { error: "Invalid uuid entry" };
@@ -91,7 +86,7 @@ function buildSignalSetupPatch(input: {
   };
 }
 
-async function promptSignalAllowFrom(params: {
+export async function promptSignalAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
   accountId?: string;
@@ -101,16 +96,16 @@ async function promptSignalAllowFrom(params: {
     accountId: params.accountId,
     defaultAccountId: resolveDefaultSignalAccountId(params.cfg),
     prompter: params.prompter,
-    noteTitle: t("wizard.signal.allowlistTitle"),
+    noteTitle: "Signal allowlist",
     noteLines: [
-      t("wizard.signal.allowlistIntro"),
-      t("wizard.signal.examples"),
+      "Allowlist Signal DMs by sender id.",
+      "Examples:",
       "- +15555550123",
       "- uuid:123e4567-e89b-12d3-a456-426614174000",
-      t("wizard.signal.multipleEntries"),
+      "Multiple entries: comma-separated.",
       `Docs: ${formatDocsLink("/signal", "signal")}`,
     ],
-    message: t("wizard.signal.allowFromPrompt"),
+    message: "Signal allowFrom (E.164 or uuid)",
     placeholder: "+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000",
     parseEntries: parseSignalAllowFromEntries,
     getExistingAllowFrom: ({ cfg, accountId }) =>
@@ -125,49 +120,14 @@ async function promptSignalAllowFrom(params: {
   });
 }
 
-export const signalDmPolicy = {
+export const signalDmPolicy = createTopLevelChannelDmPolicy({
   label: "Signal",
   channel,
   policyKey: "channels.signal.dmPolicy",
   allowFromKey: "channels.signal.allowFrom",
-  resolveConfigKeys: (cfg: OpenClawConfig, accountId?: string) =>
-    (accountId ?? resolveDefaultSignalAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
-      ? {
-          policyKey: `channels.signal.accounts.${accountId ?? resolveDefaultSignalAccountId(cfg)}.dmPolicy`,
-          allowFromKey: `channels.signal.accounts.${accountId ?? resolveDefaultSignalAccountId(cfg)}.allowFrom`,
-        }
-      : {
-          policyKey: "channels.signal.dmPolicy",
-          allowFromKey: "channels.signal.allowFrom",
-        },
-  getCurrent: (cfg: OpenClawConfig, accountId?: string) =>
-    resolveSignalAccount({ cfg, accountId: accountId ?? resolveDefaultSignalAccountId(cfg) }).config
-      .dmPolicy ?? "pairing",
-  setPolicy: (
-    cfg: OpenClawConfig,
-    policy: "pairing" | "allowlist" | "open" | "disabled",
-    accountId?: string,
-  ) =>
-    patchChannelConfigForAccount({
-      cfg,
-      channel,
-      accountId: accountId ?? resolveDefaultSignalAccountId(cfg),
-      patch:
-        policy === "open"
-          ? {
-              dmPolicy: "open",
-              allowFrom: mergeAllowFromEntries(
-                resolveSignalAccount({
-                  cfg,
-                  accountId: accountId ?? resolveDefaultSignalAccountId(cfg),
-                }).config.allowFrom,
-                ["*"],
-              ),
-            }
-          : { dmPolicy: policy },
-    }),
+  getCurrent: (cfg: OpenClawConfig) => cfg.channels?.signal?.dmPolicy ?? "pairing",
   promptAllowFrom: promptSignalAllowFrom,
-};
+});
 
 function resolveSignalCliPath(params: {
   cfg: OpenClawConfig;
@@ -201,21 +161,21 @@ export function createSignalCliPathTextInput(
 
 export const signalNumberTextInput: ChannelSetupWizardTextInput = {
   inputKey: "signalNumber",
-  message: t("wizard.signal.botNumberPrompt"),
+  message: "Signal bot number (E.164)",
   currentValue: ({ cfg, accountId }) =>
     normalizeSignalAccountInput(resolveSignalAccount({ cfg, accountId }).config.account) ??
     undefined,
-  keepPrompt: (value) => t("wizard.signal.accountKeep", { value }),
+  keepPrompt: (value) => `Signal account set (${value}). Keep it?`,
   validate: ({ value }) =>
     normalizeSignalAccountInput(value) ? undefined : INVALID_SIGNAL_ACCOUNT_ERROR,
   normalizeValue: ({ value }) => normalizeSignalAccountInput(value) ?? value,
 };
 
 export const signalCompletionNote = {
-  title: t("wizard.signal.nextStepsTitle"),
+  title: "Signal next steps",
   lines: [
-    t("wizard.signal.nextLinkDevice"),
-    t("wizard.signal.nextScanQr"),
+    'Link device with: signal-cli link -n "OpenClaw"',
+    "Scan QR in Signal -> Linked Devices",
     `Then run: ${formatCliCommand("openclaw gateway call channels.status --params '{\"probe\":true}'")}`,
     `Docs: ${formatDocsLink("/signal", "signal")}`,
   ],
@@ -245,10 +205,10 @@ export function createSignalSetupWizardProxy(loadWizard: () => Promise<ChannelSe
     channel,
     loadWizard,
     status: {
-      configuredLabel: t("wizard.channels.statusConfigured"),
-      unconfiguredLabel: t("wizard.channels.statusNeedsSetup"),
-      configuredHint: t("wizard.channels.statusSignalCliFound"),
-      unconfiguredHint: t("wizard.channels.statusSignalCliMissing"),
+      configuredLabel: "configured",
+      unconfiguredLabel: "needs setup",
+      configuredHint: "signal-cli found",
+      unconfiguredHint: "signal-cli missing",
       configuredScore: 1,
       unconfiguredScore: 0,
     },

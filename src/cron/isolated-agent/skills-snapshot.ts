@@ -1,31 +1,24 @@
-import type { SkillSnapshot } from "../../agents/skills.js";
+import { resolveAgentSkillsFilter } from "../../agents/agent-scope.js";
+import { buildWorkspaceSkillSnapshot, type SkillSnapshot } from "../../agents/skills.js";
 import { matchesSkillFilter } from "../../agents/skills/filter.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 
-const skillsSnapshotRuntimeLoader = createLazyImportLoader(
-  () => import("./skills-snapshot.runtime.js"),
-);
-
-async function loadSkillsSnapshotRuntime() {
-  return await skillsSnapshotRuntimeLoader.load();
-}
-
-export async function resolveCronSkillsSnapshot(params: {
+export function resolveCronSkillsSnapshot(params: {
   workspaceDir: string;
   config: OpenClawConfig;
   agentId: string;
   existingSnapshot?: SkillSnapshot;
   isFastTestEnv: boolean;
-}): Promise<SkillSnapshot> {
+}): SkillSnapshot {
   if (params.isFastTestEnv) {
     // Fast unit-test mode skips filesystem scans and snapshot refresh writes.
     return params.existingSnapshot ?? { prompt: "", skills: [] };
   }
 
-  const runtime = await loadSkillsSnapshotRuntime();
-  const snapshotVersion = runtime.getSkillsSnapshotVersion(params.workspaceDir);
-  const skillFilter = runtime.resolveAgentSkillsFilter(params.config, params.agentId);
+  const snapshotVersion = getSkillsSnapshotVersion(params.workspaceDir);
+  const skillFilter = resolveAgentSkillsFilter(params.config, params.agentId);
   const existingSnapshot = params.existingSnapshot;
   const shouldRefresh =
     !existingSnapshot ||
@@ -35,18 +28,10 @@ export async function resolveCronSkillsSnapshot(params: {
     return existingSnapshot;
   }
 
-  return runtime.buildWorkspaceSkillSnapshot(params.workspaceDir, {
+  return buildWorkspaceSkillSnapshot(params.workspaceDir, {
     config: params.config,
-    agentId: params.agentId,
     skillFilter,
-    eligibility: {
-      remote: runtime.getRemoteSkillEligibility({
-        advertiseExecNode: runtime.canExecRequestNode({
-          cfg: params.config,
-          agentId: params.agentId,
-        }),
-      }),
-    },
+    eligibility: { remote: getRemoteSkillEligibility() },
     snapshotVersion,
   });
 }

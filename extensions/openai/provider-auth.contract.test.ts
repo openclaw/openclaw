@@ -1,12 +1,3 @@
-import { describeOpenAICodexProviderAuthContract } from "openclaw/plugin-sdk/provider-test-contracts";
-import { vi } from "vitest";
+import { describeOpenAICodexProviderAuthContract } from "../../test/helpers/plugins/provider-auth-contract.js";
 
-const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./openai-codex-oauth.runtime.js", () => ({
-  loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
-}));
-
-describeOpenAICodexProviderAuthContract(() => import("./index.js"), {
-  loginOpenAICodexOAuthMock,
-});
+describeOpenAICodexProviderAuthContract();

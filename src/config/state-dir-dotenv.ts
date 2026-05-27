@@ -14,7 +14,24 @@ function isBlockedServiceEnvVar(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
 }
 
-function parseStateDirDotEnvContent(content: string): Record<string, string> {
+/**
+ * Read and parse `~/.openclaw/.env` (or `$OPENCLAW_STATE_DIR/.env`), returning
+ * a filtered record of key-value pairs suitable for embedding in a service
+ * environment (LaunchAgent plist, systemd unit, Scheduled Task).
+ */
+export function readStateDirDotEnvVars(
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
+  const dotEnvPath = path.join(stateDir, ".env");
+
+  let content: string;
+  try {
+    content = fs.readFileSync(dotEnvPath, "utf8");
+  } catch {
+    return {};
+  }
+
   const parsed = dotenv.parse(content);
   const entries: Record<string, string> = {};
   for (const [rawKey, value] of Object.entries(parsed)) {
@@ -33,52 +50,9 @@ function parseStateDirDotEnvContent(content: string): Record<string, string> {
   return entries;
 }
 
-export function readStateDirDotEnvVarsFromStateDir(stateDir: string): Record<string, string> {
-  const dotEnvPath = path.join(stateDir, ".env");
-  try {
-    return parseStateDirDotEnvContent(fs.readFileSync(dotEnvPath, "utf8"));
-  } catch {
-    return {};
-  }
-}
-
-/**
- * Read and parse `~/.openclaw/.env` (or `$OPENCLAW_STATE_DIR/.env`), returning
- * a filtered record of key-value pairs suitable for a managed service
- * environment source.
- */
-export function readStateDirDotEnvVars(
-  env: Record<string, string | undefined>,
-): Record<string, string> {
-  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
-  return readStateDirDotEnvVarsFromStateDir(stateDir);
-}
-
-export type DurableServiceEnvVarSources = {
-  stateDirDotEnvEnvironment: Record<string, string>;
-  configEnvironment: Record<string, string>;
-  durableEnvironment: Record<string, string>;
-};
-
-export function collectDurableServiceEnvVarSources(params: {
-  env: Record<string, string | undefined>;
-  config?: OpenClawConfig;
-}): DurableServiceEnvVarSources {
-  const stateDirDotEnvEnvironment = readStateDirDotEnvVars(params.env);
-  const configEnvironment = collectConfigServiceEnvVars(params.config);
-  return {
-    stateDirDotEnvEnvironment,
-    configEnvironment,
-    durableEnvironment: {
-      ...stateDirDotEnvEnvironment,
-      ...configEnvironment,
-    },
-  };
-}
-
 /**
  * Durable service env sources survive beyond the invoking shell and are safe to
- * persist into owner-only gateway service environment sources.
+ * persist into gateway install metadata.
  *
  * Precedence:
  * 1. state-dir `.env` file vars
@@ -88,5 +62,8 @@ export function collectDurableServiceEnvVars(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
 }): Record<string, string> {
-  return collectDurableServiceEnvVarSources(params).durableEnvironment;
+  return {
+    ...readStateDirDotEnvVars(params.env),
+    ...collectConfigServiceEnvVars(params.config),
+  };
 }

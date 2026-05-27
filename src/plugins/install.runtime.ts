@@ -1,5 +1,5 @@
-import { resolveArchiveKind } from "../infra/archive.js";
-import { pathExists, root } from "../infra/fs-safe.js";
+import { fileExists, readJsonFile, resolveArchiveKind } from "../infra/archive.js";
+import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "../infra/install-flow.js";
 import {
   resolveInstallModeOptions,
@@ -15,7 +15,6 @@ import {
   ensureInstallTargetAvailable,
   resolveCanonicalInstallTarget,
 } from "../infra/install-target.js";
-import { readJson } from "../infra/json-files.js";
 import {
   finalizeNpmSpecArchiveInstall,
   installFromNpmSpecArchiveWithInstaller,
@@ -24,7 +23,6 @@ import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveCompatibilityHostVersion, resolveRuntimeServiceVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import {
-  scanInstalledPackageDependencyTree,
   scanBundleInstallSource,
   scanFileInstallSource,
   scanPackageInstallSource,
@@ -41,10 +39,9 @@ export type { NpmIntegrityDrift, NpmSpecResolution };
 
 export {
   checkMinHostVersion,
-  root,
   detectBundleManifestFormat,
   ensureInstallTargetAvailable,
-  pathExists as fileExists,
+  fileExists,
   finalizeNpmSpecArchiveInstall,
   getPackageManifestMetadata,
   installFromNpmSpecArchiveWithInstaller,
@@ -52,7 +49,7 @@ export {
   isPathInside,
   loadBundleManifest,
   loadPluginManifest,
-  readJson as readJsonFile,
+  readJsonFile,
   resolveArchiveKind,
   resolveArchiveSourcePath,
   resolveCanonicalInstallTarget,
@@ -62,10 +59,10 @@ export {
   resolveCompatibilityHostVersion,
   resolveRuntimeServiceVersion,
   resolveTimedInstallModeOptions,
-  scanInstalledPackageDependencyTree,
   scanBundleInstallSource,
   scanFileInstallSource,
   scanPackageInstallSource,
   validateRegistryNpmSpec,
   withExtractedArchiveRoot,
+  writeFileFromPathWithinRoot,
 };

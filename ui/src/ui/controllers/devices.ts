@@ -14,7 +14,6 @@ export type DeviceTokenSummary = {
 export type PendingDevice = {
   requestId: string;
   deviceId: string;
-  publicKey?: string;
   displayName?: string;
   role?: string;
   roles?: string[];
@@ -26,7 +25,6 @@ export type PendingDevice = {
 
 export type PairedDevice = {
   deviceId: string;
-  publicKey?: string;
   displayName?: string;
   roles?: string[];
   scopes?: string[];
@@ -63,7 +61,7 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
   try {
     const res = await state.client.request<{
       pending?: Array<PendingDevice>;
-      paired?: Array<PairedDevice>;
+      paired?: Array<PendingDevice>;
     }>("device.pair.list", {});
     state.devicesList = {
       pending: Array.isArray(res?.pending) ? res.pending : [],
@@ -115,7 +113,7 @@ export async function rotateDeviceToken(
   }
   try {
     const res = await state.client.request<{
-      token?: string;
+      token: string;
       role?: string;
       deviceId?: string;
       scopes?: Array<string>;

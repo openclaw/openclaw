@@ -1,26 +1,13 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import {
-  matchesExactOrPrefix,
-  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
-  resolveClaudeThinkingProfile,
-} from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { matchesExactOrPrefix } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyOpencodeZenConfig, OPENCODE_ZEN_DEFAULT_MODEL } from "./api.js";
-import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
-const OPENCODE_SHARED_PROFILE_IDS = ["opencode:default", "opencode-go:default"] as const;
-const OPENCODE_SHARED_HINT = "Shared API key for Zen + Go catalogs";
-const OPENCODE_SHARED_WIZARD_GROUP = {
-  groupId: "opencode",
-  groupLabel: "OpenCode",
-  groupHint: OPENCODE_SHARED_HINT,
-} as const;
 
 function isModernOpencodeModel(modelId: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(modelId);
+  const lower = modelId.trim().toLowerCase();
   if (lower.endsWith("-free") || lower === "alpha-glm-4.7") {
     return false;
   }
@@ -42,15 +29,15 @@ export default definePluginEntry({
           providerId: PROVIDER_ID,
           methodId: "api-key",
           label: "OpenCode Zen catalog",
-          hint: OPENCODE_SHARED_HINT,
+          hint: "Shared API key for Zen + Go catalogs",
           optionKey: "opencodeZenApiKey",
           flagName: "--opencode-zen-api-key",
           envVar: "OPENCODE_API_KEY",
           promptMessage: "Enter OpenCode API key",
-          profileIds: [...OPENCODE_SHARED_PROFILE_IDS],
+          profileIds: ["opencode:default", "opencode-go:default"],
           defaultModel: OPENCODE_ZEN_DEFAULT_MODEL,
-          applyConfig: (cfg) => applyOpencodeZenConfig(cfg),
           expectedProviders: ["opencode", "opencode-go"],
+          applyConfig: (cfg) => applyOpencodeZenConfig(cfg),
           noteMessage: [
             "OpenCode uses one API key across the Zen and Go catalogs.",
             "Zen provides access to Claude, GPT, Gemini, and more models.",
@@ -61,14 +48,18 @@ export default definePluginEntry({
           wizard: {
             choiceId: "opencode-zen",
             choiceLabel: "OpenCode Zen catalog",
-            ...OPENCODE_SHARED_WIZARD_GROUP,
+            groupId: "opencode",
+            groupLabel: "OpenCode",
+            groupHint: "Shared API key for Zen + Go catalogs",
           },
         }),
       ],
-      ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      capabilities: {
+        openAiCompatTurnValidation: false,
+        geminiThoughtSignatureSanitization: true,
+        geminiThoughtSignatureModelHints: ["gemini"],
+      },
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
-      resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
     });
-    api.registerMediaUnderstandingProvider(opencodeMediaUnderstandingProvider);
   },
 });

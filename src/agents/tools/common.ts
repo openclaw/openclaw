@@ -1,43 +1,15 @@
-import type {
-  AgentTool,
-  AgentToolResult,
-  AgentToolUpdateCallback,
-} from "@earendil-works/pi-agent-core";
-import type { TSchema } from "typebox";
-import { readLocalFileSafely } from "../../infra/fs-safe.js";
+import fs from "node:fs/promises";
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { detectMime } from "../../media/mime.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
-export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
-  TParameters,
-  TResult
-> & {
+// oxlint-disable-next-line typescript/no-explicit-any
+export type AnyAgentTool = AgentTool<any, unknown> & {
+  ownerOnly?: boolean;
   displaySummary?: string;
 };
-
-type ErasedAgentToolExecute = {
-  execute(
-    this: void,
-    toolCallId: string,
-    params: unknown,
-    signal?: AbortSignal,
-    onUpdate?: AgentToolUpdateCallback<unknown>,
-  ): Promise<AgentToolResult<unknown>>;
-};
-
-export type AnyAgentTool = Omit<AgentTool<TSchema, unknown>, "execute"> &
-  ErasedAgentToolExecute & {
-    displaySummary?: string;
-  };
-
-export function asToolParamsRecord(params: unknown): Record<string, unknown> {
-  return params && typeof params === "object" && !Array.isArray(params)
-    ? (params as Record<string, unknown>)
-    : {};
-}
 
 export type StringParamOptions = {
   required?: boolean;
@@ -50,6 +22,8 @@ export type ActionGate<T extends Record<string, boolean | undefined>> = (
   key: keyof T,
   defaultValue?: boolean,
 ) => boolean;
+
+export const OWNER_ONLY_TOOL_ERROR = "Tool restricted to owner senders.";
 
 export class ToolInputError extends Error {
   readonly status: number = 400;
@@ -116,23 +90,6 @@ export function readStringParam(
     return undefined;
   }
   return value;
-}
-
-/**
- * Normalize tool model override input.
- * - empty/whitespace => undefined
- * - "default" (case-insensitive) => undefined (sentinel: reset/fallback)
- * - otherwise returns trimmed explicit model string
- */
-export function normalizeToolModelOverride(value: string | undefined): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.toLowerCase() === "default") {
-    return undefined;
-  }
-  return trimmed;
 }
 
 export function readStringOrNumberParam(
@@ -203,7 +160,10 @@ export function readStringArrayParam(
   const { required = false, label = key } = options;
   const raw = readParamRaw(params, key);
   if (Array.isArray(raw)) {
-    const values = normalizeStringEntries(raw.filter((entry) => typeof entry === "string"));
+    const values = raw
+      .filter((entry) => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
     if (values.length === 0) {
       if (required) {
         throw new ToolInputError(`${label} required`);
@@ -297,6 +257,21 @@ export function jsonResult(payload: unknown): AgentToolResult<unknown> {
   return textResult(JSON.stringify(payload, null, 2), payload);
 }
 
+export function wrapOwnerOnlyToolExecution(
+  tool: AnyAgentTool,
+  senderIsOwner: boolean,
+): AnyAgentTool {
+  if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
+    return tool;
+  }
+  return {
+    ...tool,
+    execute: async () => {
+      throw new Error(OWNER_ONLY_TOOL_ERROR);
+    },
+  };
+}
+
 export async function imageResult(params: {
   label: string;
   path: string;
@@ -341,7 +316,7 @@ export async function imageResultFromFile(params: {
   details?: Record<string, unknown>;
   imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
-  const buf = (await readLocalFileSafely({ filePath: params.path })).buffer;
+  const buf = await fs.readFile(params.path);
   const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
   return await imageResult({
     label: params.label,
@@ -379,18 +354,15 @@ export function parseAvailableTags(raw: unknown): AvailableTag[] | undefined {
       (t): t is Record<string, unknown> =>
         typeof t === "object" && t !== null && typeof t.name === "string",
     )
-    .map((t) =>
-      Object.assign(
-        {},
-        t.id !== undefined && typeof t.id === `string` ? { id: t.id } : {},
-        { name: t.name as string },
-        typeof t.moderated === `boolean` ? { moderated: t.moderated } : {},
-        t.emoji_id === null || typeof t.emoji_id === `string` ? { emoji_id: t.emoji_id } : {},
-        t.emoji_name === null || typeof t.emoji_name === `string`
-          ? { emoji_name: t.emoji_name }
-          : {},
-      ),
-    );
+    .map((t) => ({
+      ...(t.id !== undefined && typeof t.id === "string" ? { id: t.id } : {}),
+      name: t.name as string,
+      ...(typeof t.moderated === "boolean" ? { moderated: t.moderated } : {}),
+      ...(t.emoji_id === null || typeof t.emoji_id === "string" ? { emoji_id: t.emoji_id } : {}),
+      ...(t.emoji_name === null || typeof t.emoji_name === "string"
+        ? { emoji_name: t.emoji_name }
+        : {}),
+    }));
   // Return undefined instead of empty array to avoid accidentally clearing all tags
   return result.length ? result : undefined;
 }

@@ -1,11 +1,7 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
-import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
@@ -36,12 +32,6 @@ const mergeOrigin = (
   if (next?.to) {
     merged.to = next.to;
   }
-  if (next?.nativeChannelId) {
-    merged.nativeChannelId = next.nativeChannelId;
-  }
-  if (next?.nativeDirectUserId) {
-    merged.nativeDirectUserId = next.nativeDirectUserId;
-  }
   if (next?.accountId) {
     merged.accountId = next.accountId;
   }
@@ -51,30 +41,19 @@ const mergeOrigin = (
   return Object.keys(merged).length > 0 ? merged : undefined;
 };
 
-export function deriveSessionOrigin(
-  ctx: MsgContext,
-  opts?: { skipSystemEventOrigin?: boolean },
-): SessionOrigin | undefined {
-  const isSystemEventProvider =
-    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
-  if (opts?.skipSystemEventOrigin && isSystemEventProvider) {
-    return undefined;
-  }
-  const label = normalizeOptionalString(resolveConversationLabel(ctx));
+export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined {
+  const label = resolveConversationLabel(ctx)?.trim();
   const providerRaw =
     (typeof ctx.OriginatingChannel === "string" && ctx.OriginatingChannel) ||
     ctx.Surface ||
     ctx.Provider;
   const provider = normalizeMessageChannel(providerRaw);
-  const surface = normalizeOptionalLowercaseString(ctx.Surface);
+  const surface = ctx.Surface?.trim().toLowerCase();
   const chatType = normalizeChatType(ctx.ChatType) ?? undefined;
-  const from = normalizeOptionalString(ctx.From);
-  const to = normalizeOptionalString(
-    typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To,
-  );
-  const nativeChannelId = normalizeOptionalString(ctx.NativeChannelId);
-  const nativeDirectUserId = normalizeOptionalString(ctx.NativeDirectUserId);
-  const accountId = normalizeOptionalString(ctx.AccountId);
+  const from = ctx.From?.trim();
+  const to =
+    (typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To)?.trim() ?? undefined;
+  const accountId = ctx.AccountId?.trim();
   const threadId = ctx.MessageThreadId ?? undefined;
 
   const origin: SessionOrigin = {};
@@ -95,12 +74,6 @@ export function deriveSessionOrigin(
   }
   if (to) {
     origin.to = to;
-  }
-  if (nativeChannelId) {
-    origin.nativeChannelId = nativeChannelId;
-  }
-  if (nativeDirectUserId) {
-    origin.nativeDirectUserId = nativeDirectUserId;
   }
   if (accountId) {
     origin.accountId = accountId;
@@ -134,16 +107,14 @@ export function deriveGroupSessionPatch(params: {
   const subject = params.ctx.GroupSubject?.trim();
   const space = params.ctx.GroupSpace?.trim();
   const explicitChannel = params.ctx.GroupChannel?.trim();
-  const subjectLooksChannel = Boolean(subject?.startsWith("#"));
-  const normalizedChannel =
-    subjectLooksChannel && resolution.chatType !== "channel" ? normalizeChannelId(channel) : null;
+  const normalizedChannel = normalizeChannelId(channel);
   const isChannelProvider = Boolean(
     normalizedChannel &&
-    getLoadedChannelPlugin(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
+    getChannelPlugin(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
   );
   const nextGroupChannel =
     explicitChannel ??
-    (subjectLooksChannel && subject && (resolution.chatType === "channel" || isChannelProvider)
+    ((resolution.chatType === "channel" || isChannelProvider) && subject && subject.startsWith("#")
       ? subject
       : undefined);
   const nextSubject = nextGroupChannel ? undefined : subject;
@@ -183,12 +154,9 @@ export function deriveSessionMetaPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
-  skipSystemEventOrigin?: boolean;
 }): Partial<SessionEntry> | null {
   const groupPatch = deriveGroupSessionPatch(params);
-  const origin = deriveSessionOrigin(params.ctx, {
-    skipSystemEventOrigin: params.skipSystemEventOrigin,
-  });
+  const origin = deriveSessionOrigin(params.ctx);
   if (!groupPatch && !origin) {
     return null;
   }

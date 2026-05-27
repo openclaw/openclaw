@@ -1,5 +1,3 @@
-import { normalizeOptionalString } from "./string-coerce.js";
-
 export function resolveEmojiAndHomepage(params: {
   metadata?: { emoji?: string; homepage?: string } | null;
   frontmatter?: {
@@ -15,6 +13,6 @@ export function resolveEmojiAndHomepage(params: {
     params.frontmatter?.homepage ??
     params.frontmatter?.website ??
     params.frontmatter?.url;
-  const homepage = normalizeOptionalString(homepageRaw);
+  const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
   return { ...(emoji ? { emoji } : {}), ...(homepage ? { homepage } : {}) };
 }

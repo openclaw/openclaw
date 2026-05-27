@@ -1,40 +1,44 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeUniqueStringEntriesLower } from "../shared/string-normalization.js";
+import type { OpenClawConfig } from "../config/config.js";
 
 const DIAGNOSTICS_ENV = "OPENCLAW_DIAGNOSTICS";
 
-type ParsedEnvFlags = {
-  flags: string[];
-  disablesAll: boolean;
-};
+function normalizeFlag(value: string): string {
+  return value.trim().toLowerCase();
+}
 
-function parseEnvFlags(raw?: string): ParsedEnvFlags {
+function parseEnvFlags(raw?: string): string[] {
   if (!raw) {
-    return { flags: [], disablesAll: false };
+    return [];
   }
   const trimmed = raw.trim();
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  if (!lowered) {
-    return { flags: [], disablesAll: false };
+  if (!trimmed) {
+    return [];
   }
+  const lowered = trimmed.toLowerCase();
   if (["0", "false", "off", "none"].includes(lowered)) {
-    return { flags: [], disablesAll: true };
+    return [];
   }
   if (["1", "true", "all", "*"].includes(lowered)) {
-    return { flags: ["*"], disablesAll: false };
+    return ["*"];
   }
-  return {
-    flags: trimmed
-      .split(/[,\s]+/)
-      .map((value) => normalizeLowercaseStringOrEmpty(value))
-      .filter(Boolean),
-    disablesAll: false,
-  };
+  return trimmed
+    .split(/[,\s]+/)
+    .map(normalizeFlag)
+    .filter(Boolean);
 }
 
 function uniqueFlags(flags: string[]): string[] {
-  return normalizeUniqueStringEntriesLower(flags);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const flag of flags) {
+    const normalized = normalizeFlag(flag);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
 }
 
 export function resolveDiagnosticFlags(
@@ -43,19 +47,16 @@ export function resolveDiagnosticFlags(
 ): string[] {
   const configFlags = Array.isArray(cfg?.diagnostics?.flags) ? cfg?.diagnostics?.flags : [];
   const envFlags = parseEnvFlags(env[DIAGNOSTICS_ENV]);
-  if (envFlags.disablesAll) {
-    return [];
-  }
-  return uniqueFlags([...configFlags, ...envFlags.flags]);
+  return uniqueFlags([...configFlags, ...envFlags]);
 }
 
 export function matchesDiagnosticFlag(flag: string, enabledFlags: string[]): boolean {
-  const target = normalizeLowercaseStringOrEmpty(flag);
+  const target = normalizeFlag(flag);
   if (!target) {
     return false;
   }
   for (const raw of enabledFlags) {
-    const enabled = normalizeLowercaseStringOrEmpty(raw);
+    const enabled = normalizeFlag(raw);
     if (!enabled) {
       continue;
     }

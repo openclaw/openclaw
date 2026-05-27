@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { formatErrorMessage } from "./error-utils.js";
 
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
@@ -75,7 +74,7 @@ export function ensureMemoryIndexSchema(params: {
       );
       ftsAvailable = true;
     } catch (err) {
-      const message = formatErrorMessage(err);
+      const message = err instanceof Error ? err.message : String(err);
       ftsAvailable = false;
       ftsError = message;
     }

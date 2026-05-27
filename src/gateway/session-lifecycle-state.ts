@@ -25,7 +25,7 @@ type PersistedLifecycleSessionShape = Pick<
   "updatedAt" | "status" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun"
 >;
 
-type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
+export type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
 
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;

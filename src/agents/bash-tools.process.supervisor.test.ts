@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { supervisorMock } = vi.hoisted(() => ({
   supervisorMock: {
@@ -29,6 +29,14 @@ let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").re
 let createProcessSessionFixture: typeof import("./bash-process-registry.test-helpers.js").createProcessSessionFixture;
 let createProcessTool: typeof import("./bash-tools.process.js").createProcessTool;
 
+async function loadFreshProcessToolModulesForTest() {
+  vi.resetModules();
+  ({ addSession, getFinishedSession, getSession, resetProcessRegistryForTests } =
+    await import("./bash-process-registry.js"));
+  ({ createProcessSessionFixture } = await import("./bash-process-registry.test-helpers.js"));
+  ({ createProcessTool } = await import("./bash-tools.process.js"));
+}
+
 function createBackgroundSession(id: string, pid?: number) {
   return createProcessSessionFixture({
     id,
@@ -38,48 +46,9 @@ function createBackgroundSession(id: string, pid?: number) {
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectSessionState(sessionId: string, expected: { exited?: boolean }) {
-  const session = requireRecord(getSession(sessionId), sessionId);
-  if ("exited" in expected) {
-    expect(session.exited).toBe(expected.exited);
-  }
-}
-
-function expectFinishedSessionState(
-  sessionId: string,
-  expected: { status?: string; exitSignal?: string | null },
-) {
-  const session = requireRecord(getFinishedSession(sessionId), sessionId);
-  if ("status" in expected) {
-    expect(session.status).toBe(expected.status);
-  }
-  if ("exitSignal" in expected) {
-    expect(session.exitSignal).toBe(expected.exitSignal);
-  }
-}
-
-function expectTextContent(value: unknown, text: string) {
-  const content = requireRecord(value, "tool content");
-  expect(content.type).toBe("text");
-  expect(content.text).toBe(text);
-}
-
 describe("process tool supervisor cancellation", () => {
-  beforeAll(async () => {
-    ({ addSession, getFinishedSession, getSession, resetProcessRegistryForTests } =
-      await import("./bash-process-registry.js"));
-    ({ createProcessSessionFixture } = await import("./bash-process-registry.test-helpers.js"));
-    ({ createProcessTool } = await import("./bash-tools.process.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadFreshProcessToolModulesForTest();
     supervisorMock.spawn.mockClear();
     supervisorMock.cancel.mockClear();
     supervisorMock.cancelScope.mockClear();
@@ -106,8 +75,12 @@ describe("process tool supervisor cancellation", () => {
     });
 
     expect(supervisorMock.cancel).toHaveBeenCalledWith("sess", "manual-cancel");
-    expectSessionState("sess", { exited: false });
-    expectTextContent(result.content[0], "Termination requested for session sess.");
+    expect(getSession("sess")).toBeDefined();
+    expect(getSession("sess")?.exited).toBe(false);
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: "Termination requested for session sess.",
+    });
   });
 
   it("remove drops running session immediately when cancellation is requested", async () => {
@@ -126,7 +99,10 @@ describe("process tool supervisor cancellation", () => {
     expect(supervisorMock.cancel).toHaveBeenCalledWith("sess", "manual-cancel");
     expect(getSession("sess")).toBeUndefined();
     expect(getFinishedSession("sess")).toBeUndefined();
-    expectTextContent(result.content[0], "Removed session sess (termination requested).");
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: "Removed session sess (termination requested).",
+    });
   });
 
   it("falls back to process-tree kill when supervisor record is missing", async () => {
@@ -141,8 +117,11 @@ describe("process tool supervisor cancellation", () => {
 
     expect(killProcessTreeMock).toHaveBeenCalledWith(4242);
     expect(getSession("sess-fallback")).toBeUndefined();
-    expectFinishedSessionState("sess-fallback", { status: "failed", exitSignal: "SIGKILL" });
-    expectTextContent(result.content[0], "Killed session sess-fallback.");
+    expect(getFinishedSession("sess-fallback")).toBeDefined();
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: "Killed session sess-fallback.",
+    });
   });
 
   it("fails remove when no supervisor record and no pid is available", async () => {
@@ -156,11 +135,11 @@ describe("process tool supervisor cancellation", () => {
     });
 
     expect(killProcessTreeMock).not.toHaveBeenCalled();
-    expectSessionState("sess-no-pid", { exited: false });
-    expect(requireRecord(result.details, "result details").status).toBe("failed");
-    expectTextContent(
-      result.content[0],
-      "Unable to remove session sess-no-pid: no active supervisor run or process id.",
-    );
+    expect(getSession("sess-no-pid")).toBeDefined();
+    expect(result.details).toMatchObject({ status: "failed" });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: "Unable to remove session sess-no-pid: no active supervisor run or process id.",
+    });
   });
 });

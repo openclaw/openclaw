@@ -1,9 +1,6 @@
 import type { ReplyToMode } from "../../config/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type ReplyReferencePlanner = {
-  /** Returns the effective reply/thread id for the next send without updating state. */
-  peek(): string | undefined;
   /** Returns the effective reply/thread id for the next send and updates state. */
   use(): string | undefined;
   /** Mark that a reply was sent (needed when no reference is used). */
@@ -11,10 +8,6 @@ export type ReplyReferencePlanner = {
   /** Whether a reply has been sent in this flow. */
   hasReplied(): boolean;
 };
-
-export function isSingleUseReplyToMode(mode: ReplyToMode): boolean {
-  return mode === "first" || mode === "batched";
-}
 
 export function createReplyReferencePlanner(options: {
   replyToMode: ReplyToMode;
@@ -29,10 +22,10 @@ export function createReplyReferencePlanner(options: {
 }): ReplyReferencePlanner {
   let hasReplied = options.hasReplied ?? false;
   const allowReference = options.allowReference !== false;
-  const existingId = normalizeOptionalString(options.existingId);
-  const startId = normalizeOptionalString(options.startId);
+  const existingId = options.existingId?.trim();
+  const startId = options.startId?.trim();
 
-  const resolve = (): string | undefined => {
+  const use = (): string | undefined => {
     if (!allowReference) {
       return undefined;
     }
@@ -44,21 +37,15 @@ export function createReplyReferencePlanner(options: {
       return undefined;
     }
     if (options.replyToMode === "all") {
+      hasReplied = true;
       return id;
     }
-    if (isSingleUseReplyToMode(options.replyToMode) && hasReplied) {
-      return undefined;
+    // "first": only the first reply gets a reference.
+    if (!hasReplied) {
+      hasReplied = true;
+      return id;
     }
-    return id;
-  };
-
-  const use = (): string | undefined => {
-    const id = resolve();
-    if (!id) {
-      return undefined;
-    }
-    hasReplied = true;
-    return id;
+    return undefined;
   };
 
   const markSent = () => {
@@ -66,7 +53,6 @@ export function createReplyReferencePlanner(options: {
   };
 
   return {
-    peek: resolve,
     use,
     markSent,
     hasReplied: () => hasReplied,

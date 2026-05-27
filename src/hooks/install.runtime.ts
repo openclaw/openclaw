@@ -1,5 +1,4 @@
-import { resolveArchiveKind } from "../infra/archive.js";
-import { pathExists } from "../infra/fs-safe.js";
+import { fileExists, readJsonFile, resolveArchiveKind } from "../infra/archive.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "../infra/install-flow.js";
 import { installFromValidatedNpmSpecArchive } from "../infra/install-from-npm-spec.js";
 import {
@@ -19,20 +18,19 @@ import {
   ensureInstallTargetAvailable,
   resolveCanonicalInstallTarget,
 } from "../infra/install-target.js";
-import { readJson } from "../infra/json-files.js";
 import { isPathInside, isPathInsideWithRealpath } from "../security/scan-paths.js";
 
 export type { NpmIntegrityDrift, NpmSpecResolution };
 
 export {
   ensureInstallTargetAvailable,
-  pathExists as fileExists,
+  fileExists,
   installFromValidatedNpmSpecArchive,
   installPackageDir,
   installPackageDirWithManifestDeps,
   isPathInside,
   isPathInsideWithRealpath,
-  readJson as readJsonFile,
+  readJsonFile,
   resolveArchiveKind,
   resolveArchiveSourcePath,
   resolveCanonicalInstallTarget,

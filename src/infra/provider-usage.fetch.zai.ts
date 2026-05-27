@@ -1,8 +1,4 @@
-import {
-  buildUsageHttpErrorSnapshot,
-  fetchJson,
-  readUsageJson,
-} from "./provider-usage.fetch.shared.js";
+import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -48,11 +44,7 @@ export async function fetchZaiUsage(
     });
   }
 
-  const parsed = await readUsageJson("zai", res);
-  if (!parsed.ok) {
-    return parsed.snapshot;
-  }
-  const data = parsed.data as ZaiUsageResponse;
+  const data = (await res.json()) as ZaiUsageResponse;
   if (!data.success || data.code !== 200) {
     const errorMessage = typeof data.msg === "string" ? data.msg.trim() : "";
     return {

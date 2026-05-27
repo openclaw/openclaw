@@ -1,6 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
-import { looksLikeUuid } from "./uuid.js";
+import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 
 export type SignalSender =
   | { kind: "phone"; raw: string; e164: string }
@@ -11,7 +10,19 @@ type SignalAllowEntry =
   | { kind: "phone"; e164: string }
   | { kind: "uuid"; raw: string };
 
-export { looksLikeUuid } from "./uuid.js";
+const UUID_HYPHENATED_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_COMPACT_RE = /^[0-9a-f]{32}$/i;
+
+export function looksLikeUuid(value: string): boolean {
+  if (UUID_HYPHENATED_RE.test(value) || UUID_COMPACT_RE.test(value)) {
+    return true;
+  }
+  const compact = value.replace(/-/g, "");
+  if (!/^[0-9a-f]+$/i.test(compact)) {
+    return false;
+  }
+  return /[a-f]/i.test(compact);
+}
 
 function stripSignalPrefix(value: string): string {
   return value.replace(/^signal:/i, "").trim();
@@ -69,7 +80,7 @@ function parseSignalAllowEntry(entry: string): SignalAllowEntry | null {
   }
 
   const stripped = stripSignalPrefix(trimmed);
-  const lower = normalizeLowercaseStringOrEmpty(stripped);
+  const lower = stripped.toLowerCase();
   if (lower.startsWith("uuid:")) {
     const raw = stripped.slice("uuid:".length).trim();
     if (!raw) {
@@ -112,4 +123,17 @@ export function isSignalSenderAllowed(sender: SignalSender, allowFrom: string[])
     }
     return false;
   });
+}
+
+export function isSignalGroupAllowed(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  allowFrom: string[];
+  sender: SignalSender;
+}): boolean {
+  return evaluateSenderGroupAccessForPolicy({
+    groupPolicy: params.groupPolicy,
+    groupAllowFrom: params.allowFrom,
+    senderId: params.sender.raw,
+    isSenderAllowed: () => isSignalSenderAllowed(params.sender, params.allowFrom),
+  }).allowed;
 }

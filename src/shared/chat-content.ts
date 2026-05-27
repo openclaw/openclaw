@@ -1,28 +1,3 @@
-export function coerceChatContentText(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value == null) {
-    return "";
-  }
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint" ||
-    typeof value === "symbol"
-  ) {
-    return String(value);
-  }
-  if (typeof value === "object") {
-    try {
-      return JSON.stringify(value) ?? "";
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-
 export function extractTextFromChatContent(
   content: unknown,
   opts?: {
@@ -31,18 +6,11 @@ export function extractTextFromChatContent(
     normalizeText?: (text: string) => string;
   },
 ): string | null {
-  const normalizeText = opts?.normalizeText ?? ((text: string) => text.replace(/\s+/g, " ").trim());
+  const normalize = opts?.normalizeText ?? ((text: string) => text.replace(/\s+/g, " ").trim());
   const joinWith = opts?.joinWith ?? " ";
-  const sanitize = (text: unknown): string => {
-    const raw = coerceChatContentText(text);
-    const sanitized = opts?.sanitizeText ? opts.sanitizeText(raw) : raw;
-    return coerceChatContentText(sanitized);
-  };
-  const normalize = (text: unknown): string =>
-    coerceChatContentText(normalizeText(coerceChatContentText(text)));
 
   if (typeof content === "string") {
-    const value = sanitize(content);
+    const value = opts?.sanitizeText ? opts.sanitizeText(content) : content;
     const normalized = normalize(value);
     return normalized ? normalized : null;
   }
@@ -60,7 +28,10 @@ export function extractTextFromChatContent(
       continue;
     }
     const text = (block as { text?: unknown }).text;
-    const value = sanitize(text);
+    if (typeof text !== "string") {
+      continue;
+    }
+    const value = opts?.sanitizeText ? opts.sanitizeText(text) : text;
     if (value.trim()) {
       chunks.push(value);
     }

@@ -1,10 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
+import type { OpenClawConfig } from "../config/config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { matchRootFileOpenFailure, type RootFileOpenFailure } from "../infra/boundary-file-read.js";
-import { readRootJsonObjectSync } from "../infra/json-files.js";
-import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
-import type { PluginBundleFormat } from "./manifest-types.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { isRecord } from "../utils.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginBundleFormat } from "./types.js";
 
 type ReadBundleJsonResult =
   | { ok: true; raw: Record<string, unknown> }
@@ -20,29 +22,39 @@ export type BundleServerRuntimeSupport = {
 export function readBundleJsonObject(params: {
   rootDir: string;
   relativePath: string;
-  onOpenFailure?: (failure: RootFileOpenFailure) => ReadBundleJsonResult;
+  onOpenFailure?: (
+    failure: Extract<ReturnType<typeof openBoundaryFileSync>, { ok: false }>,
+  ) => ReadBundleJsonResult;
 }): ReadBundleJsonResult {
-  const result = readRootJsonObjectSync({
-    rootDir: params.rootDir,
-    relativePath: params.relativePath,
+  const absolutePath = path.join(params.rootDir, params.relativePath);
+  const opened = openBoundaryFileSync({
+    absolutePath,
+    rootPath: params.rootDir,
     boundaryLabel: "plugin root",
     rejectHardlinks: true,
   });
-  if (result.ok) {
-    return { ok: true, raw: result.value };
+  if (!opened.ok) {
+    return params.onOpenFailure?.(opened) ?? { ok: true, raw: {} };
   }
-  if (result.reason === "open") {
-    return params.onOpenFailure?.(result.failure) ?? { ok: true, raw: {} };
+  try {
+    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
+    if (!isRecord(raw)) {
+      return { ok: false, error: `${params.relativePath} must contain a JSON object` };
+    }
+    return { ok: true, raw };
+  } catch (error) {
+    return { ok: false, error: `failed to parse ${params.relativePath}: ${String(error)}` };
+  } finally {
+    fs.closeSync(opened.fd);
   }
-  return { ok: false, error: result.error };
 }
 
 export function resolveBundleJsonOpenFailure(params: {
-  failure: RootFileOpenFailure;
+  failure: Extract<ReturnType<typeof openBoundaryFileSync>, { ok: false }>;
   relativePath: string;
   allowMissing?: boolean;
 }): ReadBundleJsonResult {
-  return matchRootFileOpenFailure(params.failure, {
+  return matchBoundaryFileOpenFailure(params.failure, {
     path: () => {
       if (params.allowMissing) {
         return { ok: true, raw: {} };
@@ -90,16 +102,11 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
   }) => { config: TConfig; diagnostics: string[] };
   createDiagnostic: (pluginId: string, message: string) => TDiagnostic;
 }): { config: TConfig; diagnostics: TDiagnostic[] } {
-  const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
-  if (!normalizedPlugins.enabled) {
-    return { config: params.createEmptyConfig(), diagnostics: [] };
-  }
-
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const registry = loadPluginManifestRegistry({
     workspaceDir: params.workspaceDir,
     config: params.cfg,
-    includeDisabled: true,
   });
+  const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
   const diagnostics: TDiagnostic[] = [];
   let merged = params.createEmptyConfig();
 
@@ -107,13 +114,13 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
     if (record.format !== "bundle" || !record.bundleFormat) {
       continue;
     }
-    const activationState = resolveEffectivePluginActivationState({
+    const enableState = resolveEffectiveEnableState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.cfg,
     });
-    if (!activationState.activated) {
+    if (!enableState.enabled) {
       continue;
     }
 

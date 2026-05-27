@@ -21,15 +21,11 @@ export function createActiveRun(
   };
 }
 
-type ChatAbortTestContext = Record<string, unknown> & {
+export type ChatAbortTestContext = Record<string, unknown> & {
   chatAbortControllers: Map<string, ReturnType<typeof createActiveRun>>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
-  chatDeltaLastBroadcastText: Map<string, string>;
-  dedupe: Map<string, unknown>;
-  agentDeltaSentAt: Map<string, number>;
-  bufferedAgentEvents: Map<string, unknown>;
   chatAbortedRuns: Map<string, number>;
   removeChatRun: (...args: unknown[]) => { sessionKey: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
@@ -38,7 +34,7 @@ type ChatAbortTestContext = Record<string, unknown> & {
   logGateway: { warn: (...args: unknown[]) => void };
 };
 
-type ChatAbortRespondMock = Mock<RespondFn>;
+export type ChatAbortRespondMock = Mock<RespondFn>;
 
 export function createChatAbortContext(
   overrides: Record<string, unknown> = {},
@@ -48,10 +44,6 @@ export function createChatAbortContext(
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
-    dedupe: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
     chatAbortedRuns: new Map<string, number>(),
     removeChatRun: vi
       .fn()

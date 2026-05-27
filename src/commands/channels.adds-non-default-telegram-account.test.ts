@@ -6,24 +6,30 @@ import { createScopedChannelConfigAdapter } from "../plugin-sdk/channel-config-h
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { configMocks, offsetMocks, secretMocks } from "./channels.mock-harness.js";
-import { channelsAddCommand } from "./channels/add.js";
-import { channelsRemoveCommand } from "./channels/remove.js";
-import { formatGatewayChannelsStatusLines } from "./channels/status.js";
+import { configMocks, offsetMocks } from "./channels.mock-harness.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
+const authMocks = vi.hoisted(() => ({
+  loadAuthProfileStore: vi.fn(),
+}));
+
+vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
+  return {
+    ...actual,
+    loadAuthProfileStore: authMocks.loadAuthProfileStore,
+  };
+});
+
+import {
+  channelsAddCommand,
+  channelsListCommand,
+  channelsRemoveCommand,
+  formatGatewayChannelsStatusLines,
+} from "./channels.js";
+
 const runtime = createTestRuntime();
-let minimalChannelsCommandRegistry: ReturnType<typeof createTestRegistry>;
-const createClackPrompterMock = vi.hoisted(() => vi.fn());
-const catalogMocks = vi.hoisted(() => ({
-  listTrustedChannelPluginCatalogEntries: vi.fn(() => []),
-}));
-
-vi.mock("../wizard/clack-prompter.js", () => ({
-  createClackPrompter: createClackPrompterMock,
-}));
-
-vi.mock("./channel-setup/trusted-catalog.js", () => catalogMocks);
+let clackPrompterModule: typeof import("../wizard/clack-prompter.js");
 
 type ChannelSectionConfig = {
   enabled?: boolean;
@@ -36,15 +42,7 @@ type ChannelSectionConfig = {
 };
 
 function formatChannelStatusJoined(channelAccounts: Record<string, unknown>) {
-  return formatGatewayChannelsStatusLines({
-    channelLabels: {
-      discord: "Discord",
-      signal: "Signal",
-      telegram: "Telegram",
-      whatsapp: "WhatsApp",
-    },
-    channelAccounts,
-  }).join("\n");
+  return formatGatewayChannelsStatusLines({ channelAccounts }).join("\n");
 }
 
 function listConfiguredAccountIds(channelConfig: ChannelSectionConfig | undefined): string[] {
@@ -95,7 +93,6 @@ function createScopedCommandTestPlugin(params: {
     signalNumber?: string;
   }) => Record<string, unknown>;
   clearBaseFields: string[];
-  singleAccountKeysToMove?: readonly string[];
   onAccountConfigChanged?: NonNullable<ChannelPlugin["lifecycle"]>["onAccountConfigChanged"];
   onAccountRemoved?: NonNullable<ChannelPlugin["lifecycle"]>["onAccountRemoved"];
   collectStatusIssues?: NonNullable<NonNullable<ChannelPlugin["status"]>["collectStatusIssues"]>;
@@ -116,21 +113,16 @@ function createScopedCommandTestPlugin(params: {
       resolveAllowFrom: () => [],
       formatAllowFrom: (allowFrom) => allowFrom.map(String),
     }),
-    setup: {
-      ...createPatchedAccountSetupAdapter({
-        channelKey: params.id,
-        buildPatch: (input) =>
-          params.buildPatch({
-            token: input.token,
-            botToken: input.botToken,
-            appToken: input.appToken,
-            signalNumber: input.signalNumber,
-          }),
-      }),
-      ...(params.singleAccountKeysToMove
-        ? { singleAccountKeysToMove: params.singleAccountKeysToMove }
-        : {}),
-    },
+    setup: createPatchedAccountSetupAdapter({
+      channelKey: params.id,
+      buildPatch: (input) =>
+        params.buildPatch({
+          token: input.token,
+          botToken: input.botToken,
+          appToken: input.appToken,
+          signalNumber: input.signalNumber,
+        }),
+    }),
     lifecycle:
       params.onAccountConfigChanged || params.onAccountRemoved
         ? {
@@ -154,12 +146,11 @@ function createTelegramCommandTestPlugin(): ChannelPlugin {
     accountId?: string | null,
   ) => resolveScopedAccount(cfg, "telegram", accountId) as { botToken?: string };
 
-  const plugin = createScopedCommandTestPlugin({
+  return createScopedCommandTestPlugin({
     id: "telegram",
     label: "Telegram",
     buildPatch: ({ token }) => (token ? { botToken: token } : {}),
     clearBaseFields: ["botToken", "name", "dmPolicy", "allowFrom", "groupPolicy", "streaming"],
-    singleAccountKeysToMove: ["streaming"],
     onAccountConfigChanged: async ({ prevCfg, nextCfg, accountId }) => {
       const prevTelegram = resolveTelegramAccount(prevCfg, accountId);
       const nextTelegram = resolveTelegramAccount(nextCfg, accountId);
@@ -176,11 +167,10 @@ function createTelegramCommandTestPlugin(): ChannelPlugin {
           return [];
         }
         const issues: ChannelStatusIssue[] = [];
-        const issueAccountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
         if (account.allowUnmentionedGroups === true) {
           issues.push({
             channel: "telegram",
-            accountId: issueAccountId,
+            accountId: String(account.accountId ?? DEFAULT_ACCOUNT_ID),
             kind: "config",
             message:
               "Config allows unmentioned group messages (requireMention=false). Telegram Bot API privacy mode will block most group messages unless disabled.",
@@ -195,7 +185,7 @@ function createTelegramCommandTestPlugin(): ChannelPlugin {
         if (audit?.hasWildcardUnmentionedGroups === true) {
           issues.push({
             channel: "telegram",
-            accountId: issueAccountId,
+            accountId: String(account.accountId ?? DEFAULT_ACCOUNT_ID),
             kind: "config",
             message:
               'Telegram groups config uses "*" with requireMention=false; membership probing is not possible without explicit group IDs.',
@@ -207,7 +197,7 @@ function createTelegramCommandTestPlugin(): ChannelPlugin {
           }
           issues.push({
             channel: "telegram",
-            accountId: issueAccountId,
+            accountId: String(account.accountId ?? DEFAULT_ACCOUNT_ID),
             kind: "runtime",
             message: `Group ${group.chatId} not reachable by bot.${group.status ? ` status=${group.status}` : ""}${group.error ? `: ${group.error}` : ""}`,
           });
@@ -215,148 +205,141 @@ function createTelegramCommandTestPlugin(): ChannelPlugin {
         return issues;
       }),
   });
-  return {
-    ...plugin,
-    setup: {
-      ...plugin.setup!,
-      namedAccountPromotionKeys: ["botToken", "tokenFile"],
-      singleAccountKeysToMove: ["streaming"],
-    },
-  };
-}
-
-function createMinimalChannelsCommandRegistryForTests(): ReturnType<typeof createTestRegistry> {
-  return createTestRegistry([
-    {
-      pluginId: "telegram",
-      plugin: createTelegramCommandTestPlugin(),
-      source: "test",
-    },
-    {
-      pluginId: "whatsapp",
-      plugin: createScopedCommandTestPlugin({
-        id: "whatsapp",
-        label: "WhatsApp",
-        buildPatch: () => ({}),
-        clearBaseFields: ["name"],
-      }),
-      source: "test",
-    },
-    {
-      pluginId: "discord",
-      plugin: createScopedCommandTestPlugin({
-        id: "discord",
-        label: "Discord",
-        buildPatch: ({ token }) => (token ? { token } : {}),
-        clearBaseFields: ["token", "name"],
-        collectStatusIssues: (accounts) =>
-          accounts.flatMap((account) => {
-            if (account.enabled !== true || account.configured !== true) {
-              return [];
-            }
-            const issues: ChannelStatusIssue[] = [];
-            const issueAccountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
-            const messageContent = (
-              account.application as { intents?: { messageContent?: string } } | undefined
-            )?.intents?.messageContent;
-            if (messageContent === "disabled") {
-              issues.push({
-                channel: "discord",
-                accountId: issueAccountId,
-                kind: "intent",
-                message:
-                  "Message Content Intent is disabled. Bot may not see normal channel messages.",
-              });
-            }
-            const audit = account.audit as
-              | {
-                  channels?: Array<{
-                    channelId?: string;
-                    ok?: boolean;
-                    missing?: string[];
-                    error?: string;
-                  }>;
-                }
-              | undefined;
-            for (const channel of audit?.channels ?? []) {
-              if (channel.ok === true || !channel.channelId) {
-                continue;
-              }
-              issues.push({
-                channel: "discord",
-                accountId: issueAccountId,
-                kind: "permissions",
-                message: `Channel ${channel.channelId} permission audit failed.${channel.missing?.length ? ` missing ${channel.missing.join(", ")}` : ""}${channel.error ? `: ${channel.error}` : ""}`,
-              });
-            }
-            return issues;
-          }),
-      }),
-      source: "test",
-    },
-    {
-      pluginId: "slack",
-      plugin: createScopedCommandTestPlugin({
-        id: "slack",
-        label: "Slack",
-        buildPatch: ({ botToken, appToken }) => ({
-          ...(botToken ? { botToken } : {}),
-          ...(appToken ? { appToken } : {}),
-        }),
-        clearBaseFields: ["botToken", "appToken", "name"],
-      }),
-      source: "test",
-    },
-    {
-      pluginId: "signal",
-      plugin: createScopedCommandTestPlugin({
-        id: "signal",
-        label: "Signal",
-        buildPatch: ({ signalNumber }) => (signalNumber ? { account: signalNumber } : {}),
-        clearBaseFields: ["account", "name"],
-      }),
-      source: "test",
-    },
-  ]);
 }
 
 function setMinimalChannelsCommandRegistryForTests(): void {
-  setActivePluginRegistry(minimalChannelsCommandRegistry);
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        plugin: createTelegramCommandTestPlugin(),
+        source: "test",
+      },
+      {
+        pluginId: "whatsapp",
+        plugin: createScopedCommandTestPlugin({
+          id: "whatsapp",
+          label: "WhatsApp",
+          buildPatch: () => ({}),
+          clearBaseFields: ["name"],
+        }),
+        source: "test",
+      },
+      {
+        pluginId: "discord",
+        plugin: createScopedCommandTestPlugin({
+          id: "discord",
+          label: "Discord",
+          buildPatch: ({ token }) => (token ? { token } : {}),
+          clearBaseFields: ["token", "name"],
+          collectStatusIssues: (accounts) =>
+            accounts.flatMap((account) => {
+              if (account.enabled !== true || account.configured !== true) {
+                return [];
+              }
+              const issues: ChannelStatusIssue[] = [];
+              const messageContent = (
+                account.application as { intents?: { messageContent?: string } } | undefined
+              )?.intents?.messageContent;
+              if (messageContent === "disabled") {
+                issues.push({
+                  channel: "discord",
+                  accountId: String(account.accountId ?? DEFAULT_ACCOUNT_ID),
+                  kind: "intent",
+                  message:
+                    "Message Content Intent is disabled. Bot may not see normal channel messages.",
+                });
+              }
+              const audit = account.audit as
+                | {
+                    channels?: Array<{
+                      channelId?: string;
+                      ok?: boolean;
+                      missing?: string[];
+                      error?: string;
+                    }>;
+                  }
+                | undefined;
+              for (const channel of audit?.channels ?? []) {
+                if (channel.ok === true || !channel.channelId) {
+                  continue;
+                }
+                issues.push({
+                  channel: "discord",
+                  accountId: String(account.accountId ?? DEFAULT_ACCOUNT_ID),
+                  kind: "permissions",
+                  message: `Channel ${channel.channelId} permission audit failed.${channel.missing?.length ? ` missing ${channel.missing.join(", ")}` : ""}${channel.error ? `: ${channel.error}` : ""}`,
+                });
+              }
+              return issues;
+            }),
+        }),
+        source: "test",
+      },
+      {
+        pluginId: "slack",
+        plugin: createScopedCommandTestPlugin({
+          id: "slack",
+          label: "Slack",
+          buildPatch: ({ botToken, appToken }) => ({
+            ...(botToken ? { botToken } : {}),
+            ...(appToken ? { appToken } : {}),
+          }),
+          clearBaseFields: ["botToken", "appToken", "name"],
+        }),
+        source: "test",
+      },
+      {
+        pluginId: "signal",
+        plugin: createScopedCommandTestPlugin({
+          id: "signal",
+          label: "Signal",
+          buildPatch: ({ signalNumber }) => (signalNumber ? { account: signalNumber } : {}),
+          clearBaseFields: ["account", "name"],
+        }),
+        source: "test",
+      },
+    ]),
+  );
 }
 
 describe("channels command", () => {
-  beforeAll(() => {
-    minimalChannelsCommandRegistry = createMinimalChannelsCommandRegistryForTests();
+  beforeAll(async () => {
+    clackPrompterModule = await import("../wizard/clack-prompter.js");
   });
 
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
-    secretMocks.resolveCommandConfigWithSecrets.mockClear();
+    authMocks.loadAuthProfileStore.mockClear();
     offsetMocks.deleteTelegramUpdateOffset.mockClear();
-    createClackPrompterMock.mockReset();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+    authMocks.loadAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
     setMinimalChannelsCommandRegistryForTests();
   });
 
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe written config shape.
   function getWrittenConfig<T>(): T {
     expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const [config] = configMocks.writeConfigFile.mock.calls[0] ?? [];
-    if (config === undefined) {
-      throw new Error("expected written channel config");
-    }
-    return config as T;
+    return configMocks.writeConfigFile.mock.calls[0]?.[0] as T;
   }
 
   async function runRemoveWithConfirm(
     args: Parameters<typeof channelsRemoveCommand>[0],
   ): Promise<void> {
     const prompt = { confirm: vi.fn().mockResolvedValue(true) };
-    createClackPrompterMock.mockReturnValue(prompt);
-    await channelsRemoveCommand(args, runtime, { hasFlags: true });
+    const promptSpy = vi
+      .spyOn(clackPrompterModule, "createClackPrompter")
+      .mockReturnValue(prompt as never);
+    try {
+      await channelsRemoveCommand(args, runtime, { hasFlags: true });
+    } finally {
+      promptSpy.mockRestore();
+    }
   }
 
   async function addTelegramAccount(account: string, token: string): Promise<void> {
@@ -460,7 +443,7 @@ describe("channels command", () => {
 
     const next = await addAlertsTelegramAccount("alerts-token");
     expect(next.channels?.telegram?.enabled).toBe(true);
-    expect(next.channels?.telegram?.accounts?.default).toStrictEqual({});
+    expect(next.channels?.telegram?.accounts?.default).toEqual({});
     expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe("alerts-token");
   });
 
@@ -584,6 +567,42 @@ describe("channels command", () => {
     expect(next.channels?.discord?.enabled).toBe(false);
   });
 
+  it("includes external auth profiles in JSON output", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+    authMocks.loadAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "token",
+          refresh: "refresh",
+          expires: 0,
+          created: 0,
+        },
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai",
+          access: "token",
+          refresh: "refresh",
+          expires: 0,
+          created: 0,
+        },
+      },
+    });
+
+    await channelsListCommand({ json: true, usage: false }, runtime);
+    const payload = JSON.parse(runtime.log.mock.calls[0]?.[0] as string) as {
+      auth?: Array<{ id: string }>;
+    };
+    const ids = payload.auth?.map((entry) => entry.id) ?? [];
+    expect(ids).toContain("anthropic:default");
+    expect(ids).toContain("openai-codex:default");
+  });
+
   it("stores default account names in accounts when multiple accounts exist", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
@@ -654,10 +673,6 @@ describe("channels command", () => {
 
   it("formats gateway channel status lines in registry order", () => {
     const lines = formatGatewayChannelsStatusLines({
-      channelLabels: {
-        telegram: "Telegram",
-        whatsapp: "WhatsApp",
-      },
       channelAccounts: {
         telegram: [{ accountId: "default", configured: true }],
         whatsapp: [{ accountId: "default", linked: true }],
@@ -777,9 +792,6 @@ describe("channels command", () => {
 
   it("surfaces WhatsApp auth/runtime hints when unlinked or disconnected", () => {
     const unlinked = formatGatewayChannelsStatusLines({
-      channelLabels: {
-        whatsapp: "WhatsApp",
-      },
       channelAccounts: {
         whatsapp: [{ accountId: "default", enabled: true, linked: false }],
       },
@@ -788,9 +800,6 @@ describe("channels command", () => {
     expect(unlinked.join("\n")).toMatch(/Not linked/i);
 
     const disconnected = formatGatewayChannelsStatusLines({
-      channelLabels: {
-        whatsapp: "WhatsApp",
-      },
       channelAccounts: {
         whatsapp: [
           {

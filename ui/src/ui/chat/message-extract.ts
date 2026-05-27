@@ -1,29 +1,24 @@
-import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
-import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
-import { normalizeLowercaseStringOrEmpty, normalizeStringEntries } from "../string-coerce.ts";
-import { stripThinkingTags } from "../strip-thinking-tags.ts";
+import { stripThinkingTags } from "../format.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
 function processMessageText(text: string, role: string): string {
-  const shouldStripInboundMetadata = normalizeLowercaseStringOrEmpty(role) === "user";
-  const withoutInternalContext = stripInternalRuntimeContext(text);
+  const shouldStripInboundMetadata = role.toLowerCase() === "user";
   if (role === "assistant") {
-    return stripThinkingTags(withoutInternalContext);
+    return stripThinkingTags(text);
   }
   return shouldStripInboundMetadata
-    ? stripInboundMetadata(stripEnvelope(withoutInternalContext))
-    : stripEnvelope(withoutInternalContext);
+    ? stripInboundMetadata(stripEnvelope(text))
+    : stripEnvelope(text);
 }
 
 export function extractText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
-  const raw =
-    role === "assistant" ? extractSharedAssistantVisibleText(message) : extractRawText(message);
+  const raw = extractRawText(message);
   if (!raw) {
     return null;
   }
@@ -70,7 +65,7 @@ export function extractThinking(message: unknown): string | null {
   const matches = [
     ...rawText.matchAll(/<\s*think(?:ing)?\s*>([\s\S]*?)<\s*\/\s*think(?:ing)?\s*>/gi),
   ];
-  const extracted = normalizeStringEntries(matches.map((m) => m[1] ?? ""));
+  const extracted = matches.map((m) => (m[1] ?? "").trim()).filter(Boolean);
   return extracted.length > 0 ? extracted.join("\n") : null;
 }
 

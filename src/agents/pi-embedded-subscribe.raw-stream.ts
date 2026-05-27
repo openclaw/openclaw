@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { appendRegularFile } from "../infra/fs-safe.js";
 
 let rawStreamReady = false;
 
@@ -31,11 +30,7 @@ export function appendRawStream(payload: Record<string, unknown>) {
     }
   }
   try {
-    void appendRegularFile({
-      filePath: rawStreamPath,
-      content: `${JSON.stringify(payload)}\n`,
-      rejectSymlinkParents: true,
-    });
+    void fs.promises.appendFile(rawStreamPath, `${JSON.stringify(payload)}\n`);
   } catch {
     // ignore raw stream write failures
   }

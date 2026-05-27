@@ -206,15 +206,9 @@ function collectReferenceEvents(
       if (!clause?.namedBindings) {
         continue;
       }
-      if (clause.isTypeOnly) {
-        continue;
-      }
 
       if (ts.isNamedImports(clause.namedBindings)) {
         for (const element of clause.namedBindings.elements) {
-          if (element.isTypeOnly) {
-            continue;
-          }
           const importedName = element.propertyName?.text ?? element.name.text;
           const record = recordMap.get(importedName);
           if (!record) {
@@ -297,8 +291,8 @@ function finalizeRecords(records: TopologyRecord[]) {
       return byRefs;
     }
     return (
-      left.publicSpecifiers[0].localeCompare(right.publicSpecifiers[0]) ||
-      left.exportNames[0].localeCompare(right.exportNames[0])
+      left.publicSpecifiers[0]!.localeCompare(right.publicSpecifiers[0]) ||
+      left.exportNames[0]!.localeCompare(right.exportNames[0])
     );
   });
 }
@@ -419,5 +413,4 @@ export function filterRecordsForReport(
     case "public-surface-usage":
       return records;
   }
-  throw new Error("Unsupported topology report");
 }

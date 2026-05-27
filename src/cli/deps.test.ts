@@ -1,8 +1,6 @@
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
 
-const runtimeFactories = vi.hoisted(() => ({
+const moduleLoads = vi.hoisted(() => ({
   whatsapp: vi.fn(),
   telegram: vi.fn(),
   discord: vi.fn(),
@@ -20,80 +18,97 @@ const sendFns = vi.hoisted(() => ({
   imessage: vi.fn(async () => ({ messageId: "i1", chatId: "imessage:1" })),
 }));
 
-vi.mock("../channels/plugins/index.js", () => ({
-  listChannelPlugins: () =>
-    ["whatsapp", "telegram", "discord", "slack", "signal", "imessage"].map(
-      (id) =>
-        ({
-          id,
-          meta: { label: id, selectionLabel: id, docsPath: `/channels/${id}`, blurb: "" },
-        }) as ChannelPlugin,
-    ),
-}));
+const whatsappBoundaryLoads = vi.hoisted(() => vi.fn());
 
-vi.mock("./send-runtime/channel-outbound-send.js", () => ({
-  createChannelOutboundRuntimeSend: ({
-    channelId,
-  }: {
-    channelId: keyof typeof runtimeFactories;
-  }) => {
-    runtimeFactories[channelId]();
-    return { sendMessage: sendFns[channelId] };
-  },
-}));
+vi.mock("../plugins/runtime/runtime-whatsapp-boundary.js", async (importOriginal) => {
+  whatsappBoundaryLoads();
+  return await importOriginal<typeof import("../plugins/runtime/runtime-whatsapp-boundary.js")>();
+});
+
+vi.mock("./send-runtime/whatsapp.js", () => {
+  moduleLoads.whatsapp();
+  return { runtimeSend: { sendMessage: sendFns.whatsapp } };
+});
+
+vi.mock("./send-runtime/telegram.js", () => {
+  moduleLoads.telegram();
+  return { runtimeSend: { sendMessage: sendFns.telegram } };
+});
+
+vi.mock("./send-runtime/discord.js", () => {
+  moduleLoads.discord();
+  return { runtimeSend: { sendMessage: sendFns.discord } };
+});
+
+vi.mock("./send-runtime/slack.js", () => {
+  moduleLoads.slack();
+  return { runtimeSend: { sendMessage: sendFns.slack } };
+});
+
+vi.mock("./send-runtime/signal.js", () => {
+  moduleLoads.signal();
+  return { runtimeSend: { sendMessage: sendFns.signal } };
+});
+
+vi.mock("./send-runtime/imessage.js", () => {
+  moduleLoads.imessage();
+  return { runtimeSend: { sendMessage: sendFns.imessage } };
+});
 
 describe("createDefaultDeps", () => {
-  async function loadCreateDefaultDeps(scope: string) {
-    return (
-      await importFreshModule<typeof import("./deps.js")>(
-        import.meta.url,
-        `./deps.js?scope=${scope}`,
-      )
-    ).createDefaultDeps;
+  async function loadCreateDefaultDeps() {
+    return (await import("./deps.js")).createDefaultDeps;
   }
 
-  function expectUnusedRuntimeFactoriesNotLoaded(exclude: keyof typeof runtimeFactories): void {
-    const keys = Object.keys(runtimeFactories) as Array<keyof typeof runtimeFactories>;
+  function expectUnusedModulesNotLoaded(exclude: keyof typeof moduleLoads): void {
+    const keys = Object.keys(moduleLoads) as Array<keyof typeof moduleLoads>;
     for (const key of keys) {
       if (key === exclude) {
         continue;
       }
-      expect(runtimeFactories[key]).not.toHaveBeenCalled();
+      expect(moduleLoads[key]).not.toHaveBeenCalled();
     }
   }
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.resetModules();
   });
 
-  it("does not build runtime send surfaces until a dependency is used", async () => {
-    const createDefaultDeps = await loadCreateDefaultDeps("lazy-load");
+  it("does not load provider modules until a dependency is used", async () => {
+    const createDefaultDeps = await loadCreateDefaultDeps();
     const deps = createDefaultDeps();
 
-    expect(runtimeFactories.whatsapp).not.toHaveBeenCalled();
-    expect(runtimeFactories.telegram).not.toHaveBeenCalled();
-    expect(runtimeFactories.discord).not.toHaveBeenCalled();
-    expect(runtimeFactories.slack).not.toHaveBeenCalled();
-    expect(runtimeFactories.signal).not.toHaveBeenCalled();
-    expect(runtimeFactories.imessage).not.toHaveBeenCalled();
+    expect(moduleLoads.whatsapp).not.toHaveBeenCalled();
+    expect(moduleLoads.telegram).not.toHaveBeenCalled();
+    expect(moduleLoads.discord).not.toHaveBeenCalled();
+    expect(moduleLoads.slack).not.toHaveBeenCalled();
+    expect(moduleLoads.signal).not.toHaveBeenCalled();
+    expect(moduleLoads.imessage).not.toHaveBeenCalled();
 
-    const sendTelegram = deps.telegram as (...args: unknown[]) => Promise<unknown>;
+    const sendTelegram = deps["telegram"] as (...args: unknown[]) => Promise<unknown>;
     await sendTelegram("chat", "hello", { verbose: false });
 
-    expect(runtimeFactories.telegram).toHaveBeenCalledTimes(1);
+    expect(moduleLoads.telegram).toHaveBeenCalledTimes(1);
     expect(sendFns.telegram).toHaveBeenCalledTimes(1);
-    expectUnusedRuntimeFactoriesNotLoaded("telegram");
+    expectUnusedModulesNotLoaded("telegram");
   });
 
-  it("reuses cached runtime send surfaces after first lazy load", async () => {
-    const createDefaultDeps = await loadCreateDefaultDeps("module-cache");
+  it("reuses module cache after first dynamic import", async () => {
+    const createDefaultDeps = await loadCreateDefaultDeps();
     const deps = createDefaultDeps();
-    const sendDiscord = deps.discord as (...args: unknown[]) => Promise<unknown>;
+    const sendDiscord = deps["discord"] as (...args: unknown[]) => Promise<unknown>;
 
     await sendDiscord("channel", "first", { verbose: false });
     await sendDiscord("channel", "second", { verbose: false });
 
-    expect(runtimeFactories.discord).toHaveBeenCalledTimes(1);
+    expect(moduleLoads.discord).toHaveBeenCalledTimes(1);
     expect(sendFns.discord).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not import the whatsapp runtime boundary on deps module load", async () => {
+    await import("./deps.js");
+
+    expect(whatsappBoundaryLoads).not.toHaveBeenCalled();
   });
 });

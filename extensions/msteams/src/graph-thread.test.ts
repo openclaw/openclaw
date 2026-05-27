@@ -13,14 +13,6 @@ vi.mock("./graph.js", () => ({
   fetchGraphJson: vi.fn(),
 }));
 
-const firstGraphPath = () => {
-  const [call] = vi.mocked(fetchGraphJson).mock.calls;
-  if (!call) {
-    throw new Error("expected Graph fetch call");
-  }
-  return call[0].path;
-};
-
 describe("stripHtmlFromTeamsMessage", () => {
   it("preserves @mention display names from <at> tags", () => {
     expect(stripHtmlFromTeamsMessage("<at>Alice</at> hello")).toBe("@Alice hello");
@@ -146,7 +138,8 @@ describe("fetchThreadReplies", () => {
 
     await fetchThreadReplies("tok", "g", "c", "m", 200);
 
-    expect(firstGraphPath()).toContain("$top=50");
+    const path = vi.mocked(fetchGraphJson).mock.calls[0]?.[0]?.path ?? "";
+    expect(path).toContain("$top=50");
   });
 
   it("clamps limit to 1 minimum", async () => {
@@ -154,14 +147,15 @@ describe("fetchThreadReplies", () => {
 
     await fetchThreadReplies("tok", "g", "c", "m", 0);
 
-    expect(firstGraphPath()).toContain("$top=1");
+    const path = vi.mocked(fetchGraphJson).mock.calls[0]?.[0]?.path ?? "";
+    expect(path).toContain("$top=1");
   });
 
   it("returns empty array when value is missing", async () => {
     vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
 
     const result = await fetchThreadReplies("tok", "g", "c", "m");
-    expect(result).toStrictEqual([]);
+    expect(result).toEqual([]);
   });
 });
 

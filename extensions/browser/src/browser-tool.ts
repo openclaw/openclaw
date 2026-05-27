@@ -5,17 +5,16 @@ import {
   executeSnapshotAction,
   executeTabsAction,
 } from "./browser-tool.actions.js";
+import { BrowserToolSchema } from "./browser-tool.schema.js";
 import {
   type AnyAgentTool,
   type NodeListNode,
   DEFAULT_UPLOAD_DIR,
-  BrowserToolSchema,
   applyBrowserProxyPaths,
   browserAct,
   browserArmDialog,
   browserArmFileChooser,
   browserCloseTab,
-  browserDoctor,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -25,34 +24,28 @@ import {
   browserStart,
   browserStatus,
   browserStop,
-  callGatewayTool,
-  getRuntimeConfig,
   getBrowserProfileCapabilities,
   imageResultFromFile,
   jsonResult,
   listNodes,
-  normalizeOptionalString,
+  loadConfig,
   persistBrowserProxyFiles,
   readStringParam,
-  readStringValue,
   resolveBrowserConfig,
-  resolveRuntimeImageSanitization,
   resolveExistingPathsWithinRoot,
   resolveNodeIdFromList,
   resolveProfile,
   selectDefaultNodeFromList,
-  touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
-} from "./browser-tool.runtime.js";
-import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
+} from "./core-api.js";
+import { callGatewayTool } from "./core-api.js";
 
 const browserToolDeps = {
   browserAct,
   browserArmDialog,
   browserArmFileChooser,
   browserCloseTab,
-  browserDoctor,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -62,23 +55,21 @@ const browserToolDeps = {
   browserStart,
   browserStatus,
   browserStop,
-  getRuntimeConfig,
   imageResultFromFile,
+  loadConfig,
   listNodes,
   callGatewayTool,
-  touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 };
 
-export const testing = {
+export const __testing = {
   setDepsForTest(
     overrides: Partial<{
       browserAct: typeof browserAct;
       browserArmDialog: typeof browserArmDialog;
       browserArmFileChooser: typeof browserArmFileChooser;
       browserCloseTab: typeof browserCloseTab;
-      browserDoctor: typeof browserDoctor;
       browserFocusTab: typeof browserFocusTab;
       browserNavigate: typeof browserNavigate;
       browserOpenTab: typeof browserOpenTab;
@@ -89,10 +80,9 @@ export const testing = {
       browserStatus: typeof browserStatus;
       browserStop: typeof browserStop;
       imageResultFromFile: typeof imageResultFromFile;
-      getRuntimeConfig: typeof getRuntimeConfig;
+      loadConfig: typeof loadConfig;
       listNodes: typeof listNodes;
       callGatewayTool: typeof callGatewayTool;
-      touchSessionBrowserTab: typeof touchSessionBrowserTab;
       trackSessionBrowserTab: typeof trackSessionBrowserTab;
       untrackSessionBrowserTab: typeof untrackSessionBrowserTab;
     }> | null,
@@ -102,7 +92,6 @@ export const testing = {
     browserToolDeps.browserArmFileChooser =
       overrides?.browserArmFileChooser ?? browserArmFileChooser;
     browserToolDeps.browserCloseTab = overrides?.browserCloseTab ?? browserCloseTab;
-    browserToolDeps.browserDoctor = overrides?.browserDoctor ?? browserDoctor;
     browserToolDeps.browserFocusTab = overrides?.browserFocusTab ?? browserFocusTab;
     browserToolDeps.browserNavigate = overrides?.browserNavigate ?? browserNavigate;
     browserToolDeps.browserOpenTab = overrides?.browserOpenTab ?? browserOpenTab;
@@ -114,11 +103,9 @@ export const testing = {
     browserToolDeps.browserStatus = overrides?.browserStatus ?? browserStatus;
     browserToolDeps.browserStop = overrides?.browserStop ?? browserStop;
     browserToolDeps.imageResultFromFile = overrides?.imageResultFromFile ?? imageResultFromFile;
-    browserToolDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
+    browserToolDeps.loadConfig = overrides?.loadConfig ?? loadConfig;
     browserToolDeps.listNodes = overrides?.listNodes ?? listNodes;
     browserToolDeps.callGatewayTool = overrides?.callGatewayTool ?? callGatewayTool;
-    browserToolDeps.touchSessionBrowserTab =
-      overrides?.touchSessionBrowserTab ?? touchSessionBrowserTab;
     browserToolDeps.trackSessionBrowserTab =
       overrides?.trackSessionBrowserTab ?? trackSessionBrowserTab;
     browserToolDeps.untrackSessionBrowserTab =
@@ -127,7 +114,7 @@ export const testing = {
 };
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
-  const targetId = normalizeOptionalString(params.targetId);
+  const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
   const timeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? params.timeoutMs
@@ -148,8 +135,6 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "doubleClick",
   "button",
   "modifiers",
-  "x",
-  "y",
   "text",
   "submit",
   "slowly",
@@ -221,7 +206,7 @@ async function resolveBrowserNodeTarget(params: {
   target?: "sandbox" | "host" | "node";
   sandboxBridgeUrl?: string;
 }): Promise<BrowserNodeTarget | null> {
-  const cfg = browserToolDeps.getRuntimeConfig();
+  const cfg = browserToolDeps.loadConfig();
   const policy = cfg.gateway?.nodes?.browser;
   const mode = policy?.mode ?? "auto";
   if (mode === "off") {
@@ -300,7 +285,7 @@ async function callBrowserProxy(params: {
       ? Math.max(1, Math.floor(params.timeoutMs))
       : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
   const gatewayTimeoutMs = proxyTimeoutMs + BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS;
-  const payload = await browserToolDeps.callGatewayTool(
+  const payload = await browserToolDeps.callGatewayTool<{ payloadJSON?: string; payload?: string }>(
     "node.invoke",
     { timeoutMs: gatewayTimeoutMs },
     {
@@ -317,25 +302,15 @@ async function callBrowserProxy(params: {
       idempotencyKey: crypto.randomUUID(),
     },
   );
-  const parsed = unwrapBrowserProxyPayload(payload);
+  const parsed =
+    payload?.payload ??
+    (typeof payload?.payloadJSON === "string" && payload.payloadJSON
+      ? (JSON.parse(payload.payloadJSON) as BrowserProxyResult)
+      : null);
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
     throw new Error("browser proxy failed");
   }
   return parsed;
-}
-
-function unwrapBrowserProxyPayload(payload: { payload?: unknown; payloadJSON?: unknown } | null) {
-  if (payload?.payload !== undefined) {
-    return payload.payload;
-  }
-  if (typeof payload?.payloadJSON !== "string" || !payload.payloadJSON.trim()) {
-    return null;
-  }
-  try {
-    return JSON.parse(payload.payloadJSON) as BrowserProxyResult;
-  } catch {
-    return null;
-  }
 }
 
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
@@ -351,7 +326,7 @@ function resolveBrowserBaseUrl(params: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
 }): string | undefined {
-  const cfg = getRuntimeConfig();
+  const cfg = loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const normalizedSandbox = params.sandboxBridgeUrl?.trim() ?? "";
   const target = params.target ?? (normalizedSandbox ? "sandbox" : "host");
@@ -380,7 +355,7 @@ function shouldPreferHostForProfile(profileName: string | undefined) {
   if (!profileName) {
     return false;
   }
-  const cfg = browserToolDeps.getRuntimeConfig();
+  const cfg = browserToolDeps.loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const profile = resolveProfile(resolved, profileName);
   if (!profile) {
@@ -388,43 +363,6 @@ function shouldPreferHostForProfile(profileName: string | undefined) {
   }
   const capabilities = getBrowserProfileCapabilities(profile);
   return capabilities.usesChromeMcp;
-}
-
-const DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS = 45_000;
-const EXISTING_SESSION_MANAGE_ACTIONS = new Set([
-  "status",
-  "start",
-  "stop",
-  "profiles",
-  "tabs",
-  "open",
-  "focus",
-  "close",
-]);
-
-function usesExistingSessionManageFlow(params: { action: string; profileName?: string }) {
-  if (!EXISTING_SESSION_MANAGE_ACTIONS.has(params.action)) {
-    return false;
-  }
-  const cfg = browserToolDeps.getRuntimeConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const profile = resolveProfile(resolved, params.profileName ?? resolved.defaultProfile);
-  if (profile && getBrowserProfileCapabilities(profile).usesChromeMcp) {
-    return true;
-  }
-  if (params.action !== "profiles") {
-    return false;
-  }
-  return Object.keys(resolved.profiles).some((name) => {
-    const candidate = resolveProfile(resolved, name);
-    return candidate ? getBrowserProfileCapabilities(candidate).usesChromeMcp : false;
-  });
-}
-
-function readToolTimeoutMs(params: Record<string, unknown>) {
-  return typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-    ? Math.max(1, Math.floor(params.timeoutMs))
-    : undefined;
 }
 
 export function createBrowserTool(opts?: {
@@ -441,11 +379,9 @@ export function createBrowserTool(opts?: {
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
-      'For the logged-in user browser, use profile="user". A supported Chromium-based browser (v144+) must be running on the selected host or browser node. Use only when existing logins/cookies matter and the user is present.',
-      'For profile="user" or other existing-session profiles, omit timeoutMs on act:type, evaluate, hover, scrollIntoView, drag, select, and fill; that driver rejects per-call timeout overrides for those actions.',
+      'For the logged-in user browser on the local host, use profile="user". A supported Chromium-based browser (v144+) must be running. Use only when existing logins/cookies matter and the user is present.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc). For tab operations, targetId also accepts tabId handles (t1) and labels from action=tabs.",
-      "For multi-step browser work, login checks, stale refs, duplicate tabs, or Google Meet flows, use the bundled browser-automation skill when it is available.",
+      "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
       `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
@@ -457,43 +393,32 @@ export function createBrowserTool(opts?: {
       const action = readStringParam(params, "action", { required: true });
       const profile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
-      const requestedTimeoutMs = readToolTimeoutMs(params);
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
-      const configuredNode = browserToolDeps
-        .getRuntimeConfig()
-        .gateway?.nodes?.browser?.node?.trim();
 
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
       }
-      // existing-session profiles can attach through the selected host or browser node,
-      // but they must never fall back into the sandbox browser.
+      // User-browser profiles (existing-session) are host-only.
       const isUserBrowserProfile = shouldPreferHostForProfile(profile);
       if (isUserBrowserProfile) {
+        if (requestedNode || target === "node") {
+          throw new Error(`profile="${profile}" only supports the local host browser.`);
+        }
         if (target === "sandbox") {
           throw new Error(
             `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
           );
         }
-      }
-
-      let nodeTarget: BrowserNodeTarget | null = null;
-      try {
-        nodeTarget = await resolveBrowserNodeTarget({
-          requestedNode: requestedNode ?? undefined,
-          target,
-          sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-        });
-      } catch (error) {
-        // Keep the logged-in user browser usable on the host when auto-discovery
-        // of browser nodes fails transiently. Explicit node requests still fail.
-        if (!(isUserBrowserProfile && !target && !requestedNode && !configuredNode)) {
-          throw error;
+        if (!target && !requestedNode) {
+          target = "host";
         }
       }
-      if (isUserBrowserProfile && !target && !requestedNode && !nodeTarget) {
-        target = "host";
-      }
+
+      const nodeTarget = await resolveBrowserNodeTarget({
+        requestedNode: requestedNode ?? undefined,
+        target,
+        sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+      });
 
       const resolvedTarget = target === "node" ? undefined : target;
       const baseUrl = nodeTarget
@@ -527,35 +452,8 @@ export function createBrowserTool(opts?: {
             return proxy.result;
           }
         : null;
-      const toolTimeoutMs =
-        requestedTimeoutMs ??
-        (usesExistingSessionManageFlow({ action, profileName: profile })
-          ? DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS
-          : undefined);
-      const touchTrackedTab = (targetId: string | undefined) => {
-        if (proxyRequest || !targetId) {
-          return;
-        }
-        browserToolDeps.touchSessionBrowserTab({
-          sessionKey: opts?.agentSessionKey,
-          targetId,
-          baseUrl,
-          profile,
-        });
-      };
 
       switch (action) {
-        case "doctor":
-          if (proxyRequest) {
-            return jsonResult(
-              await proxyRequest({
-                method: "GET",
-                path: "/doctor",
-                profile,
-              }),
-            );
-          }
-          return jsonResult(await browserToolDeps.browserDoctor(baseUrl, { profile }));
         case "status":
           if (proxyRequest) {
             return jsonResult(
@@ -563,92 +461,67 @@ export function createBrowserTool(opts?: {
                 method: "GET",
                 path: "/",
                 profile,
-                timeoutMs: toolTimeoutMs,
               }),
             );
           }
-          return jsonResult(
-            await browserToolDeps.browserStatus(baseUrl, { profile, timeoutMs: toolTimeoutMs }),
-          );
+          return jsonResult(await browserToolDeps.browserStatus(baseUrl, { profile }));
         case "start":
           if (proxyRequest) {
             await proxyRequest({
               method: "POST",
               path: "/start",
               profile,
-              timeoutMs: toolTimeoutMs,
             });
             return jsonResult(
               await proxyRequest({
                 method: "GET",
                 path: "/",
                 profile,
-                timeoutMs: toolTimeoutMs,
               }),
             );
           }
-          await browserToolDeps.browserStart(baseUrl, { profile, timeoutMs: toolTimeoutMs });
-          return jsonResult(
-            await browserToolDeps.browserStatus(baseUrl, { profile, timeoutMs: toolTimeoutMs }),
-          );
+          await browserToolDeps.browserStart(baseUrl, { profile });
+          return jsonResult(await browserToolDeps.browserStatus(baseUrl, { profile }));
         case "stop":
           if (proxyRequest) {
             await proxyRequest({
               method: "POST",
               path: "/stop",
               profile,
-              timeoutMs: toolTimeoutMs,
             });
             return jsonResult(
               await proxyRequest({
                 method: "GET",
                 path: "/",
                 profile,
-                timeoutMs: toolTimeoutMs,
               }),
             );
           }
-          await browserToolDeps.browserStop(baseUrl, { profile, timeoutMs: toolTimeoutMs });
-          return jsonResult(
-            await browserToolDeps.browserStatus(baseUrl, { profile, timeoutMs: toolTimeoutMs }),
-          );
+          await browserToolDeps.browserStop(baseUrl, { profile });
+          return jsonResult(await browserToolDeps.browserStatus(baseUrl, { profile }));
         case "profiles":
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "GET",
               path: "/profiles",
-              timeoutMs: toolTimeoutMs,
             });
             return jsonResult(result);
           }
-          return jsonResult({
-            profiles: await browserToolDeps.browserProfiles(baseUrl, { timeoutMs: toolTimeoutMs }),
-          });
+          return jsonResult({ profiles: await browserToolDeps.browserProfiles(baseUrl) });
         case "tabs":
-          return await executeTabsAction({
-            baseUrl,
-            profile,
-            timeoutMs: toolTimeoutMs,
-            proxyRequest,
-          });
+          return await executeTabsAction({ baseUrl, profile, proxyRequest });
         case "open": {
           const targetUrl = readTargetUrlParam(params);
-          const label = normalizeOptionalString(params.label);
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
               path: "/tabs/open",
               profile,
-              body: { url: targetUrl, ...(label ? { label } : {}) },
-              timeoutMs: toolTimeoutMs,
+              body: { url: targetUrl },
             });
             return jsonResult(result);
           }
-          const opened = await browserToolDeps.browserOpenTab(baseUrl, targetUrl, {
-            profile,
-            label,
-            timeoutMs: toolTimeoutMs,
-          });
+          const opened = await browserToolDeps.browserOpenTab(baseUrl, targetUrl, { profile });
           browserToolDeps.trackSessionBrowserTab({
             sessionKey: opts?.agentSessionKey,
             targetId: opened.targetId,
@@ -667,15 +540,10 @@ export function createBrowserTool(opts?: {
               path: "/tabs/focus",
               profile,
               body: { targetId },
-              timeoutMs: toolTimeoutMs,
             });
             return jsonResult(result);
           }
-          await browserToolDeps.browserFocusTab(baseUrl, targetId, {
-            profile,
-            timeoutMs: toolTimeoutMs,
-          });
-          touchTrackedTab(targetId);
+          await browserToolDeps.browserFocusTab(baseUrl, targetId, { profile });
           return jsonResult({ ok: true });
         }
         case "close": {
@@ -686,22 +554,17 @@ export function createBrowserTool(opts?: {
                   method: "DELETE",
                   path: `/tabs/${encodeURIComponent(targetId)}`,
                   profile,
-                  timeoutMs: toolTimeoutMs,
                 })
               : await proxyRequest({
                   method: "POST",
                   path: "/act",
                   profile,
                   body: { kind: "close" },
-                  timeoutMs: toolTimeoutMs,
                 });
             return jsonResult(result);
           }
           if (targetId) {
-            await browserToolDeps.browserCloseTab(baseUrl, targetId, {
-              profile,
-              timeoutMs: toolTimeoutMs,
-            });
+            await browserToolDeps.browserCloseTab(baseUrl, targetId, { profile });
             browserToolDeps.untrackSessionBrowserTab({
               sessionKey: opts?.agentSessionKey,
               targetId,
@@ -709,14 +572,7 @@ export function createBrowserTool(opts?: {
               profile,
             });
           } else {
-            await browserToolDeps.browserAct(
-              baseUrl,
-              { kind: "close" },
-              {
-                profile,
-                timeoutMs: toolTimeoutMs,
-              },
-            );
+            await browserToolDeps.browserAct(baseUrl, { kind: "close" }, { profile });
           }
           return jsonResult({ ok: true });
         }
@@ -726,34 +582,24 @@ export function createBrowserTool(opts?: {
             baseUrl,
             profile,
             proxyRequest,
-            onTabActivity: touchTrackedTab,
           });
         case "screenshot": {
           const targetId = readStringParam(params, "targetId");
           const fullPage = Boolean(params.fullPage);
           const ref = readStringParam(params, "ref");
           const element = readStringParam(params, "element");
-          const labels = typeof params.labels === "boolean" ? params.labels : undefined;
           const type = params.type === "jpeg" ? "jpeg" : "png";
-          const timeoutMs =
-            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-              ? Math.max(1, Math.floor(params.timeoutMs))
-              : undefined;
-          const effectiveTimeoutMs = timeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
           const result = proxyRequest
             ? ((await proxyRequest({
                 method: "POST",
                 path: "/screenshot",
                 profile,
-                timeoutMs: effectiveTimeoutMs,
                 body: {
                   targetId,
                   fullPage,
                   ref,
                   element,
                   type,
-                  labels,
-                  timeoutMs: effectiveTimeoutMs,
                 },
               })) as Awaited<ReturnType<typeof browserScreenshotAction>>)
             : await browserToolDeps.browserScreenshotAction(baseUrl, {
@@ -762,16 +608,12 @@ export function createBrowserTool(opts?: {
                 ref,
                 element,
                 type,
-                labels,
-                timeoutMs: effectiveTimeoutMs,
                 profile,
               });
-          touchTrackedTab(readStringValue(result.targetId) ?? targetId);
           return await browserToolDeps.imageResultFromFile({
             label: "browser:screenshot",
             path: result.path,
             details: result,
-            imageSanitization: resolveRuntimeImageSanitization(),
           });
         }
         case "navigate": {
@@ -789,13 +631,13 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          const result = await browserToolDeps.browserNavigate(baseUrl, {
-            url: targetUrl,
-            targetId,
-            profile,
-          });
-          touchTrackedTab(readStringValue(result.targetId) ?? targetId);
-          return jsonResult(result);
+          return jsonResult(
+            await browserToolDeps.browserNavigate(baseUrl, {
+              url: targetUrl,
+              targetId,
+              profile,
+            }),
+          );
         }
         case "console":
           return await executeConsoleAction({
@@ -805,7 +647,7 @@ export function createBrowserTool(opts?: {
             proxyRequest,
           });
         case "pdf": {
-          const targetId = normalizeOptionalString(params.targetId);
+          const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
           const result = proxyRequest
             ? ((await proxyRequest({
                 method: "POST",
@@ -814,7 +656,6 @@ export function createBrowserTool(opts?: {
                 body: { targetId },
               })) as Awaited<ReturnType<typeof browserPdfSave>>)
             : await browserToolDeps.browserPdfSave(baseUrl, { targetId, profile });
-          touchTrackedTab(readStringValue(result.targetId) ?? targetId);
           return {
             content: [{ type: "text" as const, text: `FILE:${result.path}` }],
             details: result,
@@ -854,22 +695,21 @@ export function createBrowserTool(opts?: {
             });
             return jsonResult(result);
           }
-          const result = await browserToolDeps.browserArmFileChooser(baseUrl, {
-            paths: normalizedPaths,
-            ref,
-            inputRef,
-            element,
-            targetId,
-            timeoutMs,
-            profile,
-          });
-          touchTrackedTab(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
-          return jsonResult(result);
+          return jsonResult(
+            await browserToolDeps.browserArmFileChooser(baseUrl, {
+              paths: normalizedPaths,
+              ref,
+              inputRef,
+              element,
+              targetId,
+              timeoutMs,
+              profile,
+            }),
+          );
         }
         case "dialog": {
           const accept = Boolean(params.accept);
-          const promptText = readStringValue(params.promptText);
-          const dialogId = readStringValue(params.dialogId);
+          const promptText = typeof params.promptText === "string" ? params.promptText : undefined;
           const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({
@@ -879,23 +719,21 @@ export function createBrowserTool(opts?: {
               body: {
                 accept,
                 promptText,
-                dialogId,
                 targetId,
                 timeoutMs,
               },
             });
             return jsonResult(result);
           }
-          const result = await browserToolDeps.browserArmDialog(baseUrl, {
-            accept,
-            promptText,
-            dialogId,
-            targetId,
-            timeoutMs,
-            profile,
-          });
-          touchTrackedTab(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
-          return jsonResult(result);
+          return jsonResult(
+            await browserToolDeps.browserArmDialog(baseUrl, {
+              accept,
+              promptText,
+              targetId,
+              timeoutMs,
+              profile,
+            }),
+          );
         }
         case "act": {
           const request = readActRequestParam(params);
@@ -907,7 +745,6 @@ export function createBrowserTool(opts?: {
             baseUrl,
             profile,
             proxyRequest,
-            onTabActivity: touchTrackedTab,
           });
         }
         default:
@@ -916,4 +753,3 @@ export function createBrowserTool(opts?: {
     },
   };
 }
-export { testing as __testing };

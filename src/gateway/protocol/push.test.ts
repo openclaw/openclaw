@@ -1,13 +1,15 @@
-import { Compile } from "typebox/compile";
+import AjvPkg from "ajv";
 import { describe, expect, it } from "vitest";
 import { PushTestResultSchema } from "./schema/push.js";
 
 describe("gateway protocol push schema", () => {
-  const validatePushTestResult = Compile(PushTestResultSchema);
+  const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  const validatePushTestResult = ajv.compile(PushTestResultSchema);
 
   it("accepts push.test results with a transport", () => {
     expect(
-      validatePushTestResult.Check({
+      validatePushTestResult({
         ok: true,
         status: 200,
         tokenSuffix: "abcd1234",

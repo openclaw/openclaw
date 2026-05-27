@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
 export const ModelChoiceSchema = Type.Object(
@@ -6,7 +6,6 @@ export const ModelChoiceSchema = Type.Object(
     id: NonEmptyString,
     name: NonEmptyString,
     provider: NonEmptyString,
-    alias: Type.Optional(NonEmptyString),
     contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
     reasoning: Type.Optional(Type.Boolean()),
   },
@@ -39,23 +38,6 @@ export const AgentSummarySchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
-    agentRuntime: Type.Optional(
-      Type.Object(
-        {
-          id: NonEmptyString,
-          fallback: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("none")])),
-          source: Type.Union([
-            Type.Literal("env"),
-            Type.Literal("agent"),
-            Type.Literal("defaults"),
-            Type.Literal("model"),
-            Type.Literal("provider"),
-            Type.Literal("implicit"),
-          ]),
-        },
-        { additionalProperties: false },
-      ),
-    ),
   },
   { additionalProperties: false },
 );
@@ -76,7 +58,6 @@ export const AgentsCreateParamsSchema = Type.Object(
   {
     name: NonEmptyString,
     workspace: NonEmptyString,
-    model: Type.Optional(NonEmptyString),
     emoji: Type.Optional(Type.String()),
     avatar: Type.Optional(Type.String()),
   },
@@ -89,7 +70,6 @@ export const AgentsCreateResultSchema = Type.Object(
     agentId: NonEmptyString,
     name: NonEmptyString,
     workspace: NonEmptyString,
-    model: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -100,7 +80,6 @@ export const AgentsUpdateParamsSchema = Type.Object(
     name: Type.Optional(NonEmptyString),
     workspace: Type.Optional(NonEmptyString),
     model: Type.Optional(NonEmptyString),
-    emoji: Type.Optional(Type.String()),
     avatar: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
@@ -195,14 +174,7 @@ export const AgentsFilesSetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ModelsListParamsSchema = Type.Object(
-  {
-    view: Type.Optional(
-      Type.Union([Type.Literal("default"), Type.Literal("configured"), Type.Literal("all")]),
-    ),
-  },
-  { additionalProperties: false },
-);
+export const ModelsListParamsSchema = Type.Object({}, { additionalProperties: false });
 
 export const ModelsListResultSchema = Type.Object(
   {
@@ -227,55 +199,11 @@ export const SkillsBinsResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-const Sha256String = Type.String({
-  minLength: 64,
-  maxLength: 64,
-  pattern: "^[a-fA-F0-9]{64}$",
-});
-const SkillUploadIdempotencyKeyString = Type.String({
-  minLength: 1,
-  maxLength: 2048,
-});
-const SkillUploadDataBase64String = Type.String({
-  minLength: 1,
-  maxLength: 5_592_408,
-});
-
-export const SkillsUploadBeginParamsSchema = Type.Object(
-  {
-    kind: Type.Literal("skill-archive"),
-    slug: NonEmptyString,
-    sizeBytes: Type.Integer({ minimum: 1 }),
-    sha256: Type.Optional(Sha256String),
-    force: Type.Optional(Type.Boolean()),
-    idempotencyKey: Type.Optional(SkillUploadIdempotencyKeyString),
-  },
-  { additionalProperties: false },
-);
-
-export const SkillsUploadChunkParamsSchema = Type.Object(
-  {
-    uploadId: NonEmptyString,
-    offset: Type.Integer({ minimum: 0 }),
-    dataBase64: SkillUploadDataBase64String,
-  },
-  { additionalProperties: false },
-);
-
-export const SkillsUploadCommitParamsSchema = Type.Object(
-  {
-    uploadId: NonEmptyString,
-    sha256: Type.Optional(Sha256String),
-  },
-  { additionalProperties: false },
-);
-
 export const SkillsInstallParamsSchema = Type.Union([
   Type.Object(
     {
       name: NonEmptyString,
       installId: NonEmptyString,
-      dangerouslyForceUnsafeInstall: Type.Optional(Type.Boolean()),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
     },
     { additionalProperties: false },
@@ -286,17 +214,6 @@ export const SkillsInstallParamsSchema = Type.Union([
       slug: NonEmptyString,
       version: Type.Optional(NonEmptyString),
       force: Type.Optional(Type.Boolean()),
-      timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      source: Type.Literal("upload"),
-      uploadId: NonEmptyString,
-      slug: NonEmptyString,
-      force: Type.Optional(Type.Boolean()),
-      sha256: Type.Optional(Sha256String),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
     },
     { additionalProperties: false },
@@ -323,98 +240,6 @@ export const SkillsUpdateParamsSchema = Type.Union([
   ),
 ]);
 
-export const SkillsSearchParamsSchema = Type.Object(
-  {
-    query: Type.Optional(NonEmptyString),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
-  },
-  { additionalProperties: false },
-);
-
-export const SkillsSearchResultSchema = Type.Object(
-  {
-    results: Type.Array(
-      Type.Object(
-        {
-          score: Type.Number(),
-          slug: NonEmptyString,
-          displayName: NonEmptyString,
-          summary: Type.Optional(Type.String()),
-          version: Type.Optional(NonEmptyString),
-          updatedAt: Type.Optional(Type.Integer()),
-        },
-        { additionalProperties: false },
-      ),
-    ),
-  },
-  { additionalProperties: false },
-);
-
-export const SkillsDetailParamsSchema = Type.Object(
-  {
-    slug: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
-
-export const SkillsDetailResultSchema = Type.Object(
-  {
-    skill: Type.Union([
-      Type.Object(
-        {
-          slug: NonEmptyString,
-          displayName: NonEmptyString,
-          summary: Type.Optional(Type.String()),
-          tags: Type.Optional(Type.Record(NonEmptyString, Type.String())),
-          createdAt: Type.Integer(),
-          updatedAt: Type.Integer(),
-        },
-        { additionalProperties: false },
-      ),
-      Type.Null(),
-    ]),
-    latestVersion: Type.Optional(
-      Type.Union([
-        Type.Object(
-          {
-            version: NonEmptyString,
-            createdAt: Type.Integer(),
-            changelog: Type.Optional(Type.String()),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Null(),
-      ]),
-    ),
-    metadata: Type.Optional(
-      Type.Union([
-        Type.Object(
-          {
-            os: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-            systems: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Null(),
-      ]),
-    ),
-    owner: Type.Optional(
-      Type.Union([
-        Type.Object(
-          {
-            handle: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-            displayName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-            image: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Null(),
-      ]),
-    ),
-  },
-  { additionalProperties: false },
-);
-
 export const ToolsCatalogParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -427,18 +252,6 @@ export const ToolsEffectiveParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
     sessionKey: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
-
-export const ToolsInvokeParamsSchema = Type.Object(
-  {
-    name: NonEmptyString,
-    args: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-    sessionKey: Type.Optional(NonEmptyString),
-    agentId: Type.Optional(NonEmptyString),
-    confirm: Type.Optional(Type.Boolean()),
-    idempotencyKey: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -464,10 +277,6 @@ export const ToolCatalogEntrySchema = Type.Object(
     source: Type.Union([Type.Literal("core"), Type.Literal("plugin")]),
     pluginId: Type.Optional(NonEmptyString),
     optional: Type.Optional(Type.Boolean()),
-    risk: Type.Optional(
-      Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
-    ),
-    tags: Type.Optional(Type.Array(NonEmptyString)),
     defaultProfiles: Type.Array(
       Type.Union([
         Type.Literal("minimal"),
@@ -509,10 +318,6 @@ export const ToolsEffectiveEntrySchema = Type.Object(
     source: Type.Union([Type.Literal("core"), Type.Literal("plugin"), Type.Literal("channel")]),
     pluginId: Type.Optional(NonEmptyString),
     channelId: Type.Optional(NonEmptyString),
-    risk: Type.Optional(
-      Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
-    ),
-    tags: Type.Optional(Type.Array(NonEmptyString)),
   },
   { additionalProperties: false },
 );
@@ -532,36 +337,6 @@ export const ToolsEffectiveResultSchema = Type.Object(
     agentId: NonEmptyString,
     profile: NonEmptyString,
     groups: Type.Array(ToolsEffectiveGroupSchema),
-  },
-  { additionalProperties: false },
-);
-
-export const ToolsInvokeErrorSchema = Type.Object(
-  {
-    code: NonEmptyString,
-    message: NonEmptyString,
-    details: Type.Optional(Type.Unknown()),
-  },
-  { additionalProperties: false },
-);
-
-export const ToolsInvokeResultSchema = Type.Object(
-  {
-    ok: Type.Boolean(),
-    toolName: NonEmptyString,
-    output: Type.Optional(Type.Unknown()),
-    requiresApproval: Type.Optional(Type.Boolean()),
-    approvalId: Type.Optional(NonEmptyString),
-    source: Type.Optional(
-      Type.Union([
-        Type.Literal("core"),
-        Type.Literal("plugin"),
-        Type.Literal("mcp"),
-        Type.Literal("channel"),
-        Type.String(),
-      ]),
-    ),
-    error: Type.Optional(ToolsInvokeErrorSchema),
   },
   { additionalProperties: false },
 );

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { listSkillCommandsForAgents as listActualSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { writeSkill } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
@@ -11,8 +11,7 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
-import { resetPluginCommandMocks } from "./test-support/plugin-command.js";
-import { writeSkill } from "./test-support/write-skill.js";
+import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
 const tempDirs: string[] = [];
 
@@ -27,7 +26,9 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
     resetNativeCommandMenuMocks();
     resetPluginCommandMocks();
     await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+      tempDirs
+        .splice(0, tempDirs.length)
+        .map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
   });
 
@@ -59,9 +60,9 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
         },
       ],
     };
-    listSkillCommandsForAgents.mockImplementation(
-      ({ cfg, agentIds }: { cfg: OpenClawConfig; agentIds?: string[] }) =>
-        listActualSkillCommandsForAgents({ cfg, agentIds }),
+    const actualSkillCommands = await import("../../../src/auto-reply/skill-commands.js");
+    listSkillCommandsForAgents.mockImplementation(({ cfg, agentIds }) =>
+      actualSkillCommands.listSkillCommandsForAgents({ cfg, agentIds }),
     );
 
     registerTelegramNativeCommands({
@@ -82,7 +83,7 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
 
-    expect(registeredCommands.map((entry) => entry.command)).toContain("alpha_skill");
-    expect(registeredCommands.map((entry) => entry.command)).not.toContain("beta_skill");
+    expect(registeredCommands.some((entry) => entry.command === "alpha_skill")).toBe(true);
+    expect(registeredCommands.some((entry) => entry.command === "beta_skill")).toBe(false);
   });
 });

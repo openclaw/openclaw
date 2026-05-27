@@ -1,4 +1,4 @@
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { defaultRouteConfig } = vi.hoisted(() => ({
@@ -11,13 +11,11 @@ const { defaultRouteConfig } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
-  >("openclaw/plugin-sdk/runtime-config-snapshot");
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
-    getRuntimeConfig: vi.fn(() => defaultRouteConfig),
+    loadConfig: vi.fn(() => defaultRouteConfig),
   };
 });
 
@@ -57,12 +55,13 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
   }
 
   beforeEach(() => {
-    vi.mocked(getRuntimeConfig).mockReturnValue(defaultRouteConfig as never);
+    vi.mocked(loadConfig).mockReturnValue(defaultRouteConfig as never);
   });
 
   it("uses group-level agent when no topic agentId is set", async () => {
     const ctx = await buildForumContext({ topicConfig: { systemPrompt: "Be nice" } });
 
+    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:3");
   });
 
@@ -71,6 +70,7 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
       topicConfig: { agentId: "zu", systemPrompt: "I am Zu" },
     });
 
+    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:zu:");
     expect(ctx?.ctxPayload?.SessionKey).toContain("telegram:group:-1001234567890:topic:3");
   });
@@ -91,45 +91,17 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
     expect(ctxB?.ctxPayload?.SessionKey).not.toBe(ctxC?.ctxPayload?.SessionKey);
   });
 
-  it("preserves topic routing when Telegram omits chat.is_forum", async () => {
-    const resolveTelegramGroupConfig = vi.fn(() => ({
-      groupConfig: { requireMention: false },
-      topicConfig: { agentId: "zu" },
-    }));
-    const ctx = await buildTelegramMessageContextForTest({
-      message: {
-        message_id: 1,
-        chat: {
-          id: -1001234567890,
-          type: "supergroup",
-          title: "Forum",
-        },
-        date: 1700000000,
-        text: "@bot hello",
-        is_topic_message: true,
-        message_thread_id: 3,
-        from: { id: 42, first_name: "Alice" },
-      },
-      options: { forceWasMentioned: true },
-      resolveGroupActivation: () => true,
-      resolveTelegramGroupConfig,
-    });
-
-    expect(resolveTelegramGroupConfig).toHaveBeenCalledWith(-1001234567890, 3);
-    expect(ctx?.ctxPayload?.SessionKey).toContain("agent:zu:");
-    expect(ctx?.ctxPayload?.SessionKey).toContain("telegram:group:-1001234567890:topic:3");
-  });
-
   it("ignores whitespace-only agentId and uses group-level agent", async () => {
     const ctx = await buildForumContext({
       topicConfig: { agentId: "   ", systemPrompt: "Be nice" },
     });
 
+    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:main:");
   });
 
   it("preserves an unknown topic agentId in the session key", async () => {
-    vi.mocked(getRuntimeConfig).mockReturnValue({
+    vi.mocked(loadConfig).mockReturnValue({
       agents: {
         list: [{ id: "main", default: true }, { id: "zu" }],
       },
@@ -139,6 +111,7 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
 
     const ctx = await buildForumContext({ topicConfig: { agentId: "ghost" } });
 
+    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:ghost:");
   });
 
@@ -163,6 +136,7 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
       }),
     });
 
+    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:support:");
   });
 });

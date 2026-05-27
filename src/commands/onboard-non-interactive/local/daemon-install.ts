@@ -1,7 +1,6 @@
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveGatewayService } from "../../../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "../../daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, isGatewayDaemonRuntime } from "../../daemon-runtime.js";
@@ -39,7 +38,7 @@ export async function installGatewayDaemonNonInteractive(params: {
   }
 
   if (!isGatewayDaemonRuntime(daemonRuntimeRaw)) {
-    runtime.error('Invalid --daemon-runtime. Use "node" or "bun".');
+    runtime.error("Invalid --daemon-runtime (use node or bun)");
     runtime.exit(1);
     return { installed: false };
   }
@@ -63,14 +62,13 @@ export async function installGatewayDaemonNonInteractive(params: {
     runtime.exit(1);
     return { installed: false };
   }
-  const { programArguments, workingDirectory, environment, environmentValueSources } =
-    await buildGatewayInstallPlan({
-      env: process.env,
-      port,
-      runtime: daemonRuntimeRaw,
-      warn: (message) => runtime.log(message),
-      config: params.nextConfig,
-    });
+  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
+    env: process.env,
+    port,
+    runtime: daemonRuntimeRaw,
+    warn: (message) => runtime.log(message),
+    config: params.nextConfig,
+  });
   try {
     await service.install({
       env: process.env,
@@ -78,10 +76,9 @@ export async function installGatewayDaemonNonInteractive(params: {
       programArguments,
       workingDirectory,
       environment,
-      environmentValueSources,
     });
   } catch (err) {
-    runtime.error(`Gateway service install failed: ${formatErrorMessage(err)}`);
+    runtime.error(`Gateway service install failed: ${String(err)}`);
     runtime.log(gatewayInstallErrorHint());
     return { installed: false };
   }

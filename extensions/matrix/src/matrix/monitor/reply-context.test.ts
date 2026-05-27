@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMatrixReplyContextResolver, summarizeMatrixReplyEvent } from "./reply-context.js";
-import { createPollStartEvent } from "./test-events.js";
 import type { MatrixRawEvent } from "./types.js";
 
 describe("matrix reply context", () => {
@@ -31,11 +30,9 @@ describe("matrix reply context", () => {
         body: longBody,
       },
     } as MatrixRawEvent);
-    if (result === undefined) {
-      throw new Error("expected truncated reply context");
-    }
-    expect(result.length).toBeLessThanOrEqual(500);
-    expect(result.endsWith("...")).toBe(true);
+    expect(result).toBeDefined();
+    expect(result!.length).toBeLessThanOrEqual(500);
+    expect(result!.endsWith("...")).toBe(true);
   });
 
   it("handles media-only reply events", () => {
@@ -54,9 +51,25 @@ describe("matrix reply context", () => {
   });
 
   it("summarizes poll start events from poll content", () => {
-    expect(summarizeMatrixReplyEvent(createPollStartEvent("$poll"))).toBe(
-      "[Poll]\nLunch?\n\n1. Pizza\n2. Sushi",
-    );
+    expect(
+      summarizeMatrixReplyEvent({
+        event_id: "$poll",
+        sender: "@alice:example.org",
+        type: "m.poll.start",
+        origin_server_ts: Date.now(),
+        content: {
+          "m.poll.start": {
+            question: { "m.text": "Lunch?" },
+            kind: "m.poll.disclosed",
+            max_selections: 1,
+            answers: [
+              { id: "a1", "m.text": "Pizza" },
+              { id: "a2", "m.text": "Sushi" },
+            ],
+          },
+        },
+      } as MatrixRawEvent),
+    ).toBe("[Poll]\nLunch?\n\n1. Pizza\n2. Sushi");
   });
 
   it("resolves and caches reply context", async () => {
@@ -87,7 +100,6 @@ describe("matrix reply context", () => {
     expect(result).toEqual({
       replyToBody: "This is the original message",
       replyToSender: "Alice",
-      replyToSenderId: "@alice:example.org",
     });
 
     // Second call should use cache
@@ -116,7 +128,7 @@ describe("matrix reply context", () => {
       eventId: "$missing",
     });
 
-    expect(result).toStrictEqual({});
+    expect(result).toEqual({});
   });
 
   it("returns empty context for redacted events", async () => {
@@ -144,7 +156,7 @@ describe("matrix reply context", () => {
       eventId: "$redacted",
     });
 
-    expect(result).toStrictEqual({});
+    expect(result).toEqual({});
     expect(getMemberDisplayName).not.toHaveBeenCalled();
   });
 
@@ -176,7 +188,7 @@ describe("matrix reply context", () => {
       roomId: "!room:example.org",
       eventId: "$original",
     });
-    expect(first).toStrictEqual({});
+    expect(first).toEqual({});
 
     // Second call succeeds (should retry, not use cached failure)
     const second = await resolveReplyContext({
@@ -186,7 +198,6 @@ describe("matrix reply context", () => {
     expect(second).toEqual({
       replyToBody: "Recovered message",
       replyToSender: "Bob",
-      replyToSenderId: "@bob:example.org",
     });
 
     expect(getEvent).toHaveBeenCalledTimes(2);
@@ -220,7 +231,6 @@ describe("matrix reply context", () => {
     expect(result).toEqual({
       replyToBody: "Hello",
       replyToSender: "@charlie:example.org",
-      replyToSenderId: "@charlie:example.org",
     });
   });
 

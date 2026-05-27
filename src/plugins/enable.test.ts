@@ -49,31 +49,16 @@ describe("enablePluginInConfig", () => {
       },
     },
     {
-      name: "refuses enable when plugin is outside configured allowlist",
+      name: "adds plugin to allowlist when allowlist is configured",
       cfg: {
         plugins: {
           allow: ["memory-core"],
         },
       } as OpenClawConfig,
       pluginId: "google",
-      expectedEnabled: false,
-      assert: (result: ReturnType<typeof enablePluginInConfig>) => {
-        expect(result.reason).toBe("blocked by allowlist");
-        expectEnabledAllowlist(result, ["memory-core"]);
-      },
-    },
-    {
-      name: "enables plugin already present in configured allowlist",
-      cfg: {
-        plugins: {
-          allow: ["google"],
-        },
-      } as OpenClawConfig,
-      pluginId: "google",
       expectedEnabled: true,
       assert: (result: ReturnType<typeof enablePluginInConfig>) => {
-        expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
-        expectEnabledAllowlist(result, ["google"]);
+        expectEnabledAllowlist(result, ["memory-core", "google"]);
       },
     },
     {
@@ -97,31 +82,16 @@ describe("enablePluginInConfig", () => {
       assert: expectBuiltInChannelEnabled,
     },
     {
-      name: "refuses built-in channel enable when channel is outside configured allowlist",
+      name: "adds built-in channel id to allowlist when allowlist is configured",
       cfg: {
         plugins: {
           allow: ["memory-core"],
         },
       } as OpenClawConfig,
       pluginId: "telegram",
-      expectedEnabled: false,
-      assert: (result: ReturnType<typeof enablePluginInConfig>) => {
-        expect(result.reason).toBe("blocked by allowlist");
-        expect(result.config.plugins?.allow).toEqual(["memory-core"]);
-        expect(result.config.channels?.telegram?.enabled).toBeUndefined();
-      },
-    },
-    {
-      name: "enables built-in channel already present in configured allowlist",
-      cfg: {
-        plugins: {
-          allow: ["telegram"],
-        },
-      } as OpenClawConfig,
-      pluginId: "telegram",
       expectedEnabled: true,
       assert: (result: ReturnType<typeof enablePluginInConfig>) => {
-        expectBuiltInChannelEnabledWithAllowlist(result, ["telegram"]);
+        expectBuiltInChannelEnabledWithAllowlist(result, ["memory-core", "telegram"]);
       },
     },
     {
@@ -149,15 +119,5 @@ describe("enablePluginInConfig", () => {
       enabled: expectedEnabled,
       assert,
     });
-  });
-
-  it("can enable a built-in channel plugin entry without mutating channel config", () => {
-    const result = enablePluginInConfig({} as OpenClawConfig, "twitch", {
-      updateChannelConfig: false,
-    });
-
-    expect(result.enabled).toBe(true);
-    expect(result.config.plugins?.entries?.twitch?.enabled).toBe(true);
-    expect(result.config.channels?.twitch).toBeUndefined();
   });
 });

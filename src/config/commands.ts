@@ -1,81 +1,48 @@
-import { getLoadedChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import { resolveReadOnlyChannelCommandDefaults } from "../channels/plugins/read-only-command-defaults.js";
-import type { ChannelId } from "../channels/plugins/types.public.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import type { NativeCommandsSetting } from "./types.js";
-import type { OpenClawConfig } from "./types.openclaw.js";
-export { isCommandFlagEnabled, isRestartEnabled } from "./commands.flags.js";
+import type { ChannelId } from "../channels/plugins/types.js";
+import { normalizeChannelId } from "../channels/registry.js";
+import { isPlainObject } from "../infra/plain-object.js";
+import type { CommandsConfig, NativeCommandsSetting } from "./types.js";
 
-function resolveAutoDefault(
-  providerId: ChannelId | undefined,
-  kind: "native" | "nativeSkills",
-  options?: {
-    env?: NodeJS.ProcessEnv;
-    stateDir?: string;
-    workspaceDir?: string;
-    config?: OpenClawConfig;
-    autoDefault?: boolean;
-  },
-): boolean {
-  const id = normalizeChannelId(providerId) ?? normalizeOptionalLowercaseString(providerId);
+export type CommandFlagKey = {
+  [K in keyof CommandsConfig]-?: Exclude<CommandsConfig[K], undefined> extends boolean ? K : never;
+}[keyof CommandsConfig];
+
+function resolveAutoDefault(providerId?: ChannelId): boolean {
+  const id = normalizeChannelId(providerId);
   if (!id) {
     return false;
   }
-  if (typeof options?.autoDefault === "boolean") {
-    return options.autoDefault;
+  if (id === "discord" || id === "telegram") {
+    return true;
   }
-  const commandDefaults =
-    getLoadedChannelPlugin(id)?.commands ??
-    (options?.config
-      ? resolveReadOnlyChannelCommandDefaults(id, {
-          ...options,
-          config: options.config,
-        })
-      : undefined);
-  if (kind === "native") {
-    return commandDefaults?.nativeCommandsAutoEnabled === true;
+  if (id === "slack") {
+    return false;
   }
-  return commandDefaults?.nativeSkillsAutoEnabled === true;
+  return false;
 }
 
 export function resolveNativeSkillsEnabled(params: {
   providerId: ChannelId;
   providerSetting?: NativeCommandsSetting;
   globalSetting?: NativeCommandsSetting;
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-  workspaceDir?: string;
-  config?: OpenClawConfig;
-  autoDefault?: boolean;
 }): boolean {
-  return resolveNativeCommandSetting({ ...params, kind: "nativeSkills" });
+  return resolveNativeCommandSetting(params);
 }
 
 export function resolveNativeCommandsEnabled(params: {
   providerId: ChannelId;
   providerSetting?: NativeCommandsSetting;
   globalSetting?: NativeCommandsSetting;
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-  workspaceDir?: string;
-  config?: OpenClawConfig;
-  autoDefault?: boolean;
 }): boolean {
-  return resolveNativeCommandSetting({ ...params, kind: "native" });
+  return resolveNativeCommandSetting(params);
 }
 
 function resolveNativeCommandSetting(params: {
   providerId: ChannelId;
   providerSetting?: NativeCommandsSetting;
   globalSetting?: NativeCommandsSetting;
-  kind?: "native" | "nativeSkills";
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-  workspaceDir?: string;
-  config?: OpenClawConfig;
-  autoDefault?: boolean;
 }): boolean {
-  const { providerId, providerSetting, globalSetting, kind = "native", ...options } = params;
+  const { providerId, providerSetting, globalSetting } = params;
   const setting = providerSetting === undefined ? globalSetting : providerSetting;
   if (setting === true) {
     return true;
@@ -83,7 +50,7 @@ function resolveNativeCommandSetting(params: {
   if (setting === false) {
     return false;
   }
-  return resolveAutoDefault(providerId, kind, options);
+  return resolveAutoDefault(providerId);
 }
 
 export function isNativeCommandsExplicitlyDisabled(params: {
@@ -98,4 +65,26 @@ export function isNativeCommandsExplicitlyDisabled(params: {
     return globalSetting === false;
   }
   return false;
+}
+
+function getOwnCommandFlagValue(
+  config: { commands?: unknown } | undefined,
+  key: CommandFlagKey,
+): unknown {
+  const { commands } = config ?? {};
+  if (!isPlainObject(commands) || !Object.hasOwn(commands, key)) {
+    return undefined;
+  }
+  return commands[key];
+}
+
+export function isCommandFlagEnabled(
+  config: { commands?: unknown } | undefined,
+  key: CommandFlagKey,
+): boolean {
+  return getOwnCommandFlagValue(config, key) === true;
+}
+
+export function isRestartEnabled(config?: { commands?: unknown }): boolean {
+  return getOwnCommandFlagValue(config, "restart") !== false;
 }

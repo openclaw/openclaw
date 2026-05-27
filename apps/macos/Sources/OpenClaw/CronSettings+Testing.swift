@@ -104,6 +104,7 @@ extension CronSettings {
         store.runEntries = [run]
 
         let view = CronSettings(store: store, channelsStore: ChannelsStore(isPreview: true))
+        _ = view.body
         _ = view.jobRow(job)
         _ = view.jobContextMenu(job)
         _ = view.detailHeader(job)

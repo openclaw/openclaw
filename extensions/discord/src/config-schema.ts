@@ -1,4 +1,7 @@
-import { buildChannelConfigSchema, DiscordConfigSchema } from "../config-api.js";
+import {
+  buildChannelConfigSchema,
+  DiscordConfigSchema,
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { discordChannelConfigUiHints } from "./config-ui-hints.js";
 
 export const DiscordChannelConfigSchema = buildChannelConfigSchema(DiscordConfigSchema, {

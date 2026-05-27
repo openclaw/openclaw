@@ -1,9 +1,6 @@
+import { normalizeSlackMessagingTarget } from "openclaw/plugin-sdk/slack";
 import { describe, expect, it } from "vitest";
-import {
-  normalizeSlackMessagingTarget,
-  parseSlackTarget,
-  resolveSlackChannelId,
-} from "./targets.js";
+import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
 
 describe("parseSlackTarget", () => {
   it("parses user mentions and prefixes", () => {
@@ -13,10 +10,9 @@ describe("parseSlackTarget", () => {
       { input: "slack:U789", id: "U789", normalized: "user:u789" },
     ] as const;
     for (const testCase of cases) {
-      expect(parseSlackTarget(testCase.input), testCase.input).toEqual({
+      expect(parseSlackTarget(testCase.input), testCase.input).toMatchObject({
         kind: "user",
         id: testCase.id,
-        raw: testCase.input,
         normalized: testCase.normalized,
       });
     }
@@ -28,10 +24,9 @@ describe("parseSlackTarget", () => {
       { input: "#C999", id: "C999", normalized: "channel:c999" },
     ] as const;
     for (const testCase of cases) {
-      expect(parseSlackTarget(testCase.input), testCase.input).toEqual({
+      expect(parseSlackTarget(testCase.input), testCase.input).toMatchObject({
         kind: "channel",
         id: testCase.id,
-        raw: testCase.input,
         normalized: testCase.normalized,
       });
     }

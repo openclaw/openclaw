@@ -15,15 +15,12 @@ export function normalizeDeviceAuthRole(role: string): string {
   return role.trim();
 }
 
-export function normalizeDeviceAuthScopes(scopes: readonly unknown[] | undefined): string[] {
+export function normalizeDeviceAuthScopes(scopes: string[] | undefined): string[] {
   if (!Array.isArray(scopes)) {
     return [];
   }
   const out = new Set<string>();
   for (const scope of scopes) {
-    if (typeof scope !== "string") {
-      continue;
-    }
     const trimmed = scope.trim();
     if (trimmed) {
       out.add(trimmed);

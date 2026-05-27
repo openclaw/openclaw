@@ -5,27 +5,18 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  beginWebhookRequestPipelineOrReject,
-  createWebhookInFlightLimiter,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import * as synologyClient from "./client.js";
-import {
-  validateToken,
-  authorizeUserForDmWithIngress,
-  sanitizeInput,
-  RateLimiter,
-} from "./security.js";
+import { validateToken, authorizeUserForDm, sanitizeInput, RateLimiter } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 
 // One rate limiter per account, created lazily
 const rateLimiters = new Map<string, RateLimiter>();
 const invalidTokenRateLimiters = new Map<string, InvalidTokenRateLimiter>();
-const webhookInFlightLimiter = createWebhookInFlightLimiter();
 const PREAUTH_MAX_BODY_BYTES = 64 * 1024;
 const PREAUTH_BODY_TIMEOUT_MS = 5_000;
 const PREAUTH_MAX_REQUESTS_PER_MINUTE = 10;
@@ -127,26 +118,18 @@ export function clearSynologyWebhookRateLimiterStateForTest(): void {
     limiter.clear();
   }
   invalidTokenRateLimiters.clear();
-  webhookInFlightLimiter.clear();
+}
+
+export function getSynologyWebhookRateLimiterCountForTest(): number {
+  return rateLimiters.size + invalidTokenRateLimiters.size;
 }
 
 function getSynologyWebhookInvalidTokenRateLimitKey(req: IncomingMessage): string {
   return req.socket?.remoteAddress ?? "unknown";
 }
 
-function getSynologyWebhookInFlightKey(account: ResolvedSynologyChatAccount): string {
-  // Synology webhook ingress is typically a single upstream per account, and this
-  // handler does not have a trusted-proxy-aware client IP config. Keep the shared
-  // pre-auth concurrency budget scoped per account instead of keying on a fragile
-  // remoteAddress value that can collapse behind proxies or to "unknown".
-  return account.accountId;
-}
-
 /** Read the full request body as a string. */
-async function readBody(
-  req: IncomingMessage,
-  timeoutMs = PREAUTH_BODY_TIMEOUT_MS,
-): Promise<
+async function readBody(req: IncomingMessage): Promise<
   | { ok: true; body: string }
   | {
       ok: false;
@@ -157,7 +140,7 @@ async function readBody(
   try {
     const body = await readRequestBodyWithLimit(req, {
       maxBytes: PREAUTH_MAX_BODY_BYTES,
-      timeoutMs,
+      timeoutMs: PREAUTH_BODY_TIMEOUT_MS,
     });
     return { ok: true, body };
   } catch (err) {
@@ -180,25 +163,19 @@ function firstNonEmptyString(value: unknown): string | undefined {
   if (Array.isArray(value)) {
     for (const item of value) {
       const normalized = firstNonEmptyString(item);
-      if (normalized) {
-        return normalized;
-      }
+      if (normalized) return normalized;
     }
     return undefined;
   }
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  const str = typeof value === "string" ? value.trim() : "";
+  if (value === null || value === undefined) return undefined;
+  const str = String(value).trim();
   return str.length > 0 ? str : undefined;
 }
 
 function pickAlias(record: Record<string, unknown>, aliases: string[]): string | undefined {
   for (const alias of aliases) {
     const normalized = firstNonEmptyString(record[alias]);
-    if (normalized) {
-      return normalized;
-    }
+    if (normalized) return normalized;
   }
   return undefined;
 }
@@ -221,15 +198,8 @@ function parseFormBody(body: string): Record<string, unknown> {
 }
 
 function parseJsonBody(body: string): Record<string, unknown> {
-  if (!body.trim()) {
-    return {};
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body) as unknown;
-  } catch {
-    throw new Error("Invalid JSON body");
-  }
+  if (!body.trim()) return {};
+  const parsed = JSON.parse(body);
   if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
     throw new Error("Invalid JSON body");
   }
@@ -245,19 +215,13 @@ function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
     headerValue(req.headers["x-synology-token"]) ??
     headerValue(req.headers["x-webhook-token"]) ??
     headerValue(req.headers["x-openclaw-token"]);
-  if (explicit) {
-    return explicit;
-  }
+  if (explicit) return explicit;
 
   const auth = headerValue(req.headers.authorization);
-  if (!auth) {
-    return undefined;
-  }
+  if (!auth) return undefined;
 
   const bearerMatch = auth.match(/^Bearer\s+(.+)$/i);
-  if (bearerMatch?.[1]) {
-    return bearerMatch[1].trim();
-  }
+  if (bearerMatch?.[1]) return bearerMatch[1].trim();
   return auth.trim();
 }
 
@@ -274,7 +238,7 @@ function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
  * - text    <- text | message | content
  */
 function parsePayload(req: IncomingMessage, body: string): SynologyWebhookPayload | null {
-  const contentType = normalizeLowercaseStringOrEmpty(req.headers["content-type"]);
+  const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
 
   let bodyFields: Record<string, unknown> = {};
   if (contentType.includes("application/json")) {
@@ -303,9 +267,7 @@ function parsePayload(req: IncomingMessage, body: string): SynologyWebhookPayloa
     pickAlias(bodyFields, ["text", "message", "content"]) ??
     pickAlias(queryFields, ["text", "message", "content"]);
 
-  if (!token || !userId || !text) {
-    return null;
-  }
+  if (!token || !userId || !text) return null;
 
   return {
     token,
@@ -351,7 +313,6 @@ export interface WebhookHandlerDeps {
     warn: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
   };
-  bodyTimeoutMs?: number;
 }
 
 /**
@@ -381,9 +342,8 @@ async function parseWebhookPayloadRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
   log?: WebhookHandlerDeps["log"];
-  bodyTimeoutMs?: number;
 }): Promise<{ ok: false } | { ok: true; payload: SynologyWebhookPayload }> {
-  const bodyResult = await readBody(params.req, params.bodyTimeoutMs);
+  const bodyResult = await readBody(params.req);
   if (!bodyResult.ok) {
     params.log?.error("Failed to read request body", bodyResult.error);
     respondJson(params.res, bodyResult.statusCode, { error: bodyResult.error });
@@ -405,14 +365,14 @@ async function parseWebhookPayloadRequest(params: {
   return { ok: true, payload };
 }
 
-async function authorizeSynologyWebhook(params: {
+function authorizeSynologyWebhook(params: {
   req: IncomingMessage;
   account: ResolvedSynologyChatAccount;
   payload: SynologyWebhookPayload;
   invalidTokenRateLimiter: InvalidTokenRateLimiter;
   rateLimiter: RateLimiter;
   log?: WebhookHandlerDeps["log"];
-}): Promise<SynologyWebhookAuthorization> {
+}): SynologyWebhookAuthorization {
   const invalidTokenRateLimitKey = getSynologyWebhookInvalidTokenRateLimitKey(params.req);
   // Once a source has exhausted its invalid-token budget, reject all requests in the window.
   if (params.invalidTokenRateLimiter.isLocked(invalidTokenRateLimitKey)) {
@@ -429,25 +389,23 @@ async function authorizeSynologyWebhook(params: {
     return { ok: false, statusCode: 401, error: "Invalid token" };
   }
 
-  const auth = await authorizeUserForDmWithIngress({
-    accountId: params.account.accountId,
-    userId: params.payload.user_id,
-    dmPolicy: params.account.dmPolicy,
-    allowedUserIds: params.account.allowedUserIds,
-  });
-  if (!auth.senderAccess.allowed) {
-    if (auth.senderAccess.reasonCode === "dm_policy_disabled") {
+  const auth = authorizeUserForDm(
+    params.payload.user_id,
+    params.account.dmPolicy,
+    params.account.allowedUserIds,
+  );
+  if (!auth.allowed) {
+    if (auth.reason === "disabled") {
       return { ok: false, statusCode: 403, error: "DMs are disabled" };
     }
-    if (params.account.dmPolicy === "allowlist" && params.account.allowedUserIds.length === 0) {
+    if (auth.reason === "allowlist-empty") {
       params.log?.warn(
         "Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message",
       );
       return {
         ok: false,
         statusCode: 403,
-        error:
-          'Allowlist is empty. Configure allowedUserIds or use dmPolicy=open with allowedUserIds=["*"].',
+        error: "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
       };
     }
     params.log?.warn(`Unauthorized user: ${params.payload.user_id}`);
@@ -460,7 +418,7 @@ async function authorizeSynologyWebhook(params: {
     return { ok: false, statusCode: 429, error: "Rate limit exceeded" };
   }
 
-  return { ok: true, commandAuthorized: auth.senderAccess.allowed };
+  return { ok: true, commandAuthorized: auth.allowed };
 }
 
 function sanitizeSynologyWebhookText(payload: SynologyWebhookPayload): string {
@@ -478,14 +436,13 @@ async function parseAndAuthorizeSynologyWebhook(params: {
   invalidTokenRateLimiter: InvalidTokenRateLimiter;
   rateLimiter: RateLimiter;
   log?: WebhookHandlerDeps["log"];
-  bodyTimeoutMs?: number;
 }): Promise<{ ok: false } | { ok: true; message: AuthorizedSynologyWebhook }> {
   const parsed = await parseWebhookPayloadRequest(params);
   if (!parsed.ok) {
     return { ok: false };
   }
 
-  const authorized = await authorizeSynologyWebhook({
+  const authorized = authorizeSynologyWebhook({
     req: params.req,
     account: params.account,
     payload: parsed.payload,
@@ -607,31 +564,14 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
       respondJson(res, 405, { error: "Method not allowed" });
       return;
     }
-    const requestLifecycle = beginWebhookRequestPipelineOrReject({
+    const authorized = await parseAndAuthorizeSynologyWebhook({
       req,
       res,
-      inFlightLimiter: webhookInFlightLimiter,
-      inFlightKey: getSynologyWebhookInFlightKey(account),
+      account,
+      invalidTokenRateLimiter,
+      rateLimiter,
+      log,
     });
-    if (!requestLifecycle.ok) {
-      return;
-    }
-
-    let authorized: Awaited<ReturnType<typeof parseAndAuthorizeSynologyWebhook>>;
-    try {
-      authorized = await parseAndAuthorizeSynologyWebhook({
-        req,
-        res,
-        account,
-        invalidTokenRateLimiter,
-        rateLimiter,
-        log,
-        bodyTimeoutMs: deps.bodyTimeoutMs,
-      });
-    } finally {
-      // Only bound the pre-auth request pipeline; async reply delivery is outside webhook ingress.
-      requestLifecycle.release();
-    }
     if (!authorized.ok) {
       return;
     }

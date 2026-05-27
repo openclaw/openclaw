@@ -1,9 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-
-type BytesParseOptions = {
+export type BytesParseOptions = {
   defaultUnit?: "b" | "kb" | "mb" | "gb" | "tb";
 };
 
@@ -19,39 +14,33 @@ const UNIT_MULTIPLIERS: Record<string, number> = {
   t: 1024 ** 4,
 };
 
-function invalidByteSize(raw: string, reason?: string): Error {
-  const value = raw.trim() ? `"${raw}"` : "empty value";
-  const prefix = reason
-    ? `Invalid byte size (${reason}): ${value}.`
-    : `Invalid byte size: ${value}.`;
-  return new Error(`${prefix} Use values like 512kb, 10mb, 1gb, or 500.`);
-}
-
 export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
-  const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
+  const trimmed = String(raw ?? "")
+    .trim()
+    .toLowerCase();
   if (!trimmed) {
-    throw invalidByteSize(raw, "empty");
+    throw new Error("invalid byte size (empty)");
   }
 
   const m = /^(\d+(?:\.\d+)?)([a-z]+)?$/.exec(trimmed);
   if (!m) {
-    throw invalidByteSize(raw);
+    throw new Error(`invalid byte size: ${raw}`);
   }
 
   const value = Number(m[1]);
   if (!Number.isFinite(value) || value < 0) {
-    throw invalidByteSize(raw);
+    throw new Error(`invalid byte size: ${raw}`);
   }
 
-  const unit = normalizeLowercaseStringOrEmpty(m[2] ?? opts?.defaultUnit ?? "b");
+  const unit = (m[2] ?? opts?.defaultUnit ?? "b").toLowerCase();
   const multiplier = UNIT_MULTIPLIERS[unit];
   if (!multiplier) {
-    throw invalidByteSize(raw, `unknown unit "${unit}"`);
+    throw new Error(`invalid byte size unit: ${raw}`);
   }
 
   const bytes = Math.round(value * multiplier);
   if (!Number.isFinite(bytes)) {
-    throw invalidByteSize(raw);
+    throw new Error(`invalid byte size: ${raw}`);
   }
   return bytes;
 }

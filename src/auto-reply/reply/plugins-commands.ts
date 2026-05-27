@@ -1,8 +1,3 @@
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-
 export type PluginsCommand =
   | { action: "list" }
   | { action: "inspect"; name?: string }
@@ -17,13 +12,13 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
     return null;
   }
 
-  const tail = normalizeOptionalString(match?.[1]) ?? "";
+  const tail = match[1]?.trim() ?? "";
   if (!tail) {
     return { action: "list" };
   }
 
   const [rawAction, ...rest] = tail.split(/\s+/);
-  const action = normalizeOptionalLowercaseString(rawAction);
+  const action = rawAction?.trim().toLowerCase();
   const name = rest.join(" ").trim();
 
   if (action === "list") {
@@ -43,7 +38,7 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
     if (!name) {
       return {
         action: "error",
-        message: "Usage: /plugins install <path|archive|npm-spec|git:repo|clawhub:pkg>",
+        message: "Usage: /plugins install <path|archive|npm-spec|clawhub:pkg>",
       };
     }
     return { action: "install", spec: name };

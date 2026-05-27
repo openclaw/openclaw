@@ -1,4 +1,8 @@
-export function defineCachedValue(target: object, key: PropertyKey, create: () => unknown): void {
+export function defineCachedValue<T extends object, K extends PropertyKey>(
+  target: T,
+  key: K,
+  create: () => unknown,
+): void {
   let cached: unknown;
   let ready = false;
   Object.defineProperty(target, key, {

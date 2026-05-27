@@ -5,7 +5,6 @@ struct GatewayConfig {
     var bind: String?
     var port: Int?
     var remoteUrl: String?
-    var remotePort: Int?
     var token: String?
     var password: String?
     var remoteToken: String?
@@ -42,7 +41,6 @@ func loadGatewayConfig() -> GatewayConfig {
         }
         if let remote = gateway["remote"] as? [String: Any] {
             cfg.remoteUrl = remote["url"] as? String
-            cfg.remotePort = remote["remotePort"] as? Int ?? parseInt(remote["remotePort"])
             cfg.remoteToken = remote["token"] as? String
             cfg.remotePassword = remote["password"] as? String
         }

@@ -1,63 +1,30 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
   resolveOutboundChannelPlugin: vi.fn(),
-  missingOfficialExternalChannels: new Set<string>(),
 }));
-
-const deliverableChannelIds = vi.hoisted(() => [
-  "alpha",
-  "beta",
-  "gamma",
-  "delta",
-  "feishu",
-  "muted",
-  "whatsapp",
-]);
 
 vi.mock("../../channels/plugins/index.js", () => ({
-  getLoadedChannelPlugin: vi.fn(),
   listChannelPlugins: mocks.listChannelPlugins,
-}));
-
-vi.mock("../../utils/message-channel.js", () => ({
-  listDeliverableMessageChannels: () => deliverableChannelIds,
-  isDeliverableMessageChannel: (value: string) => deliverableChannelIds.includes(value),
-  normalizeMessageChannel: (value?: string | null) =>
-    typeof value === "string" ? value.trim().toLowerCase() : undefined,
 }));
 
 vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
 }));
 
-vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
-  resolveMissingOfficialExternalChannelPluginRepairHint: ({ channelId }: { channelId: string }) =>
-    mocks.missingOfficialExternalChannels.has(channelId)
-      ? {
-          pluginId: channelId,
-          channelId,
-          label: channelId === "whatsapp" ? "WhatsApp" : "Feishu",
-          installSpec: `@openclaw/${channelId}`,
-          installCommand: `openclaw plugins install @openclaw/${channelId}`,
-          doctorFixCommand: "openclaw doctor --fix",
-          repairHint: `Install the official external plugin with: openclaw plugins install @openclaw/${channelId}, or run: openclaw doctor --fix.`,
-        }
-      : null,
-}));
-
 type ChannelSelectionModule = typeof import("./channel-selection.js");
 type RuntimeModule = typeof import("../../runtime.js");
 
-let testing: ChannelSelectionModule["testing"];
+let __testing: ChannelSelectionModule["__testing"];
 let listConfiguredMessageChannels: ChannelSelectionModule["listConfiguredMessageChannels"];
 let resolveMessageChannelSelection: ChannelSelectionModule["resolveMessageChannelSelection"];
 let runtimeModule: RuntimeModule;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   runtimeModule = await import("../../runtime.js");
-  ({ testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
+  ({ __testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
     await import("./channel-selection.js"));
 });
 
@@ -97,43 +64,43 @@ describe("listConfiguredMessageChannels", () => {
     mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
       id: channel,
     }));
-    testing.resetLoggedChannelSelectionErrors();
+    __testing.resetLoggedChannelSelectionErrors();
     errorSpy.mockClear();
   });
 
   it.each([
     {
-      plugins: [makePlugin({ id: "not-a-channel" }), makePlugin({ id: "alpha", accountIds: [] })],
+      plugins: [makePlugin({ id: "not-a-channel" }), makePlugin({ id: "slack", accountIds: [] })],
       expected: [],
       expectedErrors: 0,
     },
     {
       plugins: [
         makePlugin({
-          id: "beta",
+          id: "discord",
           resolveAccount: () => ({ enabled: true }),
         }),
       ],
-      expected: ["beta"],
+      expected: ["discord"],
       expectedErrors: 0,
     },
     {
       plugins: [
         makePlugin({
-          id: "gamma",
+          id: "telegram",
           accountIds: ["disabled", "enabled"],
           resolveAccount: (accountId) =>
             accountId === "disabled" ? { enabled: false } : { enabled: true },
           isConfigured: (account) => (account as { enabled?: boolean }).enabled === true,
         }),
       ],
-      expected: ["gamma"],
+      expected: ["telegram"],
       expectedErrors: 0,
     },
     {
       plugins: [
         makePlugin({
-          id: "muted",
+          id: "signal",
           resolveAccount: () => ({ token: "x" }),
           isEnabled: () => false,
           isConfigured: () => true,
@@ -145,7 +112,7 @@ describe("listConfiguredMessageChannels", () => {
     {
       plugins: [
         makePlugin({
-          id: "beta",
+          id: "discord",
           resolveAccount: () => {
             throw new Error("boom");
           },
@@ -165,18 +132,13 @@ describe("resolveMessageChannelSelection", () => {
   beforeEach(() => {
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
-    mocks.resolveOutboundChannelPlugin.mockReset();
-    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
-      id: channel,
-    }));
-    mocks.missingOfficialExternalChannels.clear();
   });
 
   it.each([
     {
-      params: { cfg: {} as never, channel: "alpha" },
+      params: { cfg: {} as never, channel: "telegram" },
       expected: {
-        channel: "alpha",
+        channel: "telegram",
         configured: [],
         source: "explicit",
       },
@@ -184,12 +146,12 @@ describe("resolveMessageChannelSelection", () => {
     {
       setup: () => {
         const isConfigured = vi.fn(async () => true);
-        mocks.listChannelPlugins.mockReturnValue([makePlugin({ id: "beta", isConfigured })]);
+        mocks.listChannelPlugins.mockReturnValue([makePlugin({ id: "slack", isConfigured })]);
         return { isConfigured };
       },
-      params: { cfg: {} as never, channel: "beta" },
+      params: { cfg: {} as never, channel: "slack" },
       expected: {
-        channel: "beta",
+        channel: "slack",
         configured: [],
         source: "explicit",
       },
@@ -198,17 +160,17 @@ describe("resolveMessageChannelSelection", () => {
       },
     },
     {
-      params: { cfg: {} as never, channel: "channel:C123", fallbackChannel: "beta" },
+      params: { cfg: {} as never, channel: "channel:C123", fallbackChannel: "slack" },
       expected: {
-        channel: "beta",
+        channel: "slack",
         configured: [],
         source: "tool-context-fallback",
       },
     },
     {
-      params: { cfg: {} as never, fallbackChannel: "gamma" },
+      params: { cfg: {} as never, fallbackChannel: "signal" },
       expected: {
-        channel: "gamma",
+        channel: "signal",
         configured: [],
         source: "tool-context-fallback",
       },
@@ -216,25 +178,25 @@ describe("resolveMessageChannelSelection", () => {
     {
       setup: () => {
         mocks.listChannelPlugins.mockReturnValue([
-          makePlugin({ id: "delta", isConfigured: async () => true }),
+          makePlugin({ id: "discord", isConfigured: async () => true }),
         ]);
       },
       params: { cfg: {} as never },
       expected: {
-        channel: "delta",
-        configured: ["delta"],
+        channel: "discord",
+        configured: ["discord"],
         source: "single-configured",
       },
     },
     {
       setup: () => {
         mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
-          channel === "beta" ? { id: "beta" } : undefined,
+          channel === "slack" ? { id: "slack" } : undefined,
         );
       },
-      params: { cfg: {} as never, channel: "alpha", fallbackChannel: "beta" },
+      params: { cfg: {} as never, channel: "discord", fallbackChannel: "slack" },
       expected: {
-        channel: "beta",
+        channel: "slack",
         configured: [],
         source: "tool-context-fallback",
       },
@@ -243,36 +205,6 @@ describe("resolveMessageChannelSelection", () => {
     const setupResult = setup?.();
     await expect(expectResolvedSelection(params)).resolves.toEqual(expected);
     verify?.(setupResult as never);
-  });
-
-  it("allows bootstrap while checking explicit and fallback channels", async () => {
-    const cfg = {} as never;
-    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
-      channel === "beta" ? { id: "beta" } : undefined,
-    );
-
-    await expect(
-      expectResolvedSelection({
-        cfg,
-        channel: "alpha",
-        fallbackChannel: "beta",
-      }),
-    ).resolves.toEqual({
-      channel: "beta",
-      configured: [],
-      source: "tool-context-fallback",
-    });
-
-    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(1, {
-      channel: "alpha",
-      cfg,
-      allowBootstrap: true,
-    });
-    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(2, {
-      channel: "beta",
-      cfg,
-      allowBootstrap: true,
-    });
   });
 
   it.each([
@@ -284,58 +216,23 @@ describe("resolveMessageChannelSelection", () => {
       setup: () => {
         mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
       },
-      params: { cfg: {} as never, channel: "alpha" },
-      expectedMessage: "Channel is unavailable: alpha",
-    },
-    {
-      setup: () => {
-        mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
-        mocks.missingOfficialExternalChannels.add("feishu");
-      },
-      params: {
-        cfg: { channels: { feishu: { appId: "cli_xxx" } } } as never,
-        channel: "feishu",
-      },
-      expectedMessage:
-        "Channel is unavailable: feishu. Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+      params: { cfg: {} as never, channel: "discord" },
+      expectedMessage: "Channel is unavailable: discord",
     },
     {
       params: { cfg: {} as never },
-      expectedMessage:
-        "Channel is required (no configured channels detected). Run openclaw channels add to configure one",
-    },
-    {
-      setup: () => {
-        mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
-        mocks.missingOfficialExternalChannels.add("whatsapp");
-      },
-      params: { cfg: { channels: { whatsapp: { enabled: true } } } as never },
-      expectedMessage:
-        "Channel is required (no available channels detected). Configured official external channel WhatsApp is missing its plugin. Install the official external plugin with: openclaw plugins install @openclaw/whatsapp, or run: openclaw doctor --fix.",
+      expectedMessage: "Channel is required (no configured channels detected).",
     },
     {
       setup: () => {
         mocks.listChannelPlugins.mockReturnValue([
-          makePlugin({
-            id: "whatsapp",
-            isConfigured: async () => false,
-          }),
-        ]);
-      },
-      params: { cfg: { channels: { whatsapp: { enabled: true } } } as never },
-      expectedMessage:
-        "Channel is required (no configured channels detected). Run openclaw channels add to configure one",
-    },
-    {
-      setup: () => {
-        mocks.listChannelPlugins.mockReturnValue([
-          makePlugin({ id: "beta", isConfigured: async () => true }),
-          makePlugin({ id: "gamma", isConfigured: async () => true }),
+          makePlugin({ id: "discord", isConfigured: async () => true }),
+          makePlugin({ id: "telegram", isConfigured: async () => true }),
         ]);
       },
       params: { cfg: {} as never },
       expectedMessage:
-        "Channel is required when multiple channels are configured: beta, gamma. Pass --channel <channel> to choose one.",
+        "Channel is required when multiple channels are configured: discord, telegram",
     },
   ])("rejects invalid channel selection for %j", async ({ setup, params, expectedMessage }) => {
     setup?.();

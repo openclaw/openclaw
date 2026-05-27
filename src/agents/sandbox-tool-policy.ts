@@ -1,9 +1,4 @@
-import { uniqueStrings } from "../shared/string-normalization.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
-
-export const IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW = Symbol.for(
-  "openclaw.toolPolicy.implicitAllowAllFromAlsoAllow",
-);
 
 type SandboxToolPolicyConfig = {
   allow?: string[];
@@ -15,17 +10,12 @@ function unionAllow(base?: string[], extra?: string[]): string[] | undefined {
   if (!Array.isArray(extra) || extra.length === 0) {
     return base;
   }
-  if (!Array.isArray(base)) {
-    return uniqueStrings(["*", ...extra]);
+  // If the user is using alsoAllow without an allowlist, treat it as additive on top of
+  // an implicit allow-all policy.
+  if (!Array.isArray(base) || base.length === 0) {
+    return Array.from(new Set(["*", ...extra]));
   }
-  if (base.length === 0) {
-    return uniqueStrings(["*", ...extra]);
-  }
-  return uniqueStrings([...base, ...extra]);
-}
-
-function hasExplicitAllowAll(list?: string[]): boolean {
-  return Array.isArray(list) && list.some((entry) => entry.trim() === "*");
+  return Array.from(new Set([...base, ...extra]));
 }
 
 export function pickSandboxToolPolicy(
@@ -34,11 +24,6 @@ export function pickSandboxToolPolicy(
   if (!config) {
     return undefined;
   }
-  const allowFromAlsoAllowOnly =
-    !Array.isArray(config.allow) &&
-    Array.isArray(config.alsoAllow) &&
-    config.alsoAllow.length > 0 &&
-    !hasExplicitAllowAll(config.alsoAllow);
   const allow = Array.isArray(config.allow)
     ? unionAllow(config.allow, config.alsoAllow)
     : Array.isArray(config.alsoAllow) && config.alsoAllow.length > 0
@@ -48,13 +33,5 @@ export function pickSandboxToolPolicy(
   if (!allow && !deny) {
     return undefined;
   }
-  const policy = { allow, deny } as SandboxToolPolicy & {
-    [IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW]?: true;
-  };
-  if (allowFromAlsoAllowOnly) {
-    Object.defineProperty(policy, IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW, {
-      value: true,
-    });
-  }
-  return policy;
+  return { allow, deny };
 }

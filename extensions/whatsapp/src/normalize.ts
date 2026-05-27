@@ -1,8 +1,10 @@
 export {
   looksLikeWhatsAppTargetId,
-  normalizeWhatsAppAllowFromEntry,
+  normalizeWhatsAppAllowFromEntries,
   normalizeWhatsAppMessagingTarget,
+} from "./runtime-api.js";
+export {
   isWhatsAppGroupJid,
-  isWhatsAppNewsletterJid,
+  isWhatsAppUserTarget,
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";

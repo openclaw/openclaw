@@ -1,23 +1,30 @@
 import {
-  getActivePluginChannelRegistry,
+  getActivePluginRegistryVersion,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../registry.js";
 import { listBundledChannelSetupPlugins } from "./bundled.js";
-import type { ChannelPlugin } from "./types.plugin.js";
-import type { ChannelId } from "./types.public.js";
+import type { ChannelId, ChannelPlugin } from "./types.js";
 
-type ChannelSetupPluginView = {
+type CachedChannelSetupPlugins = {
+  registryVersion: number;
   sorted: ChannelPlugin[];
   byId: Map<string, ChannelPlugin>;
 };
+
+const EMPTY_CHANNEL_SETUP_CACHE: CachedChannelSetupPlugins = {
+  registryVersion: -1,
+  sorted: [],
+  byId: new Map(),
+};
+
+let cachedChannelSetupPlugins = EMPTY_CHANNEL_SETUP_CACHE;
 
 function dedupeSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
   const seen = new Set<string>();
   const resolved: ChannelPlugin[] = [];
   for (const plugin of plugins) {
-    const id = normalizeOptionalString(plugin.id) ?? "";
+    const id = String(plugin.id).trim();
     if (!id || seen.has(id)) {
       continue;
     }
@@ -40,8 +47,13 @@ function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlug
   });
 }
 
-function resolveChannelSetupPlugins(): ChannelSetupPluginView {
+function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
   const registry = requireActivePluginRegistry();
+  const registryVersion = getActivePluginRegistryVersion();
+  const cached = cachedChannelSetupPlugins;
+  if (cached.registryVersion === registryVersion) {
+    return cached;
+  }
 
   const registryPlugins = (registry.channelSetups ?? []).map((entry) => entry.plugin);
   const sorted = sortChannelSetupPlugins(
@@ -52,25 +64,23 @@ function resolveChannelSetupPlugins(): ChannelSetupPluginView {
     byId.set(plugin.id, plugin);
   }
 
-  return {
+  const next: CachedChannelSetupPlugins = {
+    registryVersion,
     sorted,
     byId,
   };
+  cachedChannelSetupPlugins = next;
+  return next;
 }
 
 export function listChannelSetupPlugins(): ChannelPlugin[] {
-  return resolveChannelSetupPlugins().sorted.slice();
-}
-
-export function listActiveChannelSetupPlugins(): ChannelPlugin[] {
-  const registry = getActivePluginChannelRegistry();
-  return sortChannelSetupPlugins((registry?.channelSetups ?? []).map((entry) => entry.plugin));
+  return resolveCachedChannelSetupPlugins().sorted.slice();
 }
 
 export function getChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = normalizeOptionalString(id) ?? "";
+  const resolvedId = String(id).trim();
   if (!resolvedId) {
     return undefined;
   }
-  return resolveChannelSetupPlugins().byId.get(resolvedId);
+  return resolveCachedChannelSetupPlugins().byId.get(resolvedId);
 }

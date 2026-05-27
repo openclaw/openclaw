@@ -1,14 +1,6 @@
 package ai.openclaw.app.ui
 
-import ai.openclaw.app.BuildConfig
-import ai.openclaw.app.LocationMode
-import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.NotificationPackageFilterMode
-import ai.openclaw.app.SensitiveFeatureConfig
-import ai.openclaw.app.node.DeviceNotificationListenerService
-import ai.openclaw.app.normalizeLocalHourMinute
 import android.Manifest
-import android.app.role.RoleManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -21,16 +13,16 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -47,6 +39,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
@@ -60,17 +53,24 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.LocationMode
+import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.normalizeLocalHourMinute
+import ai.openclaw.app.NotificationPackageFilterMode
+import ai.openclaw.app.node.DeviceNotificationListenerService
 
 @Composable
 fun SettingsSheet(viewModel: MainViewModel) {
@@ -104,32 +104,29 @@ fun SettingsSheet(viewModel: MainViewModel) {
   var notificationSessionKeyDraft by remember(notificationForwardingSessionKey) {
     mutableStateOf(notificationForwardingSessionKey.orEmpty())
   }
-  val normalizedQuietStartDraft =
-    remember(notificationQuietStartDraft) {
-      normalizeLocalHourMinute(notificationQuietStartDraft)
-    }
-  val normalizedQuietEndDraft =
-    remember(notificationQuietEndDraft) {
-      normalizeLocalHourMinute(notificationQuietEndDraft)
-    }
+  val normalizedQuietStartDraft = remember(notificationQuietStartDraft) {
+    normalizeLocalHourMinute(notificationQuietStartDraft)
+  }
+  val normalizedQuietEndDraft = remember(notificationQuietEndDraft) {
+    normalizeLocalHourMinute(notificationQuietEndDraft)
+  }
   val quietHoursDraftValid = normalizedQuietStartDraft != null && normalizedQuietEndDraft != null
-  val selectedPackagesSummary =
-    remember(notificationForwardingMode, notificationForwardingPackages) {
-      when (notificationForwardingMode) {
-        NotificationPackageFilterMode.Allowlist ->
-          if (notificationForwardingPackages.isEmpty()) {
-            "Selected: none — allowlist mode forwards nothing until you add apps."
-          } else {
-            "Selected: ${notificationForwardingPackages.size} app(s) allowed."
-          }
-        NotificationPackageFilterMode.Blocklist ->
-          if (notificationForwardingPackages.isEmpty()) {
-            "Selected: none — blocklist mode forwards all apps except OpenClaw."
-          } else {
-            "Selected: ${notificationForwardingPackages.size} app(s) blocked."
-          }
-      }
+  val selectedPackagesSummary = remember(notificationForwardingMode, notificationForwardingPackages) {
+    when (notificationForwardingMode) {
+      NotificationPackageFilterMode.Allowlist ->
+        if (notificationForwardingPackages.isEmpty()) {
+          "Selected: none — allowlist mode forwards nothing until you add apps."
+        } else {
+          "Selected: ${notificationForwardingPackages.size} app(s) allowed."
+        }
+      NotificationPackageFilterMode.Blocklist ->
+        if (notificationForwardingPackages.isEmpty()) {
+          "Selected: none — blocklist mode forwards all apps except OpenClaw."
+        } else {
+          "Selected: ${notificationForwardingPackages.size} app(s) blocked."
+        }
     }
+  }
   val quietHoursCanEnable = notificationForwardingEnabled && quietHoursDraftValid
   val quietHoursDraftDirty =
     notificationForwardingQuietStart != (normalizedQuietStartDraft ?: notificationQuietStartDraft.trim()) ||
@@ -153,8 +150,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
         versionName
       }
     }
-  var assistantRoleAvailable by remember(context) { mutableStateOf(isAssistantRoleAvailable(context)) }
-  var assistantRoleHeld by remember(context) { mutableStateOf(isAssistantRoleHeld(context)) }
   val listItemColors =
     ListItemDefaults.colors(
       containerColor = Color.Transparent,
@@ -205,11 +200,10 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
   val smsPermissionAvailable =
     remember {
-      SensitiveFeatureConfig.smsEnabled &&
+      BuildConfig.OPENCLAW_ENABLE_SMS &&
         context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
     }
-  val callLogPermissionAvailable = remember { SensitiveFeatureConfig.callLogEnabled }
-  val photosPermissionAvailable = remember { SensitiveFeatureConfig.photosEnabled }
+  val callLogPermissionAvailable = remember { BuildConfig.OPENCLAW_ENABLE_CALL_LOG }
   val photosPermission =
     if (Build.VERSION.SDK_INT >= 33) {
       Manifest.permission.READ_MEDIA_IMAGES
@@ -246,11 +240,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
   var photosPermissionGranted by
     remember {
       mutableStateOf(
-        if (photosPermissionAvailable) {
-          ContextCompat.checkSelfPermission(context, photosPermission) == PackageManager.PERMISSION_GRANTED
-        } else {
-          false
-        },
+        ContextCompat.checkSelfPermission(context, photosPermission) ==
+          PackageManager.PERMISSION_GRANTED,
       )
     }
   val photosPermissionLauncher =
@@ -328,16 +319,11 @@ fun SettingsSheet(viewModel: MainViewModel) {
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
       smsPermissionGranted =
         ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
-        PackageManager.PERMISSION_GRANTED ||
-        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
-        PackageManager.PERMISSION_GRANTED
+          PackageManager.PERMISSION_GRANTED
+        ||
+          ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
+          PackageManager.PERMISSION_GRANTED
       viewModel.refreshGatewayConnection()
-    }
-
-  val assistantRoleLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-      assistantRoleAvailable = isAssistantRoleAvailable(context)
-      assistantRoleHeld = isAssistantRoleHeld(context)
     }
 
   DisposableEffect(lifecycleOwner, context) {
@@ -346,40 +332,36 @@ fun SettingsSheet(viewModel: MainViewModel) {
         if (event == Lifecycle.Event.ON_RESUME) {
           micPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-            PackageManager.PERMISSION_GRANTED
+              PackageManager.PERMISSION_GRANTED
           notificationsPermissionGranted = hasNotificationsPermission(context)
           notificationListenerEnabled = isNotificationListenerEnabled(context)
           installedNotificationApps = queryInstalledApps(context, notificationForwardingPackages)
           photosPermissionGranted =
-            if (photosPermissionAvailable) {
-              ContextCompat.checkSelfPermission(context, photosPermission) == PackageManager.PERMISSION_GRANTED
-            } else {
-              false
-            }
+            ContextCompat.checkSelfPermission(context, photosPermission) ==
+              PackageManager.PERMISSION_GRANTED
           contactsPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
-            PackageManager.PERMISSION_GRANTED &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CONTACTS) ==
-            PackageManager.PERMISSION_GRANTED
+              PackageManager.PERMISSION_GRANTED &&
+              ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CONTACTS) ==
+              PackageManager.PERMISSION_GRANTED
           calendarPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) ==
-            PackageManager.PERMISSION_GRANTED &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALENDAR) ==
-            PackageManager.PERMISSION_GRANTED
+              PackageManager.PERMISSION_GRANTED &&
+              ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALENDAR) ==
+              PackageManager.PERMISSION_GRANTED
           callLogPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) ==
-            PackageManager.PERMISSION_GRANTED
+              PackageManager.PERMISSION_GRANTED
           motionPermissionGranted =
             !motionPermissionRequired ||
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
-            PackageManager.PERMISSION_GRANTED
+              ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
+              PackageManager.PERMISSION_GRANTED
           smsPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
-            PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
-            PackageManager.PERMISSION_GRANTED
-          assistantRoleAvailable = isAssistantRoleAvailable(context)
-          assistantRoleHeld = isAssistantRoleHeld(context)
+              PackageManager.PERMISSION_GRANTED
+            ||
+              ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
+              PackageManager.PERMISSION_GRANTED
         }
       }
     lifecycleOwner.lifecycle.addObserver(observer)
@@ -445,7 +427,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
           normalizedAppSearch.isEmpty() ||
             app.label.lowercase().contains(normalizedAppSearch) ||
             app.packageName.lowercase().contains(normalizedAppSearch)
-        }.toList()
+        }
+        .toList()
     }
 
   Box(
@@ -493,42 +476,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
               instanceId.take(8) + "…",
               style = mobileCaption1.copy(fontFamily = FontFamily.Monospace),
               color = mobileTextTertiary,
-            )
-          }
-          if (assistantRoleAvailable) {
-            HorizontalDivider(color = mobileBorder)
-            ListItem(
-              modifier = Modifier.fillMaxWidth(),
-              colors = listItemColors,
-              headlineContent = { Text("Default Assistant", style = mobileHeadline) },
-              supportingContent = {
-                Text(
-                  if (assistantRoleHeld) {
-                    "OpenClaw is registered as the device assistant."
-                  } else {
-                    "Let Android launch OpenClaw from the assistant gesture. Google Assistant App Actions still work separately."
-                  },
-                  style = mobileCallout,
-                )
-              },
-              trailingContent = {
-                Button(
-                  onClick = {
-                    assistantRoleLauncher.launch(
-                      context
-                        .getSystemService(RoleManager::class.java)
-                        .createRequestRoleIntent(RoleManager.ROLE_ASSISTANT),
-                    )
-                  },
-                  colors = settingsPrimaryButtonColors(),
-                  shape = RoundedCornerShape(14.dp),
-                ) {
-                  Text(
-                    if (assistantRoleHeld) "Manage" else "Enable",
-                    style = mobileCallout.copy(fontWeight = FontWeight.Bold),
-                  )
-                }
-              },
             )
           }
         }
@@ -659,9 +606,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
                     if (smsPermissionGranted) {
                       openAppSettings(context)
                     } else {
-                      smsPermissionLauncher.launch(
-                        arrayOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS),
-                      )
+                      smsPermissionLauncher.launch(arrayOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS))
                     }
                   },
                   colors = settingsPrimaryButtonColors(),
@@ -949,11 +894,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
             )
           },
           placeholder = {
-            Text(
-              "Blank keeps notification events on this device's default notification route. Set a key only to pin forwarding into a different session.",
-              style = mobileCaption1,
-              color = mobileTextSecondary,
-            )
+            Text("Blank keeps notification events on this device's default notification route. Set a key only to pin forwarding into a different session.", style = mobileCaption1, color = mobileTextSecondary)
           },
           modifier = Modifier.fillMaxWidth(),
           textStyle = mobileBody.copy(color = mobileText),
@@ -987,33 +928,31 @@ fun SettingsSheet(viewModel: MainViewModel) {
       }
       item {
         Column(modifier = Modifier.settingsRowModifier()) {
-          if (photosPermissionAvailable) {
-            ListItem(
-              modifier = Modifier.fillMaxWidth(),
-              colors = listItemColors,
-              headlineContent = { Text("Photos", style = mobileHeadline) },
-              supportingContent = { Text("Access recent photos.", style = mobileCallout) },
-              trailingContent = {
-                Button(
-                  onClick = {
-                    if (photosPermissionGranted) {
-                      openAppSettings(context)
-                    } else {
-                      photosPermissionLauncher.launch(photosPermission)
-                    }
-                  },
-                  colors = settingsPrimaryButtonColors(),
-                  shape = RoundedCornerShape(14.dp),
-                ) {
-                  Text(
-                    if (photosPermissionGranted) "Manage" else "Grant",
-                    style = mobileCallout.copy(fontWeight = FontWeight.Bold),
-                  )
-                }
-              },
-            )
-            HorizontalDivider(color = mobileBorder)
-          }
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Photos", style = mobileHeadline) },
+            supportingContent = { Text("Access recent photos.", style = mobileCallout) },
+            trailingContent = {
+              Button(
+                onClick = {
+                  if (photosPermissionGranted) {
+                    openAppSettings(context)
+                  } else {
+                    photosPermissionLauncher.launch(photosPermission)
+                  }
+                },
+                colors = settingsPrimaryButtonColors(),
+                shape = RoundedCornerShape(14.dp),
+              ) {
+                Text(
+                  if (photosPermissionGranted) "Manage" else "Grant",
+                  style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+                )
+              }
+            },
+          )
+          HorizontalDivider(color = mobileBorder)
           ListItem(
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,
@@ -1025,9 +964,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
                   if (contactsPermissionGranted) {
                     openAppSettings(context)
                   } else {
-                    contactsPermissionLauncher.launch(
-                      arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS),
-                    )
+                    contactsPermissionLauncher.launch(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS))
                   }
                 },
                 colors = settingsPrimaryButtonColors(),
@@ -1052,9 +989,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
                   if (calendarPermissionGranted) {
                     openAppSettings(context)
                   } else {
-                    calendarPermissionLauncher.launch(
-                      arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
-                    )
+                    calendarPermissionLauncher.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
                   }
                 },
                 colors = settingsPrimaryButtonColors(),
@@ -1234,12 +1169,8 @@ private fun queryInstalledApps(
     packageManager
       .queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)
       .asSequence()
-      .mapNotNull {
-        it.activityInfo
-          ?.packageName
-          ?.trim()
-          ?.takeIf(String::isNotEmpty)
-      }.toMutableSet()
+      .mapNotNull { it.activityInfo?.packageName?.trim()?.takeIf(String::isNotEmpty) }
+      .toMutableSet()
 
   val recentNotificationPackages =
     DeviceNotificationListenerService
@@ -1262,14 +1193,15 @@ private fun queryInstalledApps(
     .mapNotNull { packageName ->
       runCatching {
         val appInfo = packageManager.getApplicationInfo(packageName, 0)
-        val label = packageManager.getApplicationLabel(appInfo).toString().trim()
+        val label = packageManager.getApplicationLabel(appInfo)?.toString()?.trim().orEmpty()
         InstalledApp(
           label = if (label.isEmpty()) packageName else label,
           packageName = packageName,
           isSystemApp = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0,
         )
       }.getOrNull()
-    }.sortedWith(compareBy<InstalledApp> { it.label.lowercase() }.thenBy { it.packageName })
+    }
+    .sortedWith(compareBy<InstalledApp> { it.label.lowercase() }.thenBy { it.packageName })
     .toList()
 }
 
@@ -1281,14 +1213,16 @@ internal fun resolveNotificationCandidatePackages(
 ): Set<String> {
   val blockedPackage = appPackageName.trim()
   return sequenceOf(
-    configuredPackages.asSequence(),
-    launcherPackages.asSequence(),
-    recentPackages.asSequence(),
-  ).flatten()
+      configuredPackages.asSequence(),
+      launcherPackages.asSequence(),
+      recentPackages.asSequence(),
+    )
+    .flatten()
     .map { it.trim() }
     .filter { it.isNotEmpty() && it != blockedPackage }
     .toSet()
 }
+
 
 @Composable
 private fun settingsTextFieldColors() =
@@ -1348,17 +1282,15 @@ private fun openNotificationListenerSettings(context: Context) {
 private fun hasNotificationsPermission(context: Context): Boolean {
   if (Build.VERSION.SDK_INT < 33) return true
   return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-    PackageManager.PERMISSION_GRANTED
+          PackageManager.PERMISSION_GRANTED
 }
 
-private fun isNotificationListenerEnabled(context: Context): Boolean = DeviceNotificationListenerService.isAccessEnabled(context)
+private fun isNotificationListenerEnabled(context: Context): Boolean {
+  return DeviceNotificationListenerService.isAccessEnabled(context)
+}
 
 private fun hasMotionCapabilities(context: Context): Boolean {
   val sensorManager = context.getSystemService(SensorManager::class.java) ?: return false
   return sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||
     sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
 }
-
-private fun isAssistantRoleAvailable(context: Context): Boolean = context.getSystemService(RoleManager::class.java).isRoleAvailable(RoleManager.ROLE_ASSISTANT)
-
-private fun isAssistantRoleHeld(context: Context): Boolean = context.getSystemService(RoleManager::class.java).isRoleHeld(RoleManager.ROLE_ASSISTANT)

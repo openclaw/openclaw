@@ -1,24 +1,17 @@
-import { getRuntimeConfig } from "../../config/config.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
-import { resolveAllAgentSessionStoreTargets } from "../../config/sessions/targets.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
+import {
+  loadSessionStore,
+  resolveAllAgentSessionStoreTargets,
+  resolveStorePath,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import {
   mergeSessionEntry,
   type SessionAcpMeta,
   type SessionEntry,
 } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-
-let sessionStoreRuntimePromise:
-  | Promise<typeof import("../../config/sessions/store.runtime.js")>
-  | undefined;
-
-function loadSessionStoreRuntime() {
-  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
-  return sessionStoreRuntimePromise;
-}
 
 export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
@@ -38,12 +31,12 @@ function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey:
   if (store[normalized]) {
     return normalized;
   }
-  const lower = normalizeLowercaseStringOrEmpty(normalized);
+  const lower = normalized.toLowerCase();
   if (store[lower]) {
     return lower;
   }
   for (const key of Object.keys(store)) {
-    if (normalizeLowercaseStringOrEmpty(key) === lower) {
+    if (key.toLowerCase() === lower) {
       return key;
     }
   }
@@ -54,7 +47,7 @@ export function resolveSessionStorePathForAcp(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
 }): { cfg: OpenClawConfig; storePath: string } {
-  const cfg = params.cfg ?? getRuntimeConfig();
+  const cfg = params.cfg ?? loadConfig();
   const parsed = parseAgentSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: parsed?.agentId,
@@ -99,7 +92,7 @@ export async function listAcpSessionEntries(params: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<AcpSessionStoreEntry[]> {
-  const cfg = params.cfg ?? getRuntimeConfig();
+  const cfg = params.cfg ?? loadConfig();
   const storeTargets = await resolveAllAgentSessionStoreTargets(
     cfg,
     params.env ? { env: params.env } : undefined,
@@ -148,7 +141,6 @@ export async function upsertAcpSessionMeta(params: {
     sessionKey,
     cfg: params.cfg,
   });
-  const { updateSessionStore } = await loadSessionStoreRuntime();
   return await updateSessionStore(
     storePath,
     (store) => {
@@ -172,7 +164,7 @@ export async function upsertAcpSessionMeta(params: {
       return nextEntry;
     },
     {
-      activeSessionKey: normalizeLowercaseStringOrEmpty(sessionKey),
+      activeSessionKey: sessionKey.toLowerCase(),
       allowDropAcpMetaSessionKeys: [sessionKey],
     },
   );

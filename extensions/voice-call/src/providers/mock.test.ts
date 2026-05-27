@@ -15,7 +15,6 @@ function createWebhookContext(rawBody: string): WebhookContext {
 describe("MockProvider", () => {
   it("preserves explicit falsy event values", () => {
     const provider = new MockProvider();
-    const beforeParse = Date.now();
     const result = provider.parseWebhookEvent(
       createWebhookContext(
         JSON.stringify({
@@ -45,9 +44,6 @@ describe("MockProvider", () => {
         }),
       ),
     );
-    const afterParse = Date.now();
-    const endedTimestamp = result.events[1]?.timestamp;
-    const speechTimestamp = result.events[2]?.timestamp;
 
     expect(result.events).toEqual([
       {
@@ -64,7 +60,7 @@ describe("MockProvider", () => {
         type: "call.ended",
         callId: "call-2",
         providerCallId: undefined,
-        timestamp: endedTimestamp,
+        timestamp: expect.any(Number),
         reason: "",
       },
       {
@@ -72,15 +68,11 @@ describe("MockProvider", () => {
         type: "call.speech",
         callId: "call-3",
         providerCallId: undefined,
-        timestamp: speechTimestamp,
+        timestamp: expect.any(Number),
         transcript: "",
         isFinal: false,
         confidence: undefined,
       },
     ]);
-    expect(endedTimestamp).toBeGreaterThanOrEqual(beforeParse);
-    expect(endedTimestamp).toBeLessThanOrEqual(afterParse);
-    expect(speechTimestamp).toBeGreaterThanOrEqual(beforeParse);
-    expect(speechTimestamp).toBeLessThanOrEqual(afterParse);
   });
 });

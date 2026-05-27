@@ -66,7 +66,7 @@ export type IrcAccountConfig = {
   mediaMaxMb?: number;
 };
 
-type IrcConfig = IrcAccountConfig & {
+export type IrcConfig = IrcAccountConfig & {
   accounts?: Record<string, IrcAccountConfig>;
   defaultAccount?: string;
 };

@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { GoogleChatStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
@@ -23,45 +22,37 @@ export function renderGoogleChatCard(params: {
     subtitle: "Chat API webhook status and channel configuration.",
     accountCountLabel,
     statusRows: [
-      { label: t("common.configured"), value: formatNullableBoolean(configured) },
+      { label: "Configured", value: formatNullableBoolean(configured) },
       {
-        label: t("common.running"),
-        value: googleChat
-          ? googleChat.running
-            ? t("common.yes")
-            : t("common.no")
-          : t("common.na"),
+        label: "Running",
+        value: googleChat ? (googleChat.running ? "Yes" : "No") : "n/a",
       },
-      { label: t("common.credential"), value: googleChat?.credentialSource ?? t("common.na") },
+      { label: "Credential", value: googleChat?.credentialSource ?? "n/a" },
       {
-        label: t("common.audience"),
+        label: "Audience",
         value: googleChat?.audienceType
           ? `${googleChat.audienceType}${googleChat.audience ? ` · ${googleChat.audience}` : ""}`
-          : t("common.na"),
+          : "n/a",
       },
       {
-        label: t("common.lastStart"),
-        value: googleChat?.lastStartAt
-          ? formatRelativeTimestamp(googleChat.lastStartAt)
-          : t("common.na"),
+        label: "Last start",
+        value: googleChat?.lastStartAt ? formatRelativeTimestamp(googleChat.lastStartAt) : "n/a",
       },
       {
-        label: t("common.lastProbe"),
-        value: googleChat?.lastProbeAt
-          ? formatRelativeTimestamp(googleChat.lastProbeAt)
-          : t("common.na"),
+        label: "Last probe",
+        value: googleChat?.lastProbeAt ? formatRelativeTimestamp(googleChat.lastProbeAt) : "n/a",
       },
     ],
     lastError: googleChat?.lastError,
     secondaryCallout: googleChat?.probe
       ? html`<div class="callout" style="margin-top: 12px;">
-          ${googleChat.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
-          ${googleChat.probe.status ?? ""} ${googleChat.probe.error ?? ""}
+          Probe ${googleChat.probe.ok ? "ok" : "failed"} · ${googleChat.probe.status ?? ""}
+          ${googleChat.probe.error ?? ""}
         </div>`
       : nothing,
     configSection: renderChannelConfigSection({ channelId: "googlechat", props }),
     footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.probe")}</button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
     </div>`,
   });
 }

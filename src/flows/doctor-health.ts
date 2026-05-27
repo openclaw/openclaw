@@ -1,34 +1,37 @@
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
-import type { DoctorOptions } from "../commands/doctor-prompter.js";
+import { loadAndMaybeMigrateDoctorConfig } from "../commands/doctor-config-flow.js";
+import { noteSourceInstallIssues } from "../commands/doctor-install.js";
+import { noteStartupOptimizationHints } from "../commands/doctor-platform-notes.js";
+import { createDoctorPrompter, type DoctorOptions } from "../commands/doctor-prompter.js";
+import { maybeRepairUiProtocolFreshness } from "../commands/doctor-ui.js";
+import { maybeOfferUpdateBeforeDoctor } from "../commands/doctor-update.js";
+import { printWizardHeader } from "../commands/onboard-helpers.js";
+import { CONFIG_PATH } from "../config/config.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { defaultRuntime } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
+import { runDoctorHealthContributions } from "./doctor-health-contributions.js";
 
 const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
 const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
 
-export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
-  const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
-  if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
-    const { assertConfigWriteAllowedInCurrentMode } = await import("../config/config.js");
-    assertConfigWriteAllowedInCurrentMode();
-  }
-
-  const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");
-  const { printWizardHeader } = await import("../commands/onboard-helpers.js");
-  const prompter = createDoctorPrompter({ runtime: effectiveRuntime, options });
-  printWizardHeader(effectiveRuntime);
+export async function doctorCommand(
+  runtime: RuntimeEnv = defaultRuntime,
+  options: DoctorOptions = {},
+) {
+  const prompter = createDoctorPrompter({ runtime, options });
+  printWizardHeader(runtime);
   intro("OpenClaw doctor");
 
-  const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
   const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
     argv1: process.argv[1],
     cwd: process.cwd(),
   });
 
-  const { maybeOfferUpdateBeforeDoctor } = await import("../commands/doctor-update.js");
   const updateResult = await maybeOfferUpdateBeforeDoctor({
-    runtime: effectiveRuntime,
+    runtime,
     options,
     root,
     confirm: (p) => prompter.confirm(p),
@@ -38,26 +41,16 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
     return;
   }
 
-  const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
-  const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
-  const { noteStalePluginRuntimeSymlinks } =
-    await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
-  const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
-  await maybeRepairUiProtocolFreshness(effectiveRuntime, prompter);
+  await maybeRepairUiProtocolFreshness(runtime, prompter);
   noteSourceInstallIssues(root);
-  await noteStalePluginRuntimeSymlinks(root);
   noteStartupOptimizationHints();
 
-  const { loadAndMaybeMigrateDoctorConfig } = await import("../commands/doctor-config-flow.js");
   const configResult = await loadAndMaybeMigrateDoctorConfig({
     options,
     confirm: (p) => prompter.confirm(p),
-    runtime: effectiveRuntime,
-    prompter,
   });
-  const { CONFIG_PATH } = await import("../config/config.js");
   const ctx = {
-    runtime: effectiveRuntime,
+    runtime,
     options,
     prompter,
     configResult,
@@ -66,8 +59,20 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
     sourceConfigValid: configResult.sourceConfigValid ?? true,
     configPath: configResult.path ?? CONFIG_PATH,
   };
-  const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
-  await runDoctorHealthContributions(ctx);
+
+  // Watch mode loop
+  const watchOptions = {
+    ...options,
+    nonInteractive: options.watch ? true : options.nonInteractive,
+  };
+  const loopCtx = { ...ctx, options: watchOptions };
+
+  do {
+    await runDoctorHealthContributions(loopCtx);
+    if (options.watch) {
+      await new Promise((r) => setTimeout(r, options.intervalMs ?? 60000));
+    }
+  } while (options.watch);
 
   outro("Doctor complete.");
 }

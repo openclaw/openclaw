@@ -1,9 +1,11 @@
 import * as fs from "node:fs/promises";
 import { vi } from "vitest";
-import { withFetchPreconnect } from "./fetch-mock.js";
 
 export function stubFetchResponse(response: Response) {
-  vi.stubGlobal("fetch", withFetchPreconnect(vi.fn(async () => response)));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => response),
+  );
 }
 
 export function stubFetchTextResponse(text: string, init?: ResponseInit) {

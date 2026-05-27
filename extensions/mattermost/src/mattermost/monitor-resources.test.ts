@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMattermostChannel = vi.hoisted(() => vi.fn());
 const fetchMattermostUser = vi.hoisted(() => vi.fn());
@@ -18,13 +18,8 @@ vi.mock("./interactions.js", () => ({
 }));
 
 describe("mattermost monitor resources", () => {
-  let createMattermostMonitorResources: typeof import("./monitor-resources.js").createMattermostMonitorResources;
-
-  beforeAll(async () => {
-    ({ createMattermostMonitorResources } = await import("./monitor-resources.js"));
-  });
-
   beforeEach(() => {
+    vi.resetModules();
     fetchMattermostChannel.mockReset();
     fetchMattermostUser.mockReset();
     sendMattermostTyping.mockReset();
@@ -33,10 +28,15 @@ describe("mattermost monitor resources", () => {
   });
 
   it("downloads media, preserves auth headers, and infers media kind", async () => {
-    const saveRemoteMedia = vi.fn(async () => ({
+    const fetchRemoteMedia = vi.fn(async () => ({
+      buffer: new Uint8Array([1, 2, 3]),
+      contentType: "image/png",
+    }));
+    const saveMediaBuffer = vi.fn(async () => ({
       path: "/tmp/file.png",
       contentType: "image/png",
     }));
+    const { createMattermostMonitorResources } = await import("./monitor-resources.js");
 
     const resources = createMattermostMonitorResources({
       accountId: "default",
@@ -48,7 +48,8 @@ describe("mattermost monitor resources", () => {
       } as never,
       logger: {},
       mediaMaxBytes: 1024,
-      saveRemoteMedia,
+      fetchRemoteMedia,
+      saveMediaBuffer,
       mediaKindFromMime: () => "image",
     });
 
@@ -60,7 +61,7 @@ describe("mattermost monitor resources", () => {
       },
     ]);
 
-    expect(saveRemoteMedia).toHaveBeenCalledWith({
+    expect(fetchRemoteMedia).toHaveBeenCalledWith({
       url: "https://chat.example.com/api/v4/files/file-1",
       requestInit: {
         headers: {
@@ -77,6 +78,7 @@ describe("mattermost monitor resources", () => {
     fetchMattermostChannel.mockResolvedValue({ id: "chan-1", name: "town-square" });
     fetchMattermostUser.mockResolvedValue({ id: "user-1", username: "alice" });
     buildButtonProps.mockReturnValue(undefined);
+    const { createMattermostMonitorResources } = await import("./monitor-resources.js");
 
     const resources = createMattermostMonitorResources({
       accountId: "default",
@@ -84,7 +86,8 @@ describe("mattermost monitor resources", () => {
       client: {} as never,
       logger: {},
       mediaMaxBytes: 1024,
-      saveRemoteMedia: vi.fn(),
+      fetchRemoteMedia: vi.fn(),
+      saveMediaBuffer: vi.fn(),
       mediaKindFromMime: () => "document",
     });
 
@@ -114,13 +117,18 @@ describe("mattermost monitor resources", () => {
       message: "Pick a model",
     });
 
-    expect(updateMattermostPost).toHaveBeenCalledWith({}, "post-1", {
-      message: "Pick a model",
-      props: { attachments: [] },
-    });
+    expect(updateMattermostPost).toHaveBeenCalledWith(
+      {},
+      "post-1",
+      expect.objectContaining({
+        message: "Pick a model",
+        props: { attachments: [] },
+      }),
+    );
   });
 
   it("proxies typing indicators to the mattermost client helper", async () => {
+    const { createMattermostMonitorResources } = await import("./monitor-resources.js");
     const client = {} as never;
 
     const resources = createMattermostMonitorResources({
@@ -129,7 +137,8 @@ describe("mattermost monitor resources", () => {
       client,
       logger: {},
       mediaMaxBytes: 1024,
-      saveRemoteMedia: vi.fn(),
+      fetchRemoteMedia: vi.fn(),
+      saveMediaBuffer: vi.fn(),
       mediaKindFromMime: () => "document",
     });
 

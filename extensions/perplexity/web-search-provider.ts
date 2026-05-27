@@ -1,1 +1,4 @@
-export { createPerplexityWebSearchProvider } from "./src/perplexity-web-search-provider.js";
+export {
+  __testing,
+  createPerplexityWebSearchProvider,
+} from "./src/perplexity-web-search-provider.js";

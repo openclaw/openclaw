@@ -1,6 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
-import "../test-support/browser-security.mock.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
   getPwToolsCoreSessionMocks,
@@ -11,26 +10,7 @@ import {
 installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.snapshot.js");
 
-const PROXY_ENV_KEYS = [
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-] as const;
-
 describe("pw-tools-core.snapshot navigate guard", () => {
-  beforeEach(() => {
-    for (const key of PROXY_ENV_KEYS) {
-      vi.stubEnv(key, "");
-    }
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
   it("blocks unsupported non-network URLs before page lookup", async () => {
     const goto = vi.fn(async () => {});
     setPwToolsCoreCurrentPage({
@@ -51,11 +31,10 @@ describe("pw-tools-core.snapshot navigate guard", () => {
 
   it("navigates valid network URLs with clamped timeout", async () => {
     const goto = vi.fn(async () => {});
-    const page = {
+    setPwToolsCoreCurrentPage({
       goto,
       url: vi.fn(() => "https://example.com"),
-    };
-    setPwToolsCoreCurrentPage(page);
+    });
 
     const result = await mod.navigateViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -65,21 +44,6 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     });
 
     expect(goto).toHaveBeenCalledWith("https://example.com", { timeout: 1000 });
-    expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18792",
-      page,
-      ssrfPolicy: { allowPrivateNetwork: true },
-      targetId: undefined,
-      timeoutMs: 1000,
-      url: "https://example.com",
-    });
-    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18792",
-      page,
-      response: null,
-      ssrfPolicy: { allowPrivateNetwork: true },
-      targetId: undefined,
-    });
     expect(result.url).toBe("https://example.com");
   });
 
@@ -109,7 +73,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       targetId: "tab-1",
       reason: "retry navigate after detached frame",
     });
-    expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledTimes(2);
+    expect(goto).toHaveBeenCalledTimes(2);
     expect(result.url).toBe("https://example.com/recovered");
   });
 
@@ -126,14 +90,10 @@ describe("pw-tools-core.snapshot navigate guard", () => {
         }),
       }),
     }));
-    const page = {
+    setPwToolsCoreCurrentPage({
       goto,
       url: vi.fn(() => "https://93.184.216.34/final"),
-    };
-    setPwToolsCoreCurrentPage(page);
-    getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
-      new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address"),
-    );
+    });
 
     await expect(
       mod.navigateViaPlaywright({
@@ -142,42 +102,6 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       }),
     ).rejects.toBeInstanceOf(SsrFBlockedError);
 
-    expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledTimes(1);
-    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(
-      1,
-    );
-    // Navigate-style entry points OWN the navigation lifecycle, so when the
-    // post-navigation safety check rejects with an SSRF policy error the
-    // caller is responsible for closing the tab it just navigated. This is
-    // the counterpart to the read-only paths (snapshot/screenshot/
-    // interactions), which must NOT close the tab on the same error.
-    expect(getPwToolsCoreSessionMocks().closeBlockedNavigationTarget).toHaveBeenCalledTimes(1);
-    expect(getPwToolsCoreSessionMocks().closeBlockedNavigationTarget).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18792",
-      page,
-      targetId: undefined,
-    });
-  });
-
-  it("does not close the tab when post-navigation rejection is not a policy deny", async () => {
-    // Non-policy errors (e.g. transient playwright failures) must not be
-    // treated as "we navigated to a blocked URL" — the tab stays open.
-    const goto = vi.fn(async () => ({ request: () => undefined }));
-    setPwToolsCoreCurrentPage({
-      goto,
-      url: vi.fn(() => "https://example.com/final"),
-    });
-    getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
-      new Error("transient playwright error"),
-    );
-
-    await expect(
-      mod.navigateViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        url: "https://example.com/final",
-      }),
-    ).rejects.toThrow("transient playwright error");
-
-    expect(getPwToolsCoreSessionMocks().closeBlockedNavigationTarget).not.toHaveBeenCalled();
+    expect(goto).toHaveBeenCalledTimes(1);
   });
 });

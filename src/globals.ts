@@ -29,9 +29,7 @@ export function logVerboseConsole(message: string) {
   console.log(theme.muted(message));
 }
 
-type ThemeFormatter = (value: string) => string;
-
-export const success: ThemeFormatter = theme.success;
-export const warn: ThemeFormatter = theme.warn;
-export const info: ThemeFormatter = theme.info;
-export const danger: ThemeFormatter = theme.error;
+export const success = theme.success;
+export const warn = theme.warn;
+export const info = theme.info;
+export const danger = theme.error;

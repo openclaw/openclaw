@@ -14,11 +14,6 @@ export type SessionUsageEntry = {
   key: string;
   label?: string;
   sessionId?: string;
-  scope?: "instance" | "family";
-  sessionFamilyKey?: string;
-  currentSessionId?: string;
-  includedSessionIds?: string[];
-  historicalInstanceCount?: number;
   updatedAt?: number;
   agentId?: string;
   channel?: string;
@@ -68,5 +63,4 @@ export type SessionsUsageResult = {
   sessions: SessionUsageEntry[];
   totals: CostUsageSummary["totals"];
   aggregates: SessionsUsageAggregates;
-  cacheStatus?: CostUsageSummary["cacheStatus"];
 };

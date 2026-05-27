@@ -25,24 +25,15 @@ function normalizePathCandidate(candidate: string | undefined, cwd: string): str
   }
 }
 
-function resolveDefaultCwd(currentFile: string): string {
-  try {
-    return process.cwd();
-  } catch {
-    return path.dirname(currentFile);
-  }
-}
-
 export function isMainModule({
   currentFile,
   argv = process.argv,
   env = process.env,
-  cwd,
+  cwd = process.cwd(),
   wrapperEntryPairs = [],
 }: IsMainModuleOptions): boolean {
-  const resolvedCwd = cwd ?? resolveDefaultCwd(currentFile);
-  const normalizedCurrent = normalizePathCandidate(currentFile, resolvedCwd);
-  const normalizedArgv1 = normalizePathCandidate(argv[1], resolvedCwd);
+  const normalizedCurrent = normalizePathCandidate(currentFile, cwd);
+  const normalizedArgv1 = normalizePathCandidate(argv[1], cwd);
 
   if (normalizedCurrent && normalizedArgv1 && normalizedCurrent === normalizedArgv1) {
     return true;
@@ -50,7 +41,7 @@ export function isMainModule({
 
   // PM2 runs the script via an internal wrapper; `argv[1]` points at the wrapper.
   // PM2 exposes the actual script path in `pm_exec_path`.
-  const normalizedPmExecPath = normalizePathCandidate(env.pm_exec_path, resolvedCwd);
+  const normalizedPmExecPath = normalizePathCandidate(env.pm_exec_path, cwd);
   if (normalizedCurrent && normalizedPmExecPath && normalizedCurrent === normalizedPmExecPath) {
     return true;
   }

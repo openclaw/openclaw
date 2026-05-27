@@ -1,7 +1,7 @@
-export type ConfigSetDryRunInputMode = "value" | "json" | "builder" | "unset";
+export type ConfigSetDryRunInputMode = "value" | "json" | "builder";
 
 export type ConfigSetDryRunError = {
-  kind: "missing-path" | "schema" | "resolvability";
+  kind: "schema" | "resolvability";
   message: string;
   ref?: string;
 };

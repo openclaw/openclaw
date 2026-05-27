@@ -6,17 +6,13 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import {
-  normalizeOptionalString,
-  readStringValue,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { loginChutes } from "./oauth.js";
+import { loginChutes } from "openclaw/plugin-sdk/provider-auth-login";
 import {
   CHUTES_DEFAULT_MODEL_REF,
   applyChutesApiKeyConfig,
   applyChutesProviderConfig,
 } from "./onboard.js";
-import { buildChutesProvider, buildStaticChutesProvider } from "./provider-catalog.js";
+import { buildChutesProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "chutes";
 
@@ -27,14 +23,14 @@ async function runChutesOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthRes
   const scopes = process.env.CHUTES_OAUTH_SCOPES?.trim() || "openid profile chutes:invoke";
   const clientId =
     process.env.CHUTES_CLIENT_ID?.trim() ||
-    (
+    String(
       await ctx.prompter.text({
         message: "Enter Chutes OAuth client id",
         placeholder: "cid_xxx",
         validate: (value: string) => (value?.trim() ? undefined : "Required"),
-      })
+      }),
     ).trim();
-  const clientSecret = normalizeOptionalString(process.env.CHUTES_CLIENT_SECRET);
+  const clientSecret = process.env.CHUTES_CLIENT_SECRET?.trim() || undefined;
 
   await ctx.prompter.note(
     isRemote
@@ -86,7 +82,7 @@ async function runChutesOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthRes
       access: creds.access,
       refresh: creds.refresh,
       expires: creds.expires,
-      email: readStringValue(creds.email),
+      email: typeof creds.email === "string" ? creds.email : undefined,
       credentialExtra: {
         clientId,
         ...("accountId" in creds && typeof creds.accountId === "string"
@@ -182,12 +178,6 @@ export default definePluginEntry({
             },
           };
         },
-      },
-      staticCatalog: {
-        order: "profile",
-        run: async () => ({
-          provider: buildStaticChutesProvider(),
-        }),
       },
     });
   },

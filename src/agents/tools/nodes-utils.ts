@@ -1,7 +1,6 @@
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
 export type { NodeListNode };
@@ -40,7 +39,7 @@ function messageFromError(error: unknown): string {
 }
 
 function shouldFallbackToPairList(error: unknown): boolean {
-  const message = normalizeOptionalLowercaseString(messageFromError(error)) ?? "";
+  const message = messageFromError(error).toLowerCase();
   if (!message.includes("node.list")) {
     return false;
   }
@@ -73,7 +72,7 @@ async function loadNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
 
 function isLocalMacNode(node: NodeListNode): boolean {
   return (
-    normalizeOptionalLowercaseString(node.platform)?.startsWith("mac") === true &&
+    node.platform?.toLowerCase().startsWith("mac") === true &&
     typeof node.nodeId === "string" &&
     node.nodeId.startsWith("mac-")
   );

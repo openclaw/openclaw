@@ -1,5 +1,4 @@
 import type { NextFunction, Request, Response } from "express";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isLoopbackHost } from "../gateway/net.js";
 
 function firstHeader(value: string | string[] | undefined): string {
@@ -36,7 +35,7 @@ export function shouldRejectBrowserMutation(params: {
 
   // Strong signal when present: browser says this is cross-site.
   // Avoid being overly clever with "same-site" since localhost vs 127.0.0.1 may differ.
-  const secFetchSite = normalizeLowercaseStringOrEmpty(params.secFetchSite);
+  const secFetchSite = (params.secFetchSite ?? "").trim().toLowerCase();
   if (secFetchSite === "cross-site") {
     return true;
   }

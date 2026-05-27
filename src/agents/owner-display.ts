@@ -1,16 +1,20 @@
 import crypto from "node:crypto";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type { OpenClawConfig } from "../config/config.js";
 
-type OwnerDisplaySetting = {
+export type OwnerDisplaySetting = {
   ownerDisplay?: "raw" | "hash";
   ownerDisplaySecret?: string;
 };
 
-type OwnerDisplaySecretResolution = {
+export type OwnerDisplaySecretResolution = {
   config: OpenClawConfig;
   generatedSecret?: string;
 };
+
+function trimToUndefined(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
 
 /**
  * Resolve owner display settings for prompt rendering.
@@ -23,7 +27,7 @@ export function resolveOwnerDisplaySetting(config?: OpenClawConfig): OwnerDispla
   }
   return {
     ownerDisplay: "hash",
-    ownerDisplaySecret: normalizeOptionalString(config?.commands?.ownerDisplaySecret),
+    ownerDisplaySecret: trimToUndefined(config?.commands?.ownerDisplaySecret),
   };
 }
 

@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createDiscordActionGate } from "../accounts.js";
 import { readStringParam, type OpenClawConfig } from "../runtime-api.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
@@ -58,13 +58,7 @@ export async function handleDiscordAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
   options?: {
-    mediaAccess?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-      workspaceDir?: string;
-    };
     mediaLocalRoots?: readonly string[];
-    mediaReadFile?: (filePath: string) => Promise<Buffer>;
   },
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
@@ -72,13 +66,13 @@ export async function handleDiscordAction(
   const isActionEnabled = createDiscordActionGate({ cfg, accountId });
 
   if (messagingActions.has(action)) {
-    return await handleDiscordMessagingAction(action, params, isActionEnabled, cfg, options);
+    return await handleDiscordMessagingAction(action, params, isActionEnabled, options, cfg);
   }
   if (guildActions.has(action)) {
-    return await handleDiscordGuildAction(action, params, isActionEnabled, cfg, options);
+    return await handleDiscordGuildAction(action, params, isActionEnabled);
   }
   if (moderationActions.has(action)) {
-    return await handleDiscordModerationAction(action, params, isActionEnabled, cfg);
+    return await handleDiscordModerationAction(action, params, isActionEnabled);
   }
   if (presenceActions.has(action)) {
     return await handleDiscordPresenceAction(action, params, isActionEnabled);

@@ -93,18 +93,20 @@ describe("loadGatewayTlsRuntime", () => {
       autoGenerate: false,
     });
 
-    expect(result.enabled).toBe(true);
-    expect(result.required).toBe(true);
-    expect(result.certPath).toBe(certPath);
-    expect(result.keyPath).toBe(keyPath);
-    expect(result.caPath).toBe(caPath);
-    expect(result.fingerprintSha256).toBe(
-      normalizeFingerprint(new X509Certificate(CERT_PEM).fingerprint256 ?? ""),
-    );
-    expect(result.tlsOptions?.cert).toBe(CERT_PEM);
-    expect(result.tlsOptions?.key).toBe(KEY_PEM);
-    expect(result.tlsOptions?.ca).toBe(CERT_PEM);
-    expect(result.tlsOptions?.minVersion).toBe("TLSv1.3");
+    expect(result).toMatchObject({
+      enabled: true,
+      required: true,
+      certPath,
+      keyPath,
+      caPath,
+      fingerprintSha256: normalizeFingerprint(new X509Certificate(CERT_PEM).fingerprint256 ?? ""),
+      tlsOptions: {
+        cert: CERT_PEM,
+        key: KEY_PEM,
+        ca: CERT_PEM,
+        minVersion: "TLSv1.3",
+      },
+    });
     expect(result.error).toBeUndefined();
   });
 
@@ -113,18 +115,20 @@ describe("loadGatewayTlsRuntime", () => {
     const certPath = path.join(dir, "missing-cert.pem");
     const keyPath = path.join(dir, "missing-key.pem");
 
-    const result = await loadGatewayTlsRuntime({
-      enabled: true,
+    await expect(
+      loadGatewayTlsRuntime({
+        enabled: true,
+        certPath,
+        keyPath,
+        autoGenerate: false,
+      }),
+    ).resolves.toMatchObject({
+      enabled: false,
+      required: true,
       certPath,
       keyPath,
-      autoGenerate: false,
+      error: "gateway tls: cert/key missing",
     });
-
-    expect(result.enabled).toBe(false);
-    expect(result.required).toBe(true);
-    expect(result.certPath).toBe(certPath);
-    expect(result.keyPath).toBe(keyPath);
-    expect(result.error).toBe("gateway tls: cert/key missing");
   });
 
   it("reports load failures for invalid pem files", async () => {
@@ -141,10 +145,12 @@ describe("loadGatewayTlsRuntime", () => {
       autoGenerate: false,
     });
 
-    expect(result.enabled).toBe(false);
-    expect(result.required).toBe(true);
-    expect(result.certPath).toBe(certPath);
-    expect(result.keyPath).toBe(keyPath);
+    expect(result).toMatchObject({
+      enabled: false,
+      required: true,
+      certPath,
+      keyPath,
+    });
     expect(result.error).toContain("gateway tls: failed to load cert");
   });
 });

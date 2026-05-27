@@ -1,8 +1,8 @@
 import type { ResolvedBrowserProfile } from "./config.js";
 
-type BrowserProfileMode = "local-managed" | "local-existing-session" | "remote-cdp";
+export type BrowserProfileMode = "local-managed" | "local-existing-session" | "remote-cdp";
 
-type BrowserProfileCapabilities = {
+export type BrowserProfileCapabilities = {
   mode: BrowserProfileMode;
   isRemote: boolean;
   /** Profile uses the Chrome DevTools MCP server (existing-session driver). */

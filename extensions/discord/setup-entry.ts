@@ -1,9 +1,6 @@
-import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { discordSetupPlugin } from "./src/channel.setup.js";
 
-export default defineBundledChannelSetupEntry({
-  importMetaUrl: import.meta.url,
-  plugin: {
-    specifier: "./setup-plugin-api.js",
-    exportName: "discordSetupPlugin",
-  },
-});
+export { discordSetupPlugin } from "./src/channel.setup.js";
+
+export default defineSetupPluginEntry(discordSetupPlugin);

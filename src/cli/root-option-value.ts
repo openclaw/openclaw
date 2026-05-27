@@ -8,7 +8,7 @@ export function takeCliRootOptionValue(
   consumedNext: boolean;
 } {
   if (raw.includes("=")) {
-    const value = raw.slice(raw.indexOf("=") + 1);
+    const [, value] = raw.split("=", 2);
     const trimmed = (value ?? "").trim();
     return { value: trimmed || null, consumedNext: false };
   }

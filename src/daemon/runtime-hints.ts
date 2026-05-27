@@ -1,5 +1,5 @@
+import { resolveGatewayLogPaths } from "./launchd.js";
 import { toPosixPath } from "./output.js";
-import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
 function toDarwinDisplayPath(value: string): string {
   return toPosixPath(value).replace(/^[A-Za-z]:/, "");
@@ -12,26 +12,19 @@ export function buildPlatformRuntimeLogHints(params: {
   windowsTaskName: string;
 }): string[] {
   const platform = params.platform ?? process.platform;
-  const env = { ...process.env, ...params.env };
+  const env = params.env ?? process.env;
   if (platform === "darwin") {
-    const logs = resolveGatewaySupervisorLogPaths(env, { platform });
+    const logs = resolveGatewayLogPaths(env);
     return [
       `Launchd stdout (if installed): ${toDarwinDisplayPath(logs.stdoutPath)}`,
-      "Launchd stderr (if installed): suppressed",
-      `Restart attempts: ${toDarwinDisplayPath(resolveGatewayRestartLogPath(env))}`,
+      `Launchd stderr (if installed): ${toDarwinDisplayPath(logs.stderrPath)}`,
     ];
   }
   if (platform === "linux") {
-    return [
-      `Logs: journalctl --user -u ${params.systemdServiceName}.service -n 200 --no-pager`,
-      `Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
-    ];
+    return [`Logs: journalctl --user -u ${params.systemdServiceName}.service -n 200 --no-pager`];
   }
   if (platform === "win32") {
-    return [
-      `Logs: schtasks /Query /TN "${params.windowsTaskName}" /V /FO LIST`,
-      `Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
-    ];
+    return [`Logs: schtasks /Query /TN "${params.windowsTaskName}" /V /FO LIST`];
   }
   return [];
 }

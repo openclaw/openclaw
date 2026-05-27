@@ -1,19 +1,10 @@
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
-
-export function normalizeContextTokenBudget(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
-}
 
 export function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
   // pi-agent-core supports "xhigh"; OpenClaw enables it for specific models.
   if (!level) {
     return "off";
-  }
-  if (level === "max") {
-    return "xhigh";
   }
   // "adaptive" maps to "medium" at the pi-agent-core layer.  The Pi SDK
   // provider then translates this to `thinking.type: "adaptive"` with
@@ -23,6 +14,21 @@ export function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
     return "medium";
   }
   return level;
+}
+
+export function describeUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  try {
+    const serialized = JSON.stringify(error);
+    return serialized ?? "Unknown error";
+  } catch {
+    return "Unknown error";
+  }
 }
 
 export type { ReasoningLevel, ThinkLevel };

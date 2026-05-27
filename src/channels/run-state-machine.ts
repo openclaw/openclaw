@@ -1,4 +1,4 @@
-type RunStateStatusPatch = {
+export type RunStateStatusPatch = {
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;

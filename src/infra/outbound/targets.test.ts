@@ -1,10 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../plugin-sdk/whatsapp-targets.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   resolveHeartbeatDeliveryTarget,
-  resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "./targets.js";
@@ -13,113 +16,110 @@ import {
   installResolveOutboundTargetPluginRegistryHooks,
   runResolveOutboundTargetCoreTests,
 } from "./targets.shared-test.js";
-import {
-  createForumTargetTestPlugin,
-  createGenericTargetTestPlugin,
-  createTestChannelPlugin,
-  createTargetsTestRegistry,
-} from "./targets.test-helpers.js";
-
-const mocks = vi.hoisted(() => ({
-  normalizeDeliverableOutboundChannel: vi.fn(),
-  resolveOutboundChannelPlugin: vi.fn(),
-}));
-
-vi.mock("./channel-resolution.js", () => ({
-  normalizeDeliverableOutboundChannel: mocks.normalizeDeliverableOutboundChannel,
-  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
-}));
+import { telegramMessagingForTest } from "./targets.test-helpers.js";
 
 runResolveOutboundTargetCoreTests();
 
+const whatsappMessaging = {
+  inferTargetChatType: ({ to }: { to: string }) => {
+    const normalized = normalizeWhatsAppTarget(to);
+    if (!normalized) {
+      return undefined;
+    }
+    return isWhatsAppGroupJid(normalized) ? ("group" as const) : ("direct" as const);
+  },
+};
+
+const noopOutbound = (channel: "discord" | "imessage" | "slack"): ChannelOutboundAdapter => ({
+  deliveryMode: "direct",
+  sendText: async () => ({ channel, messageId: `${channel}-msg` }),
+});
+
 beforeEach(() => {
-  mocks.normalizeDeliverableOutboundChannel.mockReset();
-  mocks.normalizeDeliverableOutboundChannel.mockImplementation((value?: string | null) => {
-    const normalized = typeof value === "string" ? value.trim().toLowerCase() : undefined;
-    return ["alpha", "beta", "forum", "telegram"].includes(String(normalized))
-      ? normalized
-      : undefined;
-  });
-  mocks.resolveOutboundChannelPlugin.mockReset();
-  mocks.resolveOutboundChannelPlugin.mockImplementation(
-    ({ channel }: { channel: string }) =>
-      getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
-  );
   setActivePluginRegistry(
-    createTargetsTestRegistry([
-      createGenericTargetTestPlugin("alpha", "Alpha"),
-      createGenericTargetTestPlugin("beta", "Beta"),
-      createForumTargetTestPlugin(),
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: createOutboundTestPlugin({ id: "discord", outbound: noopOutbound("discord") }),
+        source: "test",
+      },
+      {
+        pluginId: "imessage",
+        plugin: createOutboundTestPlugin({ id: "imessage", outbound: noopOutbound("imessage") }),
+        source: "test",
+      },
+      {
+        pluginId: "slack",
+        plugin: createOutboundTestPlugin({ id: "slack", outbound: noopOutbound("slack") }),
+        source: "test",
+      },
+      {
+        pluginId: "telegram",
+        plugin: createOutboundTestPlugin({
+          id: "telegram",
+          outbound: telegramOutbound,
+          messaging: telegramMessagingForTest,
+        }),
+        source: "test",
+      },
+      {
+        pluginId: "whatsapp",
+        plugin: createOutboundTestPlugin({
+          id: "whatsapp",
+          outbound: whatsappOutbound,
+          messaging: whatsappMessaging,
+        }),
+        source: "test",
+      },
     ]),
   );
 });
 
 describe("resolveOutboundTarget defaultTo config fallback", () => {
   installResolveOutboundTargetPluginRegistryHooks();
-  const alphaDefaultCfg: OpenClawConfig = {
-    channels: { alpha: { defaultTo: "Alpha:Room One", allowFrom: ["*"] } },
+  const whatsappDefaultCfg: OpenClawConfig = {
+    channels: { whatsapp: { defaultTo: "+15551234567", allowFrom: ["*"] } },
   };
 
-  it("uses plugin defaultTo when no explicit target is provided", () => {
+  it("uses whatsapp defaultTo when no explicit target is provided", () => {
     const res = resolveOutboundTarget({
-      channel: "alpha",
+      channel: "whatsapp",
       to: undefined,
-      cfg: alphaDefaultCfg,
+      cfg: whatsappDefaultCfg,
       mode: "implicit",
     });
-    expect(res).toEqual({ ok: true, to: "room-one" });
+    expect(res).toEqual({ ok: true, to: "+15551234567" });
   });
 
-  it("uses a second plugin defaultTo when no explicit target is provided", () => {
+  it("uses telegram defaultTo when no explicit target is provided", () => {
     const cfg: OpenClawConfig = {
-      channels: { beta: { defaultTo: "Beta:Default Room" } },
+      channels: { telegram: { defaultTo: "123456789" } },
     };
     const res = resolveOutboundTarget({
-      channel: "beta",
+      channel: "telegram",
       to: "",
       cfg,
       mode: "implicit",
     });
-    expect(res).toEqual({ ok: true, to: "default-room" });
-  });
-
-  it("passes bootstrap opt-in to channel plugin resolution", () => {
-    const cfg: OpenClawConfig = {
-      channels: { alpha: { defaultTo: "Alpha:Room One" } },
-    };
-
-    const res = resolveOutboundTarget({
-      channel: "alpha",
-      to: "Alpha:Override Room",
-      cfg,
-      mode: "explicit",
-      allowBootstrap: true,
-    });
-
-    expect(res).toEqual({ ok: true, to: "override-room" });
-    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
-      channel: "alpha",
-      cfg,
-      allowBootstrap: true,
-    });
+    expect(res).toEqual({ ok: true, to: "123456789" });
   });
 
   it("explicit --reply-to overrides defaultTo", () => {
     const res = resolveOutboundTarget({
-      channel: "alpha",
-      to: "Alpha:Override Room",
-      cfg: alphaDefaultCfg,
+      channel: "whatsapp",
+      to: "+15559999999",
+      cfg: whatsappDefaultCfg,
       mode: "explicit",
     });
-    expect(res).toEqual({ ok: true, to: "override-room" });
+    expect(res).toEqual({ ok: true, to: "+15559999999" });
   });
 
   it("still errors when no defaultTo and no explicit target", () => {
     const cfg: OpenClawConfig = {
-      channels: { alpha: { allowFrom: ["room-one"] } },
+      channels: { whatsapp: { allowFrom: ["+1555"] } },
     };
     const res = resolveOutboundTarget({
-      channel: "alpha",
+      channel: "whatsapp",
       to: "",
       cfg,
       mode: "implicit",
@@ -128,28 +128,35 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
   });
 
   it("falls back to the active registry when the cached channel map is stale", () => {
-    const registry = createTargetsTestRegistry([]);
+    const registry = createTestRegistry([]);
     setActivePluginRegistry(registry, "stale-registry-test");
 
     // Warm the cached channel map before mutating the registry in place.
-    expect(resolveOutboundTarget({ channel: "alpha", to: "room-one", mode: "explicit" }).ok).toBe(
+    expect(resolveOutboundTarget({ channel: "telegram", to: "123", mode: "explicit" }).ok).toBe(
       false,
     );
 
     registry.channels.push({
-      pluginId: "alpha",
-      plugin: createGenericTargetTestPlugin("alpha", "Alpha"),
+      pluginId: "telegram",
+      plugin: createOutboundTestPlugin({
+        id: "telegram",
+        outbound: telegramOutbound,
+        messaging: telegramMessagingForTest,
+      }),
       source: "test",
     });
 
-    expect(resolveOutboundTarget({ channel: "alpha", to: "room-one", mode: "explicit" })).toEqual({
+    expect(resolveOutboundTarget({ channel: "telegram", to: "123", mode: "explicit" })).toEqual({
       ok: true,
-      to: "room-one",
+      to: "123",
     });
   });
 });
 
 describe("resolveSessionDeliveryTarget", () => {
+  type SessionDeliveryRequest = Parameters<typeof resolveSessionDeliveryTarget>[0];
+  type HeartbeatDeliveryRequest = Parameters<typeof resolveHeartbeatDeliveryTarget>[0];
+
   const expectImplicitRoute = (
     resolved: SessionDeliveryTarget,
     params: {
@@ -164,6 +171,7 @@ describe("resolveSessionDeliveryTarget", () => {
       to: params.to,
       accountId: undefined,
       threadId: undefined,
+      threadIdExplicit: false,
       mode: "implicit",
       lastChannel: params.lastChannel,
       lastTo: params.lastTo,
@@ -172,16 +180,34 @@ describe("resolveSessionDeliveryTarget", () => {
     });
   };
 
-  const expectTopicTargetKeptRaw = (
+  const expectTopicParsedFromExplicitTo = (
     entry: Parameters<typeof resolveSessionDeliveryTarget>[0]["entry"],
   ) => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry,
-      requestedChannel: "last",
-      explicitTo: "room:ops:topic:1008013",
+    expectResolvedSessionTarget({
+      request: {
+        entry,
+        requestedChannel: "last",
+        explicitTo: "63448508:topic:1008013",
+      },
+      expected: {
+        to: "63448508",
+        threadId: 1008013,
+      },
     });
-    expect(resolved.to).toBe("room:ops:topic:1008013");
-    expect(resolved.threadId).toBeUndefined();
+  };
+
+  const expectResolvedSessionTarget = (params: {
+    request: SessionDeliveryRequest;
+    expected: Partial<SessionDeliveryTarget>;
+  }) => {
+    expect(resolveSessionDeliveryTarget(params.request)).toMatchObject(params.expected);
+  };
+
+  const expectResolvedHeartbeatRoute = (params: {
+    request: HeartbeatDeliveryRequest;
+    expected: Partial<ReturnType<typeof resolveHeartbeatDeliveryTarget>>;
+  }) => {
+    expect(resolveHeartbeatDeliveryTarget(params.request)).toMatchObject(params.expected);
   };
 
   it("derives implicit delivery from the last route", () => {
@@ -189,22 +215,51 @@ describe("resolveSessionDeliveryTarget", () => {
       entry: {
         sessionId: "sess-1",
         updatedAt: 1,
-        lastChannel: " alpha ",
-        lastTo: " Room One ",
+        lastChannel: " whatsapp ",
+        lastTo: " +1555 ",
         lastAccountId: " acct-1 ",
       },
       requestedChannel: "last",
     });
 
     expect(resolved).toEqual({
-      channel: "alpha",
-      to: "Room One",
+      channel: "whatsapp",
+      to: "+1555",
       accountId: "acct-1",
       threadId: undefined,
+      threadIdExplicit: false,
       mode: "implicit",
-      lastChannel: "alpha",
-      lastTo: "Room One",
+      lastChannel: "whatsapp",
+      lastTo: "+1555",
       lastAccountId: "acct-1",
+      lastThreadId: undefined,
+    });
+  });
+
+  it("uses origin provider and accountId when legacy last route fields are absent", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-origin-route",
+        updatedAt: 1,
+        lastTo: " +1555 ",
+        origin: {
+          provider: " whatsapp ",
+          accountId: " acct-origin ",
+        },
+      },
+      requestedChannel: "last",
+    });
+
+    expect(resolved).toEqual({
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: "acct-origin",
+      threadId: undefined,
+      threadIdExplicit: false,
+      mode: "implicit",
+      lastChannel: "whatsapp",
+      lastTo: "+1555",
+      lastAccountId: "acct-origin",
       lastThreadId: undefined,
     });
   });
@@ -214,108 +269,18 @@ describe("resolveSessionDeliveryTarget", () => {
       entry: {
         sessionId: "sess-2",
         updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "room-one",
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
       },
-      requestedChannel: "beta",
+      requestedChannel: "telegram",
     });
 
     expectImplicitRoute(resolved, {
-      channel: "beta",
+      channel: "telegram",
       to: undefined,
-      lastChannel: "alpha",
-      lastTo: "room-one",
+      lastChannel: "whatsapp",
+      lastTo: "+1555",
     });
-  });
-
-  it("keeps parser-only explicit target compatibility during the migration window", () => {
-    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        {
-          ...alpha,
-          messaging: {
-            targetPrefixes: ["alpha"],
-            parseExplicitTarget: ({ raw }) =>
-              raw === "alpha:room-a:topic:77"
-                ? { to: "room-a", threadId: 77, chatType: "group" as const }
-                : null,
-          },
-        },
-      ]),
-    );
-
-    const resolved = resolveSessionDeliveryTarget({
-      requestedChannel: "alpha",
-      explicitTo: "alpha:room-a:topic:77",
-    });
-
-    expect(resolved.to).toBe("room-a");
-    expect(resolved.threadId).toBe(77);
-  });
-
-  it("keeps parser-only session target thread compatibility during the migration window", () => {
-    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        {
-          ...alpha,
-          messaging: {
-            targetPrefixes: ["alpha"],
-            parseExplicitTarget: ({ raw }) =>
-              raw === "alpha:room-a:topic:77"
-                ? { to: "room-a", threadId: 77, chatType: "group" as const }
-                : null,
-          },
-        },
-      ]),
-    );
-
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-parser",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "alpha:room-a:topic:77",
-      },
-      requestedChannel: "last",
-    });
-
-    expect(resolved.to).toBe("room-a");
-    expect(resolved.threadId).toBe(77);
-  });
-
-  it("uses an explicit provider-prefixed target before last-session channel fallback", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-prefixed",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "room-one",
-      },
-      requestedChannel: "last",
-      explicitTo: "beta:room-two",
-    });
-
-    expect(resolved.channel).toBe("beta");
-    expect(resolved.to).toBe("beta:room-two");
-    expect(resolved.lastChannel).toBe("alpha");
-  });
-
-  it("keeps target-kind prefixes on the selected last-session channel", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-target-kind",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "room-one",
-      },
-      requestedChannel: "last",
-      explicitTo: "channel:room-two",
-    });
-
-    expect(resolved.channel).toBe("alpha");
-    expect(resolved.to).toBe("channel:room-two");
   });
 
   it("allows mismatched lastTo when configured", () => {
@@ -323,68 +288,80 @@ describe("resolveSessionDeliveryTarget", () => {
       entry: {
         sessionId: "sess-3",
         updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "room-one",
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
       },
-      requestedChannel: "beta",
+      requestedChannel: "telegram",
       allowMismatchedLastTo: true,
     });
 
     expectImplicitRoute(resolved, {
-      channel: "beta",
-      to: "room-one",
-      lastChannel: "alpha",
-      lastTo: "room-one",
+      channel: "telegram",
+      to: "+1555",
+      lastChannel: "whatsapp",
+      lastTo: "+1555",
     });
   });
 
-  it("passes through explicitThreadId when provided", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-thread",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:ops",
-        lastThreadId: 999,
+  it.each([
+    {
+      name: "passes through explicitThreadId when provided",
+      request: {
+        entry: {
+          sessionId: "sess-thread",
+          updatedAt: 1,
+          lastChannel: "telegram",
+          lastTo: "-100123",
+          lastThreadId: 999,
+        },
+        requestedChannel: "last",
+        explicitThreadId: 42,
       },
-      requestedChannel: "last",
-      explicitThreadId: 42,
-    });
-
-    expect(resolved.threadId).toBe(42);
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:ops");
-  });
-
-  it("uses session lastThreadId when no explicitThreadId", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-thread-2",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:ops",
-        lastThreadId: 999,
+      expected: {
+        channel: "telegram",
+        to: "-100123",
+        threadId: 42,
       },
-      requestedChannel: "last",
-    });
-
-    expect(resolved.threadId).toBe(999);
-  });
-
-  it("does not inherit lastThreadId in heartbeat mode", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-heartbeat-thread",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "room-one",
-        lastThreadId: "thread-1",
+    },
+    {
+      name: "uses session lastThreadId when no explicitThreadId",
+      request: {
+        entry: {
+          sessionId: "sess-thread-2",
+          updatedAt: 1,
+          lastChannel: "telegram",
+          lastTo: "-100123",
+          lastThreadId: 999,
+        },
+        requestedChannel: "last",
       },
-      requestedChannel: "last",
-      mode: "heartbeat",
-    });
-
-    expect(resolved.threadId).toBeUndefined();
+      expected: {
+        threadId: 999,
+      },
+    },
+    {
+      name: "does not inherit lastThreadId in heartbeat mode",
+      request: {
+        entry: {
+          sessionId: "sess-heartbeat-thread",
+          updatedAt: 1,
+          lastChannel: "slack",
+          lastTo: "user:U123",
+          lastThreadId: "1739142736.000100",
+        },
+        requestedChannel: "last",
+        mode: "heartbeat",
+      },
+      expected: {
+        threadId: undefined,
+      },
+    },
+  ] satisfies Array<{
+    name: string;
+    request: SessionDeliveryRequest;
+    expected: Partial<SessionDeliveryTarget>;
+  }>)("$name", ({ request, expected }) => {
+    expectResolvedSessionTarget({ request, expected });
   });
 
   it("falls back to a provided channel when requested is unsupported", () => {
@@ -392,103 +369,114 @@ describe("resolveSessionDeliveryTarget", () => {
       entry: {
         sessionId: "sess-4",
         updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "room-one",
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
       },
       requestedChannel: "webchat",
-      fallbackChannel: "beta",
+      fallbackChannel: "slack",
     });
 
     expectImplicitRoute(resolved, {
-      channel: "beta",
+      channel: "slack",
       to: undefined,
-      lastChannel: "alpha",
-      lastTo: "room-one",
+      lastChannel: "whatsapp",
+      lastTo: "+1555",
     });
   });
 
-  it("keeps plugin-owned explicit targets raw for route resolution", () => {
-    expectTopicTargetKeptRaw({
+  it("parses :topic:NNN from explicitTo into threadId", () => {
+    expectTopicParsedFromExplicitTo({
       sessionId: "sess-topic",
       updatedAt: 1,
-      lastChannel: "forum",
-      lastTo: "room:ops",
+      lastChannel: "telegram",
+      lastTo: "63448508",
     });
   });
 
-  it("keeps plugin-owned explicit targets raw when lastTo is absent", () => {
-    expectTopicTargetKeptRaw({
+  it("parses :topic:NNN even when lastTo is absent", () => {
+    expectTopicParsedFromExplicitTo({
       sessionId: "sess-no-last",
       updatedAt: 1,
-      lastChannel: "forum",
+      lastChannel: "telegram",
     });
   });
 
-  it("skips plugin-owned target parsing for other channels", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-alpha",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "room-one",
+  it.each([
+    {
+      name: "skips :topic: parsing for non-telegram channels",
+      request: {
+        entry: {
+          sessionId: "sess-slack",
+          updatedAt: 1,
+          lastChannel: "slack",
+          lastTo: "C12345",
+        },
+        requestedChannel: "last",
+        explicitTo: "C12345:topic:999",
       },
-      requestedChannel: "last",
-      explicitTo: "room-one:topic:999",
-    });
-
-    expect(resolved.to).toBe("room-one:topic:999");
-    expect(resolved.threadId).toBeUndefined();
-  });
-
-  it("skips plugin-owned target parsing when the requested channel differs from lastChannel", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-cross",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:ops",
+    },
+    {
+      name: "skips :topic: parsing when channel is explicitly non-telegram even if lastChannel was telegram",
+      request: {
+        entry: {
+          sessionId: "sess-cross",
+          updatedAt: 1,
+          lastChannel: "telegram",
+          lastTo: "63448508",
+        },
+        requestedChannel: "slack",
+        explicitTo: "C12345:topic:999",
       },
-      requestedChannel: "alpha",
-      explicitTo: "room-one:topic:999",
+    },
+  ] satisfies Array<{
+    name: string;
+    request: SessionDeliveryRequest;
+  }>)("$name", ({ request }) => {
+    expectResolvedSessionTarget({
+      request,
+      expected: {
+        to: "C12345:topic:999",
+        threadId: undefined,
+      },
     });
-
-    expect(resolved.to).toBe("room-one:topic:999");
-    expect(resolved.threadId).toBeUndefined();
   });
 
-  it("keeps raw plugin-owned targets when the plugin registry is unavailable", () => {
-    setActivePluginRegistry(createTargetsTestRegistry([]));
+  it("keeps raw :topic: targets when the telegram plugin registry is unavailable", () => {
+    setActivePluginRegistry(createTestRegistry([]));
 
     const resolved = resolveSessionDeliveryTarget({
       entry: {
         sessionId: "sess-no-registry",
         updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:ops",
+        lastChannel: "telegram",
+        lastTo: "63448508",
       },
       requestedChannel: "last",
-      explicitTo: "room:ops:topic:1008013",
+      explicitTo: "63448508:topic:1008013",
     });
 
-    expect(resolved.to).toBe("room:ops:topic:1008013");
+    expect(resolved.to).toBe("63448508:topic:1008013");
     expect(resolved.threadId).toBeUndefined();
   });
 
   it("explicitThreadId takes priority over :topic: parsed value", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-priority",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:ops",
+    expectResolvedSessionTarget({
+      request: {
+        entry: {
+          sessionId: "sess-priority",
+          updatedAt: 1,
+          lastChannel: "telegram",
+          lastTo: "63448508",
+        },
+        requestedChannel: "last",
+        explicitTo: "63448508:topic:1008013",
+        explicitThreadId: 42,
       },
-      requestedChannel: "last",
-      explicitTo: "room:ops:topic:1008013",
-      explicitThreadId: 42,
+      expected: {
+        threadId: 42,
+        to: "63448508",
+      },
     });
-
-    expect(resolved.threadId).toBe(42);
-    expect(resolved.to).toBe("room:ops:topic:1008013");
   });
 
   const resolveHeartbeatTarget = (entry: SessionEntry, directPolicy?: "allow" | "block") =>
@@ -519,105 +507,104 @@ describe("resolveSessionDeliveryTarget", () => {
 
   it.each([
     {
-      name: "allows heartbeat delivery to direct targets by default and drops inherited thread ids",
+      name: "allows heartbeat delivery to Slack DMs by default and drops inherited thread ids",
       entry: {
-        sessionId: "sess-heartbeat-alpha-direct",
+        sessionId: "sess-heartbeat-slack-direct",
         updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "user:one",
-        lastThreadId: "thread-1",
+        lastChannel: "slack",
+        lastTo: "user:U123",
+        lastThreadId: "1739142736.000100",
       },
-      expectedChannel: "alpha",
-      expectedTo: "user:one",
+      expectedChannel: "slack",
+      expectedTo: "user:U123",
     },
     {
-      name: "blocks heartbeat delivery to direct targets when directPolicy is block",
+      name: "blocks heartbeat delivery to Slack DMs when directPolicy is block",
       entry: {
-        sessionId: "sess-heartbeat-alpha-direct-blocked",
+        sessionId: "sess-heartbeat-slack-direct-blocked",
         updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "user:one",
-        lastThreadId: "thread-1",
+        lastChannel: "slack",
+        lastTo: "user:U123",
+        lastThreadId: "1739142736.000100",
       },
       directPolicy: "block" as const,
       expectedChannel: "none",
       expectedReason: "dm-blocked",
     },
     {
-      name: "allows heartbeat delivery to plugin-classified direct chats by default",
+      name: "allows heartbeat delivery to Telegram direct chats by default",
       entry: {
-        sessionId: "sess-heartbeat-forum-direct",
+        sessionId: "sess-heartbeat-telegram-direct",
         updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "dm:one",
+        lastChannel: "telegram",
+        lastTo: "5232990709",
       },
-      expectedChannel: "forum",
-      expectedTo: "dm:one",
+      expectedChannel: "telegram",
+      expectedTo: "5232990709",
     },
     {
-      name: "blocks heartbeat delivery to plugin-classified direct chats when directPolicy is block",
+      name: "blocks heartbeat delivery to Telegram direct chats when directPolicy is block",
       entry: {
-        sessionId: "sess-heartbeat-forum-direct-blocked",
+        sessionId: "sess-heartbeat-telegram-direct-blocked",
         updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "dm:one",
+        lastChannel: "telegram",
+        lastTo: "5232990709",
       },
       directPolicy: "block" as const,
       expectedChannel: "none",
       expectedReason: "dm-blocked",
     },
     {
-      name: "keeps heartbeat delivery to plugin-classified groups",
+      name: "keeps heartbeat delivery to Telegram groups",
       entry: {
-        sessionId: "sess-heartbeat-forum-group",
+        sessionId: "sess-heartbeat-telegram-group",
         updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:ops",
+        lastChannel: "telegram",
+        lastTo: "-1001234567890",
       },
-      expectedChannel: "forum",
-      expectedTo: "room:ops",
+      expectedChannel: "telegram",
+      expectedTo: "-1001234567890",
     },
     {
-      name: "allows heartbeat delivery to unknown-shape targets when session chatType is direct",
+      name: "allows heartbeat delivery to WhatsApp direct chats by default",
       entry: {
-        sessionId: "sess-heartbeat-beta-direct",
+        sessionId: "sess-heartbeat-whatsapp-direct",
         updatedAt: 1,
-        lastChannel: "beta",
-        lastTo: "unknown-shape",
-        chatType: "direct",
+        lastChannel: "whatsapp",
+        lastTo: "+15551234567",
       },
-      expectedChannel: "beta",
-      expectedTo: "unknown-shape",
+      expectedChannel: "whatsapp",
+      expectedTo: "+15551234567",
     },
     {
-      name: "keeps heartbeat delivery to generic group targets",
+      name: "keeps heartbeat delivery to WhatsApp groups",
       entry: {
-        sessionId: "sess-heartbeat-alpha-group",
+        sessionId: "sess-heartbeat-whatsapp-group",
         updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "group:ops",
+        lastChannel: "whatsapp",
+        lastTo: "120363140186826074@g.us",
       },
-      expectedChannel: "alpha",
-      expectedTo: "group:ops",
+      expectedChannel: "whatsapp",
+      expectedTo: "120363140186826074@g.us",
     },
     {
       name: "uses session chatType hints when target parsing cannot classify a direct chat",
       entry: {
-        sessionId: "sess-heartbeat-alpha-unknown-direct",
+        sessionId: "sess-heartbeat-imessage-direct",
         updatedAt: 1,
-        lastChannel: "alpha",
+        lastChannel: "imessage",
         lastTo: "chat-guid-unknown-shape",
         chatType: "direct",
       },
-      expectedChannel: "alpha",
+      expectedChannel: "imessage",
       expectedTo: "chat-guid-unknown-shape",
     },
     {
       name: "blocks session chatType direct hints when directPolicy is block",
       entry: {
-        sessionId: "sess-heartbeat-alpha-unknown-direct-blocked",
+        sessionId: "sess-heartbeat-imessage-direct-blocked",
         updatedAt: 1,
-        lastChannel: "alpha",
+        lastChannel: "imessage",
         lastTo: "chat-guid-unknown-shape",
         chatType: "direct",
       },
@@ -643,678 +630,290 @@ describe("resolveSessionDeliveryTarget", () => {
     });
   });
 
-  it("allows heartbeat delivery to core direct target prefixes by default", () => {
-    const cfg: OpenClawConfig = {};
-    const resolved = resolveHeartbeatDeliveryTarget({
-      cfg,
-      entry: {
-        sessionId: "sess-heartbeat-core-direct-prefix",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "user:12345",
+  it.each([
+    {
+      name: "allows heartbeat delivery to Discord DMs by default",
+      request: {
+        cfg: {} as OpenClawConfig,
+        entry: {
+          sessionId: "sess-heartbeat-discord-dm",
+          updatedAt: 1,
+          lastChannel: "discord",
+          lastTo: "user:12345",
+        },
+        heartbeat: {
+          target: "last",
+        },
       },
-      heartbeat: {
-        target: "last",
+      expected: {
+        channel: "discord",
+        to: "user:12345",
       },
-    });
-
-    expect(resolved.channel).toBe("alpha");
-    expect(resolved.to).toBe("user:12345");
-  });
-
-  it("keeps heartbeat delivery to core channel target prefixes", () => {
-    const cfg: OpenClawConfig = {};
-    const resolved = resolveHeartbeatDeliveryTarget({
-      cfg,
-      entry: {
-        sessionId: "sess-heartbeat-core-channel-prefix",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "channel:999",
+    },
+    {
+      name: "keeps heartbeat delivery to Discord channels",
+      request: {
+        cfg: {} as OpenClawConfig,
+        entry: {
+          sessionId: "sess-heartbeat-discord-channel",
+          updatedAt: 1,
+          lastChannel: "discord",
+          lastTo: "channel:999",
+        },
+        heartbeat: {
+          target: "last",
+        },
       },
-      heartbeat: {
-        target: "last",
+      expected: {
+        channel: "discord",
+        to: "channel:999",
       },
-    });
-
-    expect(resolved.channel).toBe("alpha");
-    expect(resolved.to).toBe("channel:999");
+    },
+    {
+      name: "parses explicit heartbeat topic targets into threadId",
+      request: {
+        cfg: {} as OpenClawConfig,
+        heartbeat: {
+          target: "telegram",
+          to: "-10063448508:topic:1008013",
+        },
+      },
+      expected: {
+        channel: "telegram",
+        to: "-10063448508",
+        threadId: 1008013,
+      },
+    },
+    {
+      name: "prefers turn-scoped routing over mutable session routing for target=last",
+      request: {
+        cfg: {},
+        entry: {
+          sessionId: "sess-heartbeat-turn-source",
+          updatedAt: 1,
+          lastChannel: "slack",
+          lastTo: "U_WRONG",
+        },
+        heartbeat: {
+          target: "last",
+        },
+        turnSource: {
+          channel: "telegram",
+          to: "-100123",
+          threadId: 42,
+        },
+      },
+      expected: {
+        channel: "telegram",
+        to: "-100123",
+        threadId: 42,
+      },
+    },
+    {
+      name: "merges partial turn-scoped metadata with the stored session route for target=last",
+      request: {
+        cfg: {},
+        entry: {
+          sessionId: "sess-heartbeat-turn-source-partial",
+          updatedAt: 1,
+          lastChannel: "telegram",
+          lastTo: "-100123",
+        },
+        heartbeat: {
+          target: "last",
+        },
+        turnSource: {
+          threadId: 42,
+        },
+      },
+      expected: {
+        channel: "telegram",
+        to: "-100123",
+        threadId: 42,
+      },
+    },
+  ] satisfies Array<{
+    name: string;
+    request: HeartbeatDeliveryRequest;
+    expected: Partial<ReturnType<typeof resolveHeartbeatDeliveryTarget>>;
+  }>)("$name", ({ request, expected }) => {
+    expectResolvedHeartbeatRoute({ request, expected });
   });
 
   it("keeps explicit threadId in heartbeat mode", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-heartbeat-explicit-thread",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:ops",
-        lastThreadId: 999,
-      },
-      requestedChannel: "last",
-      mode: "heartbeat",
-      explicitThreadId: 42,
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:ops");
-    expect(resolved.threadId).toBe(42);
-  });
-
-  it("keeps explicit heartbeat plugin targets raw for modern route resolution", () => {
-    const cfg: OpenClawConfig = {};
-    const resolved = resolveHeartbeatDeliveryTarget({
-      cfg,
-      heartbeat: {
-        target: "forum",
-        to: "room:ops:topic:1008013",
-      },
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:ops:topic:1008013");
-    expect(resolved.threadId).toBeUndefined();
-  });
-
-  it("resolves explicit heartbeat plugin targets through the outbound session route", async () => {
-    const cfg: OpenClawConfig = {};
-    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
-      cfg,
-      agentId: "main",
-      heartbeat: {
-        target: "forum",
-        to: "room:ops:topic:1008013",
-      },
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:ops");
-    expect(resolved.threadId).toBe(1008013);
-  });
-
-  it("blocks heartbeat targets that route to direct chats after canonicalization", async () => {
-    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        {
-          ...alpha,
-          messaging: {
-            ...alpha.messaging,
-            resolveOutboundSessionRoute: () => ({
-              sessionKey: "main:alpha:user:u123",
-              baseSessionKey: "main:alpha:user:u123",
-              peer: { kind: "direct", id: "u123" },
-              chatType: "direct",
-              from: "alpha:u123",
-              to: "user:u123",
-            }),
-          },
+    expectResolvedSessionTarget({
+      request: {
+        entry: {
+          sessionId: "sess-heartbeat-explicit-thread",
+          updatedAt: 1,
+          lastChannel: "telegram",
+          lastTo: "-100123",
+          lastThreadId: 999,
         },
-      ]),
-    );
-
-    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
-      cfg: {},
-      agentId: "main",
-      entry: {
-        sessionId: "sess-heartbeat-routed-direct",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "channel:D123",
+        requestedChannel: "last",
+        mode: "heartbeat",
+        explicitThreadId: 42,
       },
-      heartbeat: {
-        target: "last",
-        directPolicy: "block",
-      },
-    });
-
-    expect(resolved.channel).toBe("none");
-    expect(resolved.reason).toBe("dm-blocked");
-  });
-
-  it("uses resolved target kind before applying heartbeat directPolicy to routed handles", async () => {
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        createTestChannelPlugin({
-          id: "telegram",
-          label: "Telegram",
-          outbound: {
-            deliveryMode: "direct",
-            resolveTarget: ({ to }) =>
-              to
-                ? { ok: true as const, to: to.trim() }
-                : { ok: false as const, error: new Error("target required") },
-          },
-          messaging: {
-            targetPrefixes: ["telegram"],
-            inferTargetChatType: () => "group",
-            targetResolver: {
-              resolveTarget: async ({ normalized }) => ({
-                to: normalized,
-                kind: "group",
-                source: "directory",
-              }),
-            },
-            resolveOutboundSessionRoute: ({ target, resolvedTarget }) => {
-              const isGroup = resolvedTarget?.kind === "group";
-              return {
-                sessionKey: `main:telegram:${isGroup ? "group" : "user"}:${target}`,
-                baseSessionKey: `main:telegram:${isGroup ? "group" : "user"}:${target}`,
-                peer: { kind: isGroup ? "group" : "direct", id: target },
-                chatType: isGroup ? "group" : "direct",
-                from: isGroup ? `telegram:group:${target}` : `telegram:${target}`,
-                to: target,
-              };
-            },
-          },
-        }),
-      ]),
-    );
-
-    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
-      cfg: {},
-      agentId: "main",
-      heartbeat: {
-        target: "telegram",
-        to: "@public_group",
-        directPolicy: "block",
-      },
-    });
-
-    expect(resolved.channel).toBe("telegram");
-    expect(resolved.to).toBe("@public_group");
-    expect(resolved.chatType).toBe("group");
-  });
-
-  it("keeps heartbeat route canonicalization best-effort when target resolution fails", async () => {
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        createTestChannelPlugin({
-          id: "telegram",
-          label: "Telegram",
-          outbound: {
-            deliveryMode: "direct",
-            resolveTarget: ({ to }) =>
-              to
-                ? { ok: true as const, to: to.trim() }
-                : { ok: false as const, error: new Error("target required") },
-          },
-          messaging: {
-            targetPrefixes: ["telegram"],
-            inferTargetChatType: () => "group",
-            targetResolver: {
-              resolveTarget: async () => {
-                throw new Error("directory unavailable");
-              },
-            },
-            resolveOutboundSessionRoute: ({ target }) => ({
-              sessionKey: `main:telegram:group:${target}`,
-              baseSessionKey: `main:telegram:group:${target}`,
-              peer: { kind: "group", id: target },
-              chatType: "group",
-              from: `telegram:group:${target}`,
-              to: target,
-            }),
-          },
-        }),
-      ]),
-    );
-
-    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
-      cfg: {},
-      agentId: "main",
-      heartbeat: {
-        target: "telegram",
-        to: "@public_group",
-      },
-    });
-
-    expect(resolved.channel).toBe("telegram");
-    expect(resolved.to).toBe("@public_group");
-    expect(resolved.chatType).toBe("group");
-  });
-
-  it("keeps heartbeat route canonicalization best-effort when route resolution fails", async () => {
-    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        {
-          ...alpha,
-          messaging: {
-            ...alpha.messaging,
-            inferTargetChatType: () => "group",
-            resolveOutboundSessionRoute: () => {
-              throw new Error("route lookup failed");
-            },
-          },
-        },
-      ]),
-    );
-
-    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
-      cfg: {},
-      agentId: "main",
-      entry: {
-        sessionId: "sess-heartbeat-route-failure",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "group:ops",
-      },
-      heartbeat: {
-        target: "last",
-      },
-    });
-
-    expect(resolved.channel).toBe("alpha");
-    expect(resolved.to).toBe("group:ops");
-    expect(resolved.chatType).toBe("group");
-  });
-
-  it("applies default heartbeat directPolicy after route canonicalization", async () => {
-    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        {
-          ...alpha,
-          messaging: {
-            ...alpha.messaging,
-            resolveOutboundSessionRoute: () => ({
-              sessionKey: "main:alpha:user:u123",
-              baseSessionKey: "main:alpha:user:u123",
-              peer: { kind: "direct", id: "u123" },
-              chatType: "direct",
-              from: "alpha:u123",
-              to: "user:u123",
-            }),
-          },
-        },
-      ]),
-    );
-
-    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
-      cfg: {
-        agents: {
-          defaults: {
-            heartbeat: {
-              target: "last",
-              directPolicy: "block",
-            },
-          },
-        },
-      } as OpenClawConfig,
-      agentId: "main",
-      entry: {
-        sessionId: "sess-heartbeat-default-routed-direct",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "channel:D123",
-      },
-    });
-
-    expect(resolved.channel).toBe("none");
-    expect(resolved.reason).toBe("dm-blocked");
-  });
-
-  it("preserves route threadId for heartbeat target=last on plugin-owned group sessions", () => {
-    const cfg: OpenClawConfig = {};
-    const resolved = resolveHeartbeatDeliveryTarget({
-      cfg,
-      entry: {
-        sessionId: "sess-heartbeat-forum-topic",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:ops",
-        lastThreadId: 1122,
-        chatType: "group",
-      },
-      heartbeat: {
-        target: "last",
-      },
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:ops");
-    expect(resolved.threadId).toBe(1122);
-  });
-
-  it("reuses route threadId when only deliveryContext carries it", () => {
-    const cfg: OpenClawConfig = {};
-    const resolved = resolveHeartbeatDeliveryTarget({
-      cfg,
-      entry: {
-        sessionId: "sess-heartbeat-forum-topic-context-only",
-        updatedAt: 1,
-        deliveryContext: {
-          channel: "forum",
-          to: "room:ops",
-          threadId: 1122,
-        },
-        chatType: "group",
-      },
-      heartbeat: {
-        target: "last",
-      },
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:ops");
-    expect(resolved.threadId).toBe(1122);
-  });
-
-  it("does not inherit stale threadId for direct-chat heartbeat routes", () => {
-    const cfg: OpenClawConfig = {};
-    const resolved = resolveHeartbeatDeliveryTarget({
-      cfg,
-      entry: {
-        sessionId: "sess-heartbeat-forum-direct-stale-thread",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "dm:one",
-        lastThreadId: 1122,
-        chatType: "direct",
-      },
-      heartbeat: {
-        target: "last",
-      },
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("dm:one");
-    expect(resolved.threadId).toBeUndefined();
-  });
-
-  it("prefers turn-scoped routing over mutable session routing for target=last", () => {
-    const resolved = resolveHeartbeatDeliveryTarget({
-      cfg: {},
-      entry: {
-        sessionId: "sess-heartbeat-turn-source",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "wrong-room",
-      },
-      heartbeat: {
-        target: "last",
-      },
-      turnSource: {
-        channel: "forum",
-        to: "room:ops",
+      expected: {
+        channel: "telegram",
+        to: "-100123",
         threadId: 42,
+        threadIdExplicit: true,
       },
     });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:ops");
-    expect(resolved.threadId).toBe(42);
-  });
-
-  it("merges partial turn-scoped metadata with the stored session route for target=last", () => {
-    const resolved = resolveHeartbeatDeliveryTarget({
-      cfg: {},
-      entry: {
-        sessionId: "sess-heartbeat-turn-source-partial",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:ops",
-      },
-      heartbeat: {
-        target: "last",
-      },
-      turnSource: {
-        threadId: 42,
-      },
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:ops");
-    expect(resolved.threadId).toBe(42);
   });
 });
 
 describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", () => {
-  it("uses turnSourceChannel over session lastChannel when provided", () => {
-    // Simulate: one channel originated the turn, but another channel
-    // concurrently updated the shared session route.
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-shared",
-        updatedAt: 1,
-        lastChannel: "beta",
-        lastTo: "wrong-room",
+  const expectCrossChannelReplyGuard = (params: {
+    request: Parameters<typeof resolveSessionDeliveryTarget>[0];
+    expected: Partial<SessionDeliveryTarget>;
+  }) => {
+    expect(resolveSessionDeliveryTarget(params.request)).toMatchObject(params.expected);
+  };
+
+  it.each([
+    {
+      name: "uses turnSourceChannel over session lastChannel when provided",
+      request: {
+        entry: {
+          sessionId: "sess-shared",
+          updatedAt: 1,
+          lastChannel: "slack",
+          lastTo: "U0AEMECNCBV",
+        },
+        requestedChannel: "last",
+        turnSourceChannel: "whatsapp",
+        turnSourceTo: "+66972796305",
       },
-      requestedChannel: "last",
-      turnSourceChannel: "alpha",
-      turnSourceTo: "room-one",
-    });
-
-    expect(resolved.channel).toBe("alpha");
-    expect(resolved.to).toBe("room-one");
-  });
-
-  it("falls back to session lastChannel when turnSourceChannel is not set", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-normal",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "room-one",
+      expected: {
+        channel: "whatsapp",
+        to: "+66972796305",
       },
-      requestedChannel: "last",
-    });
-
-    expect(resolved.channel).toBe("alpha");
-    expect(resolved.to).toBe("room-one");
-  });
-
-  it("respects explicit requestedChannel over turnSourceChannel", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-explicit",
-        updatedAt: 1,
-        lastChannel: "beta",
-        lastTo: "wrong-room",
+    },
+    {
+      name: "falls back to session lastChannel when turnSourceChannel is not set",
+      request: {
+        entry: {
+          sessionId: "sess-normal",
+          updatedAt: 1,
+          lastChannel: "telegram",
+          lastTo: "8587265585",
+        },
+        requestedChannel: "last",
       },
-      requestedChannel: "forum",
-      explicitTo: "room:ops",
-      turnSourceChannel: "alpha",
-      turnSourceTo: "room-one",
-    });
-
-    // Explicit requestedChannel is not "last", so it takes priority.
-    expect(resolved.channel).toBe("forum");
-  });
-
-  it("preserves turnSourceAccountId and turnSourceThreadId", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-meta",
-        updatedAt: 1,
-        lastChannel: "beta",
-        lastTo: "wrong-room",
-        lastAccountId: "wrong-account",
+      expected: {
+        channel: "telegram",
+        to: "8587265585",
       },
-      requestedChannel: "last",
-      turnSourceChannel: "forum",
-      turnSourceTo: "room:ops",
-      turnSourceAccountId: "bot-123",
-      turnSourceThreadId: 42,
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:ops");
-    expect(resolved.accountId).toBe("bot-123");
-    expect(resolved.threadId).toBe(42);
-  });
-
-  it("does not fall back to session target metadata when turnSourceChannel is set", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-no-fallback",
-        updatedAt: 1,
-        lastChannel: "beta",
-        lastTo: "wrong-room",
-        lastAccountId: "wrong-account",
-        lastThreadId: "thread-1",
+    },
+    {
+      name: "respects explicit requestedChannel over turnSourceChannel",
+      request: {
+        entry: {
+          sessionId: "sess-explicit",
+          updatedAt: 1,
+          lastChannel: "slack",
+          lastTo: "U12345",
+        },
+        requestedChannel: "telegram",
+        explicitTo: "8587265585",
+        turnSourceChannel: "whatsapp",
+        turnSourceTo: "+66972796305",
       },
-      requestedChannel: "last",
-      turnSourceChannel: "alpha",
-    });
-
-    expect(resolved.channel).toBe("alpha");
-    expect(resolved.to).toBeUndefined();
-    expect(resolved.accountId).toBeUndefined();
-    expect(resolved.threadId).toBeUndefined();
-    expect(resolved.lastTo).toBeUndefined();
-    expect(resolved.lastAccountId).toBeUndefined();
-    expect(resolved.lastThreadId).toBeUndefined();
-  });
-
-  it("falls back to session lastThreadId when turnSourceChannel matches session channel and no explicit turnSourceThreadId", () => {
-    // Regression: topic replies were landing in the root chat instead of the topic
-    // because turnSourceThreadId was undefined even though the session had it.
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-forum-topic",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:ops",
-        lastThreadId: 1122,
+      expected: {
+        channel: "telegram",
       },
-      requestedChannel: "last",
-      turnSourceChannel: "forum",
-      turnSourceTo: "room:ops",
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:ops");
-    expect(resolved.threadId).toBe(1122);
-  });
-
-  it("keeps topic thread routing when turnSourceTo uses the plugin-owned topic target", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-forum-topic-scoped",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "forum:room:ops:topic:1122",
-        lastThreadId: 1122,
+    },
+    {
+      name: "preserves turnSourceAccountId and turnSourceThreadId",
+      request: {
+        entry: {
+          sessionId: "sess-meta",
+          updatedAt: 1,
+          lastChannel: "slack",
+          lastTo: "U_WRONG",
+          lastAccountId: "wrong-account",
+        },
+        requestedChannel: "last",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "8587265585",
+        turnSourceAccountId: "bot-123",
+        turnSourceThreadId: 42,
       },
-      requestedChannel: "last",
-      turnSourceChannel: "forum",
-      turnSourceTo: "forum:room:ops:topic:1122",
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("forum:room:ops:topic:1122");
-    expect(resolved.threadId).toBe(1122);
-  });
-
-  it("does not use plugin grammar to match bare stored routes against topic-scoped turn routes", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-forum-topic-mixed-shape",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:ops",
-        lastThreadId: 1122,
+      expected: {
+        channel: "telegram",
+        to: "8587265585",
+        accountId: "bot-123",
+        threadId: 42,
       },
-      requestedChannel: "last",
-      turnSourceChannel: "forum",
-      turnSourceTo: "forum:room:ops:topic:1122",
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("forum:room:ops:topic:1122");
-    expect(resolved.threadId).toBeUndefined();
-  });
-
-  it("does not fall back to session lastThreadId when turnSourceChannel differs from session channel", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-cross-channel-no-thread",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "room-one",
-        lastThreadId: "thread-1",
+    },
+    {
+      name: "does not fall back to session target metadata when turnSourceChannel is set",
+      request: {
+        entry: {
+          sessionId: "sess-no-fallback",
+          updatedAt: 1,
+          lastChannel: "slack",
+          lastTo: "U_WRONG",
+          lastAccountId: "wrong-account",
+          lastThreadId: "1739142736.000100",
+        },
+        requestedChannel: "last",
+        turnSourceChannel: "whatsapp",
       },
-      requestedChannel: "last",
-      turnSourceChannel: "forum",
-      turnSourceTo: "room:ops",
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.threadId).toBeUndefined();
-  });
-
-  it("prefers explicit turnSourceThreadId over session lastThreadId on same channel", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-explicit-thread-override",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:ops",
-        lastThreadId: 1122,
+      expected: {
+        channel: "whatsapp",
+        to: undefined,
+        accountId: undefined,
+        threadId: undefined,
+        lastTo: undefined,
+        lastAccountId: undefined,
+        lastThreadId: undefined,
       },
-      requestedChannel: "last",
-      turnSourceChannel: "forum",
-      turnSourceTo: "room:ops",
-      turnSourceThreadId: 9999,
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:ops");
-    expect(resolved.threadId).toBe(9999);
-  });
-
-  it("drops session threadId when turnSourceTo differs from session to (shared-session race)", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-shared-race",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:ops",
-        lastThreadId: 1122,
+    },
+    {
+      name: "uses explicitTo even when turnSourceTo is omitted",
+      request: {
+        entry: {
+          sessionId: "sess-explicit-to",
+          updatedAt: 1,
+          lastChannel: "slack",
+          lastTo: "U_WRONG",
+        },
+        requestedChannel: "last",
+        explicitTo: "+15551234567",
+        turnSourceChannel: "whatsapp",
       },
-      requestedChannel: "last",
-      turnSourceChannel: "forum",
-      turnSourceTo: "room:other",
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:other");
-    expect(resolved.threadId).toBeUndefined();
-  });
-
-  it("uses explicitTo even when turnSourceTo is omitted", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-explicit-to",
-        updatedAt: 1,
-        lastChannel: "beta",
-        lastTo: "wrong-room",
+      expected: {
+        channel: "whatsapp",
+        to: "+15551234567",
       },
-      requestedChannel: "last",
-      explicitTo: "room-one",
-      turnSourceChannel: "alpha",
-    });
-
-    expect(resolved.channel).toBe("alpha");
-    expect(resolved.to).toBe("room-one");
-  });
-
-  it("still allows mismatched lastTo only from turn-scoped metadata", () => {
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-mismatch-turn",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "wrong-room",
+    },
+    {
+      name: "still allows mismatched lastTo only from turn-scoped metadata",
+      request: {
+        entry: {
+          sessionId: "sess-mismatch-turn",
+          updatedAt: 1,
+          lastChannel: "slack",
+          lastTo: "U_WRONG",
+        },
+        requestedChannel: "telegram",
+        allowMismatchedLastTo: true,
+        turnSourceChannel: "whatsapp",
+        turnSourceTo: "+15550000000",
       },
-      requestedChannel: "beta",
-      allowMismatchedLastTo: true,
-      turnSourceChannel: "alpha",
-      turnSourceTo: "room-one",
-    });
-
-    expect(resolved.channel).toBe("beta");
-    expect(resolved.to).toBe("room-one");
+      expected: {
+        channel: "telegram",
+        to: "+15550000000",
+      },
+    },
+  ] satisfies Array<{
+    name: string;
+    request: Parameters<typeof resolveSessionDeliveryTarget>[0];
+    expected: Partial<SessionDeliveryTarget>;
+  }>)("$name", ({ request, expected }) => {
+    expectCrossChannelReplyGuard({ request, expected });
   });
 });

@@ -1,4 +1,3 @@
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   fetchMattermostChannel,
   fetchMattermostUser,
@@ -21,13 +20,20 @@ export type MattermostMediaInfo = {
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
 
-type SaveRemoteMedia = (params: {
+type FetchRemoteMedia = (params: {
   url: string;
   requestInit?: RequestInit;
   filePathHint?: string;
   maxBytes: number;
   ssrfPolicy?: { allowedHostnames?: string[] };
-}) => Promise<{ path: string; contentType?: string | null }>;
+}) => Promise<{ buffer: Uint8Array; contentType?: string | null }>;
+
+type SaveMediaBuffer = (
+  buffer: Uint8Array,
+  contentType: string | undefined,
+  direction: "inbound" | "outbound",
+  maxBytes: number,
+) => Promise<{ path: string; contentType?: string | null }>;
 
 export function createMattermostMonitorResources(params: {
   accountId: string;
@@ -35,7 +41,8 @@ export function createMattermostMonitorResources(params: {
   client: MattermostClient;
   logger: { debug?: (...args: unknown[]) => void };
   mediaMaxBytes: number;
-  saveRemoteMedia: SaveRemoteMedia;
+  fetchRemoteMedia: FetchRemoteMedia;
+  saveMediaBuffer: SaveMediaBuffer;
   mediaKindFromMime: (contentType?: string) => MattermostMediaKind | null | undefined;
 }) {
   const {
@@ -44,7 +51,8 @@ export function createMattermostMonitorResources(params: {
     client,
     logger,
     mediaMaxBytes,
-    saveRemoteMedia,
+    fetchRemoteMedia,
+    saveMediaBuffer,
     mediaKindFromMime,
   } = params;
   const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();
@@ -53,14 +61,14 @@ export function createMattermostMonitorResources(params: {
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
   ): Promise<MattermostMediaInfo[]> => {
-    const ids = normalizeStringEntries(fileIds ?? []);
+    const ids = (fileIds ?? []).map((id) => id?.trim()).filter(Boolean);
     if (ids.length === 0) {
       return [];
     }
     const out: MattermostMediaInfo[] = [];
     for (const fileId of ids) {
       try {
-        const saved = await saveRemoteMedia({
+        const fetched = await fetchRemoteMedia({
           url: `${client.apiBaseUrl}/files/${fileId}`,
           requestInit: {
             headers: {
@@ -71,7 +79,13 @@ export function createMattermostMonitorResources(params: {
           maxBytes: mediaMaxBytes,
           ssrfPolicy: { allowedHostnames: [new URL(client.baseUrl).hostname] },
         });
-        const contentType = saved.contentType ?? undefined;
+        const saved = await saveMediaBuffer(
+          Buffer.from(fetched.buffer),
+          fetched.contentType ?? undefined,
+          "inbound",
+          mediaMaxBytes,
+        );
+        const contentType = saved.contentType ?? fetched.contentType ?? undefined;
         out.push({
           path: saved.path,
           contentType,

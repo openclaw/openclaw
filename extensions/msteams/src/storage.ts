@@ -1,7 +1,7 @@
 import path from "node:path";
 import { getMSTeamsRuntime } from "./runtime.js";
 
-type MSTeamsStorePathOptions = {
+export type MSTeamsStorePathOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;

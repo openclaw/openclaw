@@ -1,14 +1,8 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import fs from "node:fs";
+import path from "node:path";
 
-export function normalizeWindowsArgv(
-  argv: string[],
-  options: {
-    platform?: NodeJS.Platform;
-    execPath?: string;
-  } = {},
-): string[] {
-  const platform = options.platform ?? process.platform;
-  if (platform !== "win32") {
+export function normalizeWindowsArgv(argv: string[]): string[] {
+  if (process.platform !== "win32") {
     return argv;
   }
   if (argv.length < 2) {
@@ -32,11 +26,10 @@ export function normalizeWindowsArgv(
       .trim();
   const normalizeCandidate = (value: string): string =>
     normalizeArg(value).replace(/^\\\\\\?\\/, "");
-  const basename = (value: string): string => value.split(/[\\/]/).pop() ?? value;
 
-  const execPath = normalizeCandidate(options.execPath ?? process.execPath);
-  const execPathLower = normalizeLowercaseStringOrEmpty(execPath);
-  const execBase = normalizeLowercaseStringOrEmpty(basename(execPath));
+  const execPath = normalizeCandidate(process.execPath);
+  const execPathLower = execPath.toLowerCase();
+  const execBase = path.basename(execPath).toLowerCase();
   const isExecPath = (value: string | undefined): boolean => {
     if (!value) {
       return false;
@@ -45,36 +38,35 @@ export function normalizeWindowsArgv(
     if (!normalized) {
       return false;
     }
-    const lower = normalizeLowercaseStringOrEmpty(normalized);
-    const base = basename(lower);
+    const lower = normalized.toLowerCase();
     return (
       lower === execPathLower ||
-      base === execBase ||
+      path.basename(lower) === execBase ||
       lower.endsWith("\\node.exe") ||
       lower.endsWith("/node.exe") ||
-      base === "node.exe"
+      lower.includes("node.exe") ||
+      (path.basename(lower) === "node.exe" && fs.existsSync(normalized))
     );
   };
 
-  const argv0IsExecPath = isExecPath(argv[0]);
   const next = [...argv];
-  let removedLauncherPrefix = false;
-  for (let i = 1; i < next.length; ) {
+  for (let i = 1; i <= 3 && i < next.length; ) {
     if (isExecPath(next[i])) {
       next.splice(i, 1);
-      removedLauncherPrefix = true;
       continue;
     }
-    break;
+    i += 1;
   }
-  if (next.length < 3 || (!argv0IsExecPath && !removedLauncherPrefix)) {
-    return next;
+  const filtered = next.filter((arg, index) => index === 0 || !isExecPath(arg));
+  if (filtered.length < 3) {
+    return filtered;
   }
-  const cleaned = [...next];
+  const cleaned = [...filtered];
   for (let i = 2; i < cleaned.length; ) {
     const arg = cleaned[i];
     if (!arg || arg.startsWith("-")) {
-      break;
+      i += 1;
+      continue;
     }
     if (isExecPath(arg)) {
       cleaned.splice(i, 1);

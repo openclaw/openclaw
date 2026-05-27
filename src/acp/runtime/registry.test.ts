@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "./errors.js";
 import {
-  testing,
+  __testing,
   getAcpRuntimeBackend,
   registerAcpRuntimeBackend,
   requireAcpRuntimeBackend,
@@ -11,28 +11,22 @@ import type { AcpRuntime } from "./types.js";
 
 function createRuntimeStub(): AcpRuntime {
   return {
-    async ensureSession(input) {
-      return {
-        sessionKey: input.sessionKey,
-        backend: "stub",
-        runtimeSessionName: `${input.sessionKey}:runtime`,
-      };
-    },
-    async *runTurn() {
+    ensureSession: vi.fn(async (input) => ({
+      sessionKey: input.sessionKey,
+      backend: "stub",
+      runtimeSessionName: `${input.sessionKey}:runtime`,
+    })),
+    runTurn: vi.fn(async function* () {
       // no-op stream
-    },
-    async cancel() {},
-    async close() {},
+    }),
+    cancel: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
   };
 }
 
 describe("acp runtime registry", () => {
   beforeEach(() => {
-    testing.resetAcpRuntimeBackendsForTests();
-  });
-
-  afterEach(() => {
-    testing.resetAcpRuntimeBackendsForTests();
+    __testing.resetAcpRuntimeBackendsForTests();
   });
 
   it("registers and resolves backends by id", () => {
@@ -68,26 +62,6 @@ describe("acp runtime registry", () => {
     expect(() => requireAcpRuntimeBackend()).toThrowError(/ACP runtime backend is not configured/i);
   });
 
-  it("resolves the first healthy backend when requireAcpRuntimeBackend has no explicit id", () => {
-    const unhealthyRuntime = createRuntimeStub();
-    const healthyRuntime = createRuntimeStub();
-
-    registerAcpRuntimeBackend({
-      id: "unhealthy",
-      runtime: unhealthyRuntime,
-      healthy: () => false,
-    });
-    registerAcpRuntimeBackend({
-      id: "healthy",
-      runtime: healthyRuntime,
-      healthy: () => true,
-    });
-
-    const backend = requireAcpRuntimeBackend();
-    expect(backend.id).toBe("healthy");
-    expect(backend.runtime).toBe(healthyRuntime);
-  });
-
   it("throws a typed unavailable error when the requested backend is unhealthy", () => {
     registerAcpRuntimeBackend({
       id: "acpx",
@@ -112,7 +86,7 @@ describe("acp runtime registry", () => {
 
   it("keeps backend state on a global registry for cross-loader access", () => {
     const runtime = createRuntimeStub();
-    const sharedState = testing.getAcpRuntimeRegistryGlobalStateForTests();
+    const sharedState = __testing.getAcpRuntimeRegistryGlobalStateForTests();
 
     sharedState.backendsById.set("acpx", {
       id: "acpx",

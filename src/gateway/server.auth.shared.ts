@@ -5,7 +5,7 @@ import { WebSocket } from "ws";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
-import { MIN_PROBE_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
+import { PROTOCOL_VERSION } from "./protocol/index.js";
 import {
   createGatewaySuiteHarness,
   connectReq,
@@ -15,7 +15,6 @@ import {
   onceMessage,
   rpcReq,
   startGatewayServer,
-  startServer,
   startServerWithClient,
   trackConnectChallengeNonce,
   testTailscaleWhois,
@@ -64,17 +63,17 @@ const readConnectChallengeNonce = async (ws: WebSocket) => {
   if (cached) {
     return cached;
   }
-  const challenge: {
+  const challenge = await onceMessage<{
     type?: string;
     event?: string;
     payload?: Record<string, unknown> | null;
-  } = await onceMessage(ws, (o) => o.type === "event" && o.event === "connect.challenge");
+  }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
   const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
   expect(typeof nonce).toBe("string");
   return String(nonce);
 };
 
-const openTailscaleWs = async (port: number, headers?: Record<string, string>) => {
+const openTailscaleWs = async (port: number) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
     headers: {
       "x-forwarded-for": "100.64.0.1",
@@ -82,7 +81,6 @@ const openTailscaleWs = async (port: number, headers?: Record<string, string>) =
       "x-forwarded-host": "gateway.tailnet.ts.net",
       "tailscale-user-login": "peter",
       "tailscale-user-name": "Peter",
-      ...headers,
     },
   });
   trackConnectChallengeNonce(ws);
@@ -204,54 +202,36 @@ function resolveGatewayTokenOrEnv(): string {
     typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
       ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
       : process.env.OPENCLAW_GATEWAY_TOKEN;
-  if (typeof token !== "string") {
-    throw new Error("expected gateway token in test state or OPENCLAW_GATEWAY_TOKEN");
-  }
-  return token;
+  expect(typeof token).toBe("string");
+  return String(token ?? "");
 }
 
 async function approvePendingPairingIfNeeded() {
   const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
   const list = await listDevicePairing();
   const pending = list.pending.at(0);
-  if (!pending?.requestId) {
-    throw new Error("expected pending pairing request");
+  expect(pending?.requestId).toBeDefined();
+  if (pending?.requestId) {
+    await approveDevicePairing(pending.requestId, {
+      callerScopes: pending.scopes ?? ["operator.admin"],
+    });
   }
-  await approveDevicePairing(pending.requestId, {
-    callerScopes: pending.scopes ?? ["operator.admin"],
-  });
 }
 
 async function configureTrustedProxyControlUiAuth() {
-  const { replaceConfigFile } = await import("../config/config.js");
-  testState.gatewayAuth = undefined;
-  testState.gatewayControlUi = {
-    ...testState.gatewayControlUi,
-    allowedOrigins: ["https://localhost"],
-  };
-  await replaceConfigFile({
-    nextConfig: {
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-          },
-        },
-        trustedProxies: ["127.0.0.1"],
-        controlUi: {
-          allowedOrigins: ["https://localhost"],
-        },
-      },
+  testState.gatewayAuth = {
+    mode: "trusted-proxy",
+    trustedProxy: {
+      userHeader: "x-forwarded-user",
+      requiredHeaders: ["x-forwarded-proto"],
     },
-    afterWrite: { mode: "auto" },
-  });
+  };
+  await writeTrustedProxyControlUiConfig();
 }
 
 async function writeTrustedProxyControlUiConfig(params?: { allowInsecureAuth?: boolean }) {
-  const { replaceConfigFile } = await import("../config/config.js");
-  const nextConfig = {
+  const { writeConfigFile } = await import("../config/config.js");
+  await writeConfigFile({
     gateway: {
       trustedProxies: ["127.0.0.1"],
       controlUi: {
@@ -259,11 +239,8 @@ async function writeTrustedProxyControlUiConfig(params?: { allowInsecureAuth?: b
         ...(params?.allowInsecureAuth ? { allowInsecureAuth: true } : {}),
       },
     },
-  };
-  await replaceConfigFile({
-    nextConfig,
-    afterWrite: { mode: "auto" },
-  });
+    // oxlint-disable-next-line typescript/no-explicit-any
+  } as any);
 }
 
 function isConnectResMessage(id: string) {
@@ -300,7 +277,7 @@ async function sendRawConnectReq(
       },
     }),
   );
-  const response: {
+  return onceMessage<{
     type?: string;
     id?: string;
     ok?: boolean;
@@ -312,8 +289,7 @@ async function sendRawConnectReq(
         reason?: string;
       };
     };
-  } = await onceMessage(ws, isConnectResMessage(params.id));
-  return response;
+  }>(ws, isConnectResMessage(params.id));
 }
 
 async function resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath: string): Promise<{
@@ -327,10 +303,8 @@ async function resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath: strin
   const paired = await getPairedDevice(identity.deviceId);
   const deviceToken = paired?.tokens?.operator?.token;
   expect(paired?.deviceId).toBe(identity.deviceId);
-  if (!deviceToken) {
-    throw new Error(`expected operator token for paired device ${identity.deviceId}`);
-  }
-  return { identity: { deviceId: identity.deviceId }, deviceToken };
+  expect(deviceToken).toBeDefined();
+  return { identity: { deviceId: identity.deviceId }, deviceToken: String(deviceToken ?? "") };
 }
 
 async function startRateLimitedTokenServerWithPairedDeviceToken() {
@@ -338,11 +312,10 @@ async function startRateLimitedTokenServerWithPairedDeviceToken() {
     mode: "token",
     token: "secret",
     rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
-  } satisfies Record<string, unknown>;
+    // oxlint-disable-next-line typescript/no-explicit-any
+  } as any;
 
-  const { server, ws, port, prevToken } = await startServerWithClient(undefined, {
-    controlUiEnabled: true,
-  });
+  const { server, ws, port, prevToken } = await startServerWithClient();
   const deviceIdentityPath = nextAuthIdentityPath("openclaw-auth-rate-limit");
   try {
     const initial = await connectReq(ws, { token: "secret", deviceIdentityPath });
@@ -352,7 +325,7 @@ async function startRateLimitedTokenServerWithPairedDeviceToken() {
     const { deviceToken } = await resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath);
 
     ws.close();
-    return { server, port, prevToken, deviceToken: deviceToken ?? "", deviceIdentityPath };
+    return { server, port, prevToken, deviceToken: String(deviceToken ?? ""), deviceIdentityPath };
   } catch (err) {
     ws.close();
     await server.close();
@@ -395,7 +368,6 @@ export {
   getFreePort,
   getTrackedConnectChallengeNonce,
   installGatewayTestHooks,
-  MIN_PROBE_PROTOCOL_VERSION,
   NODE_CLIENT,
   onceMessage,
   openTailscaleWs,
@@ -408,7 +380,6 @@ export {
   sendRawConnectReq,
   startGatewayServer,
   startRateLimitedTokenServerWithPairedDeviceToken,
-  startServer,
   startServerWithClient,
   TEST_OPERATOR_CLIENT,
   trackConnectChallengeNonce,

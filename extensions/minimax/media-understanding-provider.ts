@@ -7,9 +7,6 @@ import {
 export const minimaxMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "minimax",
   capabilities: ["image"],
-  defaultModels: { image: "MiniMax-VL-01" },
-  documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
-  autoPriority: { image: 40 },
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,
 };
@@ -17,9 +14,6 @@ export const minimaxMediaUnderstandingProvider: MediaUnderstandingProvider = {
 export const minimaxPortalMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "minimax-portal",
   capabilities: ["image"],
-  defaultModels: { image: "MiniMax-VL-01" },
-  documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
-  autoPriority: { image: 50 },
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,
 };

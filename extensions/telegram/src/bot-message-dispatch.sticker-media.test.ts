@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
+import { pruneStickerMediaFromContext } from "./bot-message-dispatch.js";
 
 type MediaCtx = {
   MediaPath?: string;

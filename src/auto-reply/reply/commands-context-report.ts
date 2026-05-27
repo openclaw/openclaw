@@ -1,19 +1,14 @@
-import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
-} from "../../agents/pi-embedded-helpers/bootstrap.js";
+} from "../../agents/pi-embedded-helpers.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
-import {
-  resolveFreshSessionTotalTokens,
-  type SessionSystemPromptReport,
-} from "../../config/sessions/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 import type { ReplyPayload } from "../types.js";
+import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { renderContextTreemapPng } from "./context-treemap.js";
 
 function formatInt(n: number): string {
   return new Intl.NumberFormat("en-US").format(n);
@@ -44,40 +39,23 @@ function formatListTop(
   return { lines, omitted };
 }
 
-function resolveRunContextReport(params: HandleCommandsParams): SessionSystemPromptReport | null {
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const existing = targetSessionEntry?.systemPromptReport;
-  return existing?.source === "run" ? existing : null;
-}
-
-function resolveContextReportAgentId(params: HandleCommandsParams): string {
-  return resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-    agentId: params.agentId,
-  }).sessionAgentId;
-}
-
 async function resolveContextReport(
   params: HandleCommandsParams,
 ): Promise<SessionSystemPromptReport> {
-  const runReport = resolveRunContextReport(params);
-  if (runReport) {
-    return runReport;
+  const existing = params.sessionEntry?.systemPromptReport;
+  if (existing && existing.source === "run") {
+    return existing;
   }
 
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const sessionAgentId = resolveContextReportAgentId(params);
-  const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg, sessionAgentId);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
-  const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
+  const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg);
   const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
     await resolveCommandsSystemPromptBundle(params);
 
   return buildSystemPromptReport({
     source: "estimate",
     generatedAt: Date.now(),
-    sessionId: targetSessionEntry?.sessionId,
+    sessionId: params.sessionEntry?.sessionId,
     sessionKey: params.sessionKey,
     provider: params.provider,
     model: params.model,
@@ -94,9 +72,8 @@ async function resolveContextReport(
 }
 
 export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const args = parseContextArgs(params.command.commandBodyNormalized);
-  const sub = normalizeLowercaseStringOrEmpty(args.split(/\s+/).find(Boolean));
+  const sub = args.split(/\s+/).filter(Boolean)[0]?.toLowerCase() ?? "";
 
   if (!sub || sub === "help") {
     return {
@@ -108,7 +85,6 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "Try:",
         "- /context list   (short breakdown)",
         "- /context detail (per-file + per-tool + per-skill + system prompt size)",
-        "- /context map    (WinDirStat-style treemap image)",
         "- /context json   (same, machine-readable)",
         "",
         "Inline shortcut = a command token inside a normal message (e.g. “hey /status”). It runs immediately (allowlisted senders only) and is stripped before the model sees the remaining text.",
@@ -116,42 +92,13 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     };
   }
 
-  const cachedContextUsageTokens = resolveFreshSessionTotalTokens(targetSessionEntry);
+  const report = await resolveContextReport(params);
   const session = {
-    totalTokens: targetSessionEntry?.totalTokens ?? null,
-    totalTokensFresh: targetSessionEntry?.totalTokensFresh ?? null,
-    inputTokens: targetSessionEntry?.inputTokens ?? null,
-    outputTokens: targetSessionEntry?.outputTokens ?? null,
+    totalTokens: params.sessionEntry?.totalTokens ?? null,
+    inputTokens: params.sessionEntry?.inputTokens ?? null,
+    outputTokens: params.sessionEntry?.outputTokens ?? null,
     contextTokens: params.contextTokens ?? null,
   } as const;
-
-  if (sub === "map") {
-    const report = resolveRunContextReport(params);
-    if (!report) {
-      return {
-        text: [
-          "Context treemap unavailable.",
-          "No actual run context is cached for this session yet.",
-          "Send a normal message, then run /context map again.",
-        ].join("\n"),
-      };
-    }
-    const treemap = await renderContextTreemapPng({
-      report,
-      session: {
-        cachedContextTokens: cachedContextUsageTokens ?? null,
-        contextWindowTokens: session.contextTokens,
-      },
-    });
-    return {
-      text: treemap.caption,
-      mediaUrl: treemap.path,
-      trustedLocalMedia: true,
-      sensitiveMedia: true,
-    };
-  }
-
-  const report = await resolveContextReport(params);
 
   if (sub === "json") {
     return { text: JSON.stringify({ report, session }, null, 2) };
@@ -161,7 +108,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     return {
       text: [
         "Unknown /context mode.",
-        "Use: /context, /context list, /context detail, /context map, or /context json",
+        "Use: /context, /context list, /context detail, or /context json",
       ].join("\n"),
     };
   }
@@ -192,19 +139,18 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     : "Tools: (none)";
   const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
-  const sessionAgentId = resolveContextReportAgentId(params);
   const bootstrapMaxChars =
     typeof report.bootstrapMaxChars === "number" &&
     Number.isFinite(report.bootstrapMaxChars) &&
     report.bootstrapMaxChars > 0
       ? report.bootstrapMaxChars
-      : resolveBootstrapMaxChars(params.cfg, sessionAgentId);
+      : resolveBootstrapMaxChars(params.cfg);
   const bootstrapTotalMaxChars =
     typeof report.bootstrapTotalMaxChars === "number" &&
     Number.isFinite(report.bootstrapTotalMaxChars) &&
     report.bootstrapTotalMaxChars > 0
       ? report.bootstrapTotalMaxChars
-      : resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
+      : resolveBootstrapTotalMaxChars(params.cfg);
   const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
   const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
   const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -237,15 +183,14 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       ? [
           `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(bootstrapAnalysis.totals.rawChars)} raw chars -> ${formatInt(bootstrapAnalysis.totals.injectedChars)} injected chars).`,
           ...(truncationCauseParts.length ? [`Causes: ${truncationCauseParts.join("; ")}.`] : []),
-          "Tip: increase this agent's `agents.list[].bootstrapMaxChars` / `agents.list[].bootstrapTotalMaxChars` override, or the matching `agents.defaults.*` fallback, if this truncation is not intentional.",
+          "Tip: increase `agents.defaults.bootstrapMaxChars` and/or `agents.defaults.bootstrapTotalMaxChars` if this truncation is not intentional.",
         ]
       : [];
 
-  const contextWindowLabel = session.contextTokens != null ? formatInt(session.contextTokens) : "?";
   const totalsLine =
-    cachedContextUsageTokens != null
-      ? `Session tokens (cached): ${formatInt(cachedContextUsageTokens)} total / ctx=${contextWindowLabel}`
-      : `Session tokens (cached): unknown / ctx=${contextWindowLabel}`;
+    session.totalTokens != null
+      ? `Session tokens (cached): ${formatInt(session.totalTokens)} total / ctx=${session.contextTokens ?? "?"}`
+      : `Session tokens (cached): unknown / ctx=${session.contextTokens ?? "?"}`;
   const sharedContextLines = [
     `Workspace: ${workspaceLabel}`,
     `Bootstrap max/file: ${bootstrapMaxLabel}`,
@@ -280,29 +225,6 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       .slice(0, 30)
       .map((t) => `- ${t.name}: ${t.propertiesCount} params`);
 
-    // `systemPrompt.chars` already includes injected files, skills, and tool-list text.
-    // Add only tool schemas here so the tracked estimate stays disjoint.
-    const currentTurnChars = report.currentTurn
-      ? report.currentTurn.promptChars + report.currentTurn.runtimeContextChars
-      : 0;
-    const trackedPromptChars =
-      report.systemPrompt.chars + report.tools.schemaChars + currentTurnChars;
-    const trackedPromptLine = `Tracked prompt estimate: ${formatCharsAndTokens(trackedPromptChars)}`;
-    const actualContextLine =
-      cachedContextUsageTokens != null
-        ? `Actual context usage (cached): ${formatInt(cachedContextUsageTokens)} tok`
-        : "Actual context usage (cached): unavailable";
-    const overheadTokens =
-      cachedContextUsageTokens != null
-        ? cachedContextUsageTokens - estimateTokensFromChars(trackedPromptChars)
-        : null;
-    const overheadLine =
-      overheadTokens == null
-        ? null
-        : overheadTokens > 0
-          ? `Untracked provider/runtime overhead: ~${formatInt(overheadTokens)} tok`
-          : "Untracked provider/runtime overhead: not observed in cached usage";
-
     return {
       text: [
         "🧠 Context breakdown (detailed)",
@@ -321,10 +243,6 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         ...perToolSummary.lines,
         ...(perToolSummary.omitted ? [`… (+${perToolSummary.omitted} more tools)`] : []),
         ...(toolPropsLines.length ? ["", "Tools (param count):", ...toolPropsLines] : []),
-        "",
-        trackedPromptLine,
-        actualContextLine,
-        ...(overheadLine ? [overheadLine] : []),
         "",
         totalsLine,
         "",

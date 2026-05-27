@@ -5,21 +5,13 @@ import {
   formatSessionArchiveTimestamp,
   parseSessionArchiveTimestamp,
   type SessionArchiveReason,
-} from "../config/sessions/artifacts.js";
-import {
   resolveSessionFilePath,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
-} from "../config/sessions/paths.js";
+} from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 
-type ArchiveFileReason = SessionArchiveReason;
-export type ArchivedSessionTranscript = {
-  sourcePath: string;
-  archivedPath: string;
-};
+export type ArchiveFileReason = SessionArchiveReason;
 
 function classifySessionTranscriptCandidate(
   sessionId: string,
@@ -122,23 +114,13 @@ export function resolveSessionTranscriptCandidates(
   const legacyDir = path.join(home, ".openclaw", "sessions");
   pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, legacyDir));
 
-  return uniqueStrings(candidates);
+  return Array.from(new Set(candidates));
 }
 
 export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
-  // Notify the session transcript subscribers (memory index, sessions-history
-  // HTTP, etc.) that a mutation landed on a session-owned path. Without this
-  // emit the memory sync's incremental path never learns the new archive
-  // exists: chokidar does not watch the sessions directory, and the event bus
-  // is the only channel gateway code uses to signal session-file mutations.
-  // All other in-process mutations (append, compaction, tool-result rewrite,
-  // chat inject, command execution) already emit here; archive was the sole
-  // remaining gap, which is why `.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`
-  // files only surfaced in the index after a full reindex.
-  emitSessionTranscriptUpdate({ sessionFile: archived });
   return archived;
 }
 
@@ -153,29 +135,8 @@ export function archiveSessionTranscripts(opts: {
    * This prevents maintenance operations from mutating paths outside the agent sessions dir.
    */
   restrictToStoreDir?: boolean;
-  onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): string[] {
-  return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
-}
-
-export function archiveSessionTranscriptsDetailed(opts: {
-  sessionId: string;
-  storePath: string | undefined;
-  sessionFile?: string;
-  agentId?: string;
-  reason: "reset" | "deleted";
-  /**
-   * When true, only archive files resolved under the session store directory.
-   * This prevents maintenance operations from mutating paths outside the agent sessions dir.
-   */
-  restrictToStoreDir?: boolean;
-  /**
-   * Invoked when an individual transcript candidate fails to archive. The
-   * caller decides whether to log, warn-deliver, or escalate.
-   */
-  onArchiveError?: (err: unknown, sourcePath: string) => void;
-}): ArchivedSessionTranscript[] {
-  const archived: ArchivedSessionTranscript[] = [];
+  const archived: string[] = [];
   const storeDir =
     opts.restrictToStoreDir && opts.storePath
       ? canonicalizePathForComparison(path.dirname(opts.storePath))
@@ -197,54 +158,12 @@ export function archiveSessionTranscriptsDetailed(opts: {
       continue;
     }
     try {
-      archived.push({
-        sourcePath: candidatePath,
-        archivedPath: archiveFileOnDisk(candidatePath, opts.reason),
-      });
-    } catch (err) {
-      opts.onArchiveError?.(err, candidatePath);
+      archived.push(archiveFileOnDisk(candidatePath, opts.reason));
+    } catch {
+      // Best-effort.
     }
   }
   return archived;
-}
-
-export function resolveStableSessionEndTranscript(params: {
-  sessionId: string;
-  storePath: string | undefined;
-  sessionFile?: string;
-  agentId?: string;
-  archivedTranscripts?: ArchivedSessionTranscript[];
-}): { sessionFile?: string; transcriptArchived?: boolean } {
-  const archivedTranscripts = params.archivedTranscripts ?? [];
-  if (archivedTranscripts.length > 0) {
-    const preferredPath = params.sessionFile?.trim()
-      ? canonicalizePathForComparison(params.sessionFile)
-      : undefined;
-    const archivedMatch =
-      preferredPath == null
-        ? undefined
-        : archivedTranscripts.find(
-            (entry) => canonicalizePathForComparison(entry.sourcePath) === preferredPath,
-          );
-    const archivedPath = archivedMatch?.archivedPath ?? archivedTranscripts[0]?.archivedPath;
-    if (archivedPath) {
-      return { sessionFile: archivedPath, transcriptArchived: true };
-    }
-  }
-
-  for (const candidate of resolveSessionTranscriptCandidates(
-    params.sessionId,
-    params.storePath,
-    params.sessionFile,
-    params.agentId,
-  )) {
-    const candidatePath = canonicalizePathForComparison(candidate);
-    if (fs.existsSync(candidatePath)) {
-      return { sessionFile: candidatePath, transcriptArchived: false };
-    }
-  }
-
-  return {};
 }
 
 export async function cleanupArchivedSessionTranscripts(opts: {
@@ -258,7 +177,7 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   }
   const now = opts.nowMs ?? Date.now();
   const reason: ArchiveFileReason = opts.reason ?? "deleted";
-  const directories = uniqueStrings(opts.directories.map((dir) => path.resolve(dir)));
+  const directories = Array.from(new Set(opts.directories.map((dir) => path.resolve(dir))));
   let removed = 0;
   let scanned = 0;
 

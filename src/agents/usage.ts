@@ -1,5 +1,3 @@
-import { asFiniteNumber } from "../shared/number-coercion.js";
-
 export type UsageLike = {
   input?: number;
   output?: number;
@@ -17,14 +15,8 @@ export type UsageLike = {
   completion_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
-  reasoningTokens?: number;
-  reasoning_tokens?: number;
-  completion_tokens_details?: { reasoning_tokens?: number };
-  output_tokens_details?: { reasoning_tokens?: number };
   // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
   cached_tokens?: number;
-  // OpenAI Responses reports cached prompt reuse here.
-  input_tokens_details?: { cached_tokens?: number };
   // Kimi K2 uses prompt_tokens_details.cached_tokens for automatic prefix caching.
   prompt_tokens_details?: { cached_tokens?: number };
   // Some agents/logs emit alternate naming.
@@ -32,13 +24,6 @@ export type UsageLike = {
   total_tokens?: number;
   cache_read?: number;
   cache_write?: number;
-  // llama.cpp-style streamed completion metadata.
-  prompt_n?: number;
-  predicted_n?: number;
-  timings?: {
-    prompt_n?: number;
-    predicted_n?: number;
-  };
 };
 
 export type NormalizedUsage = {
@@ -46,7 +31,6 @@ export type NormalizedUsage = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
-  reasoningTokens?: number;
   total?: number;
 };
 
@@ -82,96 +66,61 @@ export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
   };
 }
 
+const asFiniteNumber = (value: unknown): number | undefined => {
+  if (typeof value !== "number") {
+    return undefined;
+  }
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  return value;
+};
+
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
   if (!usage) {
     return false;
   }
-  return [
-    usage.input,
-    usage.output,
-    usage.cacheRead,
-    usage.cacheWrite,
-    usage.reasoningTokens,
-    usage.total,
-  ].some((v) => typeof v === "number" && Number.isFinite(v) && v > 0);
+  return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total].some(
+    (v) => typeof v === "number" && Number.isFinite(v) && v > 0,
+  );
 }
-
-const normalizeTokenCount = (value: unknown): number | undefined => {
-  const numeric = asFiniteNumber(value);
-  if (numeric === undefined) {
-    return undefined;
-  }
-  if (numeric <= 0) {
-    return 0;
-  }
-  return Math.min(Math.trunc(numeric), Number.MAX_SAFE_INTEGER);
-};
 
 export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefined {
   if (!raw) {
     return undefined;
   }
 
-  const cacheRead = normalizeTokenCount(
-    raw.cacheRead ??
-      raw.cache_read ??
-      raw.cache_read_input_tokens ??
-      raw.cached_tokens ??
-      raw.input_tokens_details?.cached_tokens ??
-      raw.prompt_tokens_details?.cached_tokens,
-  );
-
-  const rawInputValue =
-    raw.input ??
-    raw.inputTokens ??
-    raw.input_tokens ??
-    raw.promptTokens ??
-    raw.prompt_tokens ??
-    raw.prompt_n ??
-    raw.timings?.prompt_n;
-
-  const usesOpenAIStylePromptTotals =
-    raw.cached_tokens !== undefined ||
-    raw.input_tokens_details?.cached_tokens !== undefined ||
-    raw.prompt_tokens_details?.cached_tokens !== undefined;
-
   // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
-  // prompt/input totals upstream, while OpenAI-style prompt/input aliases
-  // include cached tokens in the reported prompt total. Normalize both cases
-  // to uncached input tokens so downstream prompt-token math does not double-
-  // count cache reads.
-  const rawInput = asFiniteNumber(rawInputValue);
-  const normalizedInput =
-    rawInput !== undefined && usesOpenAIStylePromptTotals && cacheRead !== undefined
-      ? rawInput - cacheRead
-      : rawInput;
-  const input = normalizeTokenCount(normalizedInput);
-  const output = normalizeTokenCount(
+  // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
+  // negative, which is nonsensical.  Clamp to 0.
+  const rawInput = asFiniteNumber(
+    raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
+  );
+  const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
+  const output = asFiniteNumber(
     raw.output ??
       raw.outputTokens ??
       raw.output_tokens ??
       raw.completionTokens ??
-      raw.completion_tokens ??
-      raw.predicted_n ??
-      raw.timings?.predicted_n,
+      raw.completion_tokens,
   );
-  const cacheWrite = normalizeTokenCount(
+  const cacheRead = asFiniteNumber(
+    raw.cacheRead ??
+      raw.cache_read ??
+      raw.cache_read_input_tokens ??
+      raw.cached_tokens ??
+      raw.prompt_tokens_details?.cached_tokens,
+  );
+  const cacheWrite = asFiniteNumber(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
-  const reasoningTokens = normalizeTokenCount(
-    raw.reasoningTokens ??
-      raw.reasoning_tokens ??
-      raw.completion_tokens_details?.reasoning_tokens ??
-      raw.output_tokens_details?.reasoning_tokens,
-  );
-  const total = normalizeTokenCount(raw.total ?? raw.totalTokens ?? raw.total_tokens);
+  const total = asFiniteNumber(raw.total ?? raw.totalTokens ?? raw.total_tokens);
 
   if (
     input === undefined &&
     output === undefined &&
     cacheRead === undefined &&
     cacheWrite === undefined &&
-    reasoningTokens === undefined &&
     total === undefined
   ) {
     return undefined;
@@ -182,48 +131,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     output,
     cacheRead,
     cacheWrite,
-    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     total,
-  };
-}
-
-/**
- * Maps normalized usage to OpenAI Chat Completions `usage` fields.
- *
- * `prompt_tokens` is input + cacheRead (cache write is excluded to match the
- * OpenAI-style breakdown used by the compat endpoint).
- *
- * `total_tokens` is the greater of the component sum and aggregate `total` when
- * present, so a partial breakdown cannot discard a valid upstream total.
- */
-export function toOpenAiChatCompletionsUsage(usage: NormalizedUsage | undefined): {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  completion_tokens_details?: { reasoning_tokens: number };
-} {
-  const input = usage?.input ?? 0;
-  const output = usage?.output ?? 0;
-  const cacheRead = usage?.cacheRead ?? 0;
-  const promptTokens = Math.max(0, input + cacheRead);
-  const completionTokens = Math.max(0, output);
-  const componentTotal = promptTokens + completionTokens;
-  const aggregateRaw = usage?.total;
-  const aggregateTotal =
-    typeof aggregateRaw === "number" && Number.isFinite(aggregateRaw)
-      ? Math.max(0, aggregateRaw)
-      : undefined;
-  const totalTokens =
-    aggregateTotal !== undefined ? Math.max(componentTotal, aggregateTotal) : componentTotal;
-
-  const reasoningTokens = normalizeTokenCount(usage?.reasoningTokens);
-  return {
-    prompt_tokens: promptTokens,
-    completion_tokens: completionTokens,
-    total_tokens: totalTokens,
-    ...(reasoningTokens !== undefined
-      ? { completion_tokens_details: { reasoning_tokens: reasoningTokens } }
-      : {}),
   };
 }
 
@@ -240,19 +148,6 @@ export function derivePromptTokens(usage?: {
   const cacheWrite = usage.cacheWrite ?? 0;
   const sum = input + cacheRead + cacheWrite;
   return sum > 0 ? sum : undefined;
-}
-
-export function deriveContextPromptTokens(params: {
-  lastCallUsage?: NormalizedUsage;
-  promptTokens?: number;
-  usage?: NormalizedUsage;
-}): number | undefined {
-  const promptOverride = params.promptTokens;
-  if (typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0) {
-    return promptOverride;
-  }
-
-  return derivePromptTokens(params.lastCallUsage) ?? derivePromptTokens(params.usage);
 }
 
 export function deriveSessionTotalTokens(params: {
@@ -277,10 +172,13 @@ export function deriveSessionTotalTokens(params: {
 
   // NOTE: SessionEntry.totalTokens is used as a prompt/context snapshot.
   // It intentionally excludes completion/output tokens.
-  const promptTokens = deriveContextPromptTokens({
-    promptTokens: hasPromptOverride ? promptOverride : undefined,
-    usage,
-  });
+  const promptTokens = hasPromptOverride
+    ? promptOverride
+    : derivePromptTokens({
+        input: usage?.input,
+        cacheRead: usage?.cacheRead,
+        cacheWrite: usage?.cacheWrite,
+      });
 
   if (!(typeof promptTokens === "number") || !Number.isFinite(promptTokens) || promptTokens <= 0) {
     return undefined;

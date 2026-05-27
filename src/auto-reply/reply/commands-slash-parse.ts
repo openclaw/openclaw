@@ -1,5 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-
 export type SlashCommandParseResult =
   | { kind: "no-match" }
   | { kind: "empty" }
@@ -10,20 +8,10 @@ export type ParsedSlashCommand =
   | { ok: true; action: string; args: string }
   | { ok: false; message: string };
 
-function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
+export function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
   const trimmed = raw.trim();
-  const slashLower = normalizeLowercaseStringOrEmpty(slash);
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith(slashLower)) {
-    return { kind: "no-match" };
-  }
-  // Fix #84572: enforce a boundary after the prefix so `/config-check` does
-  // not match the `/config` handler. The character immediately after the
-  // matched prefix must be whitespace, a colon, or end-of-string. Otherwise
-  // the prefix collided with a longer command name (e.g. a skill named
-  // `config-check`) and should be treated as a non-match so the longer
-  // handler — or the skill router — gets a chance to claim it.
-  const charAfter = trimmed.charAt(slash.length);
-  if (charAfter && !/[\s:]/.test(charAfter)) {
+  const slashLower = slash.toLowerCase();
+  if (!trimmed.toLowerCase().startsWith(slashLower)) {
     return { kind: "no-match" };
   }
   const rest = trimmed.slice(slash.length).trim();
@@ -34,7 +22,7 @@ function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandPa
   if (!match) {
     return { kind: "invalid" };
   }
-  const action = normalizeLowercaseStringOrEmpty(match[1]);
+  const action = match[1]?.toLowerCase() ?? "";
   const args = (match[2] ?? "").trim();
   return { kind: "parsed", action, args };
 }

@@ -1,8 +1,5 @@
 import { TextStyle, type Style } from "./zca-constants.js";
 
-const ESCAPE_SENTINEL_START = "\u0001";
-const ESCAPE_SENTINEL_END = "\u0002";
-
 type InlineStyle = (typeof TextStyle)[keyof typeof TextStyle];
 
 type LineStyle = {
@@ -265,7 +262,7 @@ export function parseZalouserTextStyles(input: string): { text: string; styles: 
   }
 
   if (escapeMap.length > 0) {
-    const escapeRegex = new RegExp(`${ESCAPE_SENTINEL_START}(\\d+)${ESCAPE_SENTINEL_END}`, "g");
+    const escapeRegex = /\x01(\d+)\x02/g;
     const shifts: Array<{ pos: number; delta: number }> = [];
     let cumulativeDelta = 0;
 

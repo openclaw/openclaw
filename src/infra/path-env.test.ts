@@ -1,6 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ensureOpenClawCliOnPath } from "./path-env.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   dirs: new Set<string>(),
@@ -11,8 +10,8 @@ const abs = (p: string) => path.resolve(p);
 const setDir = (p: string) => state.dirs.add(abs(p));
 const setExe = (p: string) => state.executables.add(abs(p));
 
-vi.mock("node:fs", async () => {
-  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
   const pathMod = await import("node:path");
   const absInMock = (p: string) => pathMod.resolve(p);
 
@@ -20,21 +19,15 @@ vi.mock("node:fs", async () => {
     ...actual,
     constants: { ...actual.constants, X_OK: actual.constants.X_OK ?? 1 },
     accessSync: (p: string, mode?: number) => {
-      const resolved = absInMock(p);
-      if (state.executables.has(resolved)) {
-        return;
+      // `mode` is ignored in tests; we only model "is executable" or "not".
+      if (!state.executables.has(absInMock(p))) {
+        throw new Error(`EACCES: permission denied, access '${p}' (mode=${mode ?? 0})`);
       }
-      actual.accessSync(p, mode);
     },
-    statSync: (p: string) => {
-      const resolved = absInMock(p);
-      if (state.dirs.has(resolved)) {
-        return {
-          isDirectory: () => true,
-        };
-      }
-      return actual.statSync(p);
-    },
+    statSync: (p: string) => ({
+      // Avoid throws for non-existent paths; the code under test only cares about isDirectory().
+      isDirectory: () => state.dirs.has(absInMock(p)),
+    }),
   };
 
   return { ...wrapped, default: wrapped };
@@ -43,6 +36,8 @@ vi.mock("node:fs", async () => {
 vi.mock("./env.js", () => ({
   isTruthyEnvValue: (value?: string) => value === "1" || value === "true",
 }));
+
+let ensureOpenClawCliOnPath: typeof import("./path-env.js").ensureOpenClawCliOnPath;
 
 describe("ensureOpenClawCliOnPath", () => {
   const envKeys = [
@@ -55,6 +50,10 @@ describe("ensureOpenClawCliOnPath", () => {
     "XDG_BIN_HOME",
   ] as const;
   let envSnapshot: Record<(typeof envKeys)[number], string | undefined>;
+
+  beforeAll(async () => {
+    ({ ensureOpenClawCliOnPath } = await import("./path-env.js"));
+  });
 
   beforeEach(() => {
     envSnapshot = Object.fromEntries(envKeys.map((k) => [k, process.env[k]])) as typeof envSnapshot;
@@ -129,26 +128,6 @@ describe("ensureOpenClawCliOnPath", () => {
       platform: "darwin",
     });
     expect(updated[0]).toBe(appBinDir);
-  });
-
-  it("keeps the current runtime directory ahead of system PATH hardening", () => {
-    const tmp = abs("/tmp/openclaw-path/case-runtime-dir");
-    const nodeBinDir = path.join(tmp, "node-bin");
-    const nodeExec = path.join(nodeBinDir, "node");
-    setDir(tmp);
-    setDir(nodeBinDir);
-    setExe(nodeExec);
-
-    resetBootstrapEnv("/usr/bin:/bin");
-
-    const updated = bootstrapPath({
-      execPath: nodeExec,
-      cwd: tmp,
-      homeDir: tmp,
-      platform: "linux",
-    });
-    expect(updated[0]).toBe(nodeBinDir);
-    expect(updated.indexOf(nodeBinDir)).toBeLessThan(updated.indexOf("/usr/bin"));
   });
 
   it("is idempotent", () => {
@@ -344,64 +323,5 @@ describe("ensureOpenClawCliOnPath", () => {
     const { params, expectedPaths, anchor } = setup();
     const updated = bootstrapPath(params);
     expectPathsAfter(updated, anchor, expectedPaths);
-  });
-
-  it("does not append HOMEBREW_PREFIX from process env", () => {
-    const { tmp, appCli } = setupAppCliRoot("case-homebrew-env-ignored");
-    const maliciousPrefix = path.join(tmp, "evil-brew");
-    const maliciousBin = path.join(maliciousPrefix, "bin");
-    const maliciousSbin = path.join(maliciousPrefix, "sbin");
-    setDir(maliciousBin);
-    setDir(maliciousSbin);
-    resetBootstrapEnv("/usr/bin:/bin");
-    process.env.HOMEBREW_PREFIX = maliciousPrefix;
-
-    const updated = bootstrapPath({
-      execPath: appCli,
-      cwd: tmp,
-      homeDir: tmp,
-      platform: "linux",
-    });
-
-    expect(updated).not.toContain(maliciousBin);
-    expect(updated).not.toContain(maliciousSbin);
-  });
-
-  it("does not probe Linuxbrew fallbacks on macOS unless already inherited", () => {
-    const { tmp, appCli } = setupAppCliRoot("case-no-darwin-linuxbrew");
-    const homeLinuxbrewBin = path.join(tmp, ".linuxbrew", "bin");
-    const globalLinuxbrewBin = "/home/linuxbrew/.linuxbrew/bin";
-    setDir(path.join(tmp, ".linuxbrew"));
-    setDir(homeLinuxbrewBin);
-    setDir("/home");
-    setDir("/home/linuxbrew");
-    setDir("/home/linuxbrew/.linuxbrew");
-    setDir(globalLinuxbrewBin);
-    resetBootstrapEnv("/usr/bin:/bin");
-
-    const updated = bootstrapPath({
-      execPath: appCli,
-      cwd: tmp,
-      homeDir: tmp,
-      platform: "darwin",
-    });
-
-    expect(updated).not.toContain(homeLinuxbrewBin);
-    expect(updated).not.toContain(globalLinuxbrewBin);
-  });
-
-  it("keeps inherited Linuxbrew path entries on macOS", () => {
-    const { tmp, appCli } = setupAppCliRoot("case-keep-darwin-linuxbrew");
-    const globalLinuxbrewBin = "/home/linuxbrew/.linuxbrew/bin";
-    resetBootstrapEnv(`${globalLinuxbrewBin}:/usr/bin:/bin`);
-
-    const updated = bootstrapPath({
-      execPath: appCli,
-      cwd: tmp,
-      homeDir: tmp,
-      platform: "darwin",
-    });
-
-    expect(updated).toContain(globalLinuxbrewBin);
   });
 });

@@ -1,75 +1,72 @@
-import {
-  defineBundledChannelEntry,
-  loadBundledEntryExportSync,
-} from "openclaw/plugin-sdk/channel-entry-contract";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
-import { registerFeishuSubagentHooks } from "./subagent-hooks-api.js";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { registerFeishuBitableTools } from "./src/bitable.js";
+import { feishuPlugin } from "./src/channel.js";
+import { registerFeishuChatTools } from "./src/chat.js";
+import { registerFeishuDocTools } from "./src/docx.js";
+import { registerFeishuDriveTools } from "./src/drive.js";
+import { registerFeishuPermTools } from "./src/perm.js";
+import { setFeishuRuntime } from "./src/runtime.js";
+import { registerFeishuSubagentHooks } from "./src/subagent-hooks.js";
+import { registerFeishuWikiTools } from "./src/wiki.js";
 
-function registerFeishuDocTools(api: OpenClawPluginApi) {
-  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "registerFeishuDocTools",
-  });
-  register(api);
+export { feishuPlugin } from "./src/channel.js";
+export { setFeishuRuntime } from "./src/runtime.js";
+export {
+  sendMessageFeishu,
+  sendCardFeishu,
+  updateCardFeishu,
+  editMessageFeishu,
+  getMessageFeishu,
+} from "./src/send.js";
+export {
+  uploadImageFeishu,
+  uploadFileFeishu,
+  sendImageFeishu,
+  sendFileFeishu,
+  sendMediaFeishu,
+} from "./src/media.js";
+export { probeFeishu } from "./src/probe.js";
+export {
+  addReactionFeishu,
+  removeReactionFeishu,
+  listReactionsFeishu,
+  FeishuEmoji,
+} from "./src/reactions.js";
+export {
+  extractMentionTargets,
+  extractMessageBody,
+  isMentionForwardRequest,
+  formatMentionForText,
+  formatMentionForCard,
+  formatMentionAllForText,
+  formatMentionAllForCard,
+  buildMentionedMessage,
+  buildMentionedCardContent,
+  type MentionTarget,
+} from "./src/mention.js";
+
+type MonitorFeishuProvider = typeof import("./src/monitor.js").monitorFeishuProvider;
+
+let feishuMonitorPromise: Promise<typeof import("./src/monitor.js")> | null = null;
+
+function loadFeishuMonitorModule() {
+  feishuMonitorPromise ??= import("./src/monitor.js");
+  return feishuMonitorPromise;
 }
 
-function registerFeishuChatTools(api: OpenClawPluginApi) {
-  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "registerFeishuChatTools",
-  });
-  register(api);
+export async function monitorFeishuProvider(
+  ...args: Parameters<MonitorFeishuProvider>
+): ReturnType<MonitorFeishuProvider> {
+  const { monitorFeishuProvider } = await loadFeishuMonitorModule();
+  return await monitorFeishuProvider(...args);
 }
 
-function registerFeishuWikiTools(api: OpenClawPluginApi) {
-  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "registerFeishuWikiTools",
-  });
-  register(api);
-}
-
-function registerFeishuDriveTools(api: OpenClawPluginApi) {
-  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "registerFeishuDriveTools",
-  });
-  register(api);
-}
-
-function registerFeishuPermTools(api: OpenClawPluginApi) {
-  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "registerFeishuPermTools",
-  });
-  register(api);
-}
-
-function registerFeishuBitableTools(api: OpenClawPluginApi) {
-  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "registerFeishuBitableTools",
-  });
-  register(api);
-}
-
-export default defineBundledChannelEntry({
+export default defineChannelPluginEntry({
   id: "feishu",
   name: "Feishu",
   description: "Feishu/Lark channel plugin",
-  importMetaUrl: import.meta.url,
-  plugin: {
-    specifier: "./channel-plugin-api.js",
-    exportName: "feishuPlugin",
-  },
-  secrets: {
-    specifier: "./secret-contract-api.js",
-    exportName: "channelSecrets",
-  },
-  runtime: {
-    specifier: "./runtime-api.js",
-    exportName: "setFeishuRuntime",
-  },
+  plugin: feishuPlugin,
+  setRuntime: setFeishuRuntime,
   registerFull(api) {
     registerFeishuSubagentHooks(api);
     registerFeishuDocTools(api);

@@ -1,11 +1,9 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-
 export function normalizeMattermostMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {
     return undefined;
   }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  const lower = trimmed.toLowerCase();
   if (lower.startsWith("channel:")) {
     const id = trimmed.slice("channel:".length).trim();
     return id ? `channel:${id}` : undefined;
@@ -36,7 +34,7 @@ export function normalizeMattermostMessagingTarget(raw: string): string | undefi
   return undefined;
 }
 
-export function looksLikeMattermostTargetId(raw: string, _normalized?: string): boolean {
+export function looksLikeMattermostTargetId(raw: string, normalized?: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
     return false;

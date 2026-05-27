@@ -2,22 +2,9 @@ import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { LogService } from "../sdk/logger.js";
-import { awaitMatrixStartupWithAbort } from "../startup-abort.js";
 import { resolveMatrixAuth, resolveMatrixAuthContext } from "./config.js";
+import { createMatrixClient } from "./create-client.js";
 import type { MatrixAuth } from "./types.js";
-
-type MatrixCreateClientDeps = {
-  createMatrixClient: typeof import("./create-client.js").createMatrixClient;
-};
-
-let matrixCreateClientDepsPromise: Promise<MatrixCreateClientDeps> | undefined;
-
-async function loadMatrixCreateClientDeps(): Promise<MatrixCreateClientDeps> {
-  matrixCreateClientDepsPromise ??= import("./create-client.js").then((runtime) => ({
-    createMatrixClient: runtime.createMatrixClient,
-  }));
-  return await matrixCreateClientDepsPromise;
-}
 
 type SharedMatrixClientState = {
   client: MatrixClient;
@@ -51,7 +38,6 @@ async function createSharedMatrixClient(params: {
   auth: MatrixAuth;
   timeoutMs?: number;
 }): Promise<SharedMatrixClientState> {
-  const { createMatrixClient } = await loadMatrixCreateClientDeps();
   const client = await createMatrixClient({
     homeserver: params.auth.homeserver,
     userId: params.auth.userId,
@@ -92,22 +78,19 @@ function deleteSharedClientState(state: SharedMatrixClientState): void {
 
 async function ensureSharedClientStarted(params: {
   state: SharedMatrixClientState;
+  timeoutMs?: number;
+  initialSyncLimit?: number;
   encryption?: boolean;
-  abortSignal?: AbortSignal;
 }): Promise<void> {
-  const waitForStart = async (startPromise: Promise<void>) => {
-    await awaitMatrixStartupWithAbort(startPromise, params.abortSignal);
-  };
-
   if (params.state.started) {
     return;
   }
   if (params.state.startPromise) {
-    await waitForStart(params.state.startPromise);
+    await params.state.startPromise;
     return;
   }
 
-  const startPromise = (async () => {
+  params.state.startPromise = (async () => {
     const client = params.state.client;
 
     // Initialize crypto if enabled
@@ -123,19 +106,15 @@ async function ensureSharedClientStarted(params: {
       }
     }
 
-    await client.start({ abortSignal: params.abortSignal });
+    await client.start();
     params.state.started = true;
   })();
-  // Keep the shared startup lock until the underlying start fully settles, even
-  // if one waiter aborts early while another caller still owns the startup.
-  const guardedStart = startPromise.finally(() => {
-    if (params.state.startPromise === guardedStart) {
-      params.state.startPromise = null;
-    }
-  });
-  params.state.startPromise = guardedStart;
 
-  await waitForStart(guardedStart);
+  try {
+    await params.state.startPromise;
+  } finally {
+    params.state.startPromise = null;
+  }
 }
 
 async function resolveSharedMatrixClientState(
@@ -146,7 +125,6 @@ async function resolveSharedMatrixClientState(
     auth?: MatrixAuth;
     startClient?: boolean;
     accountId?: string | null;
-    abortSignal?: AbortSignal;
   } = {},
 ): Promise<SharedMatrixClientState> {
   const requestedAccountId = normalizeOptionalAccountId(params.accountId);
@@ -155,21 +133,13 @@ async function resolveSharedMatrixClientState(
       `Matrix shared client account mismatch: requested ${requestedAccountId}, auth resolved ${params.auth.accountId}`,
     );
   }
-  const authContext = (() => {
-    if (params.auth) {
-      return null;
-    }
-    if (!params.cfg) {
-      throw new Error(
-        "Matrix shared client requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-      );
-    }
-    return resolveMatrixAuthContext({
-      cfg: params.cfg,
-      env: params.env,
-      accountId: params.accountId,
-    });
-  })();
+  const authContext = params.auth
+    ? null
+    : resolveMatrixAuthContext({
+        cfg: params.cfg,
+        env: params.env,
+        accountId: params.accountId,
+      });
   const auth =
     params.auth ??
     (await resolveMatrixAuth({
@@ -185,8 +155,9 @@ async function resolveSharedMatrixClientState(
     if (shouldStart) {
       await ensureSharedClientStarted({
         state: existingState,
+        timeoutMs: params.timeoutMs,
+        initialSyncLimit: auth.initialSyncLimit,
         encryption: auth.encryption,
-        abortSignal: params.abortSignal,
       });
     }
     return existingState;
@@ -198,8 +169,9 @@ async function resolveSharedMatrixClientState(
     if (shouldStart) {
       await ensureSharedClientStarted({
         state: pending,
+        timeoutMs: params.timeoutMs,
+        initialSyncLimit: auth.initialSyncLimit,
         encryption: auth.encryption,
-        abortSignal: params.abortSignal,
       });
     }
     return pending;
@@ -217,8 +189,9 @@ async function resolveSharedMatrixClientState(
     if (shouldStart) {
       await ensureSharedClientStarted({
         state: created,
+        timeoutMs: params.timeoutMs,
+        initialSyncLimit: auth.initialSyncLimit,
         encryption: auth.encryption,
-        abortSignal: params.abortSignal,
       });
     }
     return created;
@@ -235,7 +208,6 @@ export async function resolveSharedMatrixClient(
     auth?: MatrixAuth;
     startClient?: boolean;
     accountId?: string | null;
-    abortSignal?: AbortSignal;
   } = {},
 ): Promise<MatrixClient> {
   const state = await resolveSharedMatrixClientState(params);
@@ -250,7 +222,6 @@ export async function acquireSharedMatrixClient(
     auth?: MatrixAuth;
     startClient?: boolean;
     accountId?: string | null;
-    abortSignal?: AbortSignal;
   } = {},
 ): Promise<MatrixClient> {
   const state = await resolveSharedMatrixClientState(params);
@@ -294,7 +265,7 @@ export function stopSharedClientInstance(client: MatrixClient): void {
 
 export async function releaseSharedClientInstance(
   client: MatrixClient,
-  mode: "stop" | "persist" | "discard" = "stop",
+  mode: "stop" | "persist" = "stop",
 ): Promise<boolean> {
   const state = findSharedClientStateByInstance(client);
   if (!state) {
@@ -307,8 +278,6 @@ export async function releaseSharedClientInstance(
   deleteSharedClientState(state);
   if (mode === "persist") {
     await client.stopAndPersist();
-  } else if (mode === "discard") {
-    client.stopWithoutPersist();
   } else {
     client.stop();
   }

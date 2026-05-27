@@ -1,6 +1,6 @@
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 
-type UrbitBaseUrlValidation =
+export type UrbitBaseUrlValidation =
   | { ok: true; baseUrl: string; hostname: string }
   | { ok: false; error: string };
 
@@ -8,12 +8,8 @@ function hasScheme(value: string): boolean {
   return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value);
 }
 
-export function normalizeUrbitHostname(hostname: string | undefined): string {
-  return (hostname ?? "").trim().toLowerCase().replace(/\.$/, "");
-}
-
 export function validateUrbitBaseUrl(raw: string): UrbitBaseUrlValidation {
-  const trimmed = raw.trim();
+  const trimmed = String(raw ?? "").trim();
   if (!trimmed) {
     return { ok: false, error: "Required" };
   }
@@ -35,7 +31,7 @@ export function validateUrbitBaseUrl(raw: string): UrbitBaseUrlValidation {
     return { ok: false, error: "URL must not include credentials" };
   }
 
-  const hostname = normalizeUrbitHostname(parsed.hostname);
+  const hostname = parsed.hostname.trim().toLowerCase().replace(/\.$/, "");
   if (!hostname) {
     return { ok: false, error: "Invalid hostname" };
   }
@@ -53,7 +49,7 @@ export function validateUrbitBaseUrl(raw: string): UrbitBaseUrlValidation {
 }
 
 export function isBlockedUrbitHostname(hostname: string): boolean {
-  const normalized = normalizeUrbitHostname(hostname);
+  const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
   if (!normalized) {
     return false;
   }

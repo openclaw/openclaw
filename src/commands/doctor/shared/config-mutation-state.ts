@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 
 export type DoctorConfigMutationState = {
   cfg: OpenClawConfig;

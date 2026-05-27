@@ -1,4 +1,3 @@
-import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 
 export async function cookiesGetViaPlaywright(opts: {
@@ -64,7 +63,7 @@ export async function storageGetViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const kind = opts.kind;
-  const key = readStringValue(opts.key);
+  const key = typeof opts.key === "string" ? opts.key : undefined;
   const values = await page.evaluate(
     ({ kind: kind2, key: key2 }) => {
       const store = kind2 === "session" ? window.sessionStorage : window.localStorage;
@@ -99,7 +98,7 @@ export async function storageSetViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  const key = opts.key;
+  const key = String(opts.key ?? "");
   if (!key) {
     throw new Error("key is required");
   }
@@ -108,7 +107,7 @@ export async function storageSetViaPlaywright(opts: {
       const store = kind === "session" ? window.sessionStorage : window.localStorage;
       store.setItem(k, value);
     },
-    { kind: opts.kind, key, value: opts.value },
+    { kind: opts.kind, key, value: String(opts.value ?? "") },
   );
 }
 

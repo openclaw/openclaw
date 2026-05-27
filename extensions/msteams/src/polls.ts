@@ -1,14 +1,8 @@
 import crypto from "node:crypto";
-import {
-  isRecord,
-  normalizeOptionalString,
-  normalizeStringEntries,
-  uniqueStrings,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMSTeamsStorePath } from "./storage.js";
 import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
-type MSTeamsPollVote = {
+export type MSTeamsPollVote = {
   pollId: string;
   selections: string[];
 };
@@ -35,7 +29,7 @@ export type MSTeamsPollStore = {
   }) => Promise<MSTeamsPoll | null>;
 };
 
-type MSTeamsPollCard = {
+export type MSTeamsPollCard = {
   pollId: string;
   question: string;
   options: string[];
@@ -52,6 +46,9 @@ type PollStoreData = {
 const STORE_FILENAME = "msteams-polls.json";
 const MAX_POLLS = 1000;
 const POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
 function normalizeChoiceValue(value: unknown): string | null {
   if (typeof value === "string") {
@@ -73,7 +70,10 @@ function extractSelections(value: unknown): string[] {
     return [];
   }
   if (normalized.includes(",")) {
-    return normalizeStringEntries(normalized.split(","));
+    return normalized
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
   }
   return [normalized];
 }
@@ -90,7 +90,8 @@ function readNestedValue(value: unknown, keys: Array<string | number>): unknown 
 }
 
 function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
-  return normalizeOptionalString(readNestedValue(value, keys));
+  const found = readNestedValue(value, keys);
+  return typeof found === "string" && found.trim() ? found.trim() : undefined;
 }
 
 export function extractMSTeamsPollVote(
@@ -212,7 +213,7 @@ export function buildMSTeamsPollCard(params: {
   };
 }
 
-type MSTeamsPollStoreFsOptions = {
+export type MSTeamsPollStoreFsOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;
@@ -258,7 +259,7 @@ export function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: st
     .filter((value) => value >= 0 && value < poll.options.length)
     .map((value) => String(value));
   const limited = maxSelections > 1 ? mapped.slice(0, maxSelections) : mapped.slice(0, 1);
-  return uniqueStrings(limited);
+  return Array.from(new Set(limited));
 }
 
 export function createMSTeamsPollStoreFs(params?: MSTeamsPollStoreFsOptions): MSTeamsPollStore {
@@ -272,7 +273,7 @@ export function createMSTeamsPollStoreFs(params?: MSTeamsPollStoreFsOptions): MS
   const empty: PollStoreData = { version: 1, polls: {} };
 
   const readStore = async (): Promise<PollStoreData> => {
-    const { value } = await readJsonFile(filePath, empty);
+    const { value } = await readJsonFile<PollStoreData>(filePath, empty);
     const pruned = pruneToLimit(pruneExpired(value.polls ?? {}));
     return { version: 1, polls: pruned };
   };

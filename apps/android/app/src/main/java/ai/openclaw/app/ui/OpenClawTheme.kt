@@ -24,8 +24,7 @@ fun OpenClawTheme(content: @Composable () -> Unit) {
   if (!view.isInEditMode) {
     SideEffect {
       val window = (view.context as Activity).window
-      WindowCompat
-        .getInsetsController(window, window.decorView)
+      WindowCompat.getInsetsController(window, window.decorView)
         .isAppearanceLightStatusBars = !isDark
     }
   }
@@ -45,4 +44,6 @@ fun overlayContainerColor(): Color {
 }
 
 @Composable
-fun overlayIconColor(): Color = MaterialTheme.colorScheme.onSurfaceVariant
+fun overlayIconColor(): Color {
+  return MaterialTheme.colorScheme.onSurfaceVariant
+}

@@ -80,7 +80,6 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
 
     private func updateModifierState(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
         // assert(Thread.isMainThread)  - Removed for Swift 6
-
         // Right Option (keyCode 61) acts as a hold-to-talk modifier.
         if keyCode == 61 {
             self.optionDown = modifierFlags.contains(.option)
@@ -260,9 +259,9 @@ actor VoicePushToTalk {
             input.removeTap(onBus: 0)
             self.tapInstalled = false
         }
-        // Pipe Speech-compatible mic buffers into the request while the chord is held.
+        // Pipe raw mic buffers into the Speech request while the chord is held.
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request] buffer, _ in
-            request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
+            request?.append(buffer)
         }
         self.tapInstalled = true
 
@@ -348,7 +347,7 @@ actor VoicePushToTalk {
                     VoiceWakeChimePlayer.play(chime, reason: "ptt.fallback_send")
                 }
                 Task.detached {
-                    await VoiceWakeForwarder.forwardToSelectedSession(transcript: finalText)
+                    await VoiceWakeForwarder.forward(transcript: finalText)
                 }
             }
         }

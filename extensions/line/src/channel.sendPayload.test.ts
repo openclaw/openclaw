@@ -1,28 +1,7 @@
-import {
-  verifyChannelMessageAdapterCapabilityProofs,
-  verifyChannelMessageReceiveAckPolicyAdapterProofs,
-} from "openclaw/plugin-sdk/channel-message";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../api.js";
 import { linePlugin } from "./channel.js";
-import { lineConfigAdapter } from "./config-adapter.js";
-import { resolveLineGroupRequireMention } from "./group-policy.js";
-import { lineOutboundAdapter } from "./outbound.js";
 import { setLineRuntime } from "./runtime.js";
-import { createLineSendReceipt } from "./send-receipt.js";
-
-const ssrfMocks = vi.hoisted(() => ({
-  resolvePinnedHostnameWithPolicy: vi.fn(),
-}));
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
-}));
-
-afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
-  vi.resetModules();
-});
 
 type LineRuntimeMocks = {
   pushMessageLine: ReturnType<typeof vi.fn>;
@@ -39,37 +18,19 @@ type LineRuntimeMocks = {
   resolveTextChunkLimit: ReturnType<typeof vi.fn>;
 };
 
-beforeEach(() => {
-  vi.setSystemTime(1_800_000_000_000);
-  ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
-  ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
-    hostname: "example.com",
-    addresses: ["93.184.216.34"],
-  });
-});
-
-afterEach(() => {
-  vi.useRealTimers();
-});
-
-function lineResult(messageId: string, chatId = "c1") {
-  return {
-    messageId,
-    chatId,
-    receipt: createLineSendReceipt({ messageId, chatId, kind: "text" }),
-  };
-}
-
 function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
-  const pushMessageLine = vi.fn(async () => lineResult("m-text"));
-  const pushMessagesLine = vi.fn(async () => lineResult("m-batch"));
-  const pushFlexMessage = vi.fn(async () => lineResult("m-flex"));
-  const pushTemplateMessage = vi.fn(async () => lineResult("m-template"));
-  const pushLocationMessage = vi.fn(async () => lineResult("m-loc"));
-  const pushTextMessageWithQuickReplies = vi.fn(async () => lineResult("m-quick"));
+  const pushMessageLine = vi.fn(async () => ({ messageId: "m-text", chatId: "c1" }));
+  const pushMessagesLine = vi.fn(async () => ({ messageId: "m-batch", chatId: "c1" }));
+  const pushFlexMessage = vi.fn(async () => ({ messageId: "m-flex", chatId: "c1" }));
+  const pushTemplateMessage = vi.fn(async () => ({ messageId: "m-template", chatId: "c1" }));
+  const pushLocationMessage = vi.fn(async () => ({ messageId: "m-loc", chatId: "c1" }));
+  const pushTextMessageWithQuickReplies = vi.fn(async () => ({
+    messageId: "m-quick",
+    chatId: "c1",
+  }));
   const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
   const buildTemplateMessageFromPayload = vi.fn(() => ({ type: "buttons" }));
-  const sendMessageLine = vi.fn(async () => lineResult("m-media"));
+  const sendMessageLine = vi.fn(async () => ({ messageId: "m-media", chatId: "c1" }));
   const chunkMarkdownText = vi.fn((text: string) => [text]);
   const resolveTextChunkLimit = vi.fn(() => 123);
   const resolveLineAccount = vi.fn(
@@ -126,7 +87,42 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
   };
 }
 
-describe("line outbound sendPayload", () => {
+describe("linePlugin outbound.sendPayload", () => {
+  it("preserves resolved accountId when pairing notifications push directly", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = {
+      channels: {
+        line: {
+          accounts: {
+            primary: {
+              channelAccessToken: "token-primary",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.resolveLineAccount.mockReturnValue({
+      accountId: "primary",
+      channelAccessToken: "token-primary",
+      config: {},
+    });
+
+    await linePlugin.pairing!.notifyApproval!({
+      cfg,
+      id: "line:user:1",
+    });
+
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
+      "line:user:1",
+      "OpenClaw: your access has been approved.",
+      {
+        accountId: "primary",
+        channelAccessToken: "token-primary",
+      },
+    );
+  });
+
   it("sends flex message without dropping text", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
@@ -144,7 +140,7 @@ describe("line outbound sendPayload", () => {
       },
     };
 
-    await lineOutboundAdapter.sendPayload!({
+    await linePlugin.outbound!.sendPayload!({
       to: "line:group:1",
       text: payload.text,
       payload,
@@ -181,7 +177,7 @@ describe("line outbound sendPayload", () => {
       },
     };
 
-    await lineOutboundAdapter.sendPayload!({
+    await linePlugin.outbound!.sendPayload!({
       to: "line:user:1",
       text: payload.text,
       payload,
@@ -215,7 +211,7 @@ describe("line outbound sendPayload", () => {
       },
     };
 
-    await lineOutboundAdapter.sendPayload!({
+    await linePlugin.outbound!.sendPayload!({
       to: "line:user:2",
       text: "",
       payload,
@@ -239,68 +235,6 @@ describe("line outbound sendPayload", () => {
     expect(mocks.createQuickReplyItems).toHaveBeenCalledWith(["One", "Two"]);
   });
 
-  it("sends quick-reply-only payloads with fallback text", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
-    const result = await lineOutboundAdapter.sendPayload!({
-      to: "line:user:quick",
-      text: "",
-      payload: {
-        channelData: {
-          line: {
-            quickReplies: ["One", "Two"],
-          },
-        },
-      },
-      accountId: "default",
-      cfg,
-    });
-
-    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
-      "line:user:quick",
-      "Options:\n- One\n- Two",
-      ["One", "Two"],
-      { verbose: false, accountId: "default", cfg },
-    );
-    expect(result).toEqual({
-      channel: "line",
-      chatId: "c1",
-      messageId: "m-quick",
-      receipt: {
-        parts: [
-          {
-            index: 0,
-            kind: "text",
-            platformMessageId: "m-quick",
-            raw: {
-              channel: "line",
-              chatId: "c1",
-              conversationId: "c1",
-              messageId: "m-quick",
-              meta: { messageCount: 1 },
-            },
-            threadId: "c1",
-          },
-        ],
-        platformMessageIds: ["m-quick"],
-        primaryPlatformMessageId: "m-quick",
-        raw: [
-          {
-            channel: "line",
-            chatId: "c1",
-            conversationId: "c1",
-            messageId: "m-quick",
-            meta: { messageCount: 1 },
-          },
-        ],
-        sentAt: 1_800_000_000_000,
-        threadId: "c1",
-      },
-    });
-  });
-
   it("sends media before quick-reply text so buttons stay visible", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
@@ -316,7 +250,7 @@ describe("line outbound sendPayload", () => {
       },
     };
 
-    await lineOutboundAdapter.sendPayload!({
+    await linePlugin.outbound!.sendPayload!({
       to: "line:user:3",
       text: payload.text,
       payload,
@@ -324,16 +258,16 @@ describe("line outbound sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:3", "", {
-      verbose: false,
-      mediaUrl: "https://example.com/img.jpg",
-      mediaKind: undefined,
-      previewImageUrl: undefined,
-      durationMs: undefined,
-      trackingId: undefined,
-      accountId: "default",
-      cfg,
-    });
+    expect(mocks.sendMessageLine).toHaveBeenCalledWith(
+      "line:user:3",
+      "",
+      expect.objectContaining({
+        verbose: false,
+        mediaUrl: "https://example.com/img.jpg",
+        accountId: "default",
+        cfg,
+      }),
+    );
     expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
       "line:user:3",
       "Hello",
@@ -350,7 +284,7 @@ describe("line outbound sendPayload", () => {
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
 
-    await lineOutboundAdapter.sendPayload!({
+    await linePlugin.outbound!.sendPayload!({
       to: "line:user:4",
       text: "",
       payload: {
@@ -373,7 +307,7 @@ describe("line outbound sendPayload", () => {
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
 
-    await lineOutboundAdapter.sendPayload!({
+    await linePlugin.outbound!.sendPayload!({
       to: "line:user:5",
       text: "",
       payload: {
@@ -419,7 +353,7 @@ describe("line outbound sendPayload", () => {
       },
     };
 
-    await lineOutboundAdapter.sendPayload!({
+    await linePlugin.outbound!.sendPayload!({
       to: "line:user:3",
       text: payload.text,
       payload,
@@ -451,7 +385,7 @@ describe("line outbound sendPayload", () => {
       },
     };
 
-    await lineOutboundAdapter.sendPayload!({
+    await linePlugin.outbound!.sendPayload!({
       to: "line:group:C123",
       text: payload.text,
       payload,
@@ -491,7 +425,7 @@ describe("line outbound sendPayload", () => {
       },
     };
 
-    await lineOutboundAdapter.sendPayload!({
+    await linePlugin.outbound!.sendPayload!({
       to: "line:user:U123",
       text: payload.text,
       payload,
@@ -531,7 +465,7 @@ describe("line outbound sendPayload", () => {
     };
 
     await expect(
-      lineOutboundAdapter.sendPayload!({
+      linePlugin.outbound!.sendPayload!({
         to: "line:user:U123",
         text: payload.text,
         payload,
@@ -540,85 +474,11 @@ describe("line outbound sendPayload", () => {
       }),
     ).rejects.toThrow(/require previewimageurl/i);
   });
-
-  it("declares message adapter durable text and media with receipt proofs", async () => {
-    const { runtime, mocks } = createRuntime();
-    setLineRuntime(runtime);
-    const cfg = { channels: { line: {} } } as OpenClawConfig;
-
-    const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
-      adapterName: "line",
-      adapter: linePlugin.message!,
-      proofs: {
-        text: async () => {
-          const result = await linePlugin.message?.send?.text?.({
-            cfg,
-            to: "line:user:U123",
-            text: "hello",
-            accountId: "primary",
-          });
-          expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:U123", "hello", {
-            verbose: false,
-            accountId: "primary",
-            cfg,
-          });
-          expect(result?.receipt.platformMessageIds).toEqual(["m-text"]);
-        },
-        media: async () => {
-          const result = await linePlugin.message?.send?.media?.({
-            cfg,
-            to: "line:user:U123",
-            text: "image",
-            mediaUrl: "https://example.com/image.jpg",
-            accountId: "primary",
-          });
-          expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:U123", "", {
-            verbose: false,
-            mediaUrl: "https://example.com/image.jpg",
-            accountId: "primary",
-            cfg,
-          });
-          expect(result?.receipt.platformMessageIds).toEqual(["m-media"]);
-        },
-        messageSendingHooks: () => {
-          expect(linePlugin.message?.send?.text).toBeTypeOf("function");
-        },
-      },
-    });
-
-    expect(proofResults.find((result) => result.capability === "text")?.status).toBe("verified");
-    expect(proofResults.find((result) => result.capability === "media")?.status).toBe("verified");
-    expect(proofResults.find((result) => result.capability === "messageSendingHooks")?.status).toBe(
-      "verified",
-    );
-  });
-
-  it("declares receive ack policies for immediate LINE webhook acknowledgement", async () => {
-    const proofResults = await verifyChannelMessageReceiveAckPolicyAdapterProofs({
-      adapterName: "line",
-      adapter: linePlugin.message!,
-      proofs: {
-        after_receive_record: () => {
-          expect(linePlugin.message?.receive?.defaultAckPolicy).toBe("after_receive_record");
-          expect(linePlugin.message?.receive?.supportedAckPolicies).toContain(
-            "after_receive_record",
-          );
-        },
-      },
-    });
-
-    expect(proofResults.find((result) => result.policy === "after_receive_record")?.status).toBe(
-      "verified",
-    );
-    expect(proofResults.find((result) => result.policy === "after_agent_dispatch")?.status).toBe(
-      "not_declared",
-    );
-  });
 });
 
 describe("linePlugin config.formatAllowFrom", () => {
   it("strips line:user: prefixes without lowercasing", () => {
-    const formatted = lineConfigAdapter.formatAllowFrom!({
+    const formatted = linePlugin.config.formatAllowFrom!({
       cfg: {} as OpenClawConfig,
       allowFrom: ["line:user:UABC", "line:UDEF"],
     });
@@ -648,7 +508,7 @@ describe("linePlugin groups.resolveRequireMention", () => {
       },
     } as OpenClawConfig;
 
-    const requireMention = resolveLineGroupRequireMention({
+    const requireMention = linePlugin.groups!.resolveRequireMention!({
       cfg,
       accountId: "primary",
       groupId: "group-1",

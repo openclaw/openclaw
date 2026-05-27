@@ -1,5 +1,3 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-
 export function formatUnknownError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
@@ -29,6 +27,10 @@ export function formatUnknownError(err: unknown): string {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function extractStatusCode(err: unknown): number | null {
   if (!isRecord(err)) {
     return null;
@@ -55,32 +57,6 @@ function extractStatusCode(err: unknown): number | null {
       if (Number.isFinite(parsed)) {
         return parsed;
       }
-    }
-  }
-
-  return null;
-}
-
-function extractErrorCode(err: unknown): string | null {
-  if (!isRecord(err)) {
-    return null;
-  }
-
-  const direct = err.code;
-  if (typeof direct === "string" && direct.trim()) {
-    return direct;
-  }
-
-  const response = err.response;
-  if (!isRecord(response)) {
-    return null;
-  }
-
-  const body = response.body;
-  if (isRecord(body)) {
-    const error = body.error;
-    if (isRecord(error) && typeof error.code === "string" && error.code.trim()) {
-      return error.code;
     }
   }
 
@@ -147,19 +123,12 @@ function extractRetryAfterMs(err: unknown): number | null {
   return null;
 }
 
-type MSTeamsSendErrorKind =
-  | "auth"
-  | "throttled"
-  | "transient"
-  | "permanent"
-  | "network"
-  | "unknown";
+export type MSTeamsSendErrorKind = "auth" | "throttled" | "transient" | "permanent" | "unknown";
 
-type MSTeamsSendErrorClassification = {
+export type MSTeamsSendErrorClassification = {
   kind: MSTeamsSendErrorKind;
   statusCode?: number;
   retryAfterMs?: number;
-  errorCode?: string;
 };
 
 /**
@@ -173,17 +142,9 @@ type MSTeamsSendErrorClassification = {
 export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassification {
   const statusCode = extractStatusCode(err);
   const retryAfterMs = extractRetryAfterMs(err);
-  const errorCode = extractErrorCode(err) ?? undefined;
 
-  if (statusCode === 401) {
-    return { kind: "auth", statusCode, errorCode };
-  }
-
-  if (statusCode === 403) {
-    if (errorCode === "ContentStreamNotAllowed") {
-      return { kind: "permanent", statusCode, errorCode };
-    }
-    return { kind: "auth", statusCode, errorCode };
+  if (statusCode === 401 || statusCode === 403) {
+    return { kind: "auth", statusCode };
   }
 
   if (statusCode === 429) {
@@ -191,7 +152,6 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
       kind: "throttled",
       statusCode,
       retryAfterMs: retryAfterMs ?? undefined,
-      errorCode,
     };
   }
 
@@ -200,34 +160,17 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
       kind: "transient",
       statusCode,
       retryAfterMs: retryAfterMs ?? undefined,
-      errorCode,
     };
   }
 
   if (statusCode != null && statusCode >= 400) {
-    return { kind: "permanent", statusCode, errorCode };
-  }
-
-  // Transport-level errors (no HTTP status code) — check for well-known
-  // network error codes that indicate egress is blocked (#77674).
-  if (statusCode == null) {
-    const networkCode = isRecord(err) && typeof err.code === "string" ? err.code : null;
-    if (
-      networkCode === "ECONNREFUSED" ||
-      networkCode === "ENOTFOUND" ||
-      networkCode === "EHOSTUNREACH" ||
-      networkCode === "ETIMEDOUT" ||
-      networkCode === "ECONNRESET"
-    ) {
-      return { kind: "network", errorCode: networkCode };
-    }
+    return { kind: "permanent", statusCode };
   }
 
   return {
     kind: "unknown",
     statusCode: statusCode ?? undefined,
     retryAfterMs: retryAfterMs ?? undefined,
-    errorCode,
   };
 }
 
@@ -252,17 +195,11 @@ export function formatMSTeamsSendErrorHint(
   if (classification.kind === "auth") {
     return "check msteams appId/appPassword/tenantId (or env vars MSTEAMS_APP_ID/MSTEAMS_APP_PASSWORD/MSTEAMS_TENANT_ID)";
   }
-  if (classification.errorCode === "ContentStreamNotAllowed") {
-    return "Teams expired the content stream; stop streaming earlier and fall back to normal message delivery";
-  }
   if (classification.kind === "throttled") {
     return "Teams throttled the bot; backing off may help";
   }
   if (classification.kind === "transient") {
     return "transient Teams/Bot Framework error; retry may succeed";
-  }
-  if (classification.kind === "network") {
-    return "transport-level failure sending reply to Teams Bot Connector (smba.trafficmanager.net) — check egress firewall rules allow outbound HTTPS to smba.trafficmanager.net";
   }
   return undefined;
 }

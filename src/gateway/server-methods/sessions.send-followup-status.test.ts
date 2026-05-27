@@ -9,8 +9,8 @@ const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 const chatSendMock = vi.fn();
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+vi.mock("../session-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-utils.js")>();
   return {
     ...actual,
     loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
@@ -19,10 +19,8 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
-vi.mock("../../agents/subagent-registry-read.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/subagent-registry-read.js")>(
-    "../../agents/subagent-registry-read.js",
-  );
+vi.mock("../../agents/subagent-registry-read.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/subagent-registry-read.js")>();
   return {
     ...actual,
     getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>
@@ -69,7 +67,6 @@ describe("sessions.send completed subagent follow-up status", () => {
     };
 
     loadSessionEntryMock.mockReturnValue({
-      cfg: {},
       canonicalKey: childSessionKey,
       storePath: "/tmp/sessions.json",
       entry: { sessionId: "sess-followup" },
@@ -88,13 +85,11 @@ describe("sessions.send completed subagent follow-up status", () => {
     });
 
     const broadcastToConnIds = vi.fn();
-    const respondMock = vi.fn();
-    const respond = respondMock as unknown as RespondFn;
+    const respond = vi.fn() as unknown as RespondFn;
     const context = {
       chatAbortControllers: new Map(),
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-      getRuntimeConfig: () => ({}),
     } as unknown as GatewayRequestContext;
 
     await sessionsHandlers["sessions.send"]({
@@ -110,15 +105,16 @@ describe("sessions.send completed subagent follow-up status", () => {
       isWebchatConnect: () => false,
     });
 
-    const call = respondMock.mock.calls.at(0) as
-      | [boolean, { runId?: string; status?: string; messageSeq?: number }, unknown?, unknown?]
-      | undefined;
-    expect(call?.[0]).toBe(true);
-    expect(call?.[1]?.runId).toBe("run-new");
-    expect(call?.[1]?.status).toBe("started");
-    expect(call?.[1]?.messageSeq).toBe(1);
-    expect(call?.[2]).toBeUndefined();
-    expect(call?.[3]).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "run-new",
+        status: "started",
+        messageSeq: 1,
+      }),
+      undefined,
+      undefined,
+    );
     expectSubagentFollowupReactivation({
       replaceSubagentRunAfterSteerMock,
       broadcastToConnIds,

@@ -1,11 +1,4 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-
-type CommandSurfaceParams = {
+type DiscordSurfaceParams = {
   ctx: {
     OriginatingChannel?: string;
     Surface?: string;
@@ -17,37 +10,40 @@ type CommandSurfaceParams = {
   };
 };
 
-type ChannelAccountParams = {
-  cfg: OpenClawConfig;
+type DiscordAccountParams = {
   ctx: {
-    OriginatingChannel?: string;
-    Surface?: string;
-    Provider?: string;
     AccountId?: string;
-  };
-  command: {
-    channel?: string;
   };
 };
 
-export function resolveCommandSurfaceChannel(params: CommandSurfaceParams): string {
+export function isDiscordSurface(params: DiscordSurfaceParams): boolean {
+  return resolveCommandSurfaceChannel(params) === "discord";
+}
+
+export function isTelegramSurface(params: DiscordSurfaceParams): boolean {
+  return resolveCommandSurfaceChannel(params) === "telegram";
+}
+
+export function isMatrixSurface(params: DiscordSurfaceParams): boolean {
+  return resolveCommandSurfaceChannel(params) === "matrix";
+}
+
+export function resolveCommandSurfaceChannel(params: DiscordSurfaceParams): string {
   const channel =
     params.ctx.OriginatingChannel ??
     params.command.channel ??
     params.ctx.Surface ??
     params.ctx.Provider;
-  return normalizeOptionalLowercaseString(channel) ?? "";
+  return String(channel ?? "")
+    .trim()
+    .toLowerCase();
 }
 
-export function resolveChannelAccountId(params: ChannelAccountParams): string {
-  const accountId = normalizeOptionalString(params.ctx.AccountId) ?? "";
-  if (accountId) {
-    return accountId;
-  }
-  const channel = resolveCommandSurfaceChannel(params);
-  const plugin = getActivePluginChannelRegistry()?.channels.find(
-    (entry) => entry.plugin.id === channel,
-  )?.plugin;
-  const configuredDefault = normalizeOptionalString(plugin?.config.defaultAccountId?.(params.cfg));
-  return configuredDefault || "default";
+export function resolveDiscordAccountId(params: DiscordAccountParams): string {
+  return resolveChannelAccountId(params);
+}
+
+export function resolveChannelAccountId(params: DiscordAccountParams): string {
+  const accountId = typeof params.ctx.AccountId === "string" ? params.ctx.AccountId.trim() : "";
+  return accountId || "default";
 }

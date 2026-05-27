@@ -16,9 +16,6 @@ struct LowCoverageViewSmokeTests {
 
         let withRows = ContextMenuCardView(rows: SessionRow.previewRows, statusText: nil, isLoading: false)
         _ = withRows.body
-
-        let longStatus = "Gateway connection dropped; gateway likely restarted and needs a few seconds to reconnect."
-        _ = ContextRootMenuLabelView(subtitle: longStatus, width: 320).body
     }
 
     @Test func `settings toggle row builds body`() {

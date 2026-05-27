@@ -3,25 +3,12 @@ import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import {
   applyExistingCronSchedulePatch,
   resolveCronEditScheduleRequest,
 } from "./schedule-options.js";
-import {
-  getCronChannelOptions,
-  parseCronToolsAllow,
-  parseDurationMs,
-  warnIfCronSchedulerDisabled,
-} from "./shared.js";
-import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
-
-const CRON_EDIT_LOOKUP_PAGE_SIZE = 200;
-const CRON_EDIT_LOOKUP_MAX_PAGES = 50;
+import { getCronChannelOptions, parseDurationMs, warnIfCronSchedulerDisabled } from "./shared.js";
 
 const assignIf = (
   target: Record<string, unknown>,
@@ -33,32 +20,6 @@ const assignIf = (
     target[key] = value;
   }
 };
-
-async function loadCronJobForEditSchedulePatch(
-  opts: Record<string, unknown>,
-  id: string,
-): Promise<CronJob | undefined> {
-  let offset = 0;
-  for (let page = 0; page < CRON_EDIT_LOOKUP_MAX_PAGES; page += 1) {
-    const listed = (await callGatewayFromCli("cron.list", opts, {
-      includeDisabled: true,
-      limit: CRON_EDIT_LOOKUP_PAGE_SIZE,
-      offset,
-    })) as { jobs?: CronJob[]; hasMore?: boolean; nextOffset?: number | null } | null;
-    const existing = (listed?.jobs ?? []).find((job) => job.id === id);
-    if (existing) {
-      return existing;
-    }
-    if (!listed?.hasMore || typeof listed.nextOffset !== "number") {
-      return undefined;
-    }
-    if (listed.nextOffset <= offset) {
-      throw new Error("cron.list pagination did not advance while looking up cron job");
-    }
-    offset = listed.nextOffset;
-  }
-  throw new Error("cron.list pagination exceeded maximum pages while looking up cron job");
-}
 
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
@@ -81,10 +42,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--at <when>", "Set one-shot time (ISO) or duration like 20m")
       .option("--every <duration>", "Set interval duration like 10m")
       .option("--cron <expr>", "Set cron expression")
-      .option(
-        "--tz <iana>",
-        "Timezone for cron expressions (IANA; cron default: Gateway host local timezone)",
-      )
+      .option("--tz <iana>", "Timezone for cron expressions (IANA)")
       .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
       .option("--exact", "Disable cron staggering (set stagger to 0)")
       .option("--system-event <text>", "Set systemEvent payload")
@@ -97,22 +55,16 @@ export function registerCronEditCommand(cron: Command) {
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
-      .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
-      .option("--clear-tools", "Remove tool allow-list (use all tools)", false)
-      .option("--announce", "Fallback-deliver final text to a chat")
-      .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
-      .option("--no-deliver", "Disable runner fallback delivery")
+      .option("--announce", "Announce summary to a chat (subagent-style)")
+      .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
+      .option("--no-deliver", "Disable announce delivery")
       .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
       .option(
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
-      .option("--thread-id <id>", "Telegram forum topic thread id")
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
-      .option(
-        "--best-effort-deliver",
-        "Do not fail job if delivery fails (also implies --announce when used alone)",
-      )
+      .option("--best-effort-deliver", "Do not fail job if delivery fails")
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
       .option("--failure-alert", "Enable failure alerts for this job")
       .option("--no-failure-alert", "Disable failure alerts for this job")
@@ -123,8 +75,6 @@ export function registerCronEditCommand(cron: Command) {
       )
       .option("--failure-alert-to <dest>", "Failure alert destination")
       .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
-      .option("--failure-alert-include-skipped", "Count consecutive skipped runs toward alerts")
-      .option("--failure-alert-exclude-skipped", "Alert only on execution errors")
       .option("--failure-alert-mode <mode>", "Failure alert delivery mode (announce or webhook)")
       .option(
         "--failure-alert-account-id <id>",
@@ -132,24 +82,12 @@ export function registerCronEditCommand(cron: Command) {
       )
       .action(async (id, opts) => {
         try {
-          const sessionTarget =
-            typeof opts.session === "string"
-              ? normalizeCronSessionTargetOption(opts.session)
-              : undefined;
-          if (typeof opts.session === "string" && !sessionTarget) {
-            throw new Error("--session must be main, isolated, current, or session:<id>");
-          }
-          if (sessionTarget === "main" && opts.message) {
+          if (opts.session === "main" && opts.message) {
             throw new Error(
               "Main jobs cannot use --message; use --system-event or --session isolated.",
             );
           }
-          if (
-            (sessionTarget === "isolated" ||
-              sessionTarget === "current" ||
-              sessionTarget?.startsWith("session:")) &&
-            opts.systemEvent
-          ) {
+          if (opts.session === "isolated" && opts.systemEvent) {
             throw new Error(
               "Isolated jobs cannot use --system-event; use --message or --session main.",
             );
@@ -183,14 +121,10 @@ export function registerCronEditCommand(cron: Command) {
             patch.deleteAfterRun = false;
           }
           if (typeof opts.session === "string") {
-            patch.sessionTarget = sessionTarget;
+            patch.sessionTarget = opts.session;
           }
           if (typeof opts.wake === "string") {
-            const wakeMode = opts.wake.trim();
-            if (wakeMode !== "now" && wakeMode !== "next-heartbeat") {
-              throw new Error("--wake must be now or next-heartbeat");
-            }
-            patch.wakeMode = wakeMode;
+            patch.wakeMode = opts.wake;
           }
           if (opts.agent && opts.clearAgent) {
             throw new Error("Use --agent or --clear-agent, not both");
@@ -222,7 +156,10 @@ export function registerCronEditCommand(cron: Command) {
           if (scheduleRequest.kind === "direct") {
             patch.schedule = scheduleRequest.schedule;
           } else if (scheduleRequest.kind === "patch-existing-cron") {
-            const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
+            const listed = (await callGatewayFromCli("cron.list", opts, {
+              includeDisabled: true,
+            })) as { jobs?: CronJob[] } | null;
+            const existing = (listed?.jobs ?? []).find((job) => job.id === id);
             if (!existing) {
               throw new Error(`unknown cron job id: ${id}`);
             }
@@ -230,41 +167,26 @@ export function registerCronEditCommand(cron: Command) {
           }
 
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
-          const model = normalizeOptionalString(opts.model);
-          const thinking = normalizeOptionalString(opts.thinking);
-          const toolsAllow = parseCronToolsAllow(opts.tools);
-          const rawTimeoutSeconds =
-            opts.timeoutSeconds === undefined ? undefined : String(opts.timeoutSeconds).trim();
-          if (rawTimeoutSeconds !== undefined && !/^\d+$/u.test(rawTimeoutSeconds)) {
-            throw new Error("Invalid --timeout-seconds (must be a positive integer).");
-          }
-          const timeoutSeconds =
-            rawTimeoutSeconds === undefined ? undefined : Number(rawTimeoutSeconds);
-          const hasTimeoutSeconds =
-            typeof timeoutSeconds === "number" &&
-            Number.isSafeInteger(timeoutSeconds) &&
-            timeoutSeconds > 0;
-          if (rawTimeoutSeconds !== undefined && !hasTimeoutSeconds) {
-            throw new Error("Invalid --timeout-seconds (must be a positive integer).");
-          }
+          const model =
+            typeof opts.model === "string" && opts.model.trim() ? opts.model.trim() : undefined;
+          const thinking =
+            typeof opts.thinking === "string" && opts.thinking.trim()
+              ? opts.thinking.trim()
+              : undefined;
+          const timeoutSeconds = opts.timeoutSeconds
+            ? Number.parseInt(String(opts.timeoutSeconds), 10)
+            : undefined;
+          const hasTimeoutSeconds = Boolean(timeoutSeconds && Number.isFinite(timeoutSeconds));
           const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
-          const threadId = parseCronThreadIdOption(opts.threadId);
-          const hasDeliveryThreadId = typeof threadId === "number";
-          const hasDeliveryTarget =
-            typeof opts.channel === "string" || typeof opts.to === "string" || hasDeliveryThreadId;
+          const hasDeliveryTarget = typeof opts.channel === "string" || typeof opts.to === "string";
           const hasDeliveryAccount = typeof opts.account === "string";
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
-          const hasAgentTurnPayloadField =
+          const hasAgentTurnPatch =
             typeof opts.message === "string" ||
             Boolean(model) ||
             Boolean(thinking) ||
             hasTimeoutSeconds ||
             typeof opts.lightContext === "boolean" ||
-            typeof opts.tools === "string" ||
-            Array.isArray(opts.tools) ||
-            opts.clearTools;
-          const hasAgentTurnPatch =
-            hasAgentTurnPayloadField ||
             hasDeliveryModeFlag ||
             hasDeliveryTarget ||
             hasDeliveryAccount ||
@@ -289,11 +211,6 @@ export function registerCronEditCommand(cron: Command) {
               opts.lightContext,
               typeof opts.lightContext === "boolean",
             );
-            if (opts.clearTools) {
-              payload.toolsAllow = null;
-            } else if (toolsAllow) {
-              payload.toolsAllow = toolsAllow;
-            }
             patch.payload = payload;
           }
 
@@ -301,11 +218,8 @@ export function registerCronEditCommand(cron: Command) {
             const delivery: Record<string, unknown> = {};
             if (hasDeliveryModeFlag) {
               delivery.mode = opts.announce || opts.deliver === true ? "announce" : "none";
-            } else if (
-              opts.bestEffortDeliver === true ||
-              (hasAgentTurnPayloadField && hasBestEffort)
-            ) {
-              // Back-compat: best-effort true and payload edits historically implied announce mode.
+            } else if (hasBestEffort) {
+              // Back-compat: toggling best-effort alone has historically implied announce mode.
               delivery.mode = "announce";
             }
             if (typeof opts.channel === "string") {
@@ -315,9 +229,6 @@ export function registerCronEditCommand(cron: Command) {
             if (typeof opts.to === "string") {
               const to = opts.to.trim();
               delivery.to = to ? to : undefined;
-            }
-            if (hasDeliveryThreadId) {
-              delivery.threadId = threadId;
             }
             if (typeof opts.account === "string") {
               const account = opts.account.trim();
@@ -333,24 +244,13 @@ export function registerCronEditCommand(cron: Command) {
           const hasFailureAlertChannel = typeof opts.failureAlertChannel === "string";
           const hasFailureAlertTo = typeof opts.failureAlertTo === "string";
           const hasFailureAlertCooldown = typeof opts.failureAlertCooldown === "string";
-          const hasFailureAlertIncludeSkipped =
-            typeof opts.failureAlertIncludeSkipped === "boolean";
-          const hasFailureAlertExcludeSkipped =
-            typeof opts.failureAlertExcludeSkipped === "boolean";
           const hasFailureAlertMode = typeof opts.failureAlertMode === "string";
           const hasFailureAlertAccountId = typeof opts.failureAlertAccountId === "string";
-          if (hasFailureAlertIncludeSkipped && hasFailureAlertExcludeSkipped) {
-            throw new Error(
-              "Use either --failure-alert-include-skipped or --failure-alert-exclude-skipped.",
-            );
-          }
           const hasFailureAlertFields =
             hasFailureAlertAfter ||
             hasFailureAlertChannel ||
             hasFailureAlertTo ||
             hasFailureAlertCooldown ||
-            hasFailureAlertIncludeSkipped ||
-            hasFailureAlertExcludeSkipped ||
             hasFailureAlertMode ||
             hasFailureAlertAccountId;
           const failureAlertFlag =
@@ -370,10 +270,11 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.after = after;
             }
             if (hasFailureAlertChannel) {
-              failureAlert.channel = normalizeOptionalLowercaseString(opts.failureAlertChannel);
+              const channel = String(opts.failureAlertChannel).trim().toLowerCase();
+              failureAlert.channel = channel ? channel : undefined;
             }
             if (hasFailureAlertTo) {
-              const to = normalizeOptionalString(opts.failureAlertTo) ?? "";
+              const to = String(opts.failureAlertTo).trim();
               failureAlert.to = to ? to : undefined;
             }
             if (hasFailureAlertCooldown) {
@@ -383,18 +284,15 @@ export function registerCronEditCommand(cron: Command) {
               }
               failureAlert.cooldownMs = cooldownMs;
             }
-            if (hasFailureAlertIncludeSkipped || hasFailureAlertExcludeSkipped) {
-              failureAlert.includeSkipped = hasFailureAlertIncludeSkipped;
-            }
             if (hasFailureAlertMode) {
-              const mode = normalizeOptionalLowercaseString(opts.failureAlertMode);
+              const mode = String(opts.failureAlertMode).trim().toLowerCase();
               if (mode !== "announce" && mode !== "webhook") {
                 throw new Error("Invalid --failure-alert-mode (must be 'announce' or 'webhook').");
               }
               failureAlert.mode = mode;
             }
             if (hasFailureAlertAccountId) {
-              const accountId = normalizeOptionalString(opts.failureAlertAccountId) ?? "";
+              const accountId = String(opts.failureAlertAccountId).trim();
               failureAlert.accountId = accountId ? accountId : undefined;
             }
             patch.failureAlert = failureAlert;

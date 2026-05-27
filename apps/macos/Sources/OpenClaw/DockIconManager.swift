@@ -28,7 +28,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
                 return
             }
 
-            let userWantsDockHidden = (UserDefaults.standard.object(forKey: showDockIconKey) as? Bool) == false
+            let userWantsDockHidden = !UserDefaults.standard.bool(forKey: showDockIconKey)
             let visibleWindows = NSApp?.windows.filter { window in
                 window.isVisible &&
                     window.frame.width > 1 &&

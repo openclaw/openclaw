@@ -1,5 +1,4 @@
 import type { ConfigUiHint } from "../config-ui-hints-types.js";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.js";
 
 export const SENSITIVE_URL_HINT_TAG = "url-secret";
 
@@ -10,30 +9,19 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
   "apikey",
   "secret",
   "access_token",
-  "auth_token",
   "password",
   "pass",
-  "passwd",
   "auth",
   "client_secret",
-  "hook_token",
   "refresh_token",
-  "signature",
 ]);
 
 export function isSensitiveUrlQueryParamName(name: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(name).replaceAll("-", "_");
-  return SENSITIVE_URL_QUERY_PARAM_NAMES.has(normalized);
+  return SENSITIVE_URL_QUERY_PARAM_NAMES.has(name.toLowerCase());
 }
 
 export function isSensitiveUrlConfigPath(path: string): boolean {
   if (path.endsWith(".baseUrl") || path.endsWith(".httpUrl")) {
-    return true;
-  }
-  if (path.endsWith(".cdpUrl")) {
-    return true;
-  }
-  if (path.endsWith(".request.proxy.url")) {
     return true;
   }
   return /^mcp\.servers\.(?:\*|[^.]+)\.url$/.test(path);
@@ -70,7 +58,7 @@ export function redactSensitiveUrlLikeString(value: string): string {
     return redactedUrl;
   }
   return value
-    .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
+    .replace(/\/\/([^@/?#]+)@/, "//***:***@")
     .replace(/([?&])([^=&]+)=([^&]*)/g, (match, prefix: string, key: string) =>
       isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
     );

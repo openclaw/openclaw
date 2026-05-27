@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./validation.js";
+import { validateConfigObject } from "./config.js";
 
 describe("logging.maxFileBytes config", () => {
   it("accepts a positive maxFileBytes", () => {
@@ -19,12 +19,7 @@ describe("logging.maxFileBytes config", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues).toEqual([
-        {
-          path: "logging.maxFileBytes",
-          message: "Too small: expected number to be >0 (must be greater than 0)",
-        },
-      ]);
+      expect(res.issues.some((issue) => issue.path === "logging.maxFileBytes")).toBe(true);
     }
   });
 });

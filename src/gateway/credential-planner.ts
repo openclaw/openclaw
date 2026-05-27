@@ -1,15 +1,14 @@
+import type { OpenClawConfig } from "../config/config.js";
 import { containsEnvVarReference } from "../config/env-substitution.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-type GatewayCredentialInputPath =
+export type GatewayCredentialInputPath =
   | "gateway.auth.token"
   | "gateway.auth.password"
   | "gateway.remote.token"
   | "gateway.remote.password";
 
-type GatewayConfiguredCredentialInput = {
+export type GatewayConfiguredCredentialInput = {
   path: GatewayCredentialInputPath;
   configured: boolean;
   value?: string;
@@ -43,7 +42,13 @@ export type GatewayCredentialPlan = {
 
 type GatewaySecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
-export const trimToUndefined = normalizeOptionalString;
+export function trimToUndefined(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
 
 /**
  * Like trimToUndefined but also rejects unresolved env var placeholders (e.g. `${VAR}`).
@@ -60,12 +65,20 @@ export function trimCredentialToUndefined(value: unknown): string | undefined {
   return trimmed;
 }
 
+export function readGatewayTokenEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
+}
+
+export function readGatewayPasswordEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
+}
+
 export function hasGatewayTokenEnvCandidate(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN));
+  return Boolean(readGatewayTokenEnv(env));
 }
 
 export function hasGatewayPasswordEnvCandidate(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD));
+  return Boolean(readGatewayPasswordEnv(env));
 }
 
 function resolveConfiguredGatewayCredentialInput(params: {
@@ -96,8 +109,8 @@ export function createGatewayCredentialPlan(params: {
   const remote = gateway?.remote;
   const defaults = params.defaults ?? params.config.secrets?.defaults;
   const authMode = gateway?.auth?.mode;
-  const envToken = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
-  const envPassword = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
+  const envToken = readGatewayTokenEnv(env);
+  const envPassword = readGatewayPasswordEnv(env);
 
   const localToken = resolveConfiguredGatewayCredentialInput({
     value: gateway?.auth?.token,
@@ -125,8 +138,7 @@ export function createGatewayCredentialPlan(params: {
   const tokenCanWin = Boolean(envToken || localToken.configured || remoteToken.configured);
   const passwordCanWin =
     authMode === "password" ||
-    authMode === "trusted-proxy" ||
-    (authMode !== "token" && authMode !== "none" && !tokenCanWin);
+    (authMode !== "token" && authMode !== "none" && authMode !== "trusted-proxy" && !tokenCanWin);
   const localTokenSurfaceActive =
     localTokenCanWin &&
     !envToken &&
@@ -139,8 +151,7 @@ export function createGatewayCredentialPlan(params: {
     gateway?.tailscale?.mode === "serve" || gateway?.tailscale?.mode === "funnel";
   const remoteConfiguredSurface = remoteMode || remoteUrlConfigured || tailscaleRemoteExposure;
   const remoteTokenFallbackActive = localTokenCanWin && !envToken && !localToken.configured;
-  const remotePasswordFallbackActive =
-    authMode !== "trusted-proxy" && !envPassword && !localPassword.configured && passwordCanWin;
+  const remotePasswordFallbackActive = !envPassword && !localPassword.configured && passwordCanWin;
 
   return {
     configuredMode: gateway?.mode === "remote" ? "remote" : "local",

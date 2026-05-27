@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ChannelDirectoryEntry } from "../runtime-api.js";
 
 vi.mock("./directory-live.js", () => ({
@@ -20,13 +20,11 @@ async function resolveUserTarget(input = "Alice") {
 }
 
 describe("resolveMatrixTargets (users)", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } =
       await import("./directory-live.js"));
     ({ resolveMatrixTargets } = await import("./resolve-targets.js"));
-  });
-
-  beforeEach(() => {
     vi.mocked(listMatrixDirectoryPeersLive).mockReset();
     vi.mocked(listMatrixDirectoryGroupsLive).mockReset();
   });

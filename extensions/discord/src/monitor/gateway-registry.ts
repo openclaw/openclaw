@@ -1,4 +1,4 @@
-import type { GatewayPlugin } from "../internal/gateway.js";
+import type { GatewayPlugin } from "@buape/carbon/gateway";
 
 /**
  * Module-level registry of active Discord GatewayPlugin instances.

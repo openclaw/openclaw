@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import {
   getDiscordExecApprovalApprovers,
@@ -22,47 +22,28 @@ function buildConfig(
 }
 
 describe("discord exec approvals", () => {
-  it("requires explicit enablement even when owner approvers resolve", () => {
+  it("requires enablement and an explicit or inferred approver", () => {
     expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
+    expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig({ enabled: true }) })).toBe(false);
     expect(
       isDiscordExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true }),
-      }),
-    ).toBe(false);
-    expect(
-      isDiscordExecApprovalClientEnabled({
-        cfg: buildConfig({ approvers: ["123"] }),
-      }),
-    ).toBe(false);
-    expect(
-      isDiscordExecApprovalClientEnabled({
-        cfg: {
-          ...buildConfig(),
-          commands: { ownerAllowFrom: ["discord:789"] },
-        } as OpenClawConfig,
-      }),
-    ).toBe(false);
-    expect(
-      isDiscordExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: "auto", approvers: ["123"] }),
+        cfg: buildConfig({ enabled: true }, { allowFrom: ["123"] }),
       }),
     ).toBe(true);
-    expect(
-      isDiscordExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: false, approvers: ["123"] }),
-      }),
-    ).toBe(false);
   });
 
   it("prefers explicit approvers when configured", () => {
-    const cfg = buildConfig({ approvers: ["456"] }, { allowFrom: ["123"], defaultTo: "user:789" });
+    const cfg = buildConfig(
+      { enabled: true, approvers: ["456"] },
+      { allowFrom: ["123"], defaultTo: "user:789" },
+    );
 
     expect(getDiscordExecApprovalApprovers({ cfg })).toEqual(["456"]);
     expect(isDiscordExecApprovalApprover({ cfg, senderId: "456" })).toBe(true);
     expect(isDiscordExecApprovalApprover({ cfg, senderId: "123" })).toBe(false);
   });
 
-  it("does not infer approvers from allowFrom or default DM routes", () => {
+  it("infers approvers from allowFrom, legacy dm.allowFrom, and explicit DM defaultTo", () => {
     const cfg = buildConfig(
       { enabled: true },
       {
@@ -72,17 +53,18 @@ describe("discord exec approvals", () => {
       },
     );
 
-    expect(getDiscordExecApprovalApprovers({ cfg })).toStrictEqual([]);
-    expect(isDiscordExecApprovalApprover({ cfg, senderId: "789" })).toBe(false);
+    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual(["123", "456", "789"]);
+    expect(isDiscordExecApprovalApprover({ cfg, senderId: "789" })).toBe(true);
   });
 
-  it("falls back to commands.ownerAllowFrom for exec approvers", () => {
-    const cfg = {
-      ...buildConfig(),
-      commands: { ownerAllowFrom: ["discord:123", "user:456", "789"] },
-    } as OpenClawConfig;
+  it("ignores non-user default targets when inferring approvers", () => {
+    const cfg = buildConfig(
+      { enabled: true },
+      {
+        defaultTo: "channel:123",
+      },
+    );
 
-    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual(["123", "456", "789"]);
-    expect(isDiscordExecApprovalApprover({ cfg, senderId: "456" })).toBe(true);
+    expect(getDiscordExecApprovalApprovers({ cfg })).toEqual([]);
   });
 });

@@ -1,7 +1,6 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-type RoleRef = {
+export type RoleRef = {
   role: string;
   name?: string;
   /** Index used only when role+name duplicates exist. */
@@ -10,7 +9,7 @@ type RoleRef = {
 
 export type RoleRefMap = Record<string, RoleRef>;
 
-type RoleSnapshotStats = {
+export type RoleSnapshotStats = {
   lines: number;
   chars: number;
   refs: number;
@@ -57,7 +56,7 @@ function matchInteractiveSnapshotLine(
   if (roleRaw.startsWith("/")) {
     return null;
   }
-  const role = normalizeLowercaseStringOrEmpty(roleRaw);
+  const role = roleRaw.toLowerCase();
   return {
     roleRaw,
     role,
@@ -175,7 +174,7 @@ function processLine(
     return options.interactive ? null : line;
   }
 
-  const role = normalizeLowercaseStringOrEmpty(roleRaw);
+  const role = roleRaw.toLowerCase();
   const isInteractive = INTERACTIVE_ROLES.has(role);
   const isContent = CONTENT_ROLES.has(role);
   const isStructural = STRUCTURAL_ROLES.has(role);
@@ -265,13 +264,7 @@ export function parseRoleRef(raw: string): string | null {
     : trimmed.startsWith("ref=")
       ? trimmed.slice(4)
       : trimmed;
-  if (/^e\d+$/i.test(normalized)) {
-    return normalized;
-  }
-  if (/^\d{1,9}$/.test(normalized)) {
-    return normalized;
-  }
-  return null;
+  return /^e\d+$/.test(normalized) ? normalized : null;
 }
 
 export function buildRoleSnapshotFromAriaSnapshot(
@@ -334,12 +327,8 @@ export function buildRoleSnapshotFromAriaSnapshot(
 }
 
 function parseAiSnapshotRef(suffix: string): string | null {
-  const eMatch = suffix.match(/\[ref=(e\d+)\]/i);
-  if (eMatch) {
-    return eMatch[1];
-  }
-  const numMatch = suffix.match(/\[ref=(\d{1,9})\]/);
-  return numMatch ? numMatch[1] : null;
+  const match = suffix.match(/\[ref=(e\d+)\]/i);
+  return match ? match[1] : null;
 }
 
 /**
@@ -350,7 +339,7 @@ export function buildRoleSnapshotFromAiSnapshot(
   aiSnapshot: string,
   options: RoleSnapshotOptions = {},
 ): { snapshot: string; refs: RoleRefMap } {
-  const lines = aiSnapshot.split("\n");
+  const lines = String(aiSnapshot ?? "").split("\n");
   const refs: RoleRefMap = {};
 
   if (options.interactive) {
@@ -390,7 +379,7 @@ export function buildRoleSnapshotFromAiSnapshot(
       continue;
     }
 
-    const role = normalizeLowercaseStringOrEmpty(roleRaw);
+    const role = roleRaw.toLowerCase();
     const isStructural = STRUCTURAL_ROLES.has(role);
 
     if (options.compact && isStructural && !name) {

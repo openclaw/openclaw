@@ -1,4 +1,3 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ZalouserGroupConfig } from "./types.js";
 
 type ZalouserGroups = Record<string, ZalouserGroupConfig>;
@@ -8,7 +7,7 @@ function toGroupCandidate(value?: string | null): string {
 }
 
 export function normalizeZalouserGroupSlug(raw?: string | null): string {
-  const trimmed = normalizeOptionalLowercaseString(raw) ?? "";
+  const trimmed = raw?.trim().toLowerCase() ?? "";
   if (!trimmed) {
     return "";
   }
@@ -78,6 +77,5 @@ export function isZalouserGroupEntryAllowed(entry: ZalouserGroupConfig | undefin
   if (!entry) {
     return false;
   }
-  const legacyAllow = (entry as ZalouserGroupConfig & { allow?: unknown }).allow;
-  return legacyAllow !== false && entry.enabled !== false;
+  return entry.allow !== false && entry.enabled !== false;
 }

@@ -1,11 +1,11 @@
+import { describe, expect, it, vi } from "vitest";
 import {
   promptSetupWizardAllowFrom,
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,
   runSetupWizardFinalize,
   runSetupWizardPrepare,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import {
   createAllowlistSetupWizardProxy,
   createDelegatedFinalize,
@@ -23,8 +23,7 @@ describe("createDelegatedResolveConfigured", () => {
         status: {
           configuredLabel: "configured",
           unconfiguredLabel: "needs setup",
-          resolveConfigured: async ({ cfg, accountId }) =>
-            Boolean(cfg.channels?.[accountId ?? "demo"]),
+          resolveConfigured: async ({ cfg }) => Boolean(cfg.channels?.demo),
         },
         credentials: [],
       }),
@@ -33,9 +32,7 @@ describe("createDelegatedResolveConfigured", () => {
     const resolveConfigured = createDelegatedResolveConfigured(loadWizard);
 
     expect(await resolveConfigured({ cfg: {} })).toBe(false);
-    expect(await resolveConfigured({ cfg: { channels: { work: {} } }, accountId: "work" })).toBe(
-      true,
-    );
+    expect(await resolveConfigured({ cfg: { channels: { demo: {} } } })).toBe(true);
   });
 });
 
@@ -153,7 +150,7 @@ describe("createAllowlistSetupWizardProxy", () => {
 
     expect(
       await promptSetupWizardAllowFrom({ promptAllowFrom: wizard.dmPolicy?.promptAllowFrom }),
-    ).toStrictEqual({});
+    ).toEqual({});
     expect(
       await resolveSetupWizardAllowFromEntries({
         resolveEntries: wizard.allowFrom?.resolveEntries,

@@ -12,7 +12,6 @@
  */
 
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Feishu text_color values (1-7)
 const TEXT_COLOR: Record<string, number> = {
@@ -59,7 +58,7 @@ type DocxTextElement = NonNullable<
  *   [bold]text[/bold]             → bold
  *   [green bold]text[/green]      → green + bold
  */
-function parseColorMarkup(content: string): Segment[] {
+export function parseColorMarkup(content: string): Segment[] {
   const segments: Segment[] = [];
   // Only [known_tag]...[/...] pairs are treated as markup.  Using an open
   // pattern like \[([^\]]+)\] would match any bracket token — e.g. [Q1] —
@@ -87,7 +86,7 @@ function parseColorMarkup(content: string): Segment[] {
       }
     } else {
       // Tagged segment
-      const tagStr = normalizeLowercaseStringOrEmpty(match[1]);
+      const tagStr = match[1].toLowerCase().trim();
       const text = match[2];
       const tags = tagStr.split(/\s+/);
 

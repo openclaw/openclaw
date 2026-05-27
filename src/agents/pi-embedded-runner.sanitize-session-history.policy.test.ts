@@ -1,8 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  createSanitizeSessionHistoryHelpersMock,
-  createSanitizeSessionHistoryProviderHookRuntimeMock,
-  createSanitizeSessionHistoryProviderRuntimeMock,
   loadSanitizeSessionHistoryWithCleanMocks,
   makeMockSessionManager,
   makeSimpleUserMessages,
@@ -10,21 +7,12 @@ import {
   sanitizeSnapshotChangedOpenAIReasoning,
   sanitizeWithOpenAIResponses,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
-import { makeZeroUsageSnapshot } from "./usage.js";
 
-vi.mock(
-  "./pi-embedded-helpers.js",
-  async () => await createSanitizeSessionHistoryHelpersMock({ isGoogleModelApi: vi.fn() }),
-);
-
-vi.mock(
-  "../plugins/provider-runtime.js",
-  async () => await createSanitizeSessionHistoryProviderRuntimeMock(),
-);
-vi.mock(
-  "../plugins/provider-hook-runtime.js",
-  async () => await createSanitizeSessionHistoryProviderHookRuntimeMock(),
-);
+vi.mock("./pi-embedded-helpers.js", async () => ({
+  ...(await vi.importActual("./pi-embedded-helpers.js")),
+  isGoogleModelApi: vi.fn(),
+  sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
+}));
 
 let sanitizeSessionHistory: SanitizeSessionHistoryHarness["sanitizeSessionHistory"];
 let mockedHelpers: SanitizeSessionHistoryHarness["mockedHelpers"];
@@ -33,15 +21,10 @@ describe("sanitizeSessionHistory e2e smoke", () => {
   const mockSessionManager = makeMockSessionManager();
   const mockMessages = makeSimpleUserMessages();
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     const harness = await loadSanitizeSessionHistoryWithCleanMocks();
     sanitizeSessionHistory = harness.sanitizeSessionHistory;
     mockedHelpers = harness.mockedHelpers;
-  });
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
   });
 
   it("passes simple user-only history through for google model APIs", async () => {
@@ -75,12 +58,6 @@ describe("sanitizeSessionHistory e2e smoke", () => {
       sanitizeSessionHistory,
     });
 
-    expect(result).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "answer" }],
-        usage: makeZeroUsageSnapshot(),
-      },
-    ]);
+    expect(result).toEqual([]);
   });
 });

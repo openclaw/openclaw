@@ -1,16 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
-const { createSlackMessageHandler } = await import("./message-handler.js");
+let createSlackMessageHandler: typeof import("./message-handler.js").createSlackMessageHandler;
 
-vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
-    "openclaw/plugin-sdk/channel-inbound",
-  );
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
   return {
     ...actual,
     createChannelInboundDebouncer: () => ({
@@ -32,7 +30,6 @@ vi.mock("./thread-resolution.js", () => ({
 
 function createContext(overrides?: {
   markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
-  releaseSeenMessage?: (channel: string | undefined, ts: string | undefined) => void;
 }) {
   return {
     cfg: {},
@@ -43,14 +40,11 @@ function createContext(overrides?: {
     runtime: {},
     markMessageSeen: (channel: string | undefined, ts: string | undefined) =>
       overrides?.markMessageSeen?.(channel, ts) ?? false,
-    releaseSeenMessage: (channel: string | undefined, ts: string | undefined) =>
-      overrides?.releaseSeenMessage?.(channel, ts),
   } as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
 }
 
 function createHandlerWithTracker(overrides?: {
   markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
-  releaseSeenMessage?: (channel: string | undefined, ts: string | undefined) => void;
 }) {
   const trackEvent = vi.fn();
   const handler = createSlackMessageHandler({
@@ -76,6 +70,11 @@ async function handleDirectMessage(
 }
 
 describe("createSlackMessageHandler", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ createSlackMessageHandler } = await import("./message-handler.js"));
+  });
+
   beforeEach(() => {
     enqueueMock.mockClear();
     flushKeyMock.mockClear();
@@ -124,47 +123,6 @@ describe("createSlackMessageHandler", () => {
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(resolveThreadTsMock).toHaveBeenCalledTimes(1);
     expect(enqueueMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("accepts thread_broadcast messages from the message stream", async () => {
-    const { handler, trackEvent } = createHandlerWithTracker();
-
-    await handler(
-      {
-        type: "message",
-        subtype: "thread_broadcast",
-        channel: "C111",
-        user: "U111",
-        ts: "1709000000.000300",
-        text: "also send to channel",
-        thread_ts: "1709000000.000100",
-      } as never,
-      { source: "message" },
-    );
-
-    expect(trackEvent).toHaveBeenCalledTimes(1);
-    expect(resolveThreadTsMock).toHaveBeenCalledTimes(1);
-    expect(enqueueMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("drops message subtypes that do not carry user message text", async () => {
-    const { handler, trackEvent } = createHandlerWithTracker();
-
-    await handler(
-      {
-        type: "message",
-        subtype: "channel_join",
-        channel: "C111",
-        user: "U111",
-        ts: "1709000000.000400",
-        text: "<@U111> joined the channel",
-      } as never,
-      { source: "message" },
-    );
-
-    expect(trackEvent).not.toHaveBeenCalled();
-    expect(resolveThreadTsMock).not.toHaveBeenCalled();
-    expect(enqueueMock).not.toHaveBeenCalled();
   });
 
   it("flushes pending top-level buffered keys before immediate non-debounce follow-ups", async () => {

@@ -1,21 +1,6 @@
-import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { whatsappSetupPlugin } from "./src/channel.setup.js";
 
-export default defineBundledChannelSetupEntry({
-  importMetaUrl: import.meta.url,
-  features: {
-    legacyStateMigrations: true,
-    legacySessionSurfaces: true,
-  },
-  plugin: {
-    specifier: "./setup-plugin-api.js",
-    exportName: "whatsappSetupPlugin",
-  },
-  legacyStateMigrations: {
-    specifier: "./legacy-state-migrations-api.js",
-    exportName: "detectWhatsAppLegacyStateMigrations",
-  },
-  legacySessionSurface: {
-    specifier: "./legacy-session-surface-api.js",
-    exportName: "whatsappLegacySessionSurface",
-  },
-});
+export { whatsappSetupPlugin } from "./src/channel.setup.js";
+
+export default defineSetupPluginEntry(whatsappSetupPlugin);

@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
-type MaybeCreateDynamicAgentResult = {
+export type MaybeCreateDynamicAgentResult = {
   created: boolean;
   updatedCfg: OpenClawConfig;
   agentId?: string;
@@ -19,15 +19,9 @@ export async function maybeCreateDynamicAgent(params: {
   runtime: PluginRuntime;
   senderOpenId: string;
   dynamicCfg: DynamicAgentCreationConfig;
-  configWritesAllowed: boolean;
   log: (msg: string) => void;
 }): Promise<MaybeCreateDynamicAgentResult> {
-  const { cfg, runtime, senderOpenId, dynamicCfg, configWritesAllowed, log } = params;
-
-  if (!configWritesAllowed) {
-    log(`feishu: config writes disabled, not creating agent for ${senderOpenId}`);
-    return { created: false, updatedCfg: cfg };
-  }
+  const { cfg, runtime, senderOpenId, dynamicCfg, log } = params;
 
   // Check if there's already a binding for this user
   const existingBindings = cfg.bindings ?? [];
@@ -78,10 +72,7 @@ export async function maybeCreateDynamicAgent(params: {
       ],
     };
 
-    await runtime.config.replaceConfigFile({
-      nextConfig: updatedCfg,
-      afterWrite: { mode: "auto" },
-    });
+    await runtime.config.writeConfigFile(updatedCfg);
     return { created: true, updatedCfg, agentId };
   }
 
@@ -124,10 +115,7 @@ export async function maybeCreateDynamicAgent(params: {
   };
 
   // Write updated config using PluginRuntime API
-  await runtime.config.replaceConfigFile({
-    nextConfig: updatedCfg,
-    afterWrite: { mode: "auto" },
-  });
+  await runtime.config.writeConfigFile(updatedCfg);
 
   return { created: true, updatedCfg, agentId };
 }

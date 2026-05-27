@@ -1,26 +1,18 @@
-import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
-import {
-  buildUsageHttpErrorSnapshot,
-  fetchJson,
-  readUsageJson,
-} from "./provider-usage.fetch.shared.js";
+import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 type CodexUsageResponse = {
   rate_limit?: {
-    limit_reached?: boolean;
     primary_window?: {
       limit_window_seconds?: number;
       used_percent?: number;
       reset_at?: number;
-      reset_after_seconds?: number;
     };
     secondary_window?: {
       limit_window_seconds?: number;
       used_percent?: number;
       reset_at?: number;
-      reset_after_seconds?: number;
     };
   };
   plan_type?: string;
@@ -58,21 +50,14 @@ export async function fetchCodexUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
-  const defaultHeaders: Record<string, string> = {
+  const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
+    "User-Agent": "CodexBar",
     Accept: "application/json",
   };
   if (accountId) {
-    defaultHeaders["ChatGPT-Account-Id"] = accountId;
+    headers["ChatGPT-Account-Id"] = accountId;
   }
-  const headers =
-    resolveProviderRequestHeaders({
-      provider: "openai-codex",
-      baseUrl: "https://chatgpt.com/backend-api/wham/usage",
-      capability: "other",
-      transport: "http",
-      defaultHeaders,
-    }) ?? defaultHeaders;
 
   const res = await fetchJson(
     "https://chatgpt.com/backend-api/wham/usage",
@@ -89,11 +74,7 @@ export async function fetchCodexUsage(
     });
   }
 
-  const parsed = await readUsageJson("openai-codex", res);
-  if (!parsed.ok) {
-    return parsed.snapshot;
-  }
-  const data = parsed.data as CodexUsageResponse;
+  const data = (await res.json()) as CodexUsageResponse;
   const windows: UsageWindow[] = [];
 
   if (data.rate_limit?.primary_window) {
@@ -126,7 +107,7 @@ export async function fetchCodexUsage(
     const balance =
       typeof data.credits.balance === "number"
         ? data.credits.balance
-        : Number.parseFloat(data.credits.balance) || 0;
+        : parseFloat(data.credits.balance) || 0;
     plan = plan ? `${plan} ($${balance.toFixed(2)})` : `$${balance.toFixed(2)}`;
   }
 

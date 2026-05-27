@@ -1,6 +1,4 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import { expandToolGroups, normalizeToolName } from "../tool-policy.js";
@@ -102,10 +100,10 @@ function mergeAllowlist(base: string[] | undefined, extra: string[] | undefined)
     if (!Array.isArray(extra) || extra.length === 0) {
       return [...base];
     }
-    return uniqueStrings([...base, ...extra]);
+    return Array.from(new Set([...base, ...extra]));
   }
   if (Array.isArray(extra) && extra.length > 0) {
-    return uniqueStrings([...DEFAULT_TOOL_ALLOW, ...extra]);
+    return Array.from(new Set([...DEFAULT_TOOL_ALLOW, ...extra]));
   }
   return [...DEFAULT_TOOL_ALLOW];
 }
@@ -134,7 +132,7 @@ function resolveExplicitSandboxReAllowPatterns(params: {
   allow?: string[];
   alsoAllow?: string[];
 }): string[] {
-  return uniqueStrings([...(params.allow ?? []), ...(params.alsoAllow ?? [])]);
+  return Array.from(new Set([...(params.allow ?? []), ...(params.alsoAllow ?? [])]));
 }
 
 function filterDefaultDenyForExplicitAllows(params: {
@@ -159,15 +157,13 @@ function filterDefaultDenyForExplicitAllows(params: {
 function expandResolvedPolicy(policy: SandboxToolPolicy): SandboxToolPolicy {
   const expandedDeny = expandToolGroups(policy.deny ?? []);
   let expandedAllow = expandToolGroups(policy.allow ?? []);
-  const expandedDenyLower = expandedDeny.map(normalizeLowercaseStringOrEmpty);
-  const expandedAllowLower = expandedAllow.map(normalizeLowercaseStringOrEmpty);
 
   // `image` is essential for multimodal workflows; keep the existing sandbox
   // behavior that auto-includes it for explicit allowlists unless it is denied.
   if (
     expandedAllow.length > 0 &&
-    !expandedDenyLower.includes("image") &&
-    !expandedAllowLower.includes("image")
+    !expandedDeny.map((value) => value.toLowerCase()).includes("image") &&
+    !expandedAllow.map((value) => value.toLowerCase()).includes("image")
   ) {
     expandedAllow = [...expandedAllow, "image"];
   }

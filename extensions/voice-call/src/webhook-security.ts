@@ -1,11 +1,4 @@
 import crypto from "node:crypto";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
-import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeStringEntries,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHeader } from "./http-headers.js";
 import type { WebhookContext } from "./types.js";
 
@@ -83,7 +76,7 @@ function markReplay(cache: ReplayCache, replayKey: string): boolean {
  *
  * @see https://www.twilio.com/docs/usage/webhooks/webhooks-security
  */
-function validateTwilioSignature(
+export function validateTwilioSignature(
   authToken: string,
   signature: string | undefined,
   url: string,
@@ -127,13 +120,22 @@ function buildCanonicalTwilioParamString(params: URLSearchParams): string {
  * Timing-safe string comparison to prevent timing attacks.
  */
 function timingSafeEqual(a: string, b: string): boolean {
-  return safeEqualSecret(a, b);
+  if (a.length !== b.length) {
+    // Still do comparison to maintain constant time
+    const dummy = Buffer.from(a);
+    crypto.timingSafeEqual(dummy, dummy);
+    return false;
+  }
+
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  return crypto.timingSafeEqual(bufA, bufB);
 }
 
 /**
  * Configuration for secure URL reconstruction.
  */
-interface WebhookUrlOptions {
+export interface WebhookUrlOptions {
   /**
    * Whitelist of allowed hostnames. If provided, only these hosts will be
    * accepted from forwarding headers. This prevents host header injection attacks.
@@ -194,8 +196,8 @@ function extractHostname(hostHeader: string): string | null {
     if (endBracket === -1) {
       return null; // Malformed IPv6
     }
-    hostname = hostHeader.slice(1, endBracket);
-    return normalizeLowercaseStringOrEmpty(hostname);
+    hostname = hostHeader.substring(1, endBracket);
+    return hostname.toLowerCase();
   }
 
   // Handle IPv4/domain with optional port
@@ -211,7 +213,7 @@ function extractHostname(hostHeader: string): string | null {
     return null;
   }
 
-  return normalizeLowercaseStringOrEmpty(hostname);
+  return hostname.toLowerCase();
 }
 
 function extractHostnameFromHeader(headerValue: string): string | null {
@@ -364,6 +366,19 @@ function buildTwilioVerificationUrl(
   }
 }
 
+function isLoopbackAddress(address?: string): boolean {
+  if (!address) {
+    return false;
+  }
+  if (address === "127.0.0.1" || address === "::1") {
+    return true;
+  }
+  if (address.startsWith("::ffff:127.")) {
+    return true;
+  }
+  return false;
+}
+
 function stripPortFromUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -402,7 +417,7 @@ function extractPortFromHostHeader(hostHeader?: string): string | undefined {
 /**
  * Result of Twilio webhook verification with detailed info.
  */
-interface TwilioVerificationResult {
+export interface TwilioVerificationResult {
   ok: boolean;
   reason?: string;
   /** The URL that was used for verification (for debugging) */
@@ -415,7 +430,7 @@ interface TwilioVerificationResult {
   verifiedRequestKey?: string;
 }
 
-interface TelnyxVerificationResult {
+export interface TelnyxVerificationResult {
   ok: boolean;
   reason?: string;
   /** Request is cryptographically valid but was already processed recently. */
@@ -511,7 +526,7 @@ export function verifyTelnyxWebhook(
     return { ok: false, reason: "Missing signature or timestamp header" };
   }
 
-  const eventTimeSec = Number.parseInt(timestamp, 10);
+  const eventTimeSec = parseInt(timestamp, 10);
   if (!Number.isFinite(eventTimeSec)) {
     return { ok: false, reason: "Invalid timestamp header" };
   }
@@ -519,8 +534,6 @@ export function verifyTelnyxWebhook(
   try {
     const signedPayload = `${timestamp}|${ctx.rawBody}`;
     const signatureBuffer = decodeBase64OrBase64Url(signature);
-    // Canonicalize equivalent Base64/Base64URL encodings before replay hashing.
-    const canonicalSignature = signatureBuffer.toString("base64");
     const key = importEd25519PublicKey(publicKey);
 
     const isValid = crypto.verify(null, Buffer.from(signedPayload), key, signatureBuffer);
@@ -535,13 +548,13 @@ export function verifyTelnyxWebhook(
       return { ok: false, reason: "Timestamp too old" };
     }
 
-    const replayKey = `telnyx:${sha256Hex(`${timestamp}\n${canonicalSignature}\n${ctx.rawBody}`)}`;
+    const replayKey = `telnyx:${sha256Hex(`${timestamp}\n${signature}\n${ctx.rawBody}`)}`;
     const isReplay = markReplay(telnyxReplayCache, replayKey);
     return { ok: true, isReplay, verifiedRequestKey: replayKey };
   } catch (err) {
     return {
       ok: false,
-      reason: `Verification error: ${formatErrorMessage(err)}`,
+      reason: `Verification error: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }
@@ -605,7 +618,7 @@ export function verifyTwilioWebhook(
     return { ok: false, reason: "Missing X-Twilio-Signature header" };
   }
 
-  const isLoopback = isLoopbackHost(options?.remoteIP ?? ctx.remoteAddress ?? "");
+  const isLoopback = isLoopbackAddress(options?.remoteIP ?? ctx.remoteAddress);
   const allowLoopbackForwarding = options?.allowNgrokFreeTierLoopbackBypass && isLoopback;
 
   // Reconstruct the URL Twilio used
@@ -689,7 +702,7 @@ export function verifyTwilioWebhook(
 /**
  * Result of Plivo webhook verification with detailed info.
  */
-interface PlivoVerificationResult {
+export interface PlivoVerificationResult {
   ok: boolean;
   reason?: string;
   verificationUrl?: string;
@@ -730,7 +743,12 @@ function createPlivoV3ReplayKey(params: {
 }
 
 function timingSafeEqualString(a: string, b: string): boolean {
-  return safeEqualSecret(a, b);
+  if (a.length !== b.length) {
+    const dummy = Buffer.from(a);
+    crypto.timingSafeEqual(dummy, dummy);
+    return false;
+  }
+  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
 function validatePlivoV2Signature(params: {
@@ -832,9 +850,11 @@ function validatePlivoV3Signature(params: {
   const expected = normalizeSignatureBase64(digest);
 
   // Header can contain multiple signatures separated by commas.
-  const provided = normalizeStringEntries(params.signatureHeader.split(",")).map((s) =>
-    normalizeSignatureBase64(s),
-  );
+  const provided = params.signatureHeader
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => normalizeSignatureBase64(s));
 
   for (const sig of provided) {
     if (timingSafeEqualString(expected, sig)) {

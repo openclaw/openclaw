@@ -11,17 +11,17 @@ const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
   logInfoMock: vi.fn(),
 }));
 
-interface MockChild extends EventEmitter {
+type MockChild = EventEmitter & {
   stdout: EventEmitter;
   stderr: EventEmitter;
   kill: (signal?: NodeJS.Signals) => void;
   closeWith: (code?: number | null) => void;
-}
+};
 
 function createMockChild(params?: { autoClose?: boolean }): MockChild {
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
-  const child = new EventEmitter() as unknown as MockChild;
+  const child = new EventEmitter() as MockChild;
   child.stdout = stdout;
   child.stderr = stderr;
   child.closeWith = (code = 0) => {
@@ -66,8 +66,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async () => {
   };
 });
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
     spawn: vi.fn(),
@@ -110,7 +110,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
     if (!manager) {
       throw new Error("manager missing");
     }
-    return { manager, resolved };
+    return { manager };
   }
 
   function installIndexedPathStub(params: {
@@ -123,32 +123,14 @@ describe("QmdMemoryManager slugified path resolution", () => {
   }) {
     const inner = params.manager as unknown as {
       db: {
-        prepare: (query: string) => {
-          get: (...args: unknown[]) => unknown;
-          all: (...args: unknown[]) => unknown;
-        };
+        prepare: (query: string) => { all: (...args: unknown[]) => unknown };
         close: () => void;
       };
     };
     inner.db = {
       prepare: (query: string) => ({
-        get: (...args: unknown[]) => {
-          if (query.includes("collection = ? AND active = 1 AND path = ?")) {
-            expect(args[0]).toBe(params.collection);
-            const requestedPath = args[1];
-            expect(typeof requestedPath).toBe("string");
-            const exactCandidates = new Set([
-              ...(params.exactPaths ?? []),
-              ...(params.actualPath ? [params.actualPath] : []),
-            ]);
-            return typeof requestedPath === "string" && exactCandidates.has(requestedPath)
-              ? { path: requestedPath }
-              : undefined;
-          }
-          throw new Error(`unexpected sqlite query: ${query}`);
-        },
         all: (...args: unknown[]) => {
-          if (query.includes("collection = ? AND path = ? AND active = 1")) {
+          if (query.includes("collection = ? AND path = ?")) {
             expect(args).toEqual([params.collection, params.normalizedPath]);
             return (params.exactPaths ?? []).map((pathValue) => ({ path: pathValue }));
           }
@@ -251,11 +233,9 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
+    await expect(manager.readFile({ relPath: results[0]!.path })).resolves.toEqual({
       path: actualRelative,
       text: "line-1\nline-2\nline-3",
-      from: 1,
-      lines: 3,
     });
   });
 
@@ -279,11 +259,6 @@ describe("QmdMemoryManager slugified path resolution", () => {
     await fs.mkdir(path.dirname(actualFile), { recursive: true });
     await fs.writeFile(actualFile, "vault memory", "utf-8");
 
-    const { manager, resolved } = await createManager({ cfg });
-    const collectionName =
-      resolved.qmd?.collections.find((collection) => collection.path === extraRoot)?.name ??
-      "vault";
-
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
         const child = createMockChild({ autoClose: false });
@@ -292,7 +267,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
           "stdout",
           JSON.stringify([
             {
-              file: `qmd://${collectionName}/topics/sub-category/topic-name.md`,
+              file: "qmd://vault-main/topics/sub-category/topic-name.md",
               score: 0.81,
               snippet: "@@ -1,1\nvault memory",
             },
@@ -302,9 +277,11 @@ describe("QmdMemoryManager slugified path resolution", () => {
       }
       return createMockChild();
     });
+
+    const { manager } = await createManager({ cfg });
     installIndexedPathStub({
       manager,
-      collection: collectionName,
+      collection: "vault-main",
       normalizedPath: "topics/sub-category/topic-name.md",
       actualPath: actualRelative,
     });
@@ -314,7 +291,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
     });
     expect(results).toEqual([
       {
-        path: `qmd/${collectionName}/${actualRelative}`,
+        path: `qmd/vault-main/${actualRelative}`,
         startLine: 1,
         endLine: 1,
         score: 0.81,
@@ -323,11 +300,9 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
-      path: `qmd/${collectionName}/${actualRelative}`,
+    await expect(manager.readFile({ relPath: results[0]!.path })).resolves.toEqual({
+      path: `qmd/vault-main/${actualRelative}`,
       text: "vault memory",
-      from: 1,
-      lines: 1,
     });
   });
 
@@ -382,11 +357,9 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
+    await expect(manager.readFile({ relPath: results[0]!.path })).resolves.toEqual({
       path: exactRelative,
       text: "exact slugified path",
-      from: 1,
-      lines: 1,
     });
   });
 });

@@ -1,4 +1,3 @@
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { wrapExternalContent } from "./external-content.js";
 
 const DEFAULT_MAX_CHARS = 800;
@@ -29,7 +28,7 @@ export function buildUntrustedChannelMetadata(params: {
     .map((entry) => (typeof entry === "string" ? normalizeEntry(entry) : ""))
     .filter((entry) => Boolean(entry))
     .map((entry) => truncateText(entry, DEFAULT_MAX_ENTRY_CHARS));
-  const deduped = uniqueStrings(cleaned);
+  const deduped = cleaned.filter((entry, index, list) => list.indexOf(entry) === index);
   if (deduped.length === 0) {
     return undefined;
   }

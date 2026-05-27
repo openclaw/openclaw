@@ -3,6 +3,8 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelPlugin } from "../runtime-api.js";
+import { buildChannelConfigSchema, formatAllowFromLowercase } from "../runtime-api.js";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -10,12 +12,9 @@ import {
   checkZcaAuthenticated,
   type ResolvedZalouserAccount,
 } from "./accounts.js";
-import type { ChannelPlugin } from "./channel-api.js";
-import { buildChannelConfigSchema, formatAllowFromLowercase } from "./channel-api.js";
 import { ZalouserConfigSchema } from "./config-schema.js";
-import { zalouserDoctor } from "./doctor.js";
 
-const zalouserMeta: ChannelPlugin<ResolvedZalouserAccount>["meta"] = {
+export const zalouserMeta = {
   id: "zalouser",
   label: "Zalo Personal",
   selectionLabel: "Zalo (Personal Account)",
@@ -25,7 +24,7 @@ const zalouserMeta: ChannelPlugin<ResolvedZalouserAccount>["meta"] = {
   aliases: ["zlu"],
   order: 85,
   quickstartAllowFrom: false,
-};
+} satisfies ChannelPlugin<ResolvedZalouserAccount>["meta"];
 
 const zalouserConfigAdapter = createScopedChannelConfigAdapter<ResolvedZalouserAccount>({
   sectionKey: "zalouser",
@@ -53,15 +52,7 @@ export function createZalouserPluginBase(params: {
   setup: NonNullable<ChannelPlugin<ResolvedZalouserAccount>["setup"]>;
 }): Pick<
   ChannelPlugin<ResolvedZalouserAccount>,
-  | "id"
-  | "meta"
-  | "setupWizard"
-  | "capabilities"
-  | "doctor"
-  | "reload"
-  | "configSchema"
-  | "config"
-  | "setup"
+  "id" | "meta" | "setupWizard" | "capabilities" | "reload" | "configSchema" | "config" | "setup"
 > {
   return {
     id: "zalouser",
@@ -76,7 +67,6 @@ export function createZalouserPluginBase(params: {
       nativeCommands: false,
       blockStreaming: true,
     },
-    doctor: zalouserDoctor,
     reload: { configPrefixes: ["channels.zalouser"] },
     configSchema: buildChannelConfigSchema(ZalouserConfigSchema),
     config: {

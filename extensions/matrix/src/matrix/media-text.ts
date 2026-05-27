@@ -2,6 +2,7 @@ import path from "node:path";
 import type {
   MatrixMessageAttachmentKind,
   MatrixMessageAttachmentSummary,
+  MatrixMessageSummary,
 } from "./actions/types.js";
 
 const MATRIX_MEDIA_KINDS: Record<string, MatrixMessageAttachmentKind> = {
@@ -25,17 +26,13 @@ function resolveMatrixMediaLabel(
 
 function formatMatrixAttachmentMarker(params: {
   kind?: MatrixMessageAttachmentKind;
-  tooLarge?: boolean;
   unavailable?: boolean;
 }): string {
   const label = resolveMatrixMediaLabel(params.kind);
-  if (params.tooLarge) {
-    return `[matrix ${label} too large]`;
-  }
   return params.unavailable ? `[matrix ${label} unavailable]` : `[matrix ${label}]`;
 }
 
-function isLikelyBareFilename(text: string): boolean {
+export function isLikelyBareFilename(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.includes("\n") || /\s/.test(trimmed)) {
     return false;
@@ -97,9 +94,8 @@ export function resolveMatrixMessageBody(params: {
   return attachment.caption;
 }
 
-function formatMatrixAttachmentText(params: {
+export function formatMatrixAttachmentText(params: {
   attachment?: MatrixMessageAttachmentSummary;
-  tooLarge?: boolean;
   unavailable?: boolean;
 }): string | undefined {
   if (!params.attachment) {
@@ -107,7 +103,6 @@ function formatMatrixAttachmentText(params: {
   }
   return formatMatrixAttachmentMarker({
     kind: params.attachment.kind,
-    tooLarge: params.tooLarge,
     unavailable: params.unavailable,
   });
 }
@@ -115,13 +110,11 @@ function formatMatrixAttachmentText(params: {
 export function formatMatrixMessageText(params: {
   body?: string;
   attachment?: MatrixMessageAttachmentSummary;
-  tooLarge?: boolean;
   unavailable?: boolean;
 }): string | undefined {
   const body = params.body?.trim() ?? "";
   const marker = formatMatrixAttachmentText({
     attachment: params.attachment,
-    tooLarge: params.tooLarge,
     unavailable: params.unavailable,
   });
   if (!marker) {
@@ -131,6 +124,12 @@ export function formatMatrixMessageText(params: {
     return marker;
   }
   return `${body}\n\n${marker}`;
+}
+
+export function formatMatrixMessageSummaryText(
+  summary: Pick<MatrixMessageSummary, "body" | "attachment">,
+): string | undefined {
+  return formatMatrixMessageText(summary);
 }
 
 export function formatMatrixMediaUnavailableText(params: {
@@ -143,20 +142,6 @@ export function formatMatrixMediaUnavailableText(params: {
       body: resolveMatrixMessageBody(params),
       attachment: resolveMatrixMessageAttachment(params),
       unavailable: true,
-    }) ?? ""
-  );
-}
-
-export function formatMatrixMediaTooLargeText(params: {
-  body?: string;
-  filename?: string;
-  msgtype?: string;
-}): string {
-  return (
-    formatMatrixMessageText({
-      body: resolveMatrixMessageBody(params),
-      attachment: resolveMatrixMessageAttachment(params),
-      tooLarge: true,
     }) ?? ""
   );
 }

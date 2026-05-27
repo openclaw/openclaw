@@ -1,9 +1,8 @@
 import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
-import { formatCliCommand } from "../../cli/command-format.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
@@ -18,12 +17,6 @@ import {
 } from "./shared.js";
 
 type DefaultsFallbackKey = "model" | "imageModel";
-
-function listCommandForFallbackKey(key: DefaultsFallbackKey): string {
-  return key === "imageModel"
-    ? "openclaw models image-fallbacks list"
-    : "openclaw models fallbacks list";
-}
 
 function getFallbacks(cfg: OpenClawConfig, key: DefaultsFallbackKey): string[] {
   return resolveAgentModelFallbackValues(cfg.agents?.defaults?.[key]);
@@ -129,7 +122,7 @@ export async function removeFallbackCommand(
     const existing = getFallbacks(cfg, params.key);
     const filtered = existing.filter((entry) => {
       const resolvedEntry = resolveModelRefFromString({
-        raw: entry ?? "",
+        raw: String(entry ?? ""),
         defaultProvider: DEFAULT_PROVIDER,
         aliasIndex,
       });
@@ -140,9 +133,7 @@ export async function removeFallbackCommand(
     });
 
     if (filtered.length === existing.length) {
-      throw new Error(
-        `${params.notFoundLabel} not found: ${targetKey}. Run ${formatCliCommand(listCommandForFallbackKey(params.key))} to see configured fallbacks.`,
-      );
+      throw new Error(`${params.notFoundLabel} not found: ${targetKey}`);
     }
 
     return patchDefaultsFallbacks(cfg, { key: params.key, fallbacks: filtered });

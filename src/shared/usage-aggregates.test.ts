@@ -120,7 +120,7 @@ describe("shared/usage-aggregates", () => {
     });
 
     expect(tail.latency).toBeUndefined();
-    expect(tail.dailyLatency).toStrictEqual([]);
+    expect(tail.dailyLatency).toEqual([]);
   });
 
   it("normalizes zero-count daily latency entries to zero averages and mins", () => {

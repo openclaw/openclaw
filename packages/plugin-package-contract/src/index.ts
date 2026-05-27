@@ -22,16 +22,12 @@ export const EXTERNAL_CODE_PLUGIN_REQUIRED_FIELD_PATHS = [
   "openclaw.build.openclawVersion",
 ] as const;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function isRecord(value: unknown): value is JsonObject {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+function getTrimmedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function readOpenClawBlock(packageJson: unknown) {
@@ -47,26 +43,26 @@ export function normalizeExternalPluginCompatibility(
   packageJson: unknown,
 ): ExternalPluginCompatibility | undefined {
   const { root, compat, build, install } = readOpenClawBlock(packageJson);
-  const version = normalizeOptionalString(root?.version);
-  const minHostVersion = normalizeOptionalString(install?.minHostVersion);
+  const version = getTrimmedString(root?.version);
+  const minHostVersion = getTrimmedString(install?.minHostVersion);
   const compatibility: ExternalPluginCompatibility = {};
 
-  const pluginApi = normalizeOptionalString(compat?.pluginApi);
+  const pluginApi = getTrimmedString(compat?.pluginApi);
   if (pluginApi) {
     compatibility.pluginApiRange = pluginApi;
   }
 
-  const minGatewayVersion = normalizeOptionalString(compat?.minGatewayVersion) ?? minHostVersion;
+  const minGatewayVersion = getTrimmedString(compat?.minGatewayVersion) ?? minHostVersion;
   if (minGatewayVersion) {
     compatibility.minGatewayVersion = minGatewayVersion;
   }
 
-  const builtWithOpenClawVersion = normalizeOptionalString(build?.openclawVersion) ?? version;
+  const builtWithOpenClawVersion = getTrimmedString(build?.openclawVersion) ?? version;
   if (builtWithOpenClawVersion) {
     compatibility.builtWithOpenClawVersion = builtWithOpenClawVersion;
   }
 
-  const pluginSdkVersion = normalizeOptionalString(build?.pluginSdkVersion);
+  const pluginSdkVersion = getTrimmedString(build?.pluginSdkVersion);
   if (pluginSdkVersion) {
     compatibility.pluginSdkVersion = pluginSdkVersion;
   }
@@ -77,10 +73,10 @@ export function normalizeExternalPluginCompatibility(
 export function listMissingExternalCodePluginFieldPaths(packageJson: unknown): string[] {
   const { compat, build } = readOpenClawBlock(packageJson);
   const missing: string[] = [];
-  if (!normalizeOptionalString(compat?.pluginApi)) {
+  if (!getTrimmedString(compat?.pluginApi)) {
     missing.push("openclaw.compat.pluginApi");
   }
-  if (!normalizeOptionalString(build?.openclawVersion)) {
+  if (!getTrimmedString(build?.openclawVersion)) {
     missing.push("openclaw.build.openclawVersion");
   }
   return missing;
@@ -91,7 +87,7 @@ export function validateExternalCodePluginPackageJson(
 ): ExternalCodePluginValidationResult {
   const issues = listMissingExternalCodePluginFieldPaths(packageJson).map((fieldPath) => ({
     fieldPath,
-    message: `${fieldPath} is required for external code plugin packages.`,
+    message: `${fieldPath} is required for external code plugins published to ClawHub.`,
   }));
   return {
     compatibility: normalizeExternalPluginCompatibility(packageJson),

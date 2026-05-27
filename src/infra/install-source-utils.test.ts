@@ -1,52 +1,26 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   packNpmSpecToArchive,
   resolveArchiveSourcePath,
   withTempDir,
 } from "./install-source-utils.js";
 
-const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
 const runCommandWithTimeoutMock = vi.fn();
 const TEMP_DIR_PREFIX = "openclaw-install-source-utils-";
-const tempDirs = createTrackedTempDirs();
-
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    execFileSync: execFileSyncMock,
-  };
-});
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-async function createTempDir(prefix: string) {
-  return await tempDirs.make(prefix);
-}
+const tempDirs: string[] = [];
 
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-  } catch (error) {
-    expect(error).toBeInstanceOf(Error);
-    const statError = error as NodeJS.ErrnoException;
-    expect({
-      code: statError.code,
-      path: statError.path,
-      syscall: statError.syscall,
-    }).toEqual({
-      code: "ENOENT",
-      path: targetPath,
-      syscall: "stat",
-    });
-    return;
-  }
-  throw new Error(`Expected path to be missing: ${targetPath}`);
+async function createTempDir(prefix: string) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
 }
 
 async function createFixtureDir() {
@@ -121,12 +95,17 @@ function expectPackError(result: { ok: boolean; error?: string }, expected: stri
 }
 
 beforeEach(() => {
-  execFileSyncMock.mockClear();
   runCommandWithTimeoutMock.mockClear();
 });
 
 afterEach(async () => {
-  await tempDirs.cleanup();
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (!dir) {
+      break;
+    }
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 describe("withTempDir", () => {
@@ -137,12 +116,12 @@ describe("withTempDir", () => {
     const value = await withTempDir("openclaw-install-source-utils-", async (tmpDir) => {
       observedDir = tmpDir;
       await fs.writeFile(path.join(tmpDir, markerFile), "ok", "utf-8");
-      await expect(fs.readFile(path.join(tmpDir, markerFile), "utf8")).resolves.toBe("ok");
+      await expect(fs.stat(path.join(tmpDir, markerFile))).resolves.toBeDefined();
       return "done";
     });
 
     expect(value).toBe("done");
-    await expectPathMissing(observedDir);
+    await expect(fs.stat(observedDir)).rejects.toThrow();
   });
 });
 
@@ -215,20 +194,10 @@ describe("packNpmSpecToArchive", () => {
     });
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
       ["npm", "pack", "openclaw-plugin@1.2.3", "--ignore-scripts", "--json"],
-      {
+      expect.objectContaining({
         cwd,
         timeoutMs: 300_000,
-        env: {
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-          NPM_CONFIG_IGNORE_SCRIPTS: "true",
-          NPM_CONFIG_BEFORE: "",
-          NPM_CONFIG_MIN_RELEASE_AGE: "",
-          "NPM_CONFIG_MIN-RELEASE-AGE": "",
-          npm_config_before: "",
-          "npm_config_min-release-age": "",
-          npm_config_min_release_age: "0",
-        },
-      },
+      }),
     );
   });
 

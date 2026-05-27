@@ -37,7 +37,7 @@ describe("zalouser group policy helpers", () => {
 
   it("finds the first matching group entry", () => {
     const groups = {
-      "group:123": { enabled: true },
+      "group:123": { allow: true },
       "team-alpha": { requireMention: false },
       "*": { requireMention: true },
     };
@@ -49,12 +49,12 @@ describe("zalouser group policy helpers", () => {
         includeGroupIdAlias: true,
       }),
     );
-    expect(entry).toEqual({ enabled: true });
+    expect(entry).toEqual({ allow: true });
   });
 
   it("evaluates allow/enable flags", () => {
-    expect(isZalouserGroupEntryAllowed({ enabled: true })).toBe(true);
-    expect(isZalouserGroupEntryAllowed({ allow: false } as never)).toBe(false);
+    expect(isZalouserGroupEntryAllowed({ allow: true, enabled: true })).toBe(true);
+    expect(isZalouserGroupEntryAllowed({ allow: false })).toBe(false);
     expect(isZalouserGroupEntryAllowed({ enabled: false })).toBe(false);
     expect(isZalouserGroupEntryAllowed(undefined)).toBe(false);
   });

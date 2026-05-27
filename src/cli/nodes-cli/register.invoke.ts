@@ -1,10 +1,6 @@
 import type { Command } from "commander";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
@@ -23,29 +19,29 @@ export function registerNodesInvokeCommands(nodes: Command) {
       .option("--idempotency-key <key>", "Idempotency key (optional)")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("invoke", async () => {
-          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
-          const command = normalizeOptionalString(opts.command) ?? "";
+          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          const command = String(opts.command ?? "").trim();
           if (!nodeId || !command) {
             const { error } = getNodesTheme();
             defaultRuntime.error(error("--node and --command required"));
             defaultRuntime.exit(1);
             return;
           }
-          if (BLOCKED_NODE_INVOKE_COMMANDS.has(normalizeLowercaseStringOrEmpty(command))) {
+          if (BLOCKED_NODE_INVOKE_COMMANDS.has(command.toLowerCase())) {
             throw new Error(
               `command "${command}" is reserved for shell execution; use the exec tool with host=node instead`,
             );
           }
-          const params = JSON.parse(opts.params ?? "{}") as unknown;
+          const params = JSON.parse(String(opts.params ?? "{}")) as unknown;
           const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(opts.invokeTimeout, 10)
+            ? Number.parseInt(String(opts.invokeTimeout), 10)
             : undefined;
 
           const invokeParams: Record<string, unknown> = {
             nodeId,
             command,
             params,
-            idempotencyKey: opts.idempotencyKey ?? randomIdempotencyKey(),
+            idempotencyKey: String(opts.idempotencyKey ?? randomIdempotencyKey()),
           };
           if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
             invokeParams.timeoutMs = timeoutMs;

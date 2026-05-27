@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   listMattermostAccountIdsMock,
@@ -32,13 +32,11 @@ let listMattermostDirectoryGroups: typeof import("./directory.js").listMattermos
 let listMattermostDirectoryPeers: typeof import("./directory.js").listMattermostDirectoryPeers;
 
 describe("mattermost directory", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
     ({ listMattermostDirectoryGroups, listMattermostDirectoryPeers } =
       await import("./directory.js"));
-  });
-
-  beforeEach(() => {
-    vi.clearAllMocks();
   });
 
   it("deduplicates channels across enabled accounts and skips failing accounts", async () => {
@@ -160,9 +158,13 @@ describe("mattermost directory", () => {
       }),
     ).resolves.toEqual([{ kind: "user", id: "user:user-1", name: "alice", handle: "Alice Ng" }]);
 
-    expect(client.request).toHaveBeenNthCalledWith(2, "/users/search", {
-      method: "POST",
-      body: JSON.stringify({ term: "ali", team_id: "team-1" }),
-    });
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      "/users/search",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ term: "ali", team_id: "team-1" }),
+      }),
+    );
   });
 });

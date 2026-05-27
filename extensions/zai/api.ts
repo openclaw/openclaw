@@ -1,5 +1,4 @@
 export { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from "./onboard.js";
-export { detectZaiEndpoint, type ZaiDetectedEndpoint, type ZaiEndpointId } from "./detect.js";
 export {
   buildZaiModelDefinition,
   resolveZaiBaseUrl,

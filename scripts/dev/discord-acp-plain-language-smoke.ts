@@ -5,16 +5,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { formatErrorMessage } from "../../src/infra/errors.ts";
-import {
-  maskIdentifier,
-  parseStrictIntegerOption,
-  previewForDevToolLog,
-  redactForDevToolLog,
-  redactHomePath,
-} from "../lib/dev-tooling-safety.ts";
 
 function writeStdoutLine(message: string): void {
   process.stdout.write(`${message}\n`);
@@ -133,20 +124,20 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function parseNumber(value: string | undefined, fallback: number, label: string): number {
-  return parseStrictIntegerOption({ fallback, label, min: 1, raw: value });
+function parseNumber(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function resolveStateDir(): string {
   const override = process.env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
-    if (override === "~") {
-      return path.resolve(process.env.HOME || "");
-    }
-    if (override.startsWith("~/")) {
-      return path.resolve(process.env.HOME || "", override.slice(2));
-    }
-    return path.resolve(override);
+    return override.startsWith("~")
+      ? path.resolve(process.env.HOME || "", override.slice(1))
+      : path.resolve(override);
   }
   const home = process.env.OPENCLAW_HOME?.trim() || process.env.HOME || "";
   return path.join(home, ".openclaw");
@@ -167,27 +158,6 @@ function resolveArg(flag: string): string | undefined {
 
 function hasFlag(flag: string): boolean {
   return process.argv.slice(2).includes(flag);
-}
-
-function parseDriverMode(raw: string): DriverMode {
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === "token" || normalized === "webhook" || normalized === "openclaw") {
-    return normalized;
-  }
-  throw new Error(
-    `Invalid --driver value ${JSON.stringify(raw)}; expected token, webhook, or openclaw.`,
-  );
-}
-
-function redactDiscordApiPath(apiPath: string): string {
-  return apiPath.replace(
-    /(\/webhooks\/[^/?#]+\/)([^/?#]+)/gu,
-    (_match, prefix: string, token: string) => `${prefix}${maskIdentifier(token)}`,
-  );
-}
-
-function safeErrorMessage(error: unknown): string {
-  return redactForDevToolLog(formatErrorMessage(error));
 }
 
 function usage(): string {
@@ -233,7 +203,15 @@ function parseArgs(): Args {
   const channelId = resolveArg("--channel") || process.env.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID || "";
   const driverModeRaw =
     resolveArg("--driver") || process.env.OPENCLAW_DISCORD_SMOKE_DRIVER || "token";
-  const driverMode = parseDriverMode(driverModeRaw);
+  const normalizedDriverMode = driverModeRaw.trim().toLowerCase();
+  const driverMode: DriverMode =
+    normalizedDriverMode === "webhook"
+      ? "webhook"
+      : normalizedDriverMode === "openclaw"
+        ? "openclaw"
+        : normalizedDriverMode === "token"
+          ? "token"
+          : "token";
   const driverToken =
     resolveArg("--token") || process.env.OPENCLAW_DISCORD_SMOKE_DRIVER_TOKEN || "";
   const driverTokenPrefix =
@@ -255,12 +233,10 @@ function parseArgs(): Args {
   const timeoutMs = parseNumber(
     resolveArg("--timeout-ms") || process.env.OPENCLAW_DISCORD_SMOKE_TIMEOUT_MS,
     240_000,
-    "--timeout-ms",
   );
   const pollMs = parseNumber(
     resolveArg("--poll-ms") || process.env.OPENCLAW_DISCORD_SMOKE_POLL_MS,
     1_500,
-    "--poll-ms",
   );
   const defaultBindingsPath = path.join(resolveStateDir(), "discord", "thread-bindings.json");
   const threadBindingsPath =
@@ -416,9 +392,7 @@ async function requestDiscordJson<T>(params: {
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       throw new Error(
-        redactForDevToolLog(
-          `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)} failed: ${response.status} ${response.statusText}${text ? ` :: ${text}` : ""}`,
-        ),
+        `${params.errorPrefix} ${params.method} ${params.path} failed: ${response.status} ${response.statusText}${text ? ` :: ${text}` : ""}`,
       );
     }
 
@@ -429,9 +403,7 @@ async function requestDiscordJson<T>(params: {
     return (await response.json()) as T;
   }
 
-  throw new Error(
-    `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)} exceeded retry budget.`,
-  );
+  throw new Error(`${params.errorPrefix} ${params.method} ${params.path} exceeded retry budget.`);
 }
 
 async function readThreadBindings(filePath: string): Promise<ThreadBindingRecord[]> {
@@ -456,14 +428,18 @@ function resolveCandidateBindings(params: {
   const normalizedTargetAgent = params.targetAgent.trim().toLowerCase();
   return params.entries
     .filter((entry) => {
-      const targetKind = (entry.targetKind || "").trim().toLowerCase();
+      const targetKind = String(entry.targetKind || "")
+        .trim()
+        .toLowerCase();
       if (targetKind !== "acp") {
         return false;
       }
       if (normalizeBoundAt(entry) < params.minBoundAt) {
         return false;
       }
-      const agentId = (entry.agentId || "").trim().toLowerCase();
+      const agentId = String(entry.agentId || "")
+        .trim()
+        .toLowerCase();
       if (normalizedTargetAgent && agentId && agentId !== normalizedTargetAgent) {
         return false;
       }
@@ -494,7 +470,7 @@ function toRecentMessageRow(message: DiscordMessage) {
     id: message.id,
     author: message.author?.username || message.author?.id || "unknown",
     bot: Boolean(message.author?.bot),
-    content: previewForDevToolLog(message.content || "", 500),
+    content: (message.content || "").slice(0, 500),
   };
 }
 
@@ -527,7 +503,7 @@ function printOutput(params: { json: boolean; payload: SuccessResult | FailureRe
     writeStdoutLine(`smokeId: ${success.smokeId}`);
     writeStdoutLine(`sentMessageId: ${success.sentMessageId}`);
     writeStdoutLine(`threadId: ${success.binding.threadId}`);
-    writeStdoutLine(`sessionKey: ${maskIdentifier(success.binding.targetSessionKey)}`);
+    writeStdoutLine(`sessionKey: ${success.binding.targetSessionKey}`);
     writeStdoutLine(`ackMessageId: ${success.ackMessage.id}`);
     writeStdoutLine(
       `ackAuthor: ${success.ackMessage.authorUsername || success.ackMessage.authorId || "unknown"}`,
@@ -564,7 +540,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
       ok: false,
       stage: "validation",
       smokeId: "n/a",
-      error: safeErrorMessage(err),
+      error: err instanceof Error ? err.message : String(err),
     };
   }
 
@@ -686,7 +662,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
           "--json",
         ],
       });
-      sentMessageId = sent.payload?.result?.messageId || "";
+      sentMessageId = String(sent.payload?.result?.messageId || "");
       if (!sentMessageId) {
         throw new Error("openclaw message send did not return payload.result.messageId");
       }
@@ -696,7 +672,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
       ok: false,
       stage: setupStage,
       smokeId,
-      error: safeErrorMessage(err),
+      error: err instanceof Error ? err.message : String(err),
     };
   }
 
@@ -735,11 +711,11 @@ async function run(): Promise<SuccessResult | FailureResult> {
         ok: false,
         stage: "wait-binding",
         smokeId,
-        error: `Timed out waiting for new ACP thread binding (path: ${redactHomePath(args.threadBindingsPath)}).`,
+        error: `Timed out waiting for new ACP thread binding (path: ${args.threadBindingsPath}).`,
         diagnostics: {
           bindingCandidates: latestCandidates.slice(0, 6).map((entry) => ({
             threadId: entry.threadId || "",
-            targetSessionKey: maskIdentifier(entry.targetSessionKey),
+            targetSessionKey: entry.targetSessionKey || "",
             targetKind: entry.targetKind,
             agentId: entry.agentId,
             boundAt: entry.boundAt,
@@ -798,7 +774,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
           bindingCandidates: [
             {
               threadId: winningBinding.threadId || "",
-              targetSessionKey: maskIdentifier(winningBinding.targetSessionKey),
+              targetSessionKey: winningBinding.targetSessionKey || "",
               targetKind: winningBinding.targetKind,
               agentId: winningBinding.agentId,
               boundAt: winningBinding.boundAt,
@@ -817,8 +793,8 @@ async function run(): Promise<SuccessResult | FailureResult> {
       binding: {
         threadId,
         targetSessionKey: winningBinding.targetSessionKey,
-        targetKind: winningBinding.targetKind || "acp",
-        agentId: winningBinding.agentId || args.targetAgent,
+        targetKind: String(winningBinding.targetKind || "acp"),
+        agentId: String(winningBinding.agentId || args.targetAgent),
         boundAt: normalizeBoundAt(winningBinding),
         accountId: winningBinding.accountId,
         channelId: winningBinding.channelId,
@@ -844,34 +820,23 @@ async function run(): Promise<SuccessResult | FailureResult> {
   }
 }
 
-async function main(): Promise<number> {
-  if (hasFlag("--help") || hasFlag("-h")) {
-    writeStdoutLine(usage());
-    return 0;
-  }
-  const result = await run().catch(
-    (err): FailureResult => ({
-      ok: false,
-      stage: "unexpected",
-      smokeId: "n/a",
-      error: safeErrorMessage(err),
-    }),
-  );
-  printOutput({
-    json: hasFlag("--json"),
-    payload: result,
-  });
-  return result.ok ? 0 : 1;
+if (hasFlag("--help") || hasFlag("-h")) {
+  writeStdoutLine(usage());
+  process.exit(0);
 }
 
-export const testing = {
-  parseDriverMode,
-  parseNumber,
-  redactDiscordApiPath,
-  resolveStateDir,
-  safeErrorMessage,
-};
+const result = await run().catch(
+  (err): FailureResult => ({
+    ok: false,
+    stage: "unexpected",
+    smokeId: "n/a",
+    error: err instanceof Error ? err.message : String(err),
+  }),
+);
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  process.exit(await main());
-}
+printOutput({
+  json: hasFlag("--json"),
+  payload: result,
+});
+
+process.exit(result.ok ? 0 : 1);

@@ -4,30 +4,38 @@ import type { TypingSignaler } from "./typing-mode.js";
 
 const hoisted = vi.hoisted(() => {
   const loadSessionStoreMock = vi.fn();
-  return { loadSessionStoreMock };
+  const scheduleFollowupDrainMock = vi.fn();
+  return { loadSessionStoreMock, scheduleFollowupDrainMock };
 });
 
-vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
-  );
+vi.mock("../../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
   return {
     ...actual,
     loadSessionStore: (...args: unknown[]) => hoisted.loadSessionStoreMock(...args),
   };
 });
 
+vi.mock("./queue.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./queue.js")>();
+  return {
+    ...actual,
+    scheduleFollowupDrain: (...args: unknown[]) => hoisted.scheduleFollowupDrainMock(...args),
+  };
+});
+
 const {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
+  finalizeWithFollowup,
   isAudioPayload,
   signalTypingIfNeeded,
 } = await import("./agent-runner-helpers.js");
 
 describe("agent runner helpers", () => {
   beforeEach(() => {
-    vi.useRealTimers();
-    hoisted.loadSessionStoreMock.mockReset();
+    hoisted.loadSessionStoreMock.mockClear();
+    hoisted.scheduleFollowupDrainMock.mockClear();
   });
 
   it("detects audio payloads from mediaUrl/mediaUrls", () => {
@@ -61,30 +69,6 @@ describe("agent runner helpers", () => {
     expect(shouldEmitOutput()).toBe(true);
   });
 
-  it("caches session verbose reads briefly while still refreshing live changes", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { verboseLevel: "full" },
-    });
-    const shouldEmitOutput = createShouldEmitToolOutput({
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
-      resolvedVerboseLevel: "off",
-    });
-
-    expect(shouldEmitOutput()).toBe(true);
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { verboseLevel: "off" },
-    });
-    expect(shouldEmitOutput()).toBe(true);
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledOnce();
-
-    vi.setSystemTime(1_251);
-    expect(shouldEmitOutput()).toBe(false);
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledTimes(2);
-  });
-
   it("falls back when store read fails or session value is invalid", () => {
     hoisted.loadSessionStoreMock.mockImplementation(() => {
       throw new Error("boom");
@@ -106,6 +90,13 @@ describe("agent runner helpers", () => {
       resolvedVerboseLevel: "full",
     });
     expect(fallbackFull()).toBe(true);
+  });
+
+  it("schedules followup drain and returns the original value", () => {
+    const runFollowupTurn = vi.fn();
+    const value = { ok: true };
+    expect(finalizeWithFollowup(value, "queue-key", runFollowupTurn)).toBe(value);
+    expect(hoisted.scheduleFollowupDrainMock).toHaveBeenCalledWith("queue-key", runFollowupTurn);
   });
 
   it("signals typing only when any payload has text or media", async () => {

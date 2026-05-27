@@ -1,16 +1,12 @@
 import { normalizeChatType } from "../channels/chat-type.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { deriveSessionChatType } from "./session-chat-type.js";
+import { deriveSessionChatType } from "./session-key-utils.js";
 
 export type SessionSendPolicyDecision = "allow" | "deny";
 
 export function normalizeSendPolicy(raw?: string | null): SessionSendPolicyDecision | undefined {
-  const value = normalizeOptionalLowercaseString(raw);
+  const value = raw?.trim().toLowerCase();
   if (value === "allow") {
     return "allow";
   }
@@ -21,7 +17,7 @@ export function normalizeSendPolicy(raw?: string | null): SessionSendPolicyDecis
 }
 
 function normalizeMatchValue(raw?: string | null) {
-  const value = normalizeOptionalLowercaseString(raw);
+  const value = raw?.trim().toLowerCase();
   return value ? value : undefined;
 }
 
@@ -50,25 +46,8 @@ function deriveChannelFromKey(key?: string) {
 }
 
 function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
-  const normalizedKey = normalizeOptionalLowercaseString(stripAgentSessionKeyPrefix(key));
-  if (!normalizedKey) {
-    return undefined;
-  }
-  const tokens = new Set(normalizedKey.split(":").filter(Boolean));
-  if (tokens.has("group")) {
-    return "group";
-  }
-  if (tokens.has("channel")) {
-    return "channel";
-  }
-  if (tokens.has("direct") || tokens.has("dm")) {
-    return "direct";
-  }
-  const derived = deriveSessionChatType(normalizedKey);
-  if (derived !== "unknown") {
-    return derived;
-  }
-  return undefined;
+  const chatType = deriveSessionChatType(key);
+  return chatType === "unknown" ? undefined : chatType;
 }
 
 export function resolveSendPolicy(params: {
@@ -88,26 +67,18 @@ export function resolveSendPolicy(params: {
     return "allow";
   }
 
+  const channel =
+    normalizeMatchValue(params.channel) ??
+    normalizeMatchValue(params.entry?.channel) ??
+    normalizeMatchValue(params.entry?.lastChannel) ??
+    deriveChannelFromKey(params.sessionKey);
+  const chatType =
+    normalizeChatType(params.chatType ?? params.entry?.chatType) ??
+    normalizeChatType(deriveChatTypeFromKey(params.sessionKey));
   const rawSessionKey = params.sessionKey ?? "";
   const strippedSessionKey = stripAgentSessionKeyPrefix(rawSessionKey) ?? "";
-  const rawSessionKeyNorm = normalizeLowercaseStringOrEmpty(rawSessionKey);
-  const strippedSessionKeyNorm = normalizeLowercaseStringOrEmpty(strippedSessionKey);
-  let channel: string | undefined;
-  let chatType: SessionChatType | undefined;
-  const getChannel = () => {
-    channel ??=
-      normalizeMatchValue(params.channel) ??
-      normalizeMatchValue(params.entry?.channel) ??
-      normalizeMatchValue(params.entry?.lastChannel) ??
-      deriveChannelFromKey(params.sessionKey);
-    return channel;
-  };
-  const getChatType = () => {
-    chatType ??=
-      normalizeChatType(params.chatType ?? params.entry?.chatType) ??
-      normalizeChatType(deriveChatTypeFromKey(params.sessionKey));
-    return chatType;
-  };
+  const rawSessionKeyNorm = rawSessionKey.toLowerCase();
+  const strippedSessionKeyNorm = strippedSessionKey.toLowerCase();
 
   let allowedMatch = false;
   for (const rule of policy.rules ?? []) {
@@ -121,10 +92,10 @@ export function resolveSendPolicy(params: {
     const matchPrefix = normalizeMatchValue(match.keyPrefix);
     const matchRawPrefix = normalizeMatchValue(match.rawKeyPrefix);
 
-    if (matchChannel && matchChannel !== getChannel()) {
+    if (matchChannel && matchChannel !== channel) {
       continue;
     }
-    if (matchChatType && matchChatType !== getChatType()) {
+    if (matchChatType && matchChatType !== chatType) {
       continue;
     }
     if (matchRawPrefix && !rawSessionKeyNorm.startsWith(matchRawPrefix)) {

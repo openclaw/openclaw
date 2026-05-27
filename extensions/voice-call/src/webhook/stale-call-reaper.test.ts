@@ -57,7 +57,6 @@ describe("startStaleCallReaper", () => {
 
   it("logs and swallows endCall failures", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const endCallError = new Error("network");
     const manager = {
       getActiveCalls: vi.fn(() => [
         {
@@ -67,7 +66,7 @@ describe("startStaleCallReaper", () => {
         },
       ]),
       endCall: vi.fn(async () => {
-        throw endCallError;
+        throw new Error("network");
       }),
     };
 
@@ -81,7 +80,7 @@ describe("startStaleCallReaper", () => {
 
     expect(warn).toHaveBeenCalledWith(
       "[voice-call] Reaper failed to end call call-stale:",
-      endCallError,
+      expect.any(Error),
     );
 
     stop?.();

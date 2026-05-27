@@ -1,9 +1,8 @@
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveSlackAllowListMatch } from "./allow-list.js";
 import type { SlackMonitorContext } from "./context.js";
-import { upsertChannelPairingRequest } from "./conversation.runtime.js";
 
 export async function authorizeSlackDirectMessage(params: {
   ctx: SlackMonitorContext;
@@ -20,8 +19,7 @@ export async function authorizeSlackDirectMessage(params: {
     await params.onDisabled();
     return false;
   }
-
-  if (params.ctx.dmPolicy === "open" && params.allowFromLower.includes("*")) {
+  if (params.ctx.dmPolicy === "open") {
     return true;
   }
 
@@ -59,7 +57,7 @@ export async function authorizeSlackDirectMessage(params: {
         );
       },
       onReplyError: (err) => {
-        params.log(`slack pairing reply failed for ${params.senderId}: ${formatErrorMessage(err)}`);
+        params.log(`slack pairing reply failed for ${params.senderId}: ${String(err)}`);
       },
     });
     return false;

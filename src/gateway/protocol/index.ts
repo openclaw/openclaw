@@ -1,5 +1,4 @@
-import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
-import { uniqueStrings } from "../../shared/string-normalization.js";
+import AjvPkg, { type ErrorObject } from "ajv";
 import type { SessionsPatchResult } from "../session-utils.types.js";
 import {
   type AgentEvent,
@@ -9,8 +8,6 @@ import {
   type AgentIdentityResult,
   AgentIdentityResultSchema,
   AgentParamsSchema,
-  type MessageActionParams,
-  MessageActionParamsSchema,
   type AgentSummary,
   AgentSummarySchema,
   type AgentsFileEntry,
@@ -39,77 +36,18 @@ import {
   AgentsFilesSetParamsSchema,
   type AgentsFilesSetResult,
   AgentsFilesSetResultSchema,
-  type ArtifactsDownloadParams,
-  ArtifactsDownloadParamsSchema,
-  type ArtifactsDownloadResult,
-  type ArtifactsGetParams,
-  ArtifactsGetParamsSchema,
-  type ArtifactsGetResult,
-  type ArtifactsListParams,
-  ArtifactsListParamsSchema,
-  type ArtifactsListResult,
-  type ArtifactSummary,
-  ArtifactSummarySchema,
   type AgentsListParams,
   AgentsListParamsSchema,
   type AgentsListResult,
   AgentsListResultSchema,
   type AgentWaitParams,
   AgentWaitParamsSchema,
-  type ChannelsStartParams,
-  ChannelsStartParamsSchema,
-  type ChannelsStopParams,
-  ChannelsStopParamsSchema,
   type ChannelsLogoutParams,
   ChannelsLogoutParamsSchema,
-  type TalkEvent,
-  TalkEventSchema,
-  type TalkCatalogParams,
-  TalkCatalogParamsSchema,
-  type TalkCatalogResult,
-  TalkCatalogResultSchema,
-  type TalkClientCreateParams,
-  TalkClientCreateParamsSchema,
-  type TalkClientCreateResult,
-  TalkClientCreateResultSchema,
-  type TalkAgentControlResult,
-  TalkAgentControlResultSchema,
-  type TalkClientSteerParams,
-  TalkClientSteerParamsSchema,
-  type TalkClientToolCallParams,
-  TalkClientToolCallParamsSchema,
-  type TalkClientToolCallResult,
-  TalkClientToolCallResultSchema,
   type TalkConfigParams,
   TalkConfigParamsSchema,
   type TalkConfigResult,
   TalkConfigResultSchema,
-  type TalkSessionAppendAudioParams,
-  TalkSessionAppendAudioParamsSchema,
-  type TalkSessionCancelOutputParams,
-  TalkSessionCancelOutputParamsSchema,
-  type TalkSessionCancelTurnParams,
-  TalkSessionCancelTurnParamsSchema,
-  type TalkSessionCloseParams,
-  TalkSessionCloseParamsSchema,
-  type TalkSessionCreateParams,
-  TalkSessionCreateParamsSchema,
-  type TalkSessionCreateResult,
-  TalkSessionCreateResultSchema,
-  type TalkSessionJoinParams,
-  TalkSessionJoinParamsSchema,
-  type TalkSessionJoinResult,
-  TalkSessionJoinResultSchema,
-  type TalkSessionOkResult,
-  TalkSessionOkResultSchema,
-  type TalkSessionSteerParams,
-  TalkSessionSteerParamsSchema,
-  type TalkSessionSubmitToolResultParams,
-  TalkSessionSubmitToolResultParamsSchema,
-  type TalkSessionTurnResult,
-  TalkSessionTurnResultSchema,
-  type TalkSessionTurnParams,
-  TalkSessionTurnParamsSchema,
   type TalkSpeakParams,
   TalkSpeakParamsSchema,
   type TalkSpeakResult,
@@ -118,11 +56,6 @@ import {
   ChannelsStatusParamsSchema,
   type ChannelsStatusResult,
   ChannelsStatusResultSchema,
-  type CommandEntry,
-  type CommandsListParams,
-  CommandsListParamsSchema,
-  type CommandsListResult,
-  CommandsListResultSchema,
   type ChatAbortParams,
   ChatAbortParamsSchema,
   type ChatEvent,
@@ -147,14 +80,10 @@ import {
   ConfigSchemaResponseSchema,
   type ConfigSetParams,
   ConfigSetParamsSchema,
-  type UpdateStatusParams,
-  UpdateStatusParamsSchema,
   type ConnectParams,
   ConnectParamsSchema,
   type CronAddParams,
   CronAddParamsSchema,
-  type CronGetParams,
-  CronGetParamsSchema,
   type CronJob,
   CronJobSchema,
   type CronListParams,
@@ -191,8 +120,6 @@ import {
   type ExecApprovalsSetParams,
   ExecApprovalsSetParamsSchema,
   type ExecApprovalsSnapshot,
-  type ExecApprovalGetParams,
-  ExecApprovalGetParamsSchema,
   type ExecApprovalRequestParams,
   ExecApprovalRequestParamsSchema,
   type ExecApprovalResolveParams,
@@ -201,25 +128,7 @@ import {
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
   PluginApprovalResolveParamsSchema,
-  type PluginsSessionActionParams,
-  type PluginsSessionActionResult,
-  PluginsSessionActionParamsSchema,
-  PluginsSessionActionResultSchema,
-  type PluginsUiDescriptorsParams,
-  PluginsUiDescriptorsParamsSchema,
   ErrorCodes,
-  type EnvironmentSummary,
-  EnvironmentSummarySchema,
-  type EnvironmentsListParams,
-  EnvironmentsListParamsSchema,
-  type EnvironmentsListResult,
-  EnvironmentsListResultSchema,
-  type EnvironmentsStatusParams,
-  EnvironmentsStatusParamsSchema,
-  type EnvironmentsStatusResult,
-  EnvironmentsStatusResultSchema,
-  type EnvironmentStatus,
-  EnvironmentStatusSchema,
   type ErrorShape,
   ErrorShapeSchema,
   type EventFrame,
@@ -239,8 +148,6 @@ import {
   NodeDescribeParamsSchema,
   type NodeEventParams,
   NodeEventParamsSchema,
-  type NodeEventResult,
-  NodeEventResultSchema,
   type NodePendingDrainParams,
   NodePendingDrainParamsSchema,
   type NodePendingDrainResult,
@@ -249,10 +156,6 @@ import {
   NodePendingEnqueueParamsSchema,
   type NodePendingEnqueueResult,
   NodePendingEnqueueResultSchema,
-  type NodePresenceAlivePayload,
-  NodePresenceAlivePayloadSchema,
-  type NodePresenceAliveReason,
-  NodePresenceAliveReasonSchema,
   type NodeInvokeParams,
   NodeInvokeParamsSchema,
   type NodeInvokeResultParams,
@@ -267,8 +170,6 @@ import {
   NodePairListParamsSchema,
   type NodePairRejectParams,
   NodePairRejectParamsSchema,
-  type NodePairRemoveParams,
-  NodePairRemoveParamsSchema,
   type NodePairRequestParams,
   NodePairRequestParamsSchema,
   type NodePairVerifyParams,
@@ -277,20 +178,10 @@ import {
   NodeRenameParamsSchema,
   type PollParams,
   PollParamsSchema,
-  MIN_CLIENT_PROTOCOL_VERSION,
-  MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type PushTestParams,
   PushTestParamsSchema,
   PushTestResultSchema,
-  type WebPushVapidPublicKeyParams,
-  WebPushVapidPublicKeyParamsSchema,
-  type WebPushSubscribeParams,
-  WebPushSubscribeParamsSchema,
-  type WebPushUnsubscribeParams,
-  WebPushUnsubscribeParamsSchema,
-  type WebPushTestParams,
-  WebPushTestParamsSchema,
   type PresenceEntry,
   PresenceEntrySchema,
   ProtocolSchemas,
@@ -307,23 +198,10 @@ import {
   SessionsAbortParamsSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
-  type SessionsCleanupParams,
-  SessionsCleanupParamsSchema,
-  type SessionsCompactionBranchParams,
-  SessionsCompactionBranchParamsSchema,
-  type SessionsCompactionGetParams,
-  SessionsCompactionGetParamsSchema,
-  type SessionsCompactionListParams,
-  SessionsCompactionListParamsSchema,
-  type SessionsCompactionRestoreParams,
-  SessionsCompactionRestoreParamsSchema,
-  type SessionOperationEvent,
   type SessionsCreateParams,
   SessionsCreateParamsSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
-  type SessionsDescribeParams,
-  SessionsDescribeParamsSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
   type SessionsMessagesSubscribeParams,
@@ -332,8 +210,6 @@ import {
   SessionsMessagesUnsubscribeParamsSchema,
   type SessionsPatchParams,
   SessionsPatchParamsSchema,
-  type SessionsPluginPatchParams,
-  SessionsPluginPatchParamsSchema,
   type SessionsPreviewParams,
   SessionsPreviewParamsSchema,
   type SessionsResetParams,
@@ -344,43 +220,15 @@ import {
   SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
-  type TaskSummary,
-  TaskSummarySchema,
-  type TasksCancelParams,
-  TasksCancelParamsSchema,
-  type TasksCancelResult,
-  TasksCancelResultSchema,
-  type TasksGetParams,
-  TasksGetParamsSchema,
-  type TasksGetResult,
-  TasksGetResultSchema,
-  type TasksListParams,
-  TasksListParamsSchema,
-  type TasksListResult,
-  TasksListResultSchema,
   type ShutdownEvent,
   ShutdownEventSchema,
   type SkillsBinsParams,
   SkillsBinsParamsSchema,
   type SkillsBinsResult,
-  type SkillsDetailParams,
-  SkillsDetailParamsSchema,
-  type SkillsDetailResult,
-  SkillsDetailResultSchema,
   type SkillsInstallParams,
   SkillsInstallParamsSchema,
-  type SkillsSearchParams,
-  SkillsSearchParamsSchema,
-  type SkillsSearchResult,
-  SkillsSearchResultSchema,
   type SkillsStatusParams,
   SkillsStatusParamsSchema,
-  type SkillsUploadBeginParams,
-  SkillsUploadBeginParamsSchema,
-  type SkillsUploadChunkParams,
-  SkillsUploadChunkParamsSchema,
-  type SkillsUploadCommitParams,
-  SkillsUploadCommitParamsSchema,
   type SkillsUpdateParams,
   SkillsUpdateParamsSchema,
   type ToolsCatalogParams,
@@ -389,9 +237,6 @@ import {
   type ToolsEffectiveParams,
   ToolsEffectiveParamsSchema,
   type ToolsEffectiveResult,
-  type ToolsInvokeParams,
-  ToolsInvokeParamsSchema,
-  type ToolsInvokeResult,
   type Snapshot,
   SnapshotSchema,
   type StateVersion,
@@ -426,397 +271,200 @@ import {
   WizardStepSchema,
 } from "./schema.js";
 
-export type ValidationError = {
-  keyword?: string;
-  instancePath?: string;
-  schemaPath?: string;
-  params?: Record<string, unknown>;
-  message?: string;
-};
+const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").default)({
+  allErrors: true,
+  strict: false,
+  removeAdditional: false,
+});
 
-export type ProtocolValidator<T = unknown> = ((data: unknown) => data is T) & {
-  errors: ValidationError[] | null;
-  schema: unknown;
-};
-
-function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
-  let compiled: TypeBoxValidator | undefined;
-  let errors: ValidationError[] | null = null;
-
-  const getCompiled = () => {
-    compiled ??= Compile(schema as never);
-    return compiled;
-  };
-
-  const validate = ((data: unknown): data is T => {
-    const current = getCompiled();
-    const valid = current.Check(data);
-    errors = valid ? null : ([...current.Errors(data)] as ValidationError[]);
-    return valid;
-  }) as ProtocolValidator<T>;
-
-  Object.defineProperties(validate, {
-    errors: {
-      configurable: true,
-      enumerable: true,
-      get: () => errors,
-      set: (nextErrors: ValidationError[] | null | undefined) => {
-        errors = nextErrors ?? null;
-      },
-    },
-    schema: {
-      configurable: true,
-      enumerable: true,
-      get: () => schema,
-    },
-  });
-
-  return validate;
-}
-
-export const validateCommandsListParams = lazyCompile<CommandsListParams>(CommandsListParamsSchema);
-export const validateConnectParams = lazyCompile<ConnectParams>(ConnectParamsSchema);
-export const validateRequestFrame = lazyCompile<RequestFrame>(RequestFrameSchema);
-export const validateResponseFrame = lazyCompile<ResponseFrame>(ResponseFrameSchema);
-export const validateEventFrame = lazyCompile<EventFrame>(EventFrameSchema);
-export const validateMessageActionParams =
-  lazyCompile<MessageActionParams>(MessageActionParamsSchema);
-export const validateSendParams = lazyCompile(SendParamsSchema);
-export const validatePollParams = lazyCompile<PollParams>(PollParamsSchema);
-export const validateAgentParams = lazyCompile(AgentParamsSchema);
+export const validateConnectParams = ajv.compile<ConnectParams>(ConnectParamsSchema);
+export const validateRequestFrame = ajv.compile<RequestFrame>(RequestFrameSchema);
+export const validateResponseFrame = ajv.compile<ResponseFrame>(ResponseFrameSchema);
+export const validateEventFrame = ajv.compile<EventFrame>(EventFrameSchema);
+export const validateSendParams = ajv.compile(SendParamsSchema);
+export const validatePollParams = ajv.compile<PollParams>(PollParamsSchema);
+export const validateAgentParams = ajv.compile(AgentParamsSchema);
 export const validateAgentIdentityParams =
-  lazyCompile<AgentIdentityParams>(AgentIdentityParamsSchema);
-export const validateAgentWaitParams = lazyCompile<AgentWaitParams>(AgentWaitParamsSchema);
-export const validateWakeParams = lazyCompile<WakeParams>(WakeParamsSchema);
-export const validateAgentsListParams = lazyCompile<AgentsListParams>(AgentsListParamsSchema);
-export const validateAgentsCreateParams = lazyCompile<AgentsCreateParams>(AgentsCreateParamsSchema);
-export const validateAgentsUpdateParams = lazyCompile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
-export const validateAgentsDeleteParams = lazyCompile<AgentsDeleteParams>(AgentsDeleteParamsSchema);
-export const validateAgentsFilesListParams = lazyCompile<AgentsFilesListParams>(
+  ajv.compile<AgentIdentityParams>(AgentIdentityParamsSchema);
+export const validateAgentWaitParams = ajv.compile<AgentWaitParams>(AgentWaitParamsSchema);
+export const validateWakeParams = ajv.compile<WakeParams>(WakeParamsSchema);
+export const validateAgentsListParams = ajv.compile<AgentsListParams>(AgentsListParamsSchema);
+export const validateAgentsCreateParams = ajv.compile<AgentsCreateParams>(AgentsCreateParamsSchema);
+export const validateAgentsUpdateParams = ajv.compile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
+export const validateAgentsDeleteParams = ajv.compile<AgentsDeleteParams>(AgentsDeleteParamsSchema);
+export const validateAgentsFilesListParams = ajv.compile<AgentsFilesListParams>(
   AgentsFilesListParamsSchema,
 );
-export const validateAgentsFilesGetParams = lazyCompile<AgentsFilesGetParams>(
+export const validateAgentsFilesGetParams = ajv.compile<AgentsFilesGetParams>(
   AgentsFilesGetParamsSchema,
 );
-export const validateAgentsFilesSetParams = lazyCompile<AgentsFilesSetParams>(
+export const validateAgentsFilesSetParams = ajv.compile<AgentsFilesSetParams>(
   AgentsFilesSetParamsSchema,
 );
-export const validateArtifactsListParams =
-  lazyCompile<ArtifactsListParams>(ArtifactsListParamsSchema);
-export const validateArtifactsGetParams = lazyCompile<ArtifactsGetParams>(ArtifactsGetParamsSchema);
-export const validateArtifactsDownloadParams = lazyCompile<ArtifactsDownloadParams>(
-  ArtifactsDownloadParamsSchema,
-);
-export const validateNodePairRequestParams = lazyCompile<NodePairRequestParams>(
+export const validateNodePairRequestParams = ajv.compile<NodePairRequestParams>(
   NodePairRequestParamsSchema,
 );
-export const validateNodePairListParams = lazyCompile<NodePairListParams>(NodePairListParamsSchema);
-export const validateNodePairApproveParams = lazyCompile<NodePairApproveParams>(
+export const validateNodePairListParams = ajv.compile<NodePairListParams>(NodePairListParamsSchema);
+export const validateNodePairApproveParams = ajv.compile<NodePairApproveParams>(
   NodePairApproveParamsSchema,
 );
-export const validateNodePairRejectParams = lazyCompile<NodePairRejectParams>(
+export const validateNodePairRejectParams = ajv.compile<NodePairRejectParams>(
   NodePairRejectParamsSchema,
 );
-export const validateNodePairRemoveParams = lazyCompile<NodePairRemoveParams>(
-  NodePairRemoveParamsSchema,
-);
-export const validateNodePairVerifyParams = lazyCompile<NodePairVerifyParams>(
+export const validateNodePairVerifyParams = ajv.compile<NodePairVerifyParams>(
   NodePairVerifyParamsSchema,
 );
-export const validateNodeRenameParams = lazyCompile<NodeRenameParams>(NodeRenameParamsSchema);
-export const validateNodeListParams = lazyCompile<NodeListParams>(NodeListParamsSchema);
-export const validateEnvironmentsListParams = lazyCompile<EnvironmentsListParams>(
-  EnvironmentsListParamsSchema,
-);
-export const validateEnvironmentsStatusParams = lazyCompile<EnvironmentsStatusParams>(
-  EnvironmentsStatusParamsSchema,
-);
-export const validateNodePendingAckParams = lazyCompile<NodePendingAckParams>(
+export const validateNodeRenameParams = ajv.compile<NodeRenameParams>(NodeRenameParamsSchema);
+export const validateNodeListParams = ajv.compile<NodeListParams>(NodeListParamsSchema);
+export const validateNodePendingAckParams = ajv.compile<NodePendingAckParams>(
   NodePendingAckParamsSchema,
 );
-export const validateNodeDescribeParams = lazyCompile<NodeDescribeParams>(NodeDescribeParamsSchema);
-export const validateNodeInvokeParams = lazyCompile<NodeInvokeParams>(NodeInvokeParamsSchema);
-export const validateNodeInvokeResultParams = lazyCompile<NodeInvokeResultParams>(
+export const validateNodeDescribeParams = ajv.compile<NodeDescribeParams>(NodeDescribeParamsSchema);
+export const validateNodeInvokeParams = ajv.compile<NodeInvokeParams>(NodeInvokeParamsSchema);
+export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams>(
   NodeInvokeResultParamsSchema,
 );
-export const validateNodeEventParams = lazyCompile<NodeEventParams>(NodeEventParamsSchema);
-export const validateNodeEventResult = lazyCompile<NodeEventResult>(NodeEventResultSchema);
-export const validateNodePresenceAlivePayload = lazyCompile<NodePresenceAlivePayload>(
-  NodePresenceAlivePayloadSchema,
-);
-export const validateNodePendingDrainParams = lazyCompile<NodePendingDrainParams>(
+export const validateNodeEventParams = ajv.compile<NodeEventParams>(NodeEventParamsSchema);
+export const validateNodePendingDrainParams = ajv.compile<NodePendingDrainParams>(
   NodePendingDrainParamsSchema,
 );
-export const validateNodePendingEnqueueParams = lazyCompile<NodePendingEnqueueParams>(
+export const validateNodePendingEnqueueParams = ajv.compile<NodePendingEnqueueParams>(
   NodePendingEnqueueParamsSchema,
 );
-export const validatePushTestParams = lazyCompile<PushTestParams>(PushTestParamsSchema);
-export const validateWebPushVapidPublicKeyParams = lazyCompile<WebPushVapidPublicKeyParams>(
-  WebPushVapidPublicKeyParamsSchema,
-);
-export const validateWebPushSubscribeParams = lazyCompile<WebPushSubscribeParams>(
-  WebPushSubscribeParamsSchema,
-);
-export const validateWebPushUnsubscribeParams = lazyCompile<WebPushUnsubscribeParams>(
-  WebPushUnsubscribeParamsSchema,
-);
-export const validateWebPushTestParams = lazyCompile<WebPushTestParams>(WebPushTestParamsSchema);
-export const validateSecretsResolveParams = lazyCompile<SecretsResolveParams>(
+export const validatePushTestParams = ajv.compile<PushTestParams>(PushTestParamsSchema);
+export const validateSecretsResolveParams = ajv.compile<SecretsResolveParams>(
   SecretsResolveParamsSchema,
 );
-export const validateSecretsResolveResult = lazyCompile<SecretsResolveResult>(
+export const validateSecretsResolveResult = ajv.compile<SecretsResolveResult>(
   SecretsResolveResultSchema,
 );
-export const validateSessionsListParams = lazyCompile<SessionsListParams>(SessionsListParamsSchema);
-export const validateSessionsCleanupParams = lazyCompile<SessionsCleanupParams>(
-  SessionsCleanupParamsSchema,
-);
-export const validateSessionsPreviewParams = lazyCompile<SessionsPreviewParams>(
+export const validateSessionsListParams = ajv.compile<SessionsListParams>(SessionsListParamsSchema);
+export const validateSessionsPreviewParams = ajv.compile<SessionsPreviewParams>(
   SessionsPreviewParamsSchema,
 );
-export const validateSessionsDescribeParams = lazyCompile<SessionsDescribeParams>(
-  SessionsDescribeParamsSchema,
-);
-export const validateSessionsResolveParams = lazyCompile<SessionsResolveParams>(
+export const validateSessionsResolveParams = ajv.compile<SessionsResolveParams>(
   SessionsResolveParamsSchema,
 );
-export const validateSessionsCreateParams = lazyCompile<SessionsCreateParams>(
+export const validateSessionsCreateParams = ajv.compile<SessionsCreateParams>(
   SessionsCreateParamsSchema,
 );
-export const validateSessionsSendParams = lazyCompile<SessionsSendParams>(SessionsSendParamsSchema);
-export const validateSessionsMessagesSubscribeParams = lazyCompile<SessionsMessagesSubscribeParams>(
+export const validateSessionsSendParams = ajv.compile<SessionsSendParams>(SessionsSendParamsSchema);
+export const validateSessionsMessagesSubscribeParams = ajv.compile<SessionsMessagesSubscribeParams>(
   SessionsMessagesSubscribeParamsSchema,
 );
 export const validateSessionsMessagesUnsubscribeParams =
-  lazyCompile<SessionsMessagesUnsubscribeParams>(SessionsMessagesUnsubscribeParamsSchema);
+  ajv.compile<SessionsMessagesUnsubscribeParams>(SessionsMessagesUnsubscribeParamsSchema);
 export const validateSessionsAbortParams =
-  lazyCompile<SessionsAbortParams>(SessionsAbortParamsSchema);
+  ajv.compile<SessionsAbortParams>(SessionsAbortParamsSchema);
 export const validateSessionsPatchParams =
-  lazyCompile<SessionsPatchParams>(SessionsPatchParamsSchema);
-export const validateSessionsPluginPatchParams = lazyCompile<SessionsPluginPatchParams>(
-  SessionsPluginPatchParamsSchema,
-);
+  ajv.compile<SessionsPatchParams>(SessionsPatchParamsSchema);
 export const validateSessionsResetParams =
-  lazyCompile<SessionsResetParams>(SessionsResetParamsSchema);
-export const validateSessionsDeleteParams = lazyCompile<SessionsDeleteParams>(
+  ajv.compile<SessionsResetParams>(SessionsResetParamsSchema);
+export const validateSessionsDeleteParams = ajv.compile<SessionsDeleteParams>(
   SessionsDeleteParamsSchema,
 );
-export const validateSessionsCompactParams = lazyCompile<SessionsCompactParams>(
+export const validateSessionsCompactParams = ajv.compile<SessionsCompactParams>(
   SessionsCompactParamsSchema,
 );
-export const validateSessionsCompactionListParams = lazyCompile<SessionsCompactionListParams>(
-  SessionsCompactionListParamsSchema,
-);
-export const validateSessionsCompactionGetParams = lazyCompile<SessionsCompactionGetParams>(
-  SessionsCompactionGetParamsSchema,
-);
-export const validateSessionsCompactionBranchParams = lazyCompile<SessionsCompactionBranchParams>(
-  SessionsCompactionBranchParamsSchema,
-);
-export const validateSessionsCompactionRestoreParams = lazyCompile<SessionsCompactionRestoreParams>(
-  SessionsCompactionRestoreParamsSchema,
-);
 export const validateSessionsUsageParams =
-  lazyCompile<SessionsUsageParams>(SessionsUsageParamsSchema);
-export const validateTasksListParams = lazyCompile<TasksListParams>(TasksListParamsSchema);
-export const validateTasksGetParams = lazyCompile<TasksGetParams>(TasksGetParamsSchema);
-export const validateTasksCancelParams = lazyCompile<TasksCancelParams>(TasksCancelParamsSchema);
-export const validateConfigGetParams = lazyCompile<ConfigGetParams>(ConfigGetParamsSchema);
-export const validateConfigSetParams = lazyCompile<ConfigSetParams>(ConfigSetParamsSchema);
-export const validateConfigApplyParams = lazyCompile<ConfigApplyParams>(ConfigApplyParamsSchema);
-export const validateConfigPatchParams = lazyCompile<ConfigPatchParams>(ConfigPatchParamsSchema);
-export const validateConfigSchemaParams = lazyCompile<ConfigSchemaParams>(ConfigSchemaParamsSchema);
-export const validateConfigSchemaLookupParams = lazyCompile<ConfigSchemaLookupParams>(
+  ajv.compile<SessionsUsageParams>(SessionsUsageParamsSchema);
+export const validateConfigGetParams = ajv.compile<ConfigGetParams>(ConfigGetParamsSchema);
+export const validateConfigSetParams = ajv.compile<ConfigSetParams>(ConfigSetParamsSchema);
+export const validateConfigApplyParams = ajv.compile<ConfigApplyParams>(ConfigApplyParamsSchema);
+export const validateConfigPatchParams = ajv.compile<ConfigPatchParams>(ConfigPatchParamsSchema);
+export const validateConfigSchemaParams = ajv.compile<ConfigSchemaParams>(ConfigSchemaParamsSchema);
+export const validateConfigSchemaLookupParams = ajv.compile<ConfigSchemaLookupParams>(
   ConfigSchemaLookupParamsSchema,
 );
-export const validateConfigSchemaLookupResult = lazyCompile<ConfigSchemaLookupResult>(
+export const validateConfigSchemaLookupResult = ajv.compile<ConfigSchemaLookupResult>(
   ConfigSchemaLookupResultSchema,
 );
-export const validateWizardStartParams = lazyCompile<WizardStartParams>(WizardStartParamsSchema);
-export const validateWizardNextParams = lazyCompile<WizardNextParams>(WizardNextParamsSchema);
-export const validateWizardCancelParams = lazyCompile<WizardCancelParams>(WizardCancelParamsSchema);
-export const validateWizardStatusParams = lazyCompile<WizardStatusParams>(WizardStatusParamsSchema);
-export const validateTalkModeParams = lazyCompile<TalkModeParams>(TalkModeParamsSchema);
-export const validateTalkEvent = lazyCompile<TalkEvent>(TalkEventSchema);
-export const validateTalkCatalogParams = lazyCompile<TalkCatalogParams>(TalkCatalogParamsSchema);
-export const validateTalkCatalogResult = lazyCompile<TalkCatalogResult>(TalkCatalogResultSchema);
-export const validateTalkConfigParams = lazyCompile<TalkConfigParams>(TalkConfigParamsSchema);
-export const validateTalkConfigResult = lazyCompile<TalkConfigResult>(TalkConfigResultSchema);
-export const validateTalkClientCreateParams = lazyCompile<TalkClientCreateParams>(
-  TalkClientCreateParamsSchema,
-);
-export const validateTalkClientCreateResult = lazyCompile<TalkClientCreateResult>(
-  TalkClientCreateResultSchema,
-);
-export const validateTalkClientToolCallParams = lazyCompile<TalkClientToolCallParams>(
-  TalkClientToolCallParamsSchema,
-);
-export const validateTalkClientToolCallResult = lazyCompile<TalkClientToolCallResult>(
-  TalkClientToolCallResultSchema,
-);
-export const validateTalkClientSteerParams = lazyCompile<TalkClientSteerParams>(
-  TalkClientSteerParamsSchema,
-);
-export const validateTalkAgentControlResult = lazyCompile<TalkAgentControlResult>(
-  TalkAgentControlResultSchema,
-);
-export const validateTalkSessionCreateParams = lazyCompile<TalkSessionCreateParams>(
-  TalkSessionCreateParamsSchema,
-);
-export const validateTalkSessionCreateResult = lazyCompile<TalkSessionCreateResult>(
-  TalkSessionCreateResultSchema,
-);
-export const validateTalkSessionJoinParams = lazyCompile<TalkSessionJoinParams>(
-  TalkSessionJoinParamsSchema,
-);
-export const validateTalkSessionJoinResult = lazyCompile<TalkSessionJoinResult>(
-  TalkSessionJoinResultSchema,
-);
-export const validateTalkSessionAppendAudioParams = lazyCompile<TalkSessionAppendAudioParams>(
-  TalkSessionAppendAudioParamsSchema,
-);
-export const validateTalkSessionTurnParams = lazyCompile<TalkSessionTurnParams>(
-  TalkSessionTurnParamsSchema,
-);
-export const validateTalkSessionCancelTurnParams = lazyCompile<TalkSessionCancelTurnParams>(
-  TalkSessionCancelTurnParamsSchema,
-);
-export const validateTalkSessionCancelOutputParams = lazyCompile<TalkSessionCancelOutputParams>(
-  TalkSessionCancelOutputParamsSchema,
-);
-export const validateTalkSessionTurnResult = lazyCompile<TalkSessionTurnResult>(
-  TalkSessionTurnResultSchema,
-);
-export const validateTalkSessionSteerParams = lazyCompile<TalkSessionSteerParams>(
-  TalkSessionSteerParamsSchema,
-);
-export const validateTalkSessionSubmitToolResultParams =
-  lazyCompile<TalkSessionSubmitToolResultParams>(TalkSessionSubmitToolResultParamsSchema);
-export const validateTalkSessionCloseParams = lazyCompile<TalkSessionCloseParams>(
-  TalkSessionCloseParamsSchema,
-);
-export const validateTalkSessionOkResult =
-  lazyCompile<TalkSessionOkResult>(TalkSessionOkResultSchema);
-export const validateTalkSpeakParams = lazyCompile<TalkSpeakParams>(TalkSpeakParamsSchema);
-export const validateTalkSpeakResult = lazyCompile<TalkSpeakResult>(TalkSpeakResultSchema);
-export const validateChannelsStatusParams = lazyCompile<ChannelsStatusParams>(
+export const validateWizardStartParams = ajv.compile<WizardStartParams>(WizardStartParamsSchema);
+export const validateWizardNextParams = ajv.compile<WizardNextParams>(WizardNextParamsSchema);
+export const validateWizardCancelParams = ajv.compile<WizardCancelParams>(WizardCancelParamsSchema);
+export const validateWizardStatusParams = ajv.compile<WizardStatusParams>(WizardStatusParamsSchema);
+export const validateTalkModeParams = ajv.compile<TalkModeParams>(TalkModeParamsSchema);
+export const validateTalkConfigParams = ajv.compile<TalkConfigParams>(TalkConfigParamsSchema);
+export const validateTalkConfigResult = ajv.compile<TalkConfigResult>(TalkConfigResultSchema);
+export const validateTalkSpeakParams = ajv.compile<TalkSpeakParams>(TalkSpeakParamsSchema);
+export const validateTalkSpeakResult = ajv.compile<TalkSpeakResult>(TalkSpeakResultSchema);
+export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
   ChannelsStatusParamsSchema,
 );
-export const validateChannelsStartParams =
-  lazyCompile<ChannelsStartParams>(ChannelsStartParamsSchema);
-export const validateChannelsStopParams = lazyCompile<ChannelsStopParams>(ChannelsStopParamsSchema);
-export const validateChannelsLogoutParams = lazyCompile<ChannelsLogoutParams>(
+export const validateChannelsLogoutParams = ajv.compile<ChannelsLogoutParams>(
   ChannelsLogoutParamsSchema,
 );
-export const validateModelsListParams = lazyCompile<ModelsListParams>(ModelsListParamsSchema);
-export const validateSkillsStatusParams = lazyCompile<SkillsStatusParams>(SkillsStatusParamsSchema);
-export const validateToolsCatalogParams = lazyCompile<ToolsCatalogParams>(ToolsCatalogParamsSchema);
-export const validateToolsEffectiveParams = lazyCompile<ToolsEffectiveParams>(
+export const validateModelsListParams = ajv.compile<ModelsListParams>(ModelsListParamsSchema);
+export const validateSkillsStatusParams = ajv.compile<SkillsStatusParams>(SkillsStatusParamsSchema);
+export const validateToolsCatalogParams = ajv.compile<ToolsCatalogParams>(ToolsCatalogParamsSchema);
+export const validateToolsEffectiveParams = ajv.compile<ToolsEffectiveParams>(
   ToolsEffectiveParamsSchema,
 );
-export const validateToolsInvokeParams = lazyCompile<ToolsInvokeParams>(ToolsInvokeParamsSchema);
-export const validateSkillsBinsParams = lazyCompile<SkillsBinsParams>(SkillsBinsParamsSchema);
+export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
 export const validateSkillsInstallParams =
-  lazyCompile<SkillsInstallParams>(SkillsInstallParamsSchema);
-export const validateSkillsUploadBeginParams = lazyCompile<SkillsUploadBeginParams>(
-  SkillsUploadBeginParamsSchema,
-);
-export const validateSkillsUploadChunkParams = lazyCompile<SkillsUploadChunkParams>(
-  SkillsUploadChunkParamsSchema,
-);
-export const validateSkillsUploadCommitParams = lazyCompile<SkillsUploadCommitParams>(
-  SkillsUploadCommitParamsSchema,
-);
-export const validateSkillsUpdateParams = lazyCompile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
-export const validateSkillsSearchParams = lazyCompile<SkillsSearchParams>(SkillsSearchParamsSchema);
-export const validateSkillsDetailParams = lazyCompile<SkillsDetailParams>(SkillsDetailParamsSchema);
-export const validateCronListParams = lazyCompile<CronListParams>(CronListParamsSchema);
-export const validateCronStatusParams = lazyCompile<CronStatusParams>(CronStatusParamsSchema);
-export const validateCronGetParams = lazyCompile<CronGetParams>(CronGetParamsSchema);
-export const validateCronAddParams = lazyCompile<CronAddParams>(CronAddParamsSchema);
-export const validateCronUpdateParams = lazyCompile<CronUpdateParams>(CronUpdateParamsSchema);
-export const validateCronRemoveParams = lazyCompile<CronRemoveParams>(CronRemoveParamsSchema);
-export const validateCronRunParams = lazyCompile<CronRunParams>(CronRunParamsSchema);
-export const validateCronRunsParams = lazyCompile<CronRunsParams>(CronRunsParamsSchema);
-export const validateDevicePairListParams = lazyCompile<DevicePairListParams>(
+  ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
+export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
+export const validateCronListParams = ajv.compile<CronListParams>(CronListParamsSchema);
+export const validateCronStatusParams = ajv.compile<CronStatusParams>(CronStatusParamsSchema);
+export const validateCronAddParams = ajv.compile<CronAddParams>(CronAddParamsSchema);
+export const validateCronUpdateParams = ajv.compile<CronUpdateParams>(CronUpdateParamsSchema);
+export const validateCronRemoveParams = ajv.compile<CronRemoveParams>(CronRemoveParamsSchema);
+export const validateCronRunParams = ajv.compile<CronRunParams>(CronRunParamsSchema);
+export const validateCronRunsParams = ajv.compile<CronRunsParams>(CronRunsParamsSchema);
+export const validateDevicePairListParams = ajv.compile<DevicePairListParams>(
   DevicePairListParamsSchema,
 );
-export const validateDevicePairApproveParams = lazyCompile<DevicePairApproveParams>(
+export const validateDevicePairApproveParams = ajv.compile<DevicePairApproveParams>(
   DevicePairApproveParamsSchema,
 );
-export const validateDevicePairRejectParams = lazyCompile<DevicePairRejectParams>(
+export const validateDevicePairRejectParams = ajv.compile<DevicePairRejectParams>(
   DevicePairRejectParamsSchema,
 );
-export const validateDevicePairRemoveParams = lazyCompile<DevicePairRemoveParams>(
+export const validateDevicePairRemoveParams = ajv.compile<DevicePairRemoveParams>(
   DevicePairRemoveParamsSchema,
 );
-export const validateDeviceTokenRotateParams = lazyCompile<DeviceTokenRotateParams>(
+export const validateDeviceTokenRotateParams = ajv.compile<DeviceTokenRotateParams>(
   DeviceTokenRotateParamsSchema,
 );
-export const validateDeviceTokenRevokeParams = lazyCompile<DeviceTokenRevokeParams>(
+export const validateDeviceTokenRevokeParams = ajv.compile<DeviceTokenRevokeParams>(
   DeviceTokenRevokeParamsSchema,
 );
-export const validateExecApprovalsGetParams = lazyCompile<ExecApprovalsGetParams>(
+export const validateExecApprovalsGetParams = ajv.compile<ExecApprovalsGetParams>(
   ExecApprovalsGetParamsSchema,
 );
-export const validateExecApprovalsSetParams = lazyCompile<ExecApprovalsSetParams>(
+export const validateExecApprovalsSetParams = ajv.compile<ExecApprovalsSetParams>(
   ExecApprovalsSetParamsSchema,
 );
-export const validateExecApprovalGetParams = lazyCompile<ExecApprovalGetParams>(
-  ExecApprovalGetParamsSchema,
-);
-export const validateExecApprovalRequestParams = lazyCompile<ExecApprovalRequestParams>(
+export const validateExecApprovalRequestParams = ajv.compile<ExecApprovalRequestParams>(
   ExecApprovalRequestParamsSchema,
 );
-export const validateExecApprovalResolveParams = lazyCompile<ExecApprovalResolveParams>(
+export const validateExecApprovalResolveParams = ajv.compile<ExecApprovalResolveParams>(
   ExecApprovalResolveParamsSchema,
 );
-export const validatePluginApprovalRequestParams = lazyCompile<PluginApprovalRequestParams>(
+export const validatePluginApprovalRequestParams = ajv.compile<PluginApprovalRequestParams>(
   PluginApprovalRequestParamsSchema,
 );
-export const validatePluginApprovalResolveParams = lazyCompile<PluginApprovalResolveParams>(
+export const validatePluginApprovalResolveParams = ajv.compile<PluginApprovalResolveParams>(
   PluginApprovalResolveParamsSchema,
 );
-export const validatePluginsUiDescriptorsParams = lazyCompile<PluginsUiDescriptorsParams>(
-  PluginsUiDescriptorsParamsSchema,
-);
-export const validatePluginsSessionActionParams = lazyCompile<PluginsSessionActionParams>(
-  PluginsSessionActionParamsSchema,
-);
-export const validatePluginsSessionActionResult = lazyCompile<PluginsSessionActionResult>(
-  PluginsSessionActionResultSchema,
-);
-export const validateExecApprovalsNodeGetParams = lazyCompile<ExecApprovalsNodeGetParams>(
+export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
 );
-export const validateExecApprovalsNodeSetParams = lazyCompile<ExecApprovalsNodeSetParams>(
+export const validateExecApprovalsNodeSetParams = ajv.compile<ExecApprovalsNodeSetParams>(
   ExecApprovalsNodeSetParamsSchema,
 );
-export const validateLogsTailParams = lazyCompile<LogsTailParams>(LogsTailParamsSchema);
-export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
-export const validateChatSendParams = lazyCompile(ChatSendParamsSchema);
-export const validateChatAbortParams = lazyCompile<ChatAbortParams>(ChatAbortParamsSchema);
-export const validateChatInjectParams = lazyCompile<ChatInjectParams>(ChatInjectParamsSchema);
-export const validateChatEvent = lazyCompile(ChatEventSchema);
-export const validateUpdateStatusParams = lazyCompile<UpdateStatusParams>(UpdateStatusParamsSchema);
-export const validateUpdateRunParams = lazyCompile<UpdateRunParams>(UpdateRunParamsSchema);
+export const validateLogsTailParams = ajv.compile<LogsTailParams>(LogsTailParamsSchema);
+export const validateChatHistoryParams = ajv.compile(ChatHistoryParamsSchema);
+export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
+export const validateChatAbortParams = ajv.compile<ChatAbortParams>(ChatAbortParamsSchema);
+export const validateChatInjectParams = ajv.compile<ChatInjectParams>(ChatInjectParamsSchema);
+export const validateChatEvent = ajv.compile(ChatEventSchema);
+export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(UpdateRunParamsSchema);
 export const validateWebLoginStartParams =
-  lazyCompile<WebLoginStartParams>(WebLoginStartParamsSchema);
-export const validateWebLoginWaitParams = lazyCompile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
+  ajv.compile<WebLoginStartParams>(WebLoginStartParamsSchema);
+export const validateWebLoginWaitParams = ajv.compile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
 
-function firstStringParam(value: unknown): string | undefined {
-  if (typeof value === "string" && value.trim()) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.find(
-      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-    );
-  }
-  return undefined;
-}
-
-export function formatValidationErrors(errors: ValidationError[] | null | undefined) {
+export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
   if (!errors?.length) {
     return "unknown validation error";
   }
@@ -828,42 +476,26 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
     const instancePath = typeof err?.instancePath === "string" ? err.instancePath : "";
 
     if (keyword === "additionalProperties") {
-      const additionalProperty =
-        firstStringParam(err?.params?.additionalProperty) ??
-        firstStringParam(err?.params?.additionalProperties);
-      if (additionalProperty) {
+      const params = err?.params as { additionalProperty?: unknown } | undefined;
+      const additionalProperty = params?.additionalProperty;
+      if (typeof additionalProperty === "string" && additionalProperty.trim()) {
         const where = instancePath ? `at ${instancePath}` : "at root";
         parts.push(`${where}: unexpected property '${additionalProperty}'`);
         continue;
       }
     }
-    if (keyword === "required") {
-      const missingProperty =
-        firstStringParam(err?.params?.missingProperty) ??
-        firstStringParam(err?.params?.requiredProperties);
-      if (missingProperty) {
-        const where = instancePath ? `at ${instancePath}: ` : "";
-        parts.push(`${where}must have required property '${missingProperty}'`);
-        continue;
-      }
-    }
 
-    const failingKeyword =
-      typeof err?.params?.failingKeyword === "string" ? err.params.failingKeyword : "";
     const message =
-      keyword === "then" || (keyword === "if" && failingKeyword === "then")
-        ? "must have required conditional properties"
-        : typeof err?.message === "string" && err.message.trim()
-          ? err.message
-          : "validation error";
+      typeof err?.message === "string" && err.message.trim() ? err.message : "validation error";
     const where = instancePath ? `at ${instancePath}: ` : "";
     parts.push(`${where}${message}`);
   }
 
   // De-dupe while preserving order.
-  const unique = uniqueStrings(parts.filter((part) => part.trim()));
+  const unique = Array.from(new Set(parts.filter((part) => part.trim())));
   if (!unique.length) {
-    return "unknown validation error";
+    const fallback = ajv.errorsText(errors, { separator: "; " });
+    return fallback || "unknown validation error";
   }
   return unique.join("; ");
 }
@@ -878,15 +510,8 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
-  EnvironmentStatusSchema,
-  EnvironmentSummarySchema,
-  EnvironmentsListParamsSchema,
-  EnvironmentsListResultSchema,
-  EnvironmentsStatusParamsSchema,
-  EnvironmentsStatusResultSchema,
   StateVersionSchema,
   AgentEventSchema,
-  MessageActionParamsSchema,
   ChatEventSchema,
   SendParamsSchema,
   PollParamsSchema,
@@ -896,55 +521,29 @@ export {
   WakeParamsSchema,
   PushTestParamsSchema,
   PushTestResultSchema,
-  WebPushVapidPublicKeyParamsSchema,
-  WebPushSubscribeParamsSchema,
-  WebPushUnsubscribeParamsSchema,
-  WebPushTestParamsSchema,
   NodePairRequestParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
   NodePairRejectParamsSchema,
-  NodePairRemoveParamsSchema,
   NodePairVerifyParamsSchema,
   NodeListParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
-  NodeEventResultSchema,
-  NodePresenceAlivePayloadSchema,
-  NodePresenceAliveReasonSchema,
   NodePendingDrainParamsSchema,
   NodePendingDrainResultSchema,
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   SessionsListParamsSchema,
-  SessionsCleanupParamsSchema,
   SessionsPreviewParamsSchema,
-  SessionsDescribeParamsSchema,
   SessionsResolveParamsSchema,
-  SessionsCompactionListParamsSchema,
-  SessionsCompactionGetParamsSchema,
-  SessionsCompactionBranchParamsSchema,
-  SessionsCompactionRestoreParamsSchema,
   SessionsCreateParamsSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
-  SessionsPluginPatchParamsSchema,
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
   SessionsUsageParamsSchema,
-  ArtifactSummarySchema,
-  ArtifactsListParamsSchema,
-  ArtifactsGetParamsSchema,
-  ArtifactsDownloadParamsSchema,
-  TaskSummarySchema,
-  TasksListParamsSchema,
-  TasksListResultSchema,
-  TasksGetParamsSchema,
-  TasksGetResultSchema,
-  TasksCancelParamsSchema,
-  TasksCancelResultSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -953,7 +552,6 @@ export {
   ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponseSchema,
   ConfigSchemaLookupResultSchema,
-  UpdateStatusParamsSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -962,36 +560,12 @@ export {
   WizardNextResultSchema,
   WizardStartResultSchema,
   WizardStatusResultSchema,
-  TalkEventSchema,
-  TalkCatalogParamsSchema,
-  TalkCatalogResultSchema,
-  TalkClientCreateParamsSchema,
-  TalkClientCreateResultSchema,
-  TalkAgentControlResultSchema,
-  TalkClientSteerParamsSchema,
-  TalkClientToolCallParamsSchema,
-  TalkClientToolCallResultSchema,
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
-  TalkSessionAppendAudioParamsSchema,
-  TalkSessionCancelOutputParamsSchema,
-  TalkSessionCancelTurnParamsSchema,
-  TalkSessionCreateParamsSchema,
-  TalkSessionCreateResultSchema,
-  TalkSessionJoinParamsSchema,
-  TalkSessionJoinResultSchema,
-  TalkSessionTurnParamsSchema,
-  TalkSessionTurnResultSchema,
-  TalkSessionSteerParamsSchema,
-  TalkSessionSubmitToolResultParamsSchema,
-  TalkSessionCloseParamsSchema,
-  TalkSessionOkResultSchema,
   TalkSpeakParamsSchema,
   TalkSpeakResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
-  ChannelsStartParamsSchema,
-  ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
@@ -1011,29 +585,15 @@ export {
   AgentsFilesSetResultSchema,
   AgentsListParamsSchema,
   AgentsListResultSchema,
-  CommandsListParamsSchema,
-  CommandsListResultSchema,
-  PluginsSessionActionParamsSchema,
-  PluginsSessionActionResultSchema,
-  PluginsUiDescriptorsParamsSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
   ToolsEffectiveParamsSchema,
-  ToolsInvokeParamsSchema,
   SkillsInstallParamsSchema,
-  SkillsSearchParamsSchema,
-  SkillsSearchResultSchema,
-  SkillsDetailParamsSchema,
-  SkillsDetailResultSchema,
-  SkillsUploadBeginParamsSchema,
-  SkillsUploadChunkParamsSchema,
-  SkillsUploadCommitParamsSchema,
   SkillsUpdateParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
   CronStatusParamsSchema,
-  CronGetParamsSchema,
   CronAddParamsSchema,
   CronUpdateParamsSchema,
   CronRemoveParamsSchema,
@@ -1041,11 +601,6 @@ export {
   CronRunsParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
-  ExecApprovalsGetParamsSchema,
-  ExecApprovalsSetParamsSchema,
-  ExecApprovalGetParamsSchema,
-  ExecApprovalRequestParamsSchema,
-  ExecApprovalResolveParamsSchema,
   ChatHistoryParamsSchema,
   ChatSendParamsSchema,
   ChatInjectParamsSchema,
@@ -1053,8 +608,6 @@ export {
   TickEventSchema,
   ShutdownEventSchema,
   ProtocolSchemas,
-  MIN_CLIENT_PROTOCOL_VERSION,
-  MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   ErrorCodes,
   errorShape,
@@ -1099,36 +652,13 @@ export type {
   WizardNextResult,
   WizardStartResult,
   WizardStatusResult,
-  TalkCatalogParams,
-  TalkCatalogResult,
-  TalkClientCreateParams,
-  TalkClientCreateResult,
-  TalkClientSteerParams,
-  TalkAgentControlResult,
-  TalkClientToolCallParams,
-  TalkClientToolCallResult,
   TalkConfigParams,
   TalkConfigResult,
-  TalkSessionAppendAudioParams,
-  TalkSessionCancelOutputParams,
-  TalkSessionCancelTurnParams,
-  TalkSessionCreateParams,
-  TalkSessionCreateResult,
-  TalkSessionJoinParams,
-  TalkSessionJoinResult,
-  TalkSessionTurnParams,
-  TalkSessionTurnResult,
-  TalkSessionSteerParams,
-  TalkSessionSubmitToolResultParams,
-  TalkSessionCloseParams,
-  TalkSessionOkResult,
   TalkSpeakParams,
   TalkSpeakResult,
   TalkModeParams,
   ChannelsStatusParams,
   ChannelsStatusResult,
-  ChannelsStartParams,
-  ChannelsStopParams,
   ChannelsLogoutParams,
   WebLoginStartParams,
   WebLoginWaitParams,
@@ -1146,81 +676,39 @@ export type {
   AgentsFilesGetResult,
   AgentsFilesSetParams,
   AgentsFilesSetResult,
-  ArtifactSummary,
-  ArtifactsListParams,
-  ArtifactsListResult,
-  ArtifactsGetParams,
-  ArtifactsGetResult,
-  ArtifactsDownloadParams,
-  ArtifactsDownloadResult,
   AgentsListParams,
   AgentsListResult,
-  CommandsListParams,
-  CommandsListResult,
-  CommandEntry,
-  PluginsSessionActionParams,
-  PluginsSessionActionResult,
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,
   ToolsEffectiveParams,
   ToolsEffectiveResult,
-  ToolsInvokeParams,
-  ToolsInvokeResult,
   SkillsBinsParams,
   SkillsBinsResult,
-  SkillsSearchParams,
-  SkillsSearchResult,
-  SkillsDetailParams,
-  SkillsDetailResult,
-  SkillsUploadBeginParams,
-  SkillsUploadChunkParams,
-  SkillsUploadCommitParams,
   SkillsInstallParams,
   SkillsUpdateParams,
-  EnvironmentStatus,
-  EnvironmentSummary,
-  EnvironmentsListParams,
-  EnvironmentsListResult,
-  EnvironmentsStatusParams,
-  EnvironmentsStatusResult,
   NodePairRejectParams,
-  NodePairRemoveParams,
   NodePairVerifyParams,
   NodeListParams,
   NodeInvokeParams,
   NodeInvokeResultParams,
   NodeEventParams,
-  NodeEventResult,
-  NodePresenceAlivePayload,
-  NodePresenceAliveReason,
   NodePendingDrainParams,
   NodePendingDrainResult,
   NodePendingEnqueueParams,
   NodePendingEnqueueResult,
   SessionsListParams,
-  SessionsCleanupParams,
   SessionsPreviewParams,
-  SessionsDescribeParams,
   SessionsResolveParams,
-  SessionOperationEvent,
   SessionsPatchParams,
   SessionsPatchResult,
   SessionsResetParams,
   SessionsDeleteParams,
   SessionsCompactParams,
   SessionsUsageParams,
-  TaskSummary,
-  TasksListParams,
-  TasksListResult,
-  TasksGetParams,
-  TasksGetResult,
-  TasksCancelParams,
-  TasksCancelResult,
   CronJob,
   CronListParams,
   CronStatusParams,
-  CronGetParams,
   CronAddParams,
   CronUpdateParams,
   CronRemoveParams,
@@ -1230,17 +718,9 @@ export type {
   ExecApprovalsGetParams,
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,
-  ExecApprovalGetParams,
-  ExecApprovalRequestParams,
-  ExecApprovalResolveParams,
   LogsTailParams,
   LogsTailResult,
   PollParams,
-  WebPushVapidPublicKeyParams,
-  WebPushSubscribeParams,
-  WebPushUnsubscribeParams,
-  WebPushTestParams,
-  UpdateStatusParams,
   UpdateRunParams,
   ChatInjectParams,
 };

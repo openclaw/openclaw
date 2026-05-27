@@ -1,4 +1,1 @@
-export {
-  createBrowserControlContext,
-  startBrowserControlServiceFromConfig,
-} from "../control-service.js";
+export * from "../control-service.js";

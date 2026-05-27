@@ -1,33 +1,24 @@
 import crypto from "node:crypto";
-import type { CallGatewayOptions } from "../../gateway/call.js";
+import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { resolveNestedAgentLaneForSession } from "../lanes.js";
-import {
-  type AssistantReplySnapshot,
-  readLatestAssistantReplySnapshot,
-  waitForAgentRun,
-} from "../run-wait.js";
-import { runAgentStep } from "./agent-step.js";
+import { AGENT_LANE_NESTED } from "../lanes.js";
+import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
   buildAgentToAgentAnnounceContext,
   buildAgentToAgentReplyContext,
   isAnnounceSkip,
-  isNonDeliverableSessionsReply,
   isReplySkip,
 } from "./sessions-send-helpers.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
 
-type GatewayCaller = <T = unknown>(opts: CallGatewayOptions) => Promise<T>;
+type GatewayCaller = typeof callGateway;
 
 const defaultSessionsSendA2ADeps = {
-  callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
-    const { callGateway } = await import("../../gateway/call.js");
-    return callGateway<T>(opts);
-  },
+  callGateway,
 };
 
 let sessionsSendA2ADeps: {
@@ -42,38 +33,32 @@ export async function runSessionsSendA2AFlow(params: {
   maxPingPongTurns: number;
   requesterSessionKey?: string;
   requesterChannel?: GatewayMessageChannel;
-  baseline?: AssistantReplySnapshot;
   roundOneReply?: string;
   waitRunId?: string;
+  metadata?: Record<string, unknown>;
 }) {
   const runContextId = params.waitRunId ?? "unknown";
   try {
     let primaryReply = params.roundOneReply;
     let latestReply = params.roundOneReply;
     if (!primaryReply && params.waitRunId) {
-      const wait = await waitForAgentRun({
-        runId: params.waitRunId,
-        timeoutMs: Math.min(params.announceTimeoutMs, 60_000),
-        callGateway: sessionsSendA2ADeps.callGateway,
+      const waitMs = Math.min(params.announceTimeoutMs, 60_000);
+      const wait = await sessionsSendA2ADeps.callGateway<{ status: string }>({
+        method: "agent.wait",
+        params: {
+          runId: params.waitRunId,
+          timeoutMs: waitMs,
+        },
+        timeoutMs: waitMs + 2000,
       });
-      if (wait.status === "ok") {
-        const latestSnapshot = await readLatestAssistantReplySnapshot({
+      if (wait?.status === "ok") {
+        primaryReply = await readLatestAssistantReply({
           sessionKey: params.targetSessionKey,
-          callGateway: sessionsSendA2ADeps.callGateway,
         });
-        const baselineFingerprint = params.baseline?.fingerprint;
-        primaryReply =
-          latestSnapshot.text &&
-          (!baselineFingerprint || latestSnapshot.fingerprint !== baselineFingerprint)
-            ? latestSnapshot.text
-            : undefined;
         latestReply = primaryReply;
       }
     }
     if (!latestReply) {
-      return;
-    }
-    if (isNonDeliverableSessionsReply(latestReply)) {
       return;
     }
 
@@ -108,13 +93,13 @@ export async function runSessionsSendA2AFlow(params: {
           message: incomingMessage,
           extraSystemPrompt: replyPrompt,
           timeoutMs: params.announceTimeoutMs,
-          lane: resolveNestedAgentLaneForSession(currentSessionKey),
+          lane: AGENT_LANE_NESTED,
           sourceSessionKey: nextSessionKey,
           sourceChannel:
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
         });
-        if (!replyText || isReplySkip(replyText) || isNonDeliverableSessionsReply(replyText)) {
+        if (!replyText || isReplySkip(replyText)) {
           break;
         }
         latestReply = replyText;
@@ -139,19 +124,12 @@ export async function runSessionsSendA2AFlow(params: {
       message: "Agent-to-agent announce step.",
       extraSystemPrompt: announcePrompt,
       timeoutMs: params.announceTimeoutMs,
-      lane: resolveNestedAgentLaneForSession(params.targetSessionKey),
-      transcriptMessage: "",
+      lane: AGENT_LANE_NESTED,
       sourceSessionKey: params.requesterSessionKey,
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
-    if (
-      announceTarget &&
-      announceReply &&
-      announceReply.trim() &&
-      !isAnnounceSkip(announceReply) &&
-      !isNonDeliverableSessionsReply(announceReply)
-    ) {
+    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
       try {
         await sessionsSendA2ADeps.callGateway({
           method: "send",
@@ -160,7 +138,6 @@ export async function runSessionsSendA2AFlow(params: {
             message: announceReply.trim(),
             channel: announceTarget.channel,
             accountId: announceTarget.accountId,
-            threadId: announceTarget.threadId,
             idempotencyKey: crypto.randomUUID(),
           },
           timeoutMs: 10_000,
@@ -182,7 +159,7 @@ export async function runSessionsSendA2AFlow(params: {
   }
 }
 
-export const testing = {
+export const __testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
     sessionsSendA2ADeps = overrides
       ? {
@@ -192,4 +169,3 @@ export const testing = {
       : defaultSessionsSendA2ADeps;
   },
 };
-export { testing as __testing };

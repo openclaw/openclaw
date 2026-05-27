@@ -24,16 +24,12 @@ describe("directory adapters", () => {
   it("builds empty directory adapters", async () => {
     const adapter = createEmptyChannelDirectoryAdapter();
     await expect(adapter.self?.({ cfg: {}, runtime: {} as never })).resolves.toBeNull();
-    await expect(adapter.listPeers?.({ cfg: {}, runtime: {} as never })).resolves.toStrictEqual([]);
-    await expect(adapter.listGroups?.({ cfg: {}, runtime: {} as never })).resolves.toStrictEqual(
-      [],
-    );
+    await expect(adapter.listPeers?.({ cfg: {}, runtime: {} as never })).resolves.toEqual([]);
+    await expect(adapter.listGroups?.({ cfg: {}, runtime: {} as never })).resolves.toEqual([]);
   });
 
   it("exports standalone null/empty helpers", async () => {
     await expect(nullChannelDirectorySelf({ cfg: {}, runtime: {} as never })).resolves.toBeNull();
-    await expect(
-      emptyChannelDirectoryList({ cfg: {}, runtime: {} as never }),
-    ).resolves.toStrictEqual([]);
+    await expect(emptyChannelDirectoryList({ cfg: {}, runtime: {} as never })).resolves.toEqual([]);
   });
 });

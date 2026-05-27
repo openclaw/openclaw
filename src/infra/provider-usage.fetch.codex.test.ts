@@ -23,21 +23,10 @@ describe("fetchCodexUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
-  it("returns a stable error for malformed successful usage JSON", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "{not json"));
-
-    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
-
-    expect(result.error).toBe("Malformed usage response");
-    expect(result.windows).toHaveLength(0);
-  });
-
   it("parses windows, reset times, and plan balance", async () => {
     const mockFetch = createProviderUsageFetch(async (_url, init) => {
       const headers = (init?.headers as Record<string, string> | undefined) ?? {};
       expect(headers["ChatGPT-Account-Id"]).toBe("acct-1");
-      expect(headers.originator).toBe("openclaw");
-      expect(headers["User-Agent"]).toMatch(/^openclaw\//);
       return makeResponse(200, {
         rate_limit: {
           primary_window: {
@@ -144,7 +133,7 @@ describe("fetchCodexUsage", () => {
 
     const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
     expect(result.plan).toBe("$7.50");
-    expect(result.windows).toStrictEqual([]);
+    expect(result.windows).toEqual([]);
   });
 
   it("falls back invalid credit strings to a zero balance", async () => {

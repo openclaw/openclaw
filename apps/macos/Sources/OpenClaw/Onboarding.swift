@@ -21,16 +21,12 @@ final class OnboardingController {
     static let shared = OnboardingController()
     private var window: NSWindow?
 
-    static func markComplete() {
-        UserDefaults.standard.set(true, forKey: onboardingSeenKey)
-        UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
-        AppStateStore.shared.onboardingSeen = true
-    }
-
     func show() {
         if ProcessInfo.processInfo.isNixMode {
             // Nix mode is fully declarative; onboarding would suggest interactive setup that doesn't apply.
-            Self.markComplete()
+            UserDefaults.standard.set(true, forKey: "openclaw.onboardingSeen")
+            UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
+            AppStateStore.shared.onboardingSeen = true
             return
         }
         if let window {
@@ -66,6 +62,7 @@ final class OnboardingController {
 }
 
 struct OnboardingView: View {
+    @Environment(\.openSettings) var openSettings
     @State var currentPage = 0
     @State var isRequesting = false
     @State var installingCLI = false

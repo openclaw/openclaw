@@ -1,24 +1,15 @@
-import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { telegramPlugin } from "./src/channel.js";
+import { setTelegramRuntime } from "./src/runtime.js";
 
-export default defineBundledChannelEntry({
+export { telegramPlugin } from "./src/channel.js";
+export { setTelegramRuntime } from "./src/runtime.js";
+
+export default defineChannelPluginEntry({
   id: "telegram",
   name: "Telegram",
   description: "Telegram channel plugin",
-  importMetaUrl: import.meta.url,
-  plugin: {
-    specifier: "./channel-plugin-api.js",
-    exportName: "telegramPlugin",
-  },
-  secrets: {
-    specifier: "./secret-contract-api.js",
-    exportName: "channelSecrets",
-  },
-  runtime: {
-    specifier: "./runtime-setter-api.js",
-    exportName: "setTelegramRuntime",
-  },
-  accountInspect: {
-    specifier: "./account-inspect-api.js",
-    exportName: "inspectTelegramReadOnlyAccount",
-  },
+  plugin: telegramPlugin as ChannelPlugin,
+  setRuntime: setTelegramRuntime,
 });

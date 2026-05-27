@@ -1,5 +1,3 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveLineAccount } from "./accounts.js";
 import {
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
@@ -7,11 +5,8 @@ import {
   type LineConfig,
   type OpenClawConfig,
   type ResolvedLineAccount,
-} from "./channel-api.js";
+} from "../api.js";
 import { getLineRuntime } from "./runtime.js";
-
-const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
-const loadLineMonitorRuntime = createLazyRuntimeModule(() => import("./monitor.runtime.js"));
 
 export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["gateway"]> = {
   startAccount: async (ctx) => {
@@ -31,7 +26,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
 
     let lineBotLabel = "";
     try {
-      const probe = await (await loadLineProbeRuntime()).probeLineBot(token, 2500);
+      const probe = await getLineRuntime().channel.line.probeLineBot(token, 2500);
       const displayName = probe.ok ? probe.bot?.displayName?.trim() : null;
       if (displayName) {
         lineBotLabel = ` (${displayName})`;
@@ -44,11 +39,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
 
     ctx.log?.info(`[${account.accountId}] starting LINE provider${lineBotLabel}`);
 
-    const monitorLineProvider =
-      getLineRuntime().channel.line?.monitorLineProvider ??
-      (await loadLineMonitorRuntime()).monitorLineProvider;
-
-    return await monitorLineProvider({
+    return await getLineRuntime().channel.line.monitorLineProvider({
       channelAccessToken: token,
       channelSecret: secret,
       accountId: account.accountId,
@@ -112,13 +103,10 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
           delete nextCfg.channels;
         }
       }
-      await getLineRuntime().config.replaceConfigFile({
-        nextConfig: nextCfg,
-        afterWrite: { mode: "auto" },
-      });
+      await getLineRuntime().config.writeConfigFile(nextCfg);
     }
 
-    const resolved = resolveLineAccount({
+    const resolved = getLineRuntime().channel.line.resolveLineAccount({
       cfg: changed ? nextCfg : cfg,
       accountId,
     });

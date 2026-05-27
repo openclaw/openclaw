@@ -1,15 +1,9 @@
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { CompactEmbeddedPiSessionDirect } from "./compact.runtime.types.js";
+import { compactEmbeddedPiSessionDirect as compactEmbeddedPiSessionDirectImpl } from "./compact.js";
 
-const compactRuntimeLoader = createLazyImportLoader(() => import("./compact.js"));
+type CompactEmbeddedPiSessionDirect = typeof import("./compact.js").compactEmbeddedPiSessionDirect;
 
-function loadCompactRuntime() {
-  return compactRuntimeLoader.load();
-}
-
-export async function compactEmbeddedPiSessionDirect(
+export function compactEmbeddedPiSessionDirect(
   ...args: Parameters<CompactEmbeddedPiSessionDirect>
 ): ReturnType<CompactEmbeddedPiSessionDirect> {
-  const { compactEmbeddedPiSessionDirect } = await loadCompactRuntime();
-  return compactEmbeddedPiSessionDirect(...args);
+  return compactEmbeddedPiSessionDirectImpl(...args);
 }

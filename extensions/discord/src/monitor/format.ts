@@ -1,4 +1,4 @@
-import type { Guild, User } from "../internal/discord.js";
+import type { Guild, User } from "@buape/carbon";
 
 export function resolveDiscordSystemLocation(params: {
   isDirectMessage: boolean;

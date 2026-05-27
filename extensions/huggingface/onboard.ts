@@ -21,6 +21,10 @@ const huggingfacePresetAppliers = createModelCatalogPresetAppliers({
   }),
 });
 
+export function applyHuggingfaceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return huggingfacePresetAppliers.applyProviderConfig(cfg);
+}
+
 export function applyHuggingfaceConfig(cfg: OpenClawConfig): OpenClawConfig {
   return huggingfacePresetAppliers.applyConfig(cfg);
 }

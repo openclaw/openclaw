@@ -39,10 +39,6 @@ describe("irc protocol", () => {
   it("splits long text on boundaries", () => {
     const chunks = splitIrcText("a ".repeat(300), 120);
     expect(chunks.length).toBeGreaterThan(2);
-    expect(
-      chunks
-        .map((chunk, index) => ({ index, length: chunk.length }))
-        .filter((chunk) => chunk.length > 120),
-    ).toStrictEqual([]);
+    expect(chunks.every((chunk) => chunk.length <= 120)).toBe(true);
   });
 });

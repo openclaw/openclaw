@@ -4,9 +4,11 @@ read_when:
   - You want to run the Gateway on a Linux server or cloud VPS
   - You need a quick map of hosting guides
   - You want generic Linux server tuning for OpenClaw
-title: "Linux server"
+title: "Linux Server"
 sidebarTitle: "Linux Server"
 ---
+
+# Linux Server
 
 Run the OpenClaw Gateway on any Linux server or cloud VPS. This page helps you
 pick a provider, explains how cloud deployments work, and covers generic Linux
@@ -21,7 +23,6 @@ tuning that applies everywhere.
   <Card title="Oracle Cloud" href="/install/oracle">Always Free ARM tier</Card>
   <Card title="Fly.io" href="/install/fly">Fly Machines</Card>
   <Card title="Hetzner" href="/install/hetzner">Docker on Hetzner VPS</Card>
-  <Card title="Hostinger" href="/install/hostinger">VPS with one-click setup</Card>
   <Card title="GCP" href="/install/gcp">Compute Engine</Card>
   <Card title="Azure" href="/install/azure">Linux VM</Card>
   <Card title="exe.dev" href="/install/exe-dev">VM with HTTPS proxy</Card>
@@ -42,21 +43,6 @@ A community video walkthrough is available at
   If you bind to `lan` or `tailnet`, require `gateway.auth.token` or `gateway.auth.password`.
 
 Related pages: [Gateway remote access](/gateway/remote), [Platforms hub](/platforms).
-
-## Harden admin access first
-
-Before you install OpenClaw on a public VPS, decide how you want to administer
-the box itself.
-
-- If you want Tailnet-only admin access, install Tailscale first, join the VPS
-  to your tailnet, verify a second SSH session over the Tailscale IP or
-  MagicDNS name, then restrict public SSH.
-- If you are not using Tailscale, apply the equivalent hardening for your SSH
-  path before exposing more services.
-- This is separate from Gateway access. You can still keep OpenClaw bound to
-  loopback and use an SSH tunnel or Tailscale Serve for the dashboard.
-
-Tailscale-specific Gateway options live in [Tailscale](/gateway/tailscale).
 
 ## Shared company agent on a VPS
 
@@ -90,7 +76,7 @@ source ~/.bashrc
 ```
 
 - `NODE_COMPILE_CACHE` improves repeated command startup times.
-- `OPENCLAW_NO_RESPAWN=1` keeps routine Gateway restarts in-process, which avoids extra process handoffs and keeps PID tracking simple on small hosts.
+- `OPENCLAW_NO_RESPAWN=1` avoids extra startup overhead from a self-respawn path.
 - First command run warms the cache; subsequent runs are faster.
 - For Raspberry Pi specifics, see [Raspberry Pi](/install/raspberry-pi).
 
@@ -107,10 +93,10 @@ For VM hosts using `systemd`, consider:
   - `TimeoutStartSec=90`
 - Prefer SSD-backed disks for state/cache paths to reduce random-I/O cold-start penalties.
 
-For the standard `openclaw onboard --install-daemon` path, edit the user unit:
+Example:
 
 ```bash
-systemctl --user edit openclaw-gateway.service
+sudo systemctl edit openclaw
 ```
 
 ```ini
@@ -122,18 +108,5 @@ RestartSec=2
 TimeoutStartSec=90
 ```
 
-If you deliberately installed a system unit instead, edit
-`openclaw-gateway.service` via `sudo systemctl edit openclaw-gateway.service`.
-
 How `Restart=` policies help automated recovery:
 [systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).
-
-For Linux OOM behavior, child process victim selection, and `exit 137`
-diagnostics, see [Linux memory pressure and OOM kills](/platforms/linux#memory-pressure-and-oom-kills).
-
-## Related
-
-- [Install overview](/install)
-- [DigitalOcean](/install/digitalocean)
-- [Fly.io](/install/fly)
-- [Hetzner](/install/hetzner)

@@ -1,5 +1,4 @@
 import { type NodeMatchCandidate, resolveNodeIdFromCandidates } from "./node-match.js";
-import { normalizeOptionalString } from "./string-coerce.js";
 
 type ResolveNodeFromListOptions<TNode extends NodeMatchCandidate> = {
   allowDefault?: boolean;
@@ -11,7 +10,7 @@ export function resolveNodeIdFromNodeList<TNode extends NodeMatchCandidate>(
   query?: string,
   options: ResolveNodeFromListOptions<TNode> = {},
 ): string {
-  const q = normalizeOptionalString(query) ?? "";
+  const q = String(query ?? "").trim();
   if (!q) {
     if (options.allowDefault === true && options.pickDefaultNode) {
       const picked = options.pickDefaultNode(nodes);

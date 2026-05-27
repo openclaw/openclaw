@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
 import type { ChannelAccountSnapshot } from "../types.ts";
 import type { ChannelKey, ChannelsProps } from "./channels.types.ts";
 
@@ -88,9 +87,9 @@ export function resolveChannelConfigured(key: ChannelKey, props: ChannelsProps):
 
 export function formatNullableBoolean(value: boolean | null): string {
   if (value == null) {
-    return t("common.na");
+    return "n/a";
   }
-  return value ? t("common.yes") : t("common.no");
+  return value ? "Yes" : "No";
 }
 
 export function renderSingleAccountChannelCard(params: {

@@ -1,72 +1,30 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
-import {
-  buildTtsSupplementMediaPayload,
-  getReplyPayloadTtsSupplement,
-  isReplyPayloadTtsSupplement,
-  resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
-import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
-import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
-import { extractCanvasFromText } from "../../chat/canvas-render.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
-import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
-import { streamSessionTranscriptLines } from "../../config/sessions/transcript-stream.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  measureDiagnosticsTimelineSpan,
-  measureDiagnosticsTimelineSpanSync,
-} from "../../infra/diagnostics-timeline.js";
-import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
-import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import { logLargePayload } from "../../logging/diagnostic-payload.js";
-import {
-  appendLocalMediaParentRoots,
-  getAgentScopedMediaLocalRoots,
-} from "../../media/local-roots.js";
-import { isAudioFileName } from "../../media/mime.js";
-import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import {
-  deleteMediaBuffer,
-  MEDIA_MAX_BYTES,
-  type SavedMedia,
-  saveMediaBuffer,
-} from "../../media/store.js";
-import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-message.js";
-import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
-import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
+import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
+import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type UserTurnInput,
-  type UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   stripInlineDirectiveTagsForDisplay,
-  sanitizeReplyDirectiveId,
+  stripInlineDirectiveTagsFromMessageForDisplay,
 } from "../../utils/directive-tags.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayCliClient,
-  isOperatorUiClient,
   isWebchatClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
@@ -75,31 +33,11 @@ import {
   type ChatAbortControllerEntry,
   type ChatAbortOps,
   isChatStopCommandText,
-  registerChatAbortController,
-  updateChatRunProvider,
+  resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import {
-  type ChatImageContent,
-  MediaOffloadError,
-  type OffloadedRef,
-  parseMessageWithAttachments,
-  resolveChatAttachmentMaxBytes,
-  UnsupportedAttachmentError,
-} from "../chat-attachments.js";
-import {
-  isToolHistoryBlockType,
-  projectChatDisplayMessage,
-  projectRecentChatDisplayMessages,
-  resolveEffectiveChatHistoryMaxChars,
-} from "../chat-display-projection.js";
-import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
+import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
-import { isSuppressedControlReplyText } from "../control-reply-text.js";
-import {
-  attachManagedOutgoingImagesToMessage,
-  cleanupManagedOutgoingImageRecords,
-  createManagedOutgoingImageBlocks,
-} from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -118,29 +56,17 @@ import {
 } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
-import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
   loadSessionEntry,
-  resolveGatewayModelSupportsImages,
-  resolveGatewaySessionThinkingDefault,
-  resolveDeletedAgentIdFromSessionKey,
-  readRecentSessionMessagesAsync,
+  readSessionMessages,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
-import {
-  appendInjectedAssistantMessageToTranscript,
-  type GatewayInjectedTtsSupplementMarker,
-} from "./chat-transcript-inject.js";
-import {
-  buildWebchatAssistantMessageFromReplyPayloads,
-  buildWebchatAudioContentBlocksFromReplyPayloads,
-} from "./chat-webchat-media.js";
+import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -169,112 +95,10 @@ type ChatAbortRequester = {
   isAdmin: boolean;
 };
 
-type PreRegisteredAgentDedupePayload = {
-  dedupeKeys?: unknown;
-  ownerConnId?: unknown;
-  ownerDeviceId?: unknown;
-  runId?: unknown;
-  sessionKey?: unknown;
-  status?: unknown;
-};
-
-type PreRegisteredAgentRun = {
-  runId: string;
-  sessionKey: string;
-  payload: PreRegisteredAgentDedupePayload;
-};
-
-function normalizeUnknownText(value: unknown): string | undefined {
-  return typeof value === "string" ? normalizeOptionalText(value) : undefined;
-}
-
-/** True when a reply payload carries at least one media reference (mediaUrl or mediaUrls). */
-function isMediaBearingPayload(payload: ReplyPayload): boolean {
-  if (payload.isReasoning === true) {
-    return false;
-  }
-  if (payload.mediaUrl?.trim()) {
-    return true;
-  }
-  if (payload.mediaUrls?.some((url) => url.trim())) {
-    return true;
-  }
-  return false;
-}
-
-function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload {
-  return isReplyPayloadTtsSupplement(payload) ? buildTtsSupplementMediaPayload(payload) : payload;
-}
-
-function resolveTtsSupplementMarkerText(text: string): string {
-  const trimmed = text.trim();
-  const projected = projectChatDisplayMessage(
-    {
-      role: "assistant",
-      content: [{ type: "text", text: trimmed }],
-    },
-    { maxChars: Number.MAX_SAFE_INTEGER },
-  );
-  const projectedContent = Array.isArray(projected?.content)
-    ? (projected.content as AssistantDisplayContentBlock[])
-    : undefined;
-  return (
-    extractAssistantDisplayTextFromContent(projectedContent) ??
-    (typeof projected?.text === "string" ? projected.text.trim() : undefined) ??
-    trimmed
-  );
-}
-
-function buildTtsSupplementTranscriptMarker(
-  payload: ReplyPayload,
-): GatewayInjectedTtsSupplementMarker | undefined {
-  const supplement = getReplyPayloadTtsSupplement(payload);
-  if (!supplement) {
-    return undefined;
-  }
-  const visibleText = resolveTtsSupplementMarkerText(
-    payload.text?.trim() || supplement.spokenText.trim(),
-  );
-  return {
-    textSha256: createHash("sha256").update(visibleText).digest("hex"),
-  };
-}
-
-function buildMediaOnlyTtsSupplementTranscriptMarker(
-  payload: ReplyPayload,
-): GatewayInjectedTtsSupplementMarker | undefined {
-  if (payload.text?.trim()) {
-    return undefined;
-  }
-  return buildTtsSupplementTranscriptMarker(payload);
-}
-
-async function buildWebchatAssistantMediaMessage(
-  payloads: ReplyPayload[],
-  options?: {
-    localRoots?: readonly string[];
-    onLocalAudioAccessDenied?: (message: string) => void;
-  },
-): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
-  return buildWebchatAssistantMessageFromReplyPayloads(payloads, {
-    localRoots: options?.localRoots,
-    onLocalAudioAccessDenied: (err) => {
-      options?.onLocalAudioAccessDenied?.(formatForLog(err));
-    },
-  });
-}
-
-export {
-  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  resolveEffectiveChatHistoryMaxChars,
-  sanitizeChatHistoryMessages,
-} from "../chat-display-projection.js";
-
-export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
+const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
+const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
-const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
 let chatHistoryPlaceholderEmitCount = 0;
-const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "main",
   "direct",
@@ -291,7 +115,6 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
 type ChatSendDeliveryEntry = {
-  route?: ChannelRouteRef;
   deliveryContext?: {
     channel?: string;
     to?: string;
@@ -317,70 +140,12 @@ type ChatSendOriginatingRoute = {
   explicitDeliverRoute: boolean;
 };
 
-const ACTIVE_CHAT_SEND_DEDUPE_PREFIX = "chat:active-send";
-
-function resolveActiveChatSendRunId(value: unknown): string | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const runId = (value as { runId?: unknown }).runId;
-  return typeof runId === "string" && runId.trim() ? runId : null;
-}
-
-function buildActiveChatSendDedupeKey(params: {
-  attachmentCount: number;
-  explicitDeliverRoute: boolean;
-  message: string;
-  originatingChannel: string;
-  sessionKey: string;
-}): string | null {
-  const message = params.message.trim();
-  if (
-    !message ||
-    message.startsWith("/") ||
-    params.attachmentCount > 0 ||
-    params.explicitDeliverRoute ||
-    normalizeMessageChannel(params.originatingChannel) !== INTERNAL_MESSAGE_CHANNEL
-  ) {
-    return null;
-  }
-  const digest = createHash("sha256")
-    .update(JSON.stringify([params.sessionKey, message]))
-    .digest("hex")
-    .slice(0, 32);
-  return `${ACTIVE_CHAT_SEND_DEDUPE_PREFIX}:${digest}`;
-}
-
 type ChatSendExplicitOrigin = {
   originatingChannel?: string;
   originatingTo?: string;
   accountId?: string;
   messageThreadId?: string;
 };
-
-function formatAttachmentFailureForLog(err: unknown): string {
-  const primary = formatUncaughtError(err);
-  const cause = err instanceof Error ? err.cause : undefined;
-  if (cause === undefined) {
-    return primary;
-  }
-  const causeText = formatUncaughtError(cause);
-  if (!causeText || causeText === primary) {
-    return primary;
-  }
-  return `${primary}\nCaused by: ${causeText}`;
-}
-
-function logAttachmentFailure(
-  logGateway: Pick<GatewayRequestContext["logGateway"], "error">,
-  label: string,
-  err: unknown,
-): void {
-  logGateway.error(label, {
-    error: formatAttachmentFailureForLog(err),
-    consoleMessage: `${label}: ${formatForLog(err)}`,
-  });
-}
 
 type SideResultPayload = {
   kind: "btw";
@@ -391,261 +156,6 @@ type SideResultPayload = {
   isError?: boolean;
   ts: number;
 };
-
-function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
-  const chunks = payloads
-    .map((payload) => {
-      if (payload.isReasoning === true) {
-        return "";
-      }
-      const parts = resolveSendableOutboundReplyParts(payload);
-      const lines: string[] = [];
-      const replyToId = sanitizeReplyDirectiveId(payload.replyToId);
-      if (replyToId) {
-        lines.push(`[[reply_to:${replyToId}]]`);
-      } else if (payload.replyToCurrent) {
-        lines.push("[[reply_to_current]]");
-      }
-      const text = payload.text?.trim();
-      if (text && !isSuppressedControlReplyText(text)) {
-        lines.push(text);
-      }
-      for (const mediaUrl of parts.mediaUrls) {
-        if (payload.sensitiveMedia === true) {
-          continue;
-        }
-        const trimmed = mediaUrl.trim();
-        if (trimmed) {
-          lines.push(`MEDIA:${trimmed}`);
-        }
-      }
-      if (payload.audioAsVoice && parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))) {
-        lines.push("[[audio_as_voice]]");
-      }
-      return lines.join("\n").trim();
-    })
-    .filter(Boolean);
-  return chunks.join("\n\n").trim();
-}
-
-function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
-  return payloads.some(
-    (payload) => payload.sensitiveMedia === true && isMediaBearingPayload(payload),
-  );
-}
-
-type AssistantDisplayContentBlock = Record<string, unknown>;
-
-function sanitizeAssistantDisplayText(value?: string | null): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const withoutEnvelope = stripEnvelopeFromMessage(value);
-  const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
-  const stripped = stripInlineDirectiveTagsForDisplay(normalized).text.trim();
-  return stripped || undefined;
-}
-
-function extractAssistantDisplayTextFromContent(
-  content?: readonly AssistantDisplayContentBlock[] | null,
-): string | undefined {
-  if (!Array.isArray(content) || content.length === 0) {
-    return undefined;
-  }
-  const parts = content
-    .map((block) => {
-      if (block?.type !== "text" || typeof block.text !== "string") {
-        return "";
-      }
-      return block.text.trim();
-    })
-    .filter(Boolean);
-  return parts.length > 0 ? parts.join("\n\n") : undefined;
-}
-
-async function buildAssistantDisplayContentFromReplyPayloads(params: {
-  sessionKey: string;
-  payloads: ReplyPayload[];
-  managedImageLocalRoots?: Parameters<typeof createManagedOutgoingImageBlocks>[0]["localRoots"];
-  includeSensitiveMedia?: boolean;
-  onLocalAudioAccessDenied?: (message: string) => void;
-  onManagedImagePrepareError?: (message: string) => void;
-}): Promise<AssistantDisplayContentBlock[] | undefined> {
-  const rawTextPayloadCount = params.payloads.filter(
-    (payload) =>
-      payload.isReasoning !== true &&
-      typeof payload.text === "string" &&
-      payload.text.trim().length > 0,
-  ).length;
-  const normalized = normalizeReplyPayloadsForDelivery(params.payloads);
-  if (normalized.length === 0) {
-    return rawTextPayloadCount > 0 ? [{ type: "text", text: "" }] : undefined;
-  }
-
-  const content: AssistantDisplayContentBlock[] = [];
-  let strippedTextPayloadCount = 0;
-  for (const payload of normalized) {
-    const text = sanitizeAssistantDisplayText(payload.text);
-    if (text) {
-      content.push({ type: "text", text });
-    } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
-      strippedTextPayloadCount += 1;
-    }
-    if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
-      continue;
-    }
-    const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads([payload], {
-      localRoots: Array.isArray(params.managedImageLocalRoots)
-        ? params.managedImageLocalRoots
-        : undefined,
-      onLocalAudioAccessDenied: (err) => {
-        params.onLocalAudioAccessDenied?.(formatForLog(err));
-      },
-    });
-    content.push(...audioBlocks);
-
-    const mediaUrls = Array.from(
-      new Set([
-        ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
-        ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
-      ]),
-    );
-    const imageBlocks = await createManagedOutgoingImageBlocks({
-      sessionKey: params.sessionKey,
-      mediaUrls,
-      localRoots: params.managedImageLocalRoots,
-      continueOnPrepareError: true,
-      onPrepareError: (error) => {
-        params.onManagedImagePrepareError?.(error.message);
-      },
-    });
-    if (imageBlocks.length > 0) {
-      content.push(...imageBlocks);
-    }
-  }
-
-  if (content.length > 0) {
-    return content;
-  }
-  return strippedTextPayloadCount > 0 ? [{ type: "text", text: "" }] : undefined;
-}
-
-function replaceAssistantContentTextBlocks(
-  content: readonly AssistantDisplayContentBlock[] | undefined,
-  transcriptMediaMessage: { content: Array<Record<string, unknown>> } | null,
-): AssistantDisplayContentBlock[] | undefined {
-  const transcriptTextBlocks = (transcriptMediaMessage?.content ?? []).filter(
-    (block): block is AssistantDisplayContentBlock =>
-      Boolean(block) &&
-      typeof block === "object" &&
-      block.type === "text" &&
-      typeof block.text === "string",
-  );
-  if (transcriptTextBlocks.length === 0) {
-    return content ? [...content] : undefined;
-  }
-  if (!content || content.length === 0) {
-    return [...transcriptTextBlocks];
-  }
-  const merged: AssistantDisplayContentBlock[] = [];
-  let transcriptTextIndex = 0;
-  for (const block of content) {
-    if (
-      block?.type === "text" &&
-      typeof block.text === "string" &&
-      transcriptTextIndex < transcriptTextBlocks.length
-    ) {
-      merged.push(transcriptTextBlocks[transcriptTextIndex++]);
-      continue;
-    }
-    merged.push(block);
-  }
-  if (transcriptTextIndex < transcriptTextBlocks.length) {
-    merged.unshift(...transcriptTextBlocks.slice(transcriptTextIndex));
-  }
-  return merged;
-}
-
-function isManagedOutgoingImageUrl(value: unknown): boolean {
-  if (typeof value !== "string" || !value.trim()) {
-    return false;
-  }
-  try {
-    const parsed = new URL(value, "http://localhost");
-    return parsed.pathname.startsWith(MANAGED_OUTGOING_IMAGE_PATH_PREFIX);
-  } catch {
-    return false;
-  }
-}
-
-function stripManagedOutgoingAssistantContentBlocks(
-  content: readonly AssistantDisplayContentBlock[] | undefined,
-): AssistantDisplayContentBlock[] | undefined {
-  if (!content || content.length === 0) {
-    return undefined;
-  }
-  const filtered = content.filter((block) => {
-    if (block?.type !== "image") {
-      return true;
-    }
-    return !(isManagedOutgoingImageUrl(block.url) || isManagedOutgoingImageUrl(block.openUrl));
-  });
-  return filtered.length > 0 ? filtered : undefined;
-}
-
-function extractAssistantDisplayText(
-  content: readonly AssistantDisplayContentBlock[] | undefined,
-): string | undefined {
-  if (!content || content.length === 0) {
-    return undefined;
-  }
-  const text = content
-    .map((block) => (block?.type === "text" && typeof block.text === "string" ? block.text : ""))
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-  return text || undefined;
-}
-
-function hasAssistantDisplayMediaContent(
-  content: readonly AssistantDisplayContentBlock[] | undefined,
-): boolean {
-  return Boolean(content?.some((block) => block?.type !== "text"));
-}
-
-function hasManagedOutgoingAssistantContent(
-  content: readonly AssistantDisplayContentBlock[] | undefined,
-): boolean {
-  return Boolean(
-    content?.some(
-      (block) =>
-        block?.type === "image" &&
-        (isManagedOutgoingImageUrl(block.url) || isManagedOutgoingImageUrl(block.openUrl)),
-    ),
-  );
-}
-
-function scheduleChatHistoryManagedImageCleanup(params: {
-  sessionKey: string;
-  context: Pick<GatewayRequestContext, "logGateway">;
-}) {
-  if (chatHistoryManagedImageCleanupState.has(params.sessionKey)) {
-    return;
-  }
-  const pending = cleanupManagedOutgoingImageRecords({ sessionKey: params.sessionKey })
-    .then(() => undefined)
-    .catch((error) => {
-      params.context.logGateway.debug(
-        `chat.history managed image cleanup skipped sessionKey=${JSON.stringify(params.sessionKey)} error=${formatForLog(error)}`,
-      );
-    })
-    .finally(() => {
-      if (chatHistoryManagedImageCleanupState.get(params.sessionKey) === pending) {
-        chatHistoryManagedImageCleanupState.delete(params.sessionKey);
-      }
-    });
-  chatHistoryManagedImageCleanupState.set(params.sessionKey, pending);
-}
 
 function resolveChatSendOriginatingRoute(params: {
   client?: { mode?: string | null; id?: string | null } | null;
@@ -675,18 +185,19 @@ function resolveChatSendOriginatingRoute(params: {
     };
   }
 
-  const sessionDeliveryContext = deliveryContextFromSession(params.entry);
   const routeChannelCandidate = normalizeMessageChannel(
-    sessionDeliveryContext?.channel ?? params.entry?.lastChannel ?? params.entry?.origin?.provider,
+    params.entry?.deliveryContext?.channel ??
+      params.entry?.lastChannel ??
+      params.entry?.origin?.provider,
   );
-  const routeToCandidate = sessionDeliveryContext?.to ?? params.entry?.lastTo;
+  const routeToCandidate = params.entry?.deliveryContext?.to ?? params.entry?.lastTo;
   const routeAccountIdCandidate =
-    sessionDeliveryContext?.accountId ??
+    params.entry?.deliveryContext?.accountId ??
     params.entry?.lastAccountId ??
     params.entry?.origin?.accountId ??
     undefined;
   const routeThreadIdCandidate =
-    sessionDeliveryContext?.threadId ??
+    params.entry?.deliveryContext?.threadId ??
     params.entry?.lastThreadId ??
     params.entry?.origin?.threadId;
   if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
@@ -762,42 +273,6 @@ function resolveChatSendOriginatingRoute(params: {
   };
 }
 
-function isAcpSessionKey(sessionKey: string | undefined): boolean {
-  return Boolean(sessionKey?.split(":").includes("acp"));
-}
-
-function explicitOriginTargetsAcpSession(origin: ChatSendExplicitOrigin | undefined): boolean {
-  if (!origin?.originatingChannel || !origin.originatingTo || !origin.accountId) {
-    return false;
-  }
-  const channel = normalizeMessageChannel(origin.originatingChannel);
-  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
-    return false;
-  }
-  const binding = getSessionBindingService().resolveByConversation({
-    channel,
-    accountId: origin.accountId,
-    conversationId: origin.originatingTo,
-  });
-  return isAcpSessionKey(binding?.targetSessionKey);
-}
-
-function explicitOriginTargetsPluginBinding(origin: ChatSendExplicitOrigin | undefined): boolean {
-  if (!origin?.originatingChannel || !origin.originatingTo || !origin.accountId) {
-    return false;
-  }
-  const channel = normalizeMessageChannel(origin.originatingChannel);
-  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
-    return false;
-  }
-  const binding = getSessionBindingService().resolveByConversation({
-    channel,
-    accountId: origin.accountId,
-    conversationId: origin.originatingTo,
-  });
-  return isPluginOwnedSessionBindingRecord(binding);
-}
-
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
   for (const char of message) {
@@ -853,217 +328,40 @@ function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"
 
 async function persistChatSendImages(params: {
   images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
-  offloadedRefs: OffloadedRef[];
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
 }): Promise<SavedMedia[]> {
-  if (
-    (params.images.length === 0 && params.offloadedRefs.length === 0) ||
-    isAcpBridgeClient(params.client)
-  ) {
+  if (params.images.length === 0 || isAcpBridgeClient(params.client)) {
     return [];
   }
-  const inlineSaved: SavedMedia[] = [];
+  const saved: SavedMedia[] = [];
   for (const img of params.images) {
     try {
-      inlineSaved.push(
-        await saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound"),
-      );
+      saved.push(await saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound"));
     } catch (err) {
       params.logGateway.warn(
         `chat.send: failed to persist inbound image (${img.mimeType}): ${formatForLog(err)}`,
       );
     }
   }
-  // imageOrder now only tracks image slots (see chat-attachments.ts), so split
-  // offloaded refs by mime: image offloads interleave with inline images via
-  // imageOrder, and non-image offloads append to the transcript tail. Without
-  // this split a non-image file would consume the next image slot whenever
-  // both kinds appear in the same request.
-  const imageOffloadedSaved: SavedMedia[] = [];
-  const nonImageOffloadedSaved: SavedMedia[] = [];
-  for (const ref of params.offloadedRefs) {
-    const entry: SavedMedia = {
-      id: ref.id,
-      path: ref.path,
-      size: 0,
-      contentType: ref.mimeType,
-    };
-    if (ref.mimeType.startsWith("image/")) {
-      imageOffloadedSaved.push(entry);
-    } else {
-      nonImageOffloadedSaved.push(entry);
-    }
-  }
-  if (params.imageOrder.length === 0) {
-    return [...inlineSaved, ...imageOffloadedSaved, ...nonImageOffloadedSaved];
-  }
-  const saved: SavedMedia[] = [];
-  let inlineIndex = 0;
-  let offloadedIndex = 0;
-  for (const entry of params.imageOrder) {
-    if (entry === "inline") {
-      const inline = inlineSaved[inlineIndex++];
-      if (inline) {
-        saved.push(inline);
-      }
-      continue;
-    }
-    const offloaded = imageOffloadedSaved[offloadedIndex++];
-    if (offloaded) {
-      saved.push(offloaded);
-    }
-  }
-  for (; inlineIndex < inlineSaved.length; inlineIndex++) {
-    const inline = inlineSaved[inlineIndex];
-    if (inline) {
-      saved.push(inline);
-    }
-  }
-  for (; offloadedIndex < imageOffloadedSaved.length; offloadedIndex++) {
-    const offloaded = imageOffloadedSaved[offloadedIndex];
-    if (offloaded) {
-      saved.push(offloaded);
-    }
-  }
-  for (const offloaded of nonImageOffloadedSaved) {
-    saved.push(offloaded);
-  }
   return saved;
 }
 
-function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
-  if (refs.length === 0) {
-    return message;
-  }
-  const removableRefs = new Set(refs.map((ref) => ref.mediaRef));
-  const lines = message.split(/\r?\n/);
-  while (lines.length > 0) {
-    const last = lines[lines.length - 1]?.trim() ?? "";
-    const match = /^\[media attached:\s*(media:\/\/inbound\/[^\]\s]+)\]$/.exec(last);
-    if (!match?.[1] || !removableRefs.delete(match[1])) {
-      break;
-    }
-    lines.pop();
-  }
-  return lines.join("\n").trimEnd();
+function buildChatSendTranscriptMessage(params: {
+  message: string;
+  savedImages: SavedMedia[];
+  timestamp: number;
+}) {
+  const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
+  return {
+    role: "user" as const,
+    content: params.message,
+    timestamp: params.timestamp,
+    ...mediaFields,
+  };
 }
 
-// Stages media-path offloads into the agent sandbox synchronously so chat.send
-// can surface 5xx before respond(). Throws MediaOffloadError on any staging
-// failure (ENOSPC / EPERM / partial-stage) so the outer chat.send handler can
-// map it to UNAVAILABLE (5xx); plain Error would be misclassified as 4xx. All
-// offloaded refs are cleaned up from the media store before rethrow.
-// Callers MUST set ctx.MediaStaged=true when this runs so the dispatch
-// pipeline skips its own stageSandboxMedia pass.
-//
-// Returned paths are absolute media-store paths when no sandbox is active, or
-// sandbox-relative paths plus `workspaceDir` when sandboxing is active. Host-side
-// media-understanding uses MediaWorkspaceDir to resolve those relative paths.
-async function prestageMediaPathOffloads(params: {
-  offloadedRefs: OffloadedRef[];
-  includeImageRefs?: boolean;
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId: string;
-}): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
-  const mediaPathRefs = params.offloadedRefs.filter(
-    (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
-  );
-  if (mediaPathRefs.length === 0) {
-    return { paths: [], types: [] };
-  }
-
-  try {
-    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-    const sandbox = await ensureSandboxWorkspaceForSession({
-      config: params.cfg,
-      sessionKey: params.sessionKey,
-      workspaceDir,
-    });
-    if (!sandbox) {
-      return {
-        paths: mediaPathRefs.map((ref) => ref.path),
-        types: mediaPathRefs.map((ref) => ref.mimeType),
-      };
-    }
-
-    // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (=
-    // MEDIA_MAX_BYTES, 5MB) and silently skips oversized files. The parse cap
-    // (resolveChatAttachmentMaxBytes, default 20MB) is higher, so a sandboxed
-    // session receiving a file between the two caps would otherwise
-    // pass parse, fail staging, and surface as a retryable 5xx even though
-    // retry cannot succeed. Reject here as a client-side 4xx instead.
-    const oversizedForSandbox = mediaPathRefs.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
-    if (oversizedForSandbox.length > 0) {
-      const details = oversizedForSandbox
-        .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
-        .join(", ");
-      throw new UnsupportedAttachmentError(
-        "non-image-too-large-for-sandbox",
-        `attachments exceed sandbox staging limit (${MEDIA_MAX_BYTES} bytes): ${details}`,
-      );
-    }
-
-    const stagingCtx: MsgContext = {
-      MediaPath: mediaPathRefs[0].path,
-      MediaPaths: mediaPathRefs.map((ref) => ref.path),
-      MediaType: mediaPathRefs[0].mimeType,
-      MediaTypes: mediaPathRefs.map((ref) => ref.mimeType),
-    };
-    const stageResult = await stageSandboxMedia({
-      ctx: stagingCtx,
-      sessionCtx: stagingCtx as TemplateContext,
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      workspaceDir,
-    });
-
-    // stageSandboxMedia silently keeps unstaged entries as their original
-    // absolute path, so length parity with `nonImage` does not prove every
-    // file landed in the sandbox. The RPC max (20MB via
-    // resolveChatAttachmentMaxBytes) admits files above the staging cap
-    // (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned `staged` map so any
-    // missing source becomes a 5xx MediaOffloadError the client can retry.
-    const stagedSources = stageResult.staged;
-    const missing = mediaPathRefs.filter((ref) => !stagedSources.has(ref.path));
-    if (missing.length > 0) {
-      throw new Error(
-        `attachment staging incomplete: ${stagedSources.size}/${mediaPathRefs.length} paths staged into sandbox workspace (missing: ${missing.map((ref) => ref.path).join(", ")})`,
-      );
-    }
-    const stagedPaths = stagingCtx.MediaPaths ?? [];
-    const stagedTypes = stagingCtx.MediaTypes ?? mediaPathRefs.map((ref) => ref.mimeType);
-
-    // Keep stagedPaths sandbox-relative (e.g. `media/inbound/foo.pdf`) so the
-    // agent inside the container can read them. Host-side media-understanding
-    // resolves them via ctx.MediaWorkspaceDir, which we carry separately.
-    return { paths: stagedPaths, types: stagedTypes, workspaceDir: sandbox.workspaceDir };
-  } catch (err) {
-    await Promise.allSettled(
-      params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
-    );
-    if (err instanceof MediaOffloadError) {
-      throw err;
-    }
-    // Sandbox-oversize rejections are client-side 4xx (see check above). Wrapping
-    // them as MediaOffloadError would misclassify them as retryable 5xx.
-    if (err instanceof UnsupportedAttachmentError) {
-      throw err;
-    }
-    throw new MediaOffloadError(
-      `[Gateway Error] Failed to stage attachments into agent workspace: ${formatErrorMessage(err)}`,
-      { cause: err },
-    );
-  }
-}
-
-type ChatSendManagedMediaFields = Partial<
-  Pick<MsgContext, "MediaPath" | "MediaPaths" | "MediaType" | "MediaTypes">
->;
-
-function resolveChatSendManagedMediaFields(savedImages: SavedMedia[]): ChatSendManagedMediaFields {
+function resolveChatSendTranscriptMediaFields(savedImages: SavedMedia[]) {
   const mediaPaths = savedImages.map((entry) => entry.path);
   if (mediaPaths.length === 0) {
     return {};
@@ -1077,206 +375,313 @@ function resolveChatSendManagedMediaFields(savedImages: SavedMedia[]): ChatSendM
   };
 }
 
-function applyChatSendManagedMediaFields(ctx: MsgContext, fields: ChatSendManagedMediaFields) {
-  if (!ctx.MediaStaged) {
-    Object.assign(ctx, fields);
+function extractTranscriptUserText(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const textBlocks = content
+    .map((block) =>
+      block && typeof block === "object" && "text" in block ? block.text : undefined,
+    )
+    .filter((text): text is string => typeof text === "string");
+  return textBlocks.length > 0 ? textBlocks.join("") : undefined;
+}
+
+async function rewriteChatSendUserTurnMediaPaths(params: {
+  transcriptPath: string;
+  sessionKey: string;
+  message: string;
+  savedImages: SavedMedia[];
+}) {
+  const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
+  if (!("MediaPath" in mediaFields)) {
     return;
   }
-
-  if (ctx.MediaPath === undefined && fields.MediaPath !== undefined) {
-    ctx.MediaPath = fields.MediaPath;
+  const sessionManager = SessionManager.open(params.transcriptPath);
+  const branch = sessionManager.getBranch();
+  const target = [...branch].toReversed().find((entry) => {
+    if (entry.type !== "message" || entry.message.role !== "user") {
+      return false;
+    }
+    const existingPaths = Array.isArray((entry.message as { MediaPaths?: unknown }).MediaPaths)
+      ? (entry.message as { MediaPaths?: unknown[] }).MediaPaths
+      : undefined;
+    if (
+      (typeof (entry.message as { MediaPath?: unknown }).MediaPath === "string" &&
+        (entry.message as { MediaPath?: string }).MediaPath) ||
+      (existingPaths && existingPaths.length > 0)
+    ) {
+      return false;
+    }
+    return (
+      extractTranscriptUserText((entry.message as { content?: unknown }).content) === params.message
+    );
+  });
+  if (!target || target.type !== "message") {
+    return;
   }
-  if (ctx.MediaPaths === undefined && fields.MediaPaths !== undefined) {
-    ctx.MediaPaths = fields.MediaPaths;
-  }
-  if (ctx.MediaType === undefined && fields.MediaType !== undefined) {
-    ctx.MediaType = fields.MediaType;
-  }
-  if (ctx.MediaTypes === undefined && fields.MediaTypes !== undefined) {
-    ctx.MediaTypes = fields.MediaTypes;
-  }
+  const rewrittenMessage = {
+    ...target.message,
+    ...mediaFields,
+  };
+  await rewriteTranscriptEntriesInSessionFile({
+    sessionFile: params.transcriptPath,
+    sessionKey: params.sessionKey,
+    request: {
+      replacements: [
+        {
+          entryId: target.id,
+          message: rewrittenMessage,
+        },
+      ],
+    },
+  });
 }
 
-function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserTurnInput["media"]> {
-  return savedMedia.map((entry) => ({
-    path: entry.path,
-    contentType: entry.contentType,
-  }));
+function truncateChatHistoryText(text: string): { text: string; truncated: boolean } {
+  if (text.length <= CHAT_HISTORY_TEXT_MAX_CHARS) {
+    return { text, truncated: false };
+  }
+  return {
+    text: `${text.slice(0, CHAT_HISTORY_TEXT_MAX_CHARS)}\n...(truncated)...`,
+    truncated: true,
+  };
 }
 
-function extractChatHistoryBlockText(message: unknown): string | undefined {
+function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; changed: boolean } {
+  if (!block || typeof block !== "object") {
+    return { block, changed: false };
+  }
+  const entry = { ...(block as Record<string, unknown>) };
+  let changed = false;
+  if (typeof entry.text === "string") {
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const res = truncateChatHistoryText(stripped.text);
+    entry.text = res.text;
+    changed ||= stripped.changed || res.truncated;
+  }
+  if (typeof entry.partialJson === "string") {
+    const res = truncateChatHistoryText(entry.partialJson);
+    entry.partialJson = res.text;
+    changed ||= res.truncated;
+  }
+  if (typeof entry.arguments === "string") {
+    const res = truncateChatHistoryText(entry.arguments);
+    entry.arguments = res.text;
+    changed ||= res.truncated;
+  }
+  if (typeof entry.thinking === "string") {
+    const res = truncateChatHistoryText(entry.thinking);
+    entry.thinking = res.text;
+    changed ||= res.truncated;
+  }
+  if ("thinkingSignature" in entry) {
+    delete entry.thinkingSignature;
+    changed = true;
+  }
+  const type = typeof entry.type === "string" ? entry.type : "";
+  if (type === "image" && typeof entry.data === "string") {
+    const bytes = Buffer.byteLength(entry.data, "utf8");
+    delete entry.data;
+    entry.omitted = true;
+    entry.bytes = bytes;
+    changed = true;
+  }
+  return { block: changed ? entry : block, changed };
+}
+
+/**
+ * Validate that a value is a finite number, returning undefined otherwise.
+ */
+function toFiniteNumber(x: unknown): number | undefined {
+  return typeof x === "number" && Number.isFinite(x) ? x : undefined;
+}
+
+/**
+ * Sanitize usage metadata to ensure only finite numeric fields are included.
+ * Prevents UI crashes from malformed transcript JSON.
+ */
+function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const u = raw as Record<string, unknown>;
+  const out: Record<string, number> = {};
+
+  // Whitelist known usage fields and validate they're finite numbers
+  const knownFields = [
+    "input",
+    "output",
+    "totalTokens",
+    "inputTokens",
+    "outputTokens",
+    "cacheRead",
+    "cacheWrite",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+  ];
+
+  for (const k of knownFields) {
+    const n = toFiniteNumber(u[k]);
+    if (n !== undefined) {
+      out[k] = n;
+    }
+  }
+
+  // Preserve nested usage.cost when present
+  if ("cost" in u && u.cost != null && typeof u.cost === "object") {
+    const sanitizedCost = sanitizeCost(u.cost);
+    if (sanitizedCost) {
+      (out as Record<string, unknown>).cost = sanitizedCost;
+    }
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Sanitize cost metadata to ensure only finite numeric fields are included.
+ * Prevents UI crashes from calling .toFixed() on non-numbers.
+ */
+function sanitizeCost(raw: unknown): { total?: number } | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const c = raw as Record<string, unknown>;
+  const total = toFiniteNumber(c.total);
+  return total !== undefined ? { total } : undefined;
+}
+
+function sanitizeChatHistoryMessage(message: unknown): { message: unknown; changed: boolean } {
+  if (!message || typeof message !== "object") {
+    return { message, changed: false };
+  }
+  const entry = { ...(message as Record<string, unknown>) };
+  let changed = false;
+
+  if ("details" in entry) {
+    delete entry.details;
+    changed = true;
+  }
+
+  // Keep usage/cost so the chat UI can render per-message token and cost badges.
+  // Only retain usage/cost on assistant messages and validate numeric fields to prevent UI crashes.
+  if (entry.role !== "assistant") {
+    if ("usage" in entry) {
+      delete entry.usage;
+      changed = true;
+    }
+    if ("cost" in entry) {
+      delete entry.cost;
+      changed = true;
+    }
+  } else {
+    // Validate and sanitize usage/cost for assistant messages
+    if ("usage" in entry) {
+      const sanitized = sanitizeUsage(entry.usage);
+      if (sanitized) {
+        entry.usage = sanitized;
+      } else {
+        delete entry.usage;
+      }
+      changed = true;
+    }
+    if ("cost" in entry) {
+      const sanitized = sanitizeCost(entry.cost);
+      if (sanitized) {
+        entry.cost = sanitized;
+      } else {
+        delete entry.cost;
+      }
+      changed = true;
+    }
+  }
+
+  if (typeof entry.content === "string") {
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+    const res = truncateChatHistoryText(stripped.text);
+    entry.content = res.text;
+    changed ||= stripped.changed || res.truncated;
+  } else if (Array.isArray(entry.content)) {
+    const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block));
+    if (updated.some((item) => item.changed)) {
+      entry.content = updated.map((item) => item.block);
+      changed = true;
+    }
+  }
+
+  if (typeof entry.text === "string") {
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const res = truncateChatHistoryText(stripped.text);
+    entry.text = res.text;
+    changed ||= stripped.changed || res.truncated;
+  }
+
+  return { message: changed ? entry : message, changed };
+}
+
+/**
+ * Extract the visible text from an assistant history message for silent-token checks.
+ * Returns `undefined` for non-assistant messages or messages with no extractable text.
+ * When `entry.text` is present it takes precedence over `entry.content` to avoid
+ * dropping messages that carry real text alongside a stale `content: "NO_REPLY"`.
+ */
+function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
   const entry = message as Record<string, unknown>;
-  if (typeof entry.content === "string") {
-    return entry.content;
+  if (entry.role !== "assistant") {
+    return undefined;
   }
   if (typeof entry.text === "string") {
     return entry.text;
   }
-  if (!Array.isArray(entry.content)) {
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  if (!Array.isArray(entry.content) || entry.content.length === 0) {
     return undefined;
   }
-  const textParts = entry.content
-    .map((block) => {
-      if (!block || typeof block !== "object") {
-        return undefined;
-      }
-      const typed = block as { text?: unknown; type?: unknown };
-      return typeof typed.text === "string" ? typed.text : undefined;
-    })
-    .filter((value): value is string => typeof value === "string");
-  return textParts.length > 0 ? textParts.join("\n") : undefined;
-}
 
-function appendCanvasBlockToAssistantHistoryMessage(params: {
-  message: unknown;
-  preview: ReturnType<typeof extractCanvasFromText>;
-  rawText: string | null;
-}): unknown {
-  const preview = params.preview;
-  if (!preview || !params.message || typeof params.message !== "object") {
-    return params.message;
-  }
-  const entry = params.message as Record<string, unknown>;
-  const baseContent = Array.isArray(entry.content)
-    ? [...entry.content]
-    : typeof entry.content === "string"
-      ? [{ type: "text", text: entry.content }]
-      : typeof entry.text === "string"
-        ? [{ type: "text", text: entry.text }]
-        : [];
-  const alreadyPresent = baseContent.some((block) => {
+  const texts: string[] = [];
+  for (const block of entry.content) {
     if (!block || typeof block !== "object") {
-      return false;
+      return undefined;
     }
-    const typed = block as { type?: unknown; preview?: unknown };
-    return (
-      typed.type === "canvas" &&
-      typed.preview &&
-      typeof typed.preview === "object" &&
-      (((typed.preview as { viewId?: unknown }).viewId &&
-        (typed.preview as { viewId?: unknown }).viewId === preview.viewId) ||
-        ((typed.preview as { url?: unknown }).url &&
-          (typed.preview as { url?: unknown }).url === preview.url))
-    );
-  });
-  if (!alreadyPresent) {
-    baseContent.push({
-      type: "canvas",
-      preview,
-      rawText: params.rawText,
-    });
+    const typed = block as { type?: unknown; text?: unknown };
+    if (typed.type !== "text" || typeof typed.text !== "string") {
+      return undefined;
+    }
+    texts.push(typed.text);
   }
-  return {
-    ...entry,
-    content: baseContent,
-  };
+  return texts.length > 0 ? texts.join("\n") : undefined;
 }
 
-function messageContainsToolHistoryContent(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown>;
-  if (
-    typeof entry.toolCallId === "string" ||
-    typeof entry.tool_call_id === "string" ||
-    typeof entry.toolName === "string" ||
-    typeof entry.tool_name === "string"
-  ) {
-    return true;
-  }
-  if (!Array.isArray(entry.content)) {
-    return false;
-  }
-  return entry.content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    return isToolHistoryBlockType((block as { type?: unknown }).type);
-  });
-}
-
-export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown[] {
+function sanitizeChatHistoryMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;
   }
-  const next = [...messages];
   let changed = false;
-  let lastAssistantIndex = -1;
-  let lastRenderableAssistantIndex = -1;
-  const pending: Array<{
-    preview: NonNullable<ReturnType<typeof extractCanvasFromText>>;
-    rawText: string | null;
-  }> = [];
-  for (let index = 0; index < next.length; index++) {
-    const message = next[index];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const entry = message as Record<string, unknown>;
-    const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
-    if (role === "assistant") {
-      lastAssistantIndex = index;
-      if (!messageContainsToolHistoryContent(entry)) {
-        lastRenderableAssistantIndex = index;
-        if (pending.length > 0) {
-          let target = next[index];
-          for (const item of pending) {
-            target = appendCanvasBlockToAssistantHistoryMessage({
-              message: target,
-              preview: item.preview,
-              rawText: item.rawText,
-            });
-          }
-          next[index] = target;
-          pending.length = 0;
-          changed = true;
-        }
-      }
-      continue;
-    }
-    if (!messageContainsToolHistoryContent(entry)) {
-      continue;
-    }
-    const toolName =
-      typeof entry.toolName === "string"
-        ? entry.toolName
-        : typeof entry.tool_name === "string"
-          ? entry.tool_name
-          : undefined;
-    const text = extractChatHistoryBlockText(entry);
-    const preview = extractCanvasFromText(text, toolName);
-    if (!preview) {
-      continue;
-    }
-    pending.push({
-      preview,
-      rawText: text ?? null,
-    });
-  }
-  if (pending.length > 0) {
-    const targetIndex =
-      lastRenderableAssistantIndex >= 0 ? lastRenderableAssistantIndex : lastAssistantIndex;
-    if (targetIndex >= 0) {
-      let target = next[targetIndex];
-      for (const item of pending) {
-        target = appendCanvasBlockToAssistantHistoryMessage({
-          message: target,
-          preview: item.preview,
-          rawText: item.rawText,
-        });
-      }
-      next[targetIndex] = target;
+  const next: unknown[] = [];
+  for (const message of messages) {
+    const res = sanitizeChatHistoryMessage(message);
+    changed ||= res.changed;
+    // Drop assistant messages whose entire visible text is the silent reply token.
+    const text = extractAssistantTextForSilentCheck(res.message);
+    if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
       changed = true;
+      continue;
     }
+    next.push(res.message);
   }
   return changed ? next : messages;
 }
 
-export function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
+function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const role =
     message &&
     typeof message === "object" &&
@@ -1297,7 +702,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
   };
 }
 
-export function replaceOversizedChatHistoryMessages(params: {
+function replaceOversizedChatHistoryMessages(params: {
   messages: unknown[];
   maxSingleMessageBytes: number;
 }): { messages: unknown[]; replacedCount: number } {
@@ -1316,7 +721,7 @@ export function replaceOversizedChatHistoryMessages(params: {
   return { messages: replacedCount > 0 ? next : messages, replacedCount };
 }
 
-export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: number }): {
+function enforceChatHistoryFinalBudget(params: { messages: unknown[]; maxBytes: number }): {
   messages: unknown[];
   placeholderCount: number;
 } {
@@ -1386,19 +791,16 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
   }
 }
 
-async function transcriptHasIdempotencyKey(
-  transcriptPath: string,
-  idempotencyKey: string,
-): Promise<boolean> {
+function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: string): boolean {
   try {
-    for await (const line of streamSessionTranscriptLines(transcriptPath)) {
-      try {
-        const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
-        if (parsed?.message?.idempotencyKey === idempotencyKey) {
-          return true;
-        }
-      } catch {
+    const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/);
+    for (const line of lines) {
+      if (!line.trim()) {
         continue;
+      }
+      const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
+      if (parsed?.message?.idempotencyKey === idempotencyKey) {
+        return true;
       }
     }
     return false;
@@ -1407,107 +809,9 @@ async function transcriptHasIdempotencyKey(
   }
 }
 
-async function findAssistantTranscriptMessageByIdempotencyKey(
-  transcriptPath: string,
-  idempotencyKey: string,
-): Promise<{ messageId: string; message: Record<string, unknown> } | null> {
-  const trimmedIdempotencyKey = idempotencyKey.trim();
-  if (!trimmedIdempotencyKey) {
-    return null;
-  }
-  const index = await readSessionTranscriptIndex(transcriptPath);
-  const target = index?.entries.toReversed().find((entry) => {
-    const message = entry.record.message as Record<string, unknown> | undefined;
-    return (
-      typeof entry.id === "string" &&
-      entry.id.trim().length > 0 &&
-      message?.role === "assistant" &&
-      message.idempotencyKey === trimmedIdempotencyKey
-    );
-  });
-  const message = target?.record.message as Record<string, unknown> | undefined;
-  if (!target?.id || !message) {
-    return null;
-  }
-  return { messageId: target.id, message };
-}
-
-async function findSourceReplyTranscriptMirrorByIdempotencyKey(
-  transcriptPath: string,
-  idempotencyKey: string,
-): Promise<{ messageId: string; message: Record<string, unknown> } | null> {
-  const found = await findAssistantTranscriptMessageByIdempotencyKey(
-    transcriptPath,
-    idempotencyKey,
-  );
-  if (found?.message.provider !== "openclaw" || found.message.model !== "delivery-mirror") {
-    return null;
-  }
-  return found;
-}
-
-function extractAssistantTranscriptText(message: Record<string, unknown>): string | undefined {
-  const content = message.content;
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const text = content
-    .map((block) =>
-      block &&
-      typeof block === "object" &&
-      (block as { type?: unknown }).type === "text" &&
-      typeof (block as { text?: unknown }).text === "string"
-        ? ((block as { text: string }).text.trim() ?? "")
-        : "",
-    )
-    .filter(Boolean)
-    .join("\n")
-    .trim();
-  return text || undefined;
-}
-
-async function findSourceReplyTranscriptMirrorByMetadata(params: {
-  transcriptPath: string;
-  idempotencyKey: string;
-  metadata: NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"];
-}): Promise<{ messageId: string; message: Record<string, unknown> } | null> {
-  const byIdempotencyKey = await findSourceReplyTranscriptMirrorByIdempotencyKey(
-    params.transcriptPath,
-    params.idempotencyKey,
-  );
-  if (byIdempotencyKey) {
-    return byIdempotencyKey;
-  }
-  const expectedText = resolveMirroredTranscriptText({
-    text: params.metadata?.text,
-    mediaUrls: params.metadata?.mediaUrls,
-  });
-  if (!expectedText) {
-    return null;
-  }
-  const index = await readSessionTranscriptIndex(params.transcriptPath);
-  const target = index?.entries.toReversed().find((entry) => {
-    const message = entry.record.message as Record<string, unknown> | undefined;
-    return (
-      typeof entry.id === "string" &&
-      entry.id.trim().length > 0 &&
-      message?.role === "assistant" &&
-      message.provider === "openclaw" &&
-      message.model === "delivery-mirror" &&
-      extractAssistantTranscriptText(message) === expectedText
-    );
-  });
-  const message = target?.record.message as Record<string, unknown> | undefined;
-  if (!target?.id || !message) {
-    return null;
-  }
-  return { messageId: target.id, message };
-}
-
-async function appendAssistantTranscriptMessage(params: {
+function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
-  content?: Array<Record<string, unknown>>;
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
@@ -1519,9 +823,7 @@ async function appendAssistantTranscriptMessage(params: {
     origin: AbortOrigin;
     runId: string;
   };
-  ttsSupplement?: GatewayInjectedTtsSupplementMarker;
-  cfg?: OpenClawConfig;
-}): Promise<TranscriptAppendResult> {
+}): TranscriptAppendResult {
   const transcriptPath = resolveTranscriptPath({
     sessionId: params.sessionId,
     storePath: params.storePath,
@@ -1545,28 +847,16 @@ async function appendAssistantTranscriptMessage(params: {
     }
   }
 
-  if (
-    params.idempotencyKey &&
-    (await transcriptHasIdempotencyKey(transcriptPath, params.idempotencyKey))
-  ) {
-    const existing = await findAssistantTranscriptMessageByIdempotencyKey(
-      transcriptPath,
-      params.idempotencyKey,
-    );
-    return existing
-      ? { ok: true, messageId: existing.messageId, message: existing.message }
-      : { ok: true };
+  if (params.idempotencyKey && transcriptHasIdempotencyKey(transcriptPath, params.idempotencyKey)) {
+    return { ok: true };
   }
 
-  return await appendInjectedAssistantMessageToTranscript({
+  return appendInjectedAssistantMessageToTranscript({
     transcriptPath,
     message: params.message,
     label: params.label,
-    content: params.content,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
-    ttsSupplement: params.ttsSupplement,
-    config: params.cfg,
   });
 }
 
@@ -1595,25 +885,24 @@ function collectSessionAbortPartials(params: {
   return out;
 }
 
-async function persistAbortedPartials(params: {
+function persistAbortedPartials(params: {
   context: Pick<GatewayRequestContext, "logGateway">;
   sessionKey: string;
   snapshots: AbortedPartialSnapshot[];
-}): Promise<void> {
+}) {
   if (params.snapshots.length === 0) {
     return;
   }
-  const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey);
+  const { storePath, entry } = loadSessionEntry(params.sessionKey);
   for (const snapshot of params.snapshots) {
     const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
-    const appended = await appendAssistantTranscriptMessage({
+    const appended = appendAssistantTranscriptMessage({
       message: snapshot.text,
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,
-      cfg,
       abortMeta: {
         aborted: true,
         origin: snapshot.abortOrigin,
@@ -1634,9 +923,6 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
     chatRunBuffers: context.chatRunBuffers,
     chatDeltaSentAt: context.chatDeltaSentAt,
     chatDeltaLastBroadcastLen: context.chatDeltaLastBroadcastLen,
-    chatDeltaLastBroadcastText: context.chatDeltaLastBroadcastText,
-    agentDeltaSentAt: context.agentDeltaSentAt,
-    bufferedAgentEvents: context.bufferedAgentEvents,
     chatAbortedRuns: context.chatAbortedRuns,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
@@ -1719,220 +1005,49 @@ function canRequesterAbortChatRun(
   return false;
 }
 
-function canRequesterAbortChatRunWithoutSessionMatch(
-  entry: ChatAbortControllerEntry,
-  requester: ChatAbortRequester,
-): boolean {
-  if (requester.isAdmin) {
-    return true;
-  }
-  const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
-  const ownerConnId = normalizeOptionalText(entry.ownerConnId);
-  return Boolean(
-    (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) ||
-    (ownerConnId && requester.connId && ownerConnId === requester.connId),
-  );
-}
-
-function readPreRegisteredAgentDedupePayloadForSession(params: {
-  entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
-  runId: string;
-  sessionKey: string;
-}): PreRegisteredAgentDedupePayload | undefined {
-  if (!params.entry?.ok) {
-    return undefined;
-  }
-  const payload = params.entry.payload as PreRegisteredAgentDedupePayload | undefined;
-  if (payload?.status !== "accepted") {
-    return undefined;
-  }
-  const payloadRunId = normalizeUnknownText(payload.runId);
-  if (payloadRunId && payloadRunId !== params.runId) {
-    return undefined;
-  }
-  return normalizeUnknownText(payload.sessionKey) === params.sessionKey ? payload : undefined;
-}
-
-function readPreRegisteredAgentRun(params: {
-  key: string;
-  entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
-}): PreRegisteredAgentRun | undefined {
-  if (!params.key.startsWith("agent:") || !params.entry?.ok) {
-    return undefined;
-  }
-  const payload = params.entry.payload as PreRegisteredAgentDedupePayload | undefined;
-  if (payload?.status !== "accepted") {
-    return undefined;
-  }
-  const runId = normalizeUnknownText(payload.runId) ?? normalizeOptionalText(params.key.slice(6));
-  const sessionKey = normalizeUnknownText(payload.sessionKey);
-  if (!runId || !sessionKey) {
-    return undefined;
-  }
-  return { runId, sessionKey, payload };
-}
-
-function canRequesterAbortPreRegisteredAgentRun(
-  payload: PreRegisteredAgentDedupePayload,
-  requester: ChatAbortRequester,
-): boolean {
-  return canRequesterAbortChatRun(
-    {
-      controller: new AbortController(),
-      sessionId: "",
-      sessionKey: normalizeUnknownText(payload.sessionKey) ?? "",
-      startedAtMs: 0,
-      expiresAtMs: 0,
-      ownerConnId: normalizeUnknownText(payload.ownerConnId),
-      ownerDeviceId: normalizeUnknownText(payload.ownerDeviceId),
-      kind: "agent",
-    },
-    requester,
-  );
-}
-
-function resolvePreRegisteredAgentDedupeKeys(
-  payload: PreRegisteredAgentDedupePayload,
-  runId: string,
-): string[] {
-  const keys = [`agent:${runId}`];
-  const payloadKeys = Array.isArray(payload.dedupeKeys) ? payload.dedupeKeys : [];
-  for (const key of payloadKeys) {
-    const normalized = normalizeUnknownText(key);
-    if (normalized?.startsWith("agent:")) {
-      keys.push(normalized);
-    }
-  }
-  return uniqueStrings(keys);
-}
-
-function writePreRegisteredAgentAbort(params: {
-  context: GatewayRequestContext;
-  runId: string;
-  sessionKey: string;
-  payload: PreRegisteredAgentDedupePayload;
-  stopReason: string;
-  endedAt?: number;
-}) {
-  const endedAt = params.endedAt ?? Date.now();
-  for (const key of resolvePreRegisteredAgentDedupeKeys(params.payload, params.runId)) {
-    setGatewayDedupeEntry({
-      dedupe: params.context.dedupe,
-      key,
-      entry: {
-        ts: endedAt,
-        ok: true,
-        payload: {
-          runId: params.runId,
-          sessionKey: params.sessionKey,
-          status: "timeout" as const,
-          summary: "aborted",
-          stopReason: params.stopReason,
-          endedAt,
-        },
-      },
-    });
-  }
-}
-
-function resolveAuthorizedPreRegisteredAgentRunsForSessionKeys(params: {
-  context: GatewayRequestContext;
-  sessionKeys: Iterable<string>;
-  requester: ChatAbortRequester;
-}) {
-  const sessionKeys = new Set(
-    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
-      (sessionKey): sessionKey is string => Boolean(sessionKey),
-    ),
-  );
-  const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
-  let matchedSessionRuns = 0;
-  for (const [key, entry] of params.context.dedupe) {
-    const run = readPreRegisteredAgentRun({ key, entry });
-    if (!run || !sessionKeys.has(run.sessionKey)) {
-      continue;
-    }
-    if (params.context.chatAbortControllers.has(run.runId)) {
-      continue;
-    }
-    matchedSessionRuns += 1;
-    if (canRequesterAbortPreRegisteredAgentRun(run.payload, params.requester)) {
-      authorizedByRunId.set(run.runId, run);
-    }
-  }
-  return {
-    matchedSessionRuns,
-    authorizedRuns: [...authorizedByRunId.values()],
-  };
-}
-
-function resolveAuthorizedRunsForSessionKeys(params: {
+function resolveAuthorizedRunIdsForSession(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  sessionKeys: Iterable<string>;
-  sessionIds?: Iterable<string | undefined>;
+  sessionKey: string;
   requester: ChatAbortRequester;
 }) {
-  const sessionKeys = new Set(
-    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
-      (sessionKey): sessionKey is string => Boolean(sessionKey),
-    ),
-  );
-  const sessionIds = new Set(
-    Array.from(params.sessionIds ?? [], (sessionId) => normalizeOptionalText(sessionId)).filter(
-      (sessionId): sessionId is string => Boolean(sessionId),
-    ),
-  );
-  const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
+  const authorizedRunIds: string[] = [];
   let matchedSessionRuns = 0;
   for (const [runId, active] of params.chatAbortControllers) {
-    if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
+    if (active.sessionKey !== params.sessionKey) {
       continue;
     }
     matchedSessionRuns += 1;
     if (canRequesterAbortChatRun(active, params.requester)) {
-      authorizedRuns.push({ runId, sessionKey: active.sessionKey });
+      authorizedRunIds.push(runId);
     }
   }
   return {
     matchedSessionRuns,
-    authorizedRuns,
+    authorizedRunIds,
   };
 }
 
-async function abortChatRunsForSessionKeyWithPartials(params: {
+function abortChatRunsForSessionKeyWithPartials(params: {
   context: GatewayRequestContext;
   ops: ChatAbortOps;
   sessionKey: string;
-  sessionKeyAliases?: string[];
-  sessionId?: string;
-  persistSessionKey?: string;
   abortOrigin: AbortOrigin;
   stopReason?: string;
   requester: ChatAbortRequester;
-}): Promise<{ aborted: boolean; runIds: string[]; unauthorized: boolean }> {
-  const sessionKeys = [params.sessionKey, ...(params.sessionKeyAliases ?? [])];
-  const { matchedSessionRuns, authorizedRuns } = resolveAuthorizedRunsForSessionKeys({
+}) {
+  const { matchedSessionRuns, authorizedRunIds } = resolveAuthorizedRunIdsForSession({
     chatAbortControllers: params.context.chatAbortControllers,
-    sessionKeys,
-    sessionIds: [params.sessionId],
+    sessionKey: params.sessionKey,
     requester: params.requester,
   });
-  const {
-    matchedSessionRuns: matchedPendingAgentRuns,
-    authorizedRuns: authorizedPendingAgentRuns,
-  } = resolveAuthorizedPreRegisteredAgentRunsForSessionKeys({
-    context: params.context,
-    sessionKeys,
-    requester: params.requester,
-  });
-  if (authorizedRuns.length === 0 && authorizedPendingAgentRuns.length === 0) {
+  if (authorizedRunIds.length === 0) {
     return {
       aborted: false,
       runIds: [],
-      unauthorized: matchedSessionRuns > 0 || matchedPendingAgentRuns > 0,
+      unauthorized: matchedSessionRuns > 0,
     };
   }
-  const authorizedRunIdSet = new Set(authorizedRuns.map((run) => run.runId));
+  const authorizedRunIdSet = new Set(authorizedRunIds);
   const snapshots = collectSessionAbortPartials({
     chatAbortControllers: params.context.chatAbortControllers,
     chatRunBuffers: params.context.chatRunBuffers,
@@ -1940,34 +1055,21 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     abortOrigin: params.abortOrigin,
   });
   const runIds: string[] = [];
-  for (const { runId, sessionKey } of authorizedRuns) {
+  for (const runId of authorizedRunIds) {
     const res = abortChatRunById(params.ops, {
       runId,
-      sessionKey,
+      sessionKey: params.sessionKey,
       stopReason: params.stopReason,
     });
     if (res.aborted) {
       runIds.push(runId);
     }
   }
-  const endedAt = Date.now();
-  const stopReason = params.stopReason ?? "rpc";
-  for (const { runId, sessionKey, payload } of authorizedPendingAgentRuns) {
-    writePreRegisteredAgentAbort({
-      context: params.context,
-      runId,
-      sessionKey,
-      payload,
-      stopReason,
-      endedAt,
-    });
-    runIds.push(runId);
-  }
   const res = { aborted: runIds.length > 0, runIds, unauthorized: false };
   if (res.aborted) {
-    await persistAbortedPartials({
+    persistAbortedPartials({
       context: params.context,
-      sessionKey: params.persistSessionKey ?? params.sessionKey,
+      sessionKey: params.sessionKey,
       snapshots,
     });
   }
@@ -1987,12 +1089,15 @@ function broadcastChatFinal(params: {
   message?: Record<string, unknown>;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
+  const strippedEnvelopeMessage = stripEnvelopeFromMessage(params.message) as
+    | Record<string, unknown>
+    | undefined;
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
     seq,
     state: "final" as const,
-    message: projectChatDisplayMessage(params.message),
+    message: stripInlineDirectiveTagsFromMessageForDisplay(strippedEnvelopeMessage),
   };
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
@@ -2045,10 +1150,6 @@ function broadcastChatError(params: {
   params.context.agentRunSeq.delete(params.runId);
 }
 
-function isSourceReplyTranscriptMirrorPayload(payload: ReplyPayload | undefined) {
-  return Boolean(payload && getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror);
-}
-
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {
@@ -2062,69 +1163,51 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit, maxChars } = params as {
+    const { sessionKey, limit } = params as {
       sessionKey: string;
       limit?: number;
-      maxChars?: number;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
-    const hardMax = 1000;
-    const defaultLimit = 200;
-    const requested = typeof limit === "number" ? limit : defaultLimit;
-    const max = Math.min(hardMax, requested);
-    const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages =
-      sessionId && storePath
-        ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-            maxMessages: max,
-            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-          })
-        : [];
+      sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,
       localMessages,
     });
-    const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-    const normalized = augmentChatHistoryWithCanvasBlocks(
-      projectRecentChatDisplayMessages(rawMessages, {
-        maxChars: effectiveMaxChars,
-        maxMessages: max,
-      }),
-    );
+    const hardMax = 1000;
+    const defaultLimit = 200;
+    const requested = typeof limit === "number" ? limit : defaultLimit;
+    const max = Math.min(hardMax, requested);
+    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const sanitized = stripEnvelopeFromMessages(sliced);
+    const normalized = sanitizeChatHistoryMessages(sanitized);
+    const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({
       messages: normalized,
       maxSingleMessageBytes: perMessageHardCap,
     });
-    scheduleChatHistoryManagedImageCleanup({ sessionKey, context });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
     if (placeholderCount > 0) {
       chatHistoryPlaceholderEmitCount += placeholderCount;
-      logLargePayload({
-        surface: "gateway.chat.history",
-        action: "truncated",
-        bytes: jsonUtf8Bytes(normalized),
-        limitBytes: maxHistoryBytes,
-        count: placeholderCount,
-        reason: "chat_history_budget",
-      });
       context.logGateway.debug(
         `chat.history omitted oversized payloads placeholders=${placeholderCount} total=${chatHistoryPlaceholderEmitCount}`,
       );
     }
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      thinkingLevel = resolveGatewaySessionThinkingDefault({
+      const catalog = await context.loadGatewayModelCatalog();
+      thinkingLevel = resolveThinkingDefault({
         cfg,
-        agentId: sessionAgentId,
         provider: resolvedSessionModel.provider,
         model: resolvedSessionModel.model,
+        catalog,
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
@@ -2137,7 +1220,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       verboseLevel,
     });
   },
-  "chat.abort": async ({ params, respond, context, client }) => {
+  "chat.abort": ({ params, respond, context, client }) => {
     if (!validateChatAbortParams(params)) {
       respond(
         false,
@@ -2158,7 +1241,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requester = resolveChatAbortRequester(client);
 
     if (!runId) {
-      const res = await abortChatRunsForSessionKeyWithPartials({
+      const res = abortChatRunsForSessionKeyWithPartials({
         context,
         ops,
         sessionKey: rawSessionKey,
@@ -2176,34 +1259,10 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     const active = context.chatAbortControllers.get(runId);
     if (!active) {
-      const pendingAgentEntry = context.dedupe.get(`agent:${runId}`);
-      const pendingAgentPayload = readPreRegisteredAgentDedupePayloadForSession({
-        entry: pendingAgentEntry,
-        runId,
-        sessionKey: rawSessionKey,
-      });
-      if (pendingAgentPayload) {
-        if (!canRequesterAbortPreRegisteredAgentRun(pendingAgentPayload, requester)) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
-          return;
-        }
-        writePreRegisteredAgentAbort({
-          context,
-          runId,
-          sessionKey: rawSessionKey,
-          payload: pendingAgentPayload,
-          stopReason: "rpc",
-        });
-        respond(true, { ok: true, aborted: true, runIds: [runId] });
-        return;
-      }
       respond(true, { ok: true, aborted: false, runIds: [] });
       return;
     }
-    if (
-      active.sessionKey !== rawSessionKey &&
-      !canRequesterAbortChatRunWithoutSessionMatch(active, requester)
-    ) {
+    if (active.sessionKey !== rawSessionKey) {
       respond(
         false,
         undefined,
@@ -2219,13 +1278,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const partialText = context.chatRunBuffers.get(runId);
     const res = abortChatRunById(ops, {
       runId,
-      sessionKey: active.sessionKey,
+      sessionKey: rawSessionKey,
       stopReason: "rpc",
     });
     if (res.aborted && partialText && partialText.trim()) {
-      await persistAbortedPartials({
+      persistAbortedPartials({
         context,
-        sessionKey: active.sessionKey,
+        sessionKey: rawSessionKey,
         snapshots: [
           {
             runId,
@@ -2256,10 +1315,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const p = params as {
       sessionKey: string;
-      sessionId?: string;
       message: string;
       thinking?: string;
-      fastMode?: boolean;
       deliver?: boolean;
       originatingChannel?: string;
       originatingTo?: string;
@@ -2330,51 +1387,23 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const rawSessionKey = p.sessionKey;
-    const {
-      cfg,
-      entry,
-      canonicalKey: sessionKey,
-    } = measureDiagnosticsTimelineSpanSync(
-      "gateway.chat_send.load_session",
-      () => loadSessionEntry(rawSessionKey),
-      {
-        phase: "agent-turn",
-        attributes: {
-          hasAttachments: normalizedAttachments.length > 0,
-          hasExplicitOrigin: explicitOriginResult.value !== undefined,
-        },
-      },
-    );
-    const requestedSessionId = normalizeOptionalText(p.sessionId);
-    const backingSessionId = entry?.sessionId ?? requestedSessionId;
-    const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey);
-    if (deletedAgentId !== null) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Agent "${deletedAgentId}" no longer exists in configuration`,
-        ),
-      );
-      return;
-    }
-    const agentId = resolveSessionAgentId({
-      sessionKey,
-      config: cfg,
-    });
-    const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
-    const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
-      config: cfg,
-    });
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
-    let imageOrder: PromptImageOrderEntry[] = [];
-    let offloadedRefs: OffloadedRef[] = [];
-    let mediaPathOffloadPaths: string[] = [];
-    let mediaPathOffloadTypes: string[] = [];
-    let mediaPathOffloadWorkspaceDir: string | undefined;
+    if (normalizedAttachments.length > 0) {
+      try {
+        const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
+          maxBytes: 5_000_000,
+          log: context.logGateway,
+        });
+        parsedMessage = parsed.message;
+        parsedImages = parsed.images;
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        return;
+      }
+    }
+    const rawSessionKey = p.sessionKey;
+    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -2399,13 +1428,10 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     if (stopCommand) {
-      const res = await abortChatRunsForSessionKeyWithPartials({
+      const res = abortChatRunsForSessionKeyWithPartials({
         context,
         ops: createChatAbortOps(context),
         sessionKey: rawSessionKey,
-        sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
-        sessionId: entry?.sessionId,
-        persistSessionKey: sessionKey,
         abortOrigin: "stop-command",
         stopReason: "stop",
         requester: resolveChatAbortRequester(client),
@@ -2434,145 +1460,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const clientInfo = client?.connect?.client;
-    const originatingRoute = resolveChatSendOriginatingRoute({
-      client: clientInfo,
-      deliver: p.deliver,
-      entry,
-      explicitOrigin: explicitOriginResult.value,
-      hasConnectedClient: client?.connect !== undefined,
-      mainKey: cfg.session?.mainKey,
-      sessionKey,
-    });
-    const activeChatSendDedupeKey = buildActiveChatSendDedupeKey({
-      attachmentCount: normalizedAttachments.length,
-      explicitDeliverRoute: originatingRoute.explicitDeliverRoute,
-      message: rawMessage,
-      originatingChannel: originatingRoute.originatingChannel,
-      sessionKey,
-    });
-    if (activeChatSendDedupeKey) {
-      const activeRunId = resolveActiveChatSendRunId(
-        context.dedupe.get(activeChatSendDedupeKey)?.payload,
-      );
-      if (activeRunId && context.chatAbortControllers.has(activeRunId)) {
-        respond(true, { runId: activeRunId, status: "in_flight" as const }, undefined, {
-          cached: true,
-          runId: activeRunId,
-        });
-        return;
-      }
-    }
-    const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
-      explicitOriginResult.value,
-    );
-    if (normalizedAttachments.length > 0) {
-      try {
-        await measureDiagnosticsTimelineSpan(
-          "gateway.chat_send.prepare_attachments",
-          async () => {
-            const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
-              loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-              provider: resolvedSessionModel.provider,
-              model: resolvedSessionModel.model,
-            });
-            const explicitOriginSupportsInlineImages =
-              explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
-              explicitOriginTargetsPlugin;
-            // Bound plugin sessions own the real recipient model, so keep image
-            // attachments even when the parent OpenClaw session model is text-only.
-            const supportsImages = supportsSessionModelImages || explicitOriginSupportsInlineImages;
-            const routeImageOffloadsAsMediaPaths = !supportsImages;
-            const parsed = await parseMessageWithAttachments(
-              inboundMessage,
-              normalizedAttachments,
-              {
-                maxBytes: resolveChatAttachmentMaxBytes(cfg),
-                log: context.logGateway,
-                supportsImages,
-                // chat.send routes selected offloadedRefs into ctx.MediaPaths below
-                // so the auto-reply stage pipeline can surface them to the agent.
-                acceptNonImage: true,
-              },
-            );
-            parsedMessage = stripTrailingOffloadedMediaMarkers(
-              parsed.message,
-              routeImageOffloadsAsMediaPaths
-                ? parsed.offloadedRefs.filter((ref) => ref.mimeType.startsWith("image/"))
-                : [],
-            );
-            parsedImages = parsed.images;
-            imageOrder = routeImageOffloadsAsMediaPaths ? [] : parsed.imageOrder;
-            offloadedRefs = parsed.offloadedRefs;
-            ({
-              paths: mediaPathOffloadPaths,
-              types: mediaPathOffloadTypes,
-              workspaceDir: mediaPathOffloadWorkspaceDir,
-            } = await prestageMediaPathOffloads({
-              offloadedRefs,
-              // Text-only image offloads need ctx.MediaPaths so media-understanding
-              // can describe them via agents.defaults.imageModel. Vision-capable
-              // image offloads stay as prompt refs for native image loading.
-              includeImageRefs: routeImageOffloadsAsMediaPaths,
-              cfg,
-              sessionKey,
-              agentId,
-            }));
-          },
-          {
-            phase: "agent-turn",
-            config: cfg,
-            attributes: {
-              attachmentCount: normalizedAttachments.length,
-              hasExplicitOrigin: explicitOriginResult.value !== undefined,
-            },
-          },
-        );
-      } catch (err) {
-        logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
-        respond(
-          false,
-          undefined,
-          errorShape(
-            err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            String(err),
-          ),
-        );
-        return;
-      }
-    }
 
     try {
-      const activeRunAbort = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
-        runId: clientRunId,
-        sessionId: backingSessionId ?? clientRunId,
+      const abortController = new AbortController();
+      context.chatAbortControllers.set(clientRunId, {
+        controller: abortController,
+        sessionId: entry?.sessionId ?? clientRunId,
         sessionKey: rawSessionKey,
-        timeoutMs,
-        now,
+        startedAtMs: now,
+        expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
         ownerConnId: normalizeOptionalText(client?.connId),
         ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
-        providerId: resolvedSessionModel.provider,
-        authProviderId: resolvedSessionAuthProvider,
-        kind: "chat-send",
-      });
-      if (!activeRunAbort.registered) {
-        respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-          cached: true,
-          runId: clientRunId,
-        });
-        return;
-      }
-      if (activeChatSendDedupeKey) {
-        context.dedupe.set(activeChatSendDedupeKey, {
-          ts: now,
-          ok: true,
-          payload: { runId: clientRunId },
-        });
-      }
-      context.addChatRun(clientRunId, {
-        sessionKey,
-        clientRunId,
       });
       const ackPayload = {
         runId: clientRunId,
@@ -2581,60 +1479,37 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(true, ackPayload, undefined, { runId: clientRunId });
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,
-        imageOrder,
-        offloadedRefs,
         client,
         logGateway: context.logGateway,
       });
-      let persistedMediaForTranscript: SavedMedia[] | undefined;
-      const getPersistedMediaForTranscript = async () => {
-        if (!persistedMediaForTranscript) {
-          persistedMediaForTranscript = await persistedImagesPromise;
-        }
-        return persistedMediaForTranscript;
-      };
-      const preparedUserTurnMediaPromise =
-        normalizedAttachments.length > 0 ? getPersistedMediaForTranscript() : Promise.resolve([]);
-      const userTurnMediaPromise = preparedUserTurnMediaPromise.then(buildChatSendUserTurnMedia);
-      const baseUserTurnInput: UserTurnInput = {
-        text: rawMessage,
-        timestamp: now,
-        idempotencyKey: `${clientRunId}:user`,
-        ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
-      };
-      const userTurnInputPromise: Promise<UserTurnInput> = userTurnMediaPromise.then((media) => ({
-        ...baseUserTurnInput,
-        ...(media.length > 0
-          ? {
-              media,
-              mediaOnlyText: "[User sent media without caption]",
-            }
-          : {}),
-      }));
-      const pluginBoundMediaFieldsPromise =
-        explicitOriginTargetsPlugin && parsedImages.length > 0
-          ? preparedUserTurnMediaPromise.then(resolveChatSendManagedMediaFields)
-          : Promise.resolve({});
 
       const trimmedMessage = parsedMessage.trim();
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
-      const commandSource = trimmedMessage.startsWith("/") ? "text" : undefined;
       const messageForAgent = systemProvenanceReceipt
         ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
         : parsedMessage;
+      const clientInfo = client?.connect?.client;
       const {
         originatingChannel,
         originatingTo,
         accountId,
         messageThreadId,
         explicitDeliverRoute,
-      } = originatingRoute;
+      } = resolveChatSendOriginatingRoute({
+        client: clientInfo,
+        deliver: p.deliver,
+        entry,
+        explicitOrigin: explicitOriginResult.value,
+        hasConnectedClient: client?.connect !== undefined,
+        mainKey: cfg.session?.mainKey,
+        sessionKey,
+      });
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
-      // See: https://github.com/moltbot/moltbot/issues/3658
+      // See: https://github.com/openclaw/openclaw/issues/3658
       const stampedMessage = injectTimestamp(messageForAgent, timestampOptsFromConfig(cfg));
 
       const ctx: MsgContext = {
@@ -2653,198 +1528,84 @@ export const chatHandlers: GatewayRequestHandlers = {
         AccountId: accountId,
         MessageThreadId: messageThreadId,
         ChatType: "direct",
-        ...(commandSource ? { CommandSource: commandSource } : {}),
         CommandAuthorized: true,
-        CommandTurn: commandSource
-          ? {
-              kind: "text-slash",
-              source: commandSource,
-              authorized: true,
-              body: commandBody,
-            }
-          : {
-              kind: "normal",
-              source: "message",
-              authorized: false,
-              body: commandBody,
-            },
         MessageSid: clientRunId,
-        ...(!isOperatorUiClient(clientInfo)
-          ? {
-              SenderId: clientInfo?.id,
-              SenderName: clientInfo?.displayName,
-              SenderUsername: clientInfo?.displayName,
-            }
-          : {}),
-        GatewayClientScopes: client?.connect?.scopes ?? [],
+        SenderId: clientInfo?.id,
+        SenderName: clientInfo?.displayName,
+        SenderUsername: clientInfo?.displayName,
+        GatewayClientScopes: client?.connect?.scopes,
       };
-      if (mediaPathOffloadPaths.length > 0) {
-        // Inject offloads via the same MsgContext fields the channel
-        // path uses so buildInboundMediaNote renders a real `[media attached:
-        // <workspace-relative-path>]` line into the agent prompt. Marker
-        // blocks the dispatch pipeline from re-running stageSandboxMedia; see
-        // prestageMediaPathOffloads.
-        ctx.MediaPath = mediaPathOffloadPaths[0];
-        ctx.MediaPaths = mediaPathOffloadPaths;
-        ctx.MediaType = mediaPathOffloadTypes[0];
-        ctx.MediaTypes = mediaPathOffloadTypes;
-        ctx.MediaWorkspaceDir = mediaPathOffloadWorkspaceDir;
-        ctx.MediaStaged = true;
-      }
-      const mediaPathOffloadsIncludeImages = mediaPathOffloadTypes.some((type) =>
-        type.startsWith("image/"),
-      );
-      const replyOptionImages = mediaPathOffloadsIncludeImages
-        ? undefined
-        : parsedImages.length > 0
-          ? parsedImages
-          : undefined;
 
-      const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
+      const agentId = resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+      });
+      const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
         cfg,
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
-      const chatSendTraceAttributes = {
-        hasAttachments: normalizedAttachments.length > 0,
-        hasExplicitOrigin: explicitOriginResult.value !== undefined,
-        hasConnectedClient: client?.connect !== undefined,
-      };
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
-      let appendedWebchatAgentMedia = false;
-      let agentRunStarted = false;
-      const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
-        input: baseUserTurnInput,
-        resolveInput: () => userTurnInputPromise,
-        target: () => {
+      let userTranscriptUpdatePromise: Promise<void> | null = null;
+      const emitUserTranscriptUpdate = async () => {
+        if (userTranscriptUpdatePromise) {
+          await userTranscriptUpdatePromise;
+          return;
+        }
+        userTranscriptUpdatePromise = (async () => {
           const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-          const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
+          const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
           if (!resolvedSessionId) {
-            return undefined;
+            return;
           }
-          return {
+          const transcriptPath = resolveTranscriptPath({
             sessionId: resolvedSessionId,
-            sessionKey,
-            sessionEntry: latestEntry ?? entry,
             storePath: latestStorePath,
+            sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
             agentId,
-            config: cfg,
-          };
-        },
-        errorContext: "gateway chat user turn transcript",
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-        onPersistenceError: (error) => {
-          context.logGateway.warn(
-            `gateway user transcript persistence failed: ${formatForLog(error)}`,
-          );
-        },
-      });
-      const persistGatewayUserTurnTranscript = async () => {
-        await measureDiagnosticsTimelineSpan(
-          "gateway.chat_send.persist_user_transcript",
-          async () => {
-            await userTurnRecorder.persistFallback();
-          },
-          {
-            phase: "agent-turn",
-            config: cfg,
-            attributes: chatSendTraceAttributes,
-          },
-        );
+          });
+          if (!transcriptPath) {
+            return;
+          }
+          const persistedImages = await persistedImagesPromise;
+          emitSessionTranscriptUpdate({
+            sessionFile: transcriptPath,
+            sessionKey,
+            message: buildChatSendTranscriptMessage({
+              message: parsedMessage,
+              savedImages: persistedImages,
+              timestamp: now,
+            }),
+          });
+        })();
+        await userTranscriptUpdatePromise;
       };
-      const persistGatewayUserTurnTranscriptBestEffort = async () => {
-        await persistGatewayUserTurnTranscript().catch(() => undefined);
-      };
-      const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
-        if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
-          return;
-        }
-        if (isSourceReplyTranscriptMirrorPayload(payload)) {
-          return;
-        }
-        const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
-        const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
-          cfg,
-          sessionKey,
-          agentId,
-          accountId,
-          payloads: [stripVisibleTextFromTtsSupplement(payload)],
-        });
-        if (!transcriptPayload) {
+      let transcriptMediaRewriteDone = false;
+      const rewriteUserTranscriptMedia = async () => {
+        if (transcriptMediaRewriteDone) {
           return;
         }
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-        const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-        const resolvedTranscriptPath = resolveTranscriptPath({
-          sessionId,
+        const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
+        if (!resolvedSessionId) {
+          return;
+        }
+        const transcriptPath = resolveTranscriptPath({
+          sessionId: resolvedSessionId,
           storePath: latestStorePath,
           sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
           agentId,
         });
-        const mediaLocalRoots = appendLocalMediaParentRoots(
-          getAgentScopedMediaLocalRoots(cfg, agentId),
-          resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
-        );
-        const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
+        if (!transcriptPath) {
+          return;
+        }
+        transcriptMediaRewriteDone = true;
+        await rewriteChatSendUserTurnMediaPaths({
+          transcriptPath,
           sessionKey,
-          payloads: [transcriptPayload],
-          managedImageLocalRoots: mediaLocalRoots,
-          includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
-          onLocalAudioAccessDenied: (message) => {
-            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-          },
-          onManagedImagePrepareError: (message) => {
-            context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
-          },
+          message: parsedMessage,
+          savedImages: await persistedImagesPromise,
         });
-        const mediaMessage = await buildWebchatAssistantMediaMessage([transcriptPayload], {
-          localRoots: mediaLocalRoots,
-          onLocalAudioAccessDenied: (message) => {
-            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-          },
-        });
-        const persistedAssistantContent = replaceAssistantContentTextBlocks(
-          assistantContent,
-          mediaMessage,
-        );
-        const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
-          ? persistedAssistantContent
-          : undefined;
-        if (!persistedContentForAppend?.length) {
-          return;
-        }
-        const transcriptReply =
-          mediaMessage?.transcriptText ??
-          extractAssistantDisplayTextFromContent(assistantContent) ??
-          buildTranscriptReplyText([transcriptPayload]);
-        if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
-          return;
-        }
-        const appended = await appendAssistantTranscriptMessage({
-          message: transcriptReply,
-          ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
-          sessionId,
-          storePath: latestStorePath,
-          sessionFile: latestEntry?.sessionFile,
-          agentId,
-          createIfMissing: true,
-          idempotencyKey: `${clientRunId}:assistant-media`,
-          ttsSupplement: ttsSupplementMarker,
-          cfg,
-        });
-        if (appended.ok) {
-          if (appended.messageId && assistantContent?.length) {
-            await attachManagedOutgoingImagesToMessage({
-              messageId: appended.messageId,
-              blocks: assistantContent,
-            });
-          }
-          appendedWebchatAgentMedia = true;
-          return;
-        }
-        context.logGateway.warn(
-          `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
-        );
       };
       const dispatcher = createReplyDispatcher({
         ...replyPipeline,
@@ -2852,667 +1613,150 @@ export const chatHandlers: GatewayRequestHandlers = {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },
         deliver: async (payload, info) => {
-          if (getReplyPayloadMetadata(payload)?.beforeAgentRunBlocked === true) {
-            userTurnRecorder.markBlocked();
+          if (info.kind !== "block" && info.kind !== "final") {
+            return;
           }
-          switch (info.kind) {
-            case "block":
-            case "final":
-              deliveredReplies.push({ payload, kind: info.kind });
-              await appendWebchatAgentMediaTranscriptIfNeeded(payload);
-              break;
-            case "tool":
-              // Tool results that carry audio (e.g. the TTS tool) must be promoted
-              // to "final" so the downstream audio extraction path can pick them up.
-              // Strip text to avoid leaking tool summary into the combined reply.
-              if (isMediaBearingPayload(payload)) {
-                deliveredReplies.push({
-                  payload: { ...payload, text: undefined },
-                  kind: "final",
-                });
-              }
-              break;
-          }
+          deliveredReplies.push({ payload, kind: info.kind });
         },
       });
 
-      void measureDiagnosticsTimelineSpan(
-        "gateway.chat_send.dispatch_inbound",
-        async () => {
-          applyChatSendManagedMediaFields(ctx, await pluginBoundMediaFieldsPromise);
-          const dispatchResult = await dispatchInboundMessage({
-            ctx,
-            cfg,
-            dispatcher,
-            replyOptions: {
-              runId: clientRunId,
-              abortSignal: activeRunAbort.controller.signal,
-              images: replyOptionImages,
-              imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
-              thinkingLevelOverride: p.thinking,
-              fastModeOverride: p.fastMode,
-              userTurnTranscriptRecorder: userTurnRecorder,
-              onAgentRunStart: (runId) => {
-                agentRunStarted = true;
-                const connId = typeof client?.connId === "string" ? client.connId : undefined;
-                const wantsToolEvents = hasGatewayClientCap(
-                  client?.connect?.caps,
-                  GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
-                );
-                if (connId && wantsToolEvents) {
-                  context.registerToolEventRecipient(runId, connId);
-                  // Register for any other active runs *in the same session* so
-                  // late-joining clients (e.g. page refresh mid-response) receive
-                  // in-progress tool events without leaking cross-session data.
-                  for (const [activeRunId, active] of context.chatAbortControllers) {
-                    if (activeRunId !== runId && active.sessionKey === p.sessionKey) {
-                      context.registerToolEventRecipient(activeRunId, connId);
-                    }
-                  }
+      // Surface accepted inbound turns immediately so transcript subscribers
+      // (gateway watchers, MCP bridges, external channel backends) do not wait
+      // on model startup, completion, or failure paths before seeing the user turn.
+      void emitUserTranscriptUpdate().catch((transcriptErr) => {
+        context.logGateway.warn(
+          `webchat eager user transcript update failed: ${formatForLog(transcriptErr)}`,
+        );
+      });
+
+      let agentRunStarted = false;
+      void dispatchInboundMessage({
+        ctx,
+        cfg,
+        dispatcher,
+        replyOptions: {
+          runId: clientRunId,
+          abortSignal: abortController.signal,
+          images: parsedImages.length > 0 ? parsedImages : undefined,
+          onAgentRunStart: (runId) => {
+            agentRunStarted = true;
+            void emitUserTranscriptUpdate();
+            const connId = typeof client?.connId === "string" ? client.connId : undefined;
+            const wantsToolEvents = hasGatewayClientCap(
+              client?.connect?.caps,
+              GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+            );
+            if (connId && wantsToolEvents) {
+              context.registerToolEventRecipient(runId, connId);
+              // Register for any other active runs *in the same session* so
+              // late-joining clients (e.g. page refresh mid-response) receive
+              // in-progress tool events without leaking cross-session data.
+              for (const [activeRunId, active] of context.chatAbortControllers) {
+                if (activeRunId !== runId && active.sessionKey === p.sessionKey) {
+                  context.registerToolEventRecipient(activeRunId, connId);
                 }
-              },
-              onModelSelected: (modelSelection) => {
-                updateChatRunProvider(context.chatAbortControllers, {
-                  runId: clientRunId,
-                  providerId: modelSelection.provider,
-                  authProviderId: resolveProviderIdForAuth(modelSelection.provider, {
-                    config: cfg,
-                  }),
-                });
-                onModelSelected(modelSelection);
-              },
-            },
-          });
-          if (dispatchResult.beforeAgentRunBlocked === true) {
-            userTurnRecorder.markBlocked();
-          }
-          return dispatchResult;
+              }
+            }
+          },
+          onModelSelected,
         },
-        {
-          phase: "agent-turn",
-          config: cfg,
-          attributes: chatSendTraceAttributes,
-        },
-      )
+      })
         .then(async () => {
-          await measureDiagnosticsTimelineSpan(
-            "gateway.chat_send.post_dispatch",
-            async () => {
-              const returnedAgentErrorPayloads = agentRunStarted
-                ? deliveredReplies
-                    .map((entry) => entry.payload)
-                    .filter((payload) => payload.isError)
-                : [];
-              const returnedAgentErrorMessage =
-                returnedAgentErrorPayloads
-                  .map((payload) => payload.text?.trim())
-                  .filter((text): text is string => Boolean(text))
-                  .join(" | ") || undefined;
-              if (
-                agentRunStarted &&
-                returnedAgentErrorPayloads.length > 0 &&
-                !userTurnRecorder.hasPersisted() &&
-                !userTurnRecorder.isBlocked()
-              ) {
-                await persistGatewayUserTurnTranscriptBestEffort();
-              }
-              if (
-                agentRunStarted &&
-                returnedAgentErrorPayloads.length === 0 &&
-                !userTurnRecorder.hasPersisted() &&
-                !userTurnRecorder.isBlocked() &&
-                userTurnRecorder.hasRuntimePersistencePending()
-              ) {
-                await persistGatewayUserTurnTranscriptBestEffort();
-              }
-              let broadcastedSourceReplyFinal = false;
-              // WebChat persistence has two owners. Agent runs persist model-visible turns
-              // through Pi's SessionManager; this dispatcher only owns live delivery payloads.
-              // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
-              // duplicate normal Pi assistant turns. The non-agent branch below has no Pi
-              // assistant turn, so it appends a gateway-injected assistant entry before
-              // broadcasting the final UI event.
-              if (!agentRunStarted) {
-                const btwReplies = deliveredReplies
-                  .map((entry) => entry.payload)
-                  .filter(isBtwReplyPayload);
-                const btwText = btwReplies
-                  .map((payload) => payload.text.trim())
-                  .filter(Boolean)
-                  .join("\n\n")
-                  .trim();
-                if (btwReplies.length > 0 && btwText) {
-                  broadcastSideResult({
-                    context,
-                    payload: {
-                      kind: "btw",
-                      runId: clientRunId,
-                      sessionKey,
-                      question: btwReplies[0].btw.question.trim(),
-                      text: btwText,
-                      isError: btwReplies.some((payload) => payload.isError),
-                      ts: Date.now(),
-                    },
-                  });
-                  broadcastChatFinal({
-                    context,
-                    runId: clientRunId,
-                    sessionKey,
-                  });
-                } else {
-                  await persistGatewayUserTurnTranscriptBestEffort();
-                  const rawFinalPayloads = appendedWebchatAgentMedia
-                    ? []
-                    : deliveredReplies
-                        .filter((entry) => entry.kind === "final")
-                        .map((entry) => entry.payload);
-                  const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
-                    cfg,
-                    sessionKey,
-                    agentId,
-                    accountId,
-                    payloads: rawFinalPayloads,
-                  });
-                  const { storePath: latestStorePath, entry: latestEntry } =
-                    loadSessionEntry(sessionKey);
-                  const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-                  const resolvedTranscriptPath = resolveTranscriptPath({
-                    sessionId,
-                    storePath: latestStorePath,
-                    sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
-                    agentId,
-                  });
-                  const mediaLocalRoots = appendLocalMediaParentRoots(
-                    getAgentScopedMediaLocalRoots(cfg, agentId),
-                    resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
-                  );
-                  const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
-                    sessionKey,
-                    payloads: finalPayloads,
-                    managedImageLocalRoots: mediaLocalRoots,
-                    includeSensitiveMedia: false,
-                    onLocalAudioAccessDenied: (message) => {
-                      context.logGateway.warn(
-                        `webchat audio embedding denied local path: ${message}`,
-                      );
-                    },
-                    onManagedImagePrepareError: (message) => {
-                      context.logGateway.warn(
-                        `webchat image embedding skipped attachment: ${message}`,
-                      );
-                    },
-                  });
-                  const mediaMessage = await buildWebchatAssistantMediaMessage(finalPayloads, {
-                    localRoots: mediaLocalRoots,
-                    onLocalAudioAccessDenied: (message) => {
-                      context.logGateway.warn(
-                        `webchat audio embedding denied local path: ${message}`,
-                      );
-                    },
-                  });
-                  const hasSensitiveMedia = hasSensitiveMediaPayload(finalPayloads);
-                  const ttsSupplementMarker = finalPayloads
-                    .map((payload) => buildMediaOnlyTtsSupplementTranscriptMarker(payload))
-                    .find((marker): marker is GatewayInjectedTtsSupplementMarker =>
-                      Boolean(marker),
-                    );
-                  const persistedAssistantContent = replaceAssistantContentTextBlocks(
-                    hasSensitiveMedia
-                      ? await buildAssistantDisplayContentFromReplyPayloads({
-                          sessionKey,
-                          payloads: finalPayloads,
-                          managedImageLocalRoots: mediaLocalRoots,
-                          includeSensitiveMedia: false,
-                          onLocalAudioAccessDenied: (message) => {
-                            context.logGateway.warn(
-                              `webchat audio embedding denied local path: ${message}`,
-                            );
-                          },
-                          onManagedImagePrepareError: (message) => {
-                            context.logGateway.warn(
-                              `webchat image embedding skipped attachment: ${message}`,
-                            );
-                          },
-                        })
-                      : assistantContent,
-                    mediaMessage,
-                  );
-                  const persistedContentForAppend = hasAssistantDisplayMediaContent(
-                    persistedAssistantContent,
-                  )
-                    ? persistedAssistantContent
-                    : undefined;
-                  const broadcastAssistantContent = hasAssistantDisplayMediaContent(
-                    assistantContent,
-                  )
-                    ? assistantContent
-                    : hasAssistantDisplayMediaContent(mediaMessage?.content)
-                      ? mediaMessage?.content
-                      : assistantContent;
-                  const displayReply =
-                    extractAssistantDisplayTextFromContent(assistantContent) ??
-                    buildTranscriptReplyText(finalPayloads);
-                  const transcriptReply =
-                    mediaMessage?.transcriptText ||
-                    buildTranscriptReplyText(finalPayloads) ||
-                    displayReply;
-                  let message: Record<string, unknown> | undefined;
-                  if (
-                    transcriptReply ||
-                    persistedContentForAppend?.length ||
-                    assistantContent?.length
-                  ) {
-                    const appended = await appendAssistantTranscriptMessage({
-                      message: transcriptReply,
-                      ...(persistedContentForAppend?.length
-                        ? { content: persistedContentForAppend }
-                        : {}),
-                      sessionId,
-                      storePath: latestStorePath,
-                      sessionFile: latestEntry?.sessionFile,
-                      agentId,
-                      createIfMissing: true,
-                      idempotencyKey: clientRunId,
-                      ttsSupplement: ttsSupplementMarker,
-                      cfg,
-                    });
-                    if (appended.ok) {
-                      if (appended.messageId && assistantContent?.length) {
-                        await attachManagedOutgoingImagesToMessage({
-                          messageId: appended.messageId,
-                          blocks: assistantContent,
-                        });
-                      }
-                      message = broadcastAssistantContent?.length
-                        ? { ...appended.message, content: broadcastAssistantContent }
-                        : appended.message;
-                    } else {
-                      context.logGateway.warn(
-                        `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
-                      );
-                      const fallbackAssistantContent =
-                        stripManagedOutgoingAssistantContentBlocks(persistedAssistantContent) ??
-                        stripManagedOutgoingAssistantContentBlocks(assistantContent);
-                      const fallbackText =
-                        extractAssistantDisplayText(fallbackAssistantContent) ?? displayReply;
-                      const now = Date.now();
-                      message = {
-                        role: "assistant",
-                        ...(fallbackAssistantContent?.length
-                          ? { content: fallbackAssistantContent }
-                          : fallbackText
-                            ? { content: [{ type: "text", text: fallbackText }] }
-                            : {}),
-                        ...(fallbackText ? { text: fallbackText } : {}),
-                        timestamp: now,
-                        ...(ttsSupplementMarker
-                          ? { openclawTtsSupplement: ttsSupplementMarker }
-                          : {}),
-                        // Keep this compatible with Pi stopReason enums even though this message isn't
-                        // persisted to the transcript due to the append failure.
-                        stopReason: "stop",
-                        usage: { input: 0, output: 0, totalTokens: 0 },
-                      };
-                    }
-                  }
-                  broadcastChatFinal({
-                    context,
-                    runId: clientRunId,
-                    sessionKey,
-                    message,
-                  });
-                }
-              } else {
-                const sourceReplyPayloads = deliveredReplies
-                  .filter((entry) => entry.kind === "final")
-                  .map((entry) => entry.payload)
-                  .filter(isSourceReplyTranscriptMirrorPayload);
-                if (sourceReplyPayloads.length > 0) {
-                  const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
-                    cfg,
-                    sessionKey,
-                    agentId,
-                    accountId,
-                    payloads: sourceReplyPayloads,
-                  });
-                  const { storePath: latestStorePath, entry: latestEntry } =
-                    loadSessionEntry(sessionKey);
-                  const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-                  const resolvedTranscriptPath = resolveTranscriptPath({
-                    sessionId,
-                    storePath: latestStorePath,
-                    sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
-                    agentId,
-                  });
-                  const mediaLocalRoots = appendLocalMediaParentRoots(
-                    getAgentScopedMediaLocalRoots(cfg, agentId),
-                    resolvedTranscriptPath ? [resolvedTranscriptPath] : undefined,
-                  );
-                  const buildReplyAssistantContent = async (
-                    payloads: typeof finalPayloads,
-                  ): Promise<AssistantDisplayContentBlock[] | undefined> =>
-                    await buildAssistantDisplayContentFromReplyPayloads({
-                      sessionKey,
-                      payloads,
-                      managedImageLocalRoots: mediaLocalRoots,
-                      includeSensitiveMedia: false,
-                      onLocalAudioAccessDenied: (message) => {
-                        context.logGateway.warn(
-                          `webchat audio embedding denied local path: ${message}`,
-                        );
-                      },
-                      onManagedImagePrepareError: (message) => {
-                        context.logGateway.warn(
-                          `webchat image embedding skipped attachment: ${message}`,
-                        );
-                      },
-                    });
-                  const buildReplyMediaMessage = async (payloads: typeof finalPayloads) =>
-                    await buildWebchatAssistantMediaMessage(payloads, {
-                      localRoots: mediaLocalRoots,
-                      onLocalAudioAccessDenied: (message) => {
-                        context.logGateway.warn(
-                          `webchat audio embedding denied local path: ${message}`,
-                        );
-                      },
-                    });
-                  const combinedAssistantContent =
-                    sourceReplyPayloads.length === 1
-                      ? await buildReplyAssistantContent(finalPayloads)
-                      : undefined;
-                  const combinedMediaMessage =
-                    sourceReplyPayloads.length === 1
-                      ? await buildReplyMediaMessage(finalPayloads)
-                      : undefined;
-                  type SourceReplyContentState = {
-                    broadcastContent: AssistantDisplayContentBlock[];
-                    persistedContent: AssistantDisplayContentBlock[];
-                    hasManagedOutgoingContent: boolean;
-                    backedManagedOutgoingContent: boolean;
-                  };
-                  const sourceReplyContentStates: SourceReplyContentState[] = [];
-                  const sourceReplyBroadcastContent: AssistantDisplayContentBlock[] = [];
-                  for (const [replyIndex] of sourceReplyPayloads.entries()) {
-                    const finalPayload = finalPayloads[replyIndex];
-                    if (!finalPayload) {
-                      continue;
-                    }
-                    const replyAssistantContent =
-                      sourceReplyPayloads.length === 1
-                        ? combinedAssistantContent
-                        : await buildReplyAssistantContent([finalPayload]);
-                    const replyMediaMessage =
-                      sourceReplyPayloads.length === 1
-                        ? combinedMediaMessage
-                        : await buildReplyMediaMessage([finalPayload]);
-                    const replyBroadcastContent = hasAssistantDisplayMediaContent(
-                      replyAssistantContent,
-                    )
-                      ? replyAssistantContent
-                      : hasAssistantDisplayMediaContent(replyMediaMessage?.content)
-                        ? replyMediaMessage?.content
-                        : replyAssistantContent;
-                    const persistedContent = replaceAssistantContentTextBlocks(
-                      replyAssistantContent,
-                      replyMediaMessage ?? null,
-                    );
-                    const state: SourceReplyContentState = {
-                      broadcastContent: replyBroadcastContent ? [...replyBroadcastContent] : [],
-                      persistedContent: persistedContent ? [...persistedContent] : [],
-                      hasManagedOutgoingContent:
-                        hasManagedOutgoingAssistantContent(persistedContent),
-                      backedManagedOutgoingContent: false,
-                    };
-                    sourceReplyContentStates[replyIndex] = state;
-                    if (state.broadcastContent.length > 0) {
-                      sourceReplyBroadcastContent.push(...state.broadcastContent);
-                    }
-                  }
-
-                  const displayReply =
-                    extractAssistantDisplayTextFromContent(sourceReplyBroadcastContent) ??
-                    buildTranscriptReplyText(finalPayloads);
-                  if (sourceReplyBroadcastContent.length || displayReply) {
-                    const sourceReplyPersistenceRequests: Array<{
-                      idempotencyKey: string;
-                      metadata: NonNullable<
-                        ReturnType<typeof getReplyPayloadMetadata>
-                      >["sourceReplyTranscriptMirror"];
-                      state: SourceReplyContentState;
-                    }> = [];
-                    for (const [replyIndex, sourceReplyPayload] of sourceReplyPayloads.entries()) {
-                      const state = sourceReplyContentStates[replyIndex];
-                      if (!state || !hasAssistantDisplayMediaContent(state.persistedContent)) {
-                        continue;
-                      }
-                      const mirrorMetadata =
-                        getReplyPayloadMetadata(sourceReplyPayload)?.sourceReplyTranscriptMirror;
-                      const mirrorIdempotencyKey = mirrorMetadata?.idempotencyKey;
-                      if (
-                        typeof mirrorIdempotencyKey !== "string" ||
-                        mirrorIdempotencyKey.trim().length === 0
-                      ) {
-                        continue;
-                      }
-                      if (!state.hasManagedOutgoingContent) {
-                        state.backedManagedOutgoingContent = true;
-                      }
-                      sourceReplyPersistenceRequests.push({
-                        idempotencyKey: mirrorIdempotencyKey,
-                        metadata: mirrorMetadata,
-                        state,
-                      });
-                    }
-
-                    const attachSourceReplyManagedImages = async (params: {
-                      messageId?: string;
-                      request: (typeof sourceReplyPersistenceRequests)[number];
-                    }) => {
-                      if (!params.request.state.hasManagedOutgoingContent) {
-                        params.request.state.backedManagedOutgoingContent = true;
-                        return;
-                      }
-                      if (!params.messageId) {
-                        return;
-                      }
-                      await attachManagedOutgoingImagesToMessage({
-                        messageId: params.messageId,
-                        blocks: params.request.state.persistedContent,
-                      });
-                      params.request.state.backedManagedOutgoingContent = true;
-                    };
-
-                    if (resolvedTranscriptPath && sourceReplyPersistenceRequests.length > 0) {
-                      const allowedSourceReplyMirrorIds = new Set<string>();
-                      for (const [
-                        replyIndex,
-                        sourceReplyPayload,
-                      ] of sourceReplyPayloads.entries()) {
-                        if (!sourceReplyContentStates[replyIndex]) {
-                          continue;
-                        }
-                        const mirrorIdempotencyKey =
-                          getReplyPayloadMetadata(sourceReplyPayload)?.sourceReplyTranscriptMirror
-                            ?.idempotencyKey;
-                        const mirrorMetadata =
-                          getReplyPayloadMetadata(sourceReplyPayload)?.sourceReplyTranscriptMirror;
-                        if (
-                          typeof mirrorIdempotencyKey !== "string" ||
-                          mirrorIdempotencyKey.trim().length === 0 ||
-                          !mirrorMetadata
-                        ) {
-                          continue;
-                        }
-                        const target = await findSourceReplyTranscriptMirrorByMetadata({
-                          transcriptPath: resolvedTranscriptPath,
-                          idempotencyKey: mirrorIdempotencyKey,
-                          metadata: mirrorMetadata,
-                        });
-                        if (target) {
-                          allowedSourceReplyMirrorIds.add(target.messageId);
-                        }
-                      }
-                      const rewriteTargets: Array<{
-                        request: (typeof sourceReplyPersistenceRequests)[number];
-                        messageId: string;
-                        message: Record<string, unknown>;
-                      }> = [];
-                      for (const request of sourceReplyPersistenceRequests) {
-                        const target = await findSourceReplyTranscriptMirrorByMetadata({
-                          transcriptPath: resolvedTranscriptPath,
-                          idempotencyKey: request.idempotencyKey,
-                          metadata: request.metadata,
-                        });
-                        if (target) {
-                          rewriteTargets.push({ request, ...target });
-                        }
-                      }
-
-                      if (rewriteTargets.length > 0) {
-                        const rewriteTargetIds = new Set(
-                          rewriteTargets.map((target) => target.messageId),
-                        );
-                        const rewriteIndex =
-                          await readSessionTranscriptIndex(resolvedTranscriptPath);
-                        const firstRewriteEntryIndex =
-                          rewriteIndex?.entries.findIndex(
-                            (entry) =>
-                              typeof entry.id === "string" && rewriteTargetIds.has(entry.id),
-                          ) ?? -1;
-                        const canRewriteSourceReplyMirrors =
-                          firstRewriteEntryIndex >= 0 &&
-                          rewriteIndex?.entries
-                            .slice(firstRewriteEntryIndex)
-                            .every(
-                              (entry) =>
-                                typeof entry.id !== "string" ||
-                                allowedSourceReplyMirrorIds.has(entry.id),
-                            ) === true;
-                        if (canRewriteSourceReplyMirrors) {
-                          const result = await rewriteTranscriptEntriesInSessionFile({
-                            sessionFile: resolvedTranscriptPath,
-                            sessionKey,
-                            config: cfg,
-                            request: {
-                              allowedRewriteSuffixEntryIds: [...allowedSourceReplyMirrorIds],
-                              replacements: rewriteTargets.map((target) => ({
-                                entryId: target.messageId,
-                                message: {
-                                  ...(target.message as unknown as AgentMessage),
-                                  idempotencyKey: target.request.idempotencyKey,
-                                  content: target.request.state.persistedContent,
-                                } as unknown as AgentMessage,
-                              })),
-                            },
-                          });
-                          if (result.changed) {
-                            for (const target of rewriteTargets) {
-                              const rewritten =
-                                await findSourceReplyTranscriptMirrorByIdempotencyKey(
-                                  resolvedTranscriptPath,
-                                  target.request.idempotencyKey,
-                                );
-                              await attachSourceReplyManagedImages({
-                                messageId: rewritten?.messageId,
-                                request: target.request,
-                              });
-                            }
-                          }
-                        }
-                      }
-                    }
-                    const sourceReplyContent = sourceReplyContentStates
-                      .flatMap((state) => {
-                        if (
-                          state.hasManagedOutgoingContent &&
-                          !state.backedManagedOutgoingContent
-                        ) {
-                          const stripped = stripManagedOutgoingAssistantContentBlocks(
-                            state.broadcastContent,
-                          );
-                          return stripped?.length
-                            ? stripped
-                            : [{ type: "text", text: "Media reply could not be displayed." }];
-                        }
-                        return state.broadcastContent;
-                      })
-                      .filter((block): block is AssistantDisplayContentBlock => Boolean(block));
-                    const sourceReplyTextFromContent =
-                      extractAssistantDisplayTextFromContent(sourceReplyContent);
-                    const sourceReplyText =
-                      sourceReplyTextFromContent ??
-                      (sourceReplyContent.length === 0 ? displayReply : undefined);
-                    const now = Date.now();
-                    const message = {
-                      role: "assistant",
-                      ...(sourceReplyContent?.length
-                        ? { content: sourceReplyContent }
-                        : sourceReplyText
-                          ? { content: [{ type: "text", text: sourceReplyText }] }
-                          : {}),
-                      ...(sourceReplyText ? { text: sourceReplyText } : {}),
-                      timestamp: now,
-                      stopReason: "stop",
-                      usage: { input: 0, output: 0, totalTokens: 0 },
-                    };
-                    broadcastChatFinal({
-                      context,
-                      runId: clientRunId,
-                      sessionKey,
-                      message,
-                    });
-                    broadcastedSourceReplyFinal = true;
-                  }
-                }
-              }
-              const shouldBroadcastAgentError =
-                returnedAgentErrorPayloads.length > 0 && !broadcastedSourceReplyFinal;
-              if (shouldBroadcastAgentError) {
-                broadcastChatError({
-                  context,
+          await rewriteUserTranscriptMedia();
+          if (!agentRunStarted) {
+            await emitUserTranscriptUpdate();
+            const btwReplies = deliveredReplies
+              .map((entry) => entry.payload)
+              .filter(isBtwReplyPayload);
+            const btwText = btwReplies
+              .map((payload) => payload.text.trim())
+              .filter(Boolean)
+              .join("\n\n")
+              .trim();
+            if (btwReplies.length > 0 && btwText) {
+              broadcastSideResult({
+                context,
+                payload: {
+                  kind: "btw",
                   runId: clientRunId,
                   sessionKey,
-                  errorMessage: returnedAgentErrorMessage,
+                  question: btwReplies[0].btw.question.trim(),
+                  text: btwText,
+                  isError: btwReplies.some((payload) => payload.isError),
+                  ts: Date.now(),
+                },
+              });
+              broadcastChatFinal({
+                context,
+                runId: clientRunId,
+                sessionKey,
+              });
+            } else {
+              const combinedReply = deliveredReplies
+                .filter((entry) => entry.kind === "final")
+                .map((entry) => entry.payload)
+                .map((part) => part.text?.trim() ?? "")
+                .filter(Boolean)
+                .join("\n\n")
+                .trim();
+              let message: Record<string, unknown> | undefined;
+              if (combinedReply) {
+                const { storePath: latestStorePath, entry: latestEntry } =
+                  loadSessionEntry(sessionKey);
+                const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+                const appended = appendAssistantTranscriptMessage({
+                  message: combinedReply,
+                  sessionId,
+                  storePath: latestStorePath,
+                  sessionFile: latestEntry?.sessionFile,
+                  agentId,
+                  createIfMissing: true,
                 });
+                if (appended.ok) {
+                  message = appended.message;
+                } else {
+                  context.logGateway.warn(
+                    `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
+                  );
+                  const now = Date.now();
+                  message = {
+                    role: "assistant",
+                    content: [{ type: "text", text: combinedReply }],
+                    timestamp: now,
+                    // Keep this compatible with Pi stopReason enums even though this message isn't
+                    // persisted to the transcript due to the append failure.
+                    stopReason: "stop",
+                    usage: { input: 0, output: 0, totalTokens: 0 },
+                  };
+                }
               }
-              if (!context.chatAbortedRuns.has(clientRunId)) {
-                const returnedAgentError = shouldBroadcastAgentError
-                  ? errorShape(
-                      ErrorCodes.UNAVAILABLE,
-                      returnedAgentErrorMessage ?? "agent returned an error payload",
-                    )
-                  : undefined;
-                setGatewayDedupeEntry({
-                  dedupe: context.dedupe,
-                  key: `chat:${clientRunId}`,
-                  entry: {
-                    ts: Date.now(),
-                    ok: !shouldBroadcastAgentError,
-                    payload: shouldBroadcastAgentError
-                      ? {
-                          runId: clientRunId,
-                          status: "error" as const,
-                          summary: returnedAgentErrorMessage ?? "agent returned an error payload",
-                        }
-                      : { runId: clientRunId, status: "ok" as const },
-                    ...(returnedAgentError ? { error: returnedAgentError } : {}),
-                  },
-                });
-              }
+              broadcastChatFinal({
+                context,
+                runId: clientRunId,
+                sessionKey,
+                message,
+              });
+            }
+          } else {
+            void emitUserTranscriptUpdate();
+          }
+          setGatewayDedupeEntry({
+            dedupe: context.dedupe,
+            key: `chat:${clientRunId}`,
+            entry: {
+              ts: Date.now(),
+              ok: true,
+              payload: { runId: clientRunId, status: "ok" as const },
             },
-            {
-              phase: "agent-turn",
-              config: cfg,
-              attributes: chatSendTraceAttributes,
-            },
-          );
+          });
         })
-        .catch(async (err) => {
-          const emitAfterError =
-            userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
-              ? Promise.resolve()
-              : persistGatewayUserTurnTranscript();
-          await emitAfterError.catch((transcriptErr) => {
+        .catch((err) => {
+          void rewriteUserTranscriptMedia().catch((rewriteErr) => {
+            context.logGateway.warn(
+              `webchat transcript media rewrite failed after error: ${formatForLog(rewriteErr)}`,
+            );
+          });
+          void emitUserTranscriptUpdate().catch((transcriptErr) => {
             context.logGateway.warn(
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
@@ -3540,12 +1784,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .finally(() => {
-          activeRunAbort.cleanup();
-          context.removeChatRun(clientRunId, clientRunId, sessionKey);
+          context.chatAbortControllers.delete(clientRunId);
         });
     } catch (err) {
-      context.chatAbortControllers.delete(clientRunId);
-      context.removeChatRun(clientRunId, clientRunId, sessionKey);
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: clientRunId,
@@ -3565,12 +1806,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(false, payload, error, {
         runId: clientRunId,
         error: formatForLog(err),
-      });
-      broadcastChatError({
-        context,
-        runId: clientRunId,
-        sessionKey,
-        errorMessage: String(err),
       });
     }
   },
@@ -3601,7 +1836,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const appended = await appendAssistantTranscriptMessage({
+    const appended = appendAssistantTranscriptMessage({
       message: p.message,
       label: p.label,
       sessionId,
@@ -3609,7 +1844,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionFile: entry?.sessionFile,
       agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
       createIfMissing: true,
-      cfg,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {
       respond(
@@ -3624,15 +1858,14 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     // Broadcast to webchat for immediate UI update
-    const message = projectChatDisplayMessage(appended.message, {
-      maxChars: resolveEffectiveChatHistoryMaxChars(cfg),
-    });
     const chatPayload = {
       runId: `inject-${appended.messageId}`,
       sessionKey,
       seq: 0,
       state: "final" as const,
-      message,
+      message: stripInlineDirectiveTagsFromMessageForDisplay(
+        stripEnvelopeFromMessage(appended.message) as Record<string, unknown>,
+      ),
     };
     context.broadcast("chat", chatPayload);
     context.nodeSendToSession(sessionKey, "chat", chatPayload);

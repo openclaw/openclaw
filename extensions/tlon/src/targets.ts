@@ -1,4 +1,4 @@
-type TlonTarget =
+export type TlonTarget =
   | { kind: "dm"; ship: string }
   | { kind: "group"; nest: string; hostShip: string; channelName: string };
 
@@ -23,15 +23,6 @@ export function parseChannelNest(raw: string): { hostShip: string; channelName: 
   return { hostShip, channelName };
 }
 
-function makeGroupTarget(parsed: { hostShip: string; channelName: string }): TlonTarget {
-  return {
-    kind: "group",
-    nest: `chat/${parsed.hostShip}/${parsed.channelName}`,
-    hostShip: parsed.hostShip,
-    channelName: parsed.channelName,
-  };
-}
-
 export function parseTlonTarget(raw?: string | null): TlonTarget | null {
   const trimmed = raw?.trim();
   if (!trimmed) {
@@ -52,7 +43,12 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
       if (!parsed) {
         return null;
       }
-      return makeGroupTarget(parsed);
+      return {
+        kind: "group",
+        nest: `chat/${parsed.hostShip}/${parsed.channelName}`,
+        hostShip: parsed.hostShip,
+        channelName: parsed.channelName,
+      };
     }
     const parts = groupTarget.split("/");
     if (parts.length === 2) {
@@ -73,7 +69,12 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
     if (!parsed) {
       return null;
     }
-    return makeGroupTarget(parsed);
+    return {
+      kind: "group",
+      nest: `chat/${parsed.hostShip}/${parsed.channelName}`,
+      hostShip: parsed.hostShip,
+      channelName: parsed.channelName,
+    };
   }
 
   if (SHIP_RE.test(withoutPrefix)) {

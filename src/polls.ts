@@ -4,12 +4,12 @@ export type PollInput = {
   maxSelections?: number;
   /**
    * Poll duration in seconds.
-   * Channel-specific limits apply in each owning plugin.
+   * Channel-specific limits apply (e.g. Telegram open_period is 5-600s).
    */
   durationSeconds?: number;
   /**
    * Poll duration in hours.
-   * Used by channels that model duration in hours.
+   * Used by channels that model duration in hours (e.g. Discord).
    */
   durationHours?: number;
 };

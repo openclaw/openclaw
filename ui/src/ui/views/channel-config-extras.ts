@@ -1,5 +1,3 @@
-import { t } from "../../i18n/index.ts";
-
 export function resolveChannelConfigValue(
   configForm: Record<string, unknown> | null | undefined,
   channelId: string,
@@ -21,7 +19,7 @@ export function resolveChannelConfigValue(
 
 export function formatChannelExtraValue(raw: unknown): string {
   if (raw == null) {
-    return t("common.na");
+    return "n/a";
   }
   if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
     return String(raw);
@@ -29,7 +27,7 @@ export function formatChannelExtraValue(raw: unknown): string {
   try {
     return JSON.stringify(raw);
   } catch {
-    return t("common.na");
+    return "n/a";
   }
 }
 

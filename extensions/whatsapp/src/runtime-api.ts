@@ -1,47 +1,40 @@
-export { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
-export { buildChannelConfigSchema, WhatsAppConfigSchema } from "../config-api.js";
-export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 export {
-  formatWhatsAppConfigAllowFromEntries,
-  resolveWhatsAppConfigAllowFrom,
-  resolveWhatsAppConfigDefaultTo,
-} from "./config-accessors.js";
-export {
+  buildChannelConfigSchema,
   createActionGate,
+  DEFAULT_ACCOUNT_ID,
+  formatWhatsAppConfigAllowFromEntries,
+  getChatChannelMeta,
   jsonResult,
+  normalizeE164,
   readReactionParams,
   readStringParam,
-  ToolAuthorizationError,
-} from "openclaw/plugin-sdk/channel-actions";
-export { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-
-export { type ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
-export { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
-export {
+  resolveWhatsAppGroupIntroHint,
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-} from "./group-policy.js";
+  ToolAuthorizationError,
+  WhatsAppConfigSchema,
+  type ChannelPlugin,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/whatsapp-core";
+
 export {
-  resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppMentionStripRegexes,
-} from "./group-intro.js";
-export { createWhatsAppOutboundBase } from "./outbound-base.js";
-export {
-  isWhatsAppGroupJid,
-  isWhatsAppUserTarget,
+  createWhatsAppOutboundBase,
   looksLikeWhatsAppTargetId,
   normalizeWhatsAppAllowFromEntries,
   normalizeWhatsAppMessagingTarget,
+  resolveWhatsAppHeartbeatRecipients,
+  resolveWhatsAppMentionStripRegexes,
+  type ChannelMessageActionName,
+  type DmPolicy,
+  type GroupPolicy,
+  type WhatsAppAccountConfig,
+} from "openclaw/plugin-sdk/whatsapp-shared";
+export {
+  isWhatsAppGroupJid,
+  isWhatsAppUserTarget,
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";
 export { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
-export { resolveWhatsAppReactionLevel } from "./reaction-level.js";
-
-export type OpenClawConfig = RuntimeOpenClawConfig;
-export type { WhatsAppAccountConfig } from "./account-types.js";
-
 type MonitorWebChannel = typeof import("./channel.runtime.js").monitorWebChannel;
 
 let channelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;

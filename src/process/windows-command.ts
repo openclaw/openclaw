@@ -1,6 +1,5 @@
 import path from "node:path";
 import process from "node:process";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export function resolveWindowsCommandShim(params: {
   command: string;
@@ -10,7 +9,7 @@ export function resolveWindowsCommandShim(params: {
   if ((params.platform ?? process.platform) !== "win32") {
     return params.command;
   }
-  const basename = normalizeLowercaseStringOrEmpty(path.basename(params.command));
+  const basename = path.basename(params.command).toLowerCase();
   if (path.extname(basename)) {
     return params.command;
   }

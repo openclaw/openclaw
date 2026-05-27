@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SlackMessageEvent } from "../types.js";
-import { buildSlackDebounceKey } from "./message-handler/debounce-key.js";
+import { buildSlackDebounceKey } from "./message-handler.js";
 
 function makeMessage(overrides: Partial<SlackMessageEvent> = {}): SlackMessageEvent {
   return {

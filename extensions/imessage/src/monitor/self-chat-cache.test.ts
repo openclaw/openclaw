@@ -1,11 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSelfChatCache } from "./self-chat-cache.js";
 
 describe("createSelfChatCache", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   const directLookup = {
     accountId: "default",
     sender: "+15555550123",

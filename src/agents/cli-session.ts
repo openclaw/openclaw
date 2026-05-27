@@ -1,12 +1,15 @@
 import crypto from "node:crypto";
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { CLAUDE_CLI_BACKEND_ID } from "../plugin-sdk/anthropic-cli.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-const CLAUDE_CLI_BACKEND_ID = "claude-cli";
+function trimOptional(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
 
 export function hashCliSessionText(value: string | undefined): string | undefined {
-  const trimmed = normalizeOptionalString(value);
+  const trimmed = trimOptional(value);
   if (!trimmed) {
     return undefined;
   }
@@ -22,27 +25,21 @@ export function getCliSessionBinding(
   }
   const normalized = normalizeProviderId(provider);
   const fromBindings = entry.cliSessionBindings?.[normalized];
-  const bindingSessionId = normalizeOptionalString(fromBindings?.sessionId);
+  const bindingSessionId = trimOptional(fromBindings?.sessionId);
   if (bindingSessionId) {
     return {
       sessionId: bindingSessionId,
-      ...(fromBindings?.forceReuse === true ? { forceReuse: true } : {}),
-      authProfileId: normalizeOptionalString(fromBindings?.authProfileId),
-      authEpoch: normalizeOptionalString(fromBindings?.authEpoch),
-      authEpochVersion: fromBindings?.authEpochVersion,
-      extraSystemPromptHash: normalizeOptionalString(fromBindings?.extraSystemPromptHash),
-      promptToolNamesHash: normalizeOptionalString(fromBindings?.promptToolNamesHash),
-      mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
-      mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
+      authProfileId: trimOptional(fromBindings?.authProfileId),
+      extraSystemPromptHash: trimOptional(fromBindings?.extraSystemPromptHash),
+      mcpConfigHash: trimOptional(fromBindings?.mcpConfigHash),
     };
   }
   const fromMap = entry.cliSessionIds?.[normalized];
-  const normalizedFromMap = normalizeOptionalString(fromMap);
-  if (normalizedFromMap) {
-    return { sessionId: normalizedFromMap };
+  if (fromMap?.trim()) {
+    return { sessionId: fromMap.trim() };
   }
   if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    const legacy = normalizeOptionalString(entry.claudeCliSessionId);
+    const legacy = entry.claudeCliSessionId?.trim();
     if (legacy) {
       return { sessionId: legacy };
     }
@@ -75,27 +72,14 @@ export function setCliSessionBinding(
     ...entry.cliSessionBindings,
     [normalized]: {
       sessionId: trimmed,
-      ...(binding.forceReuse === true ? { forceReuse: true } : {}),
-      ...(normalizeOptionalString(binding.authProfileId)
-        ? { authProfileId: normalizeOptionalString(binding.authProfileId) }
+      ...(trimOptional(binding.authProfileId)
+        ? { authProfileId: trimOptional(binding.authProfileId) }
         : {}),
-      ...(normalizeOptionalString(binding.authEpoch)
-        ? { authEpoch: normalizeOptionalString(binding.authEpoch) }
+      ...(trimOptional(binding.extraSystemPromptHash)
+        ? { extraSystemPromptHash: trimOptional(binding.extraSystemPromptHash) }
         : {}),
-      ...(typeof binding.authEpochVersion === "number" && Number.isFinite(binding.authEpochVersion)
-        ? { authEpochVersion: binding.authEpochVersion }
-        : {}),
-      ...(normalizeOptionalString(binding.extraSystemPromptHash)
-        ? { extraSystemPromptHash: normalizeOptionalString(binding.extraSystemPromptHash) }
-        : {}),
-      ...(normalizeOptionalString(binding.promptToolNamesHash)
-        ? { promptToolNamesHash: normalizeOptionalString(binding.promptToolNamesHash) }
-        : {}),
-      ...(normalizeOptionalString(binding.mcpConfigHash)
-        ? { mcpConfigHash: normalizeOptionalString(binding.mcpConfigHash) }
-        : {}),
-      ...(normalizeOptionalString(binding.mcpResumeHash)
-        ? { mcpResumeHash: normalizeOptionalString(binding.mcpResumeHash) }
+      ...(trimOptional(binding.mcpConfigHash)
+        ? { mcpConfigHash: trimOptional(binding.mcpConfigHash) }
         : {}),
     },
   };
@@ -118,77 +102,39 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
     entry.cliSessionIds = Object.keys(next).length > 0 ? next : undefined;
   }
   if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    entry.claudeCliSessionId = undefined;
+    delete entry.claudeCliSessionId;
   }
 }
 
 export function clearAllCliSessions(entry: SessionEntry): void {
-  entry.cliSessionBindings = undefined;
-  entry.cliSessionIds = undefined;
-  entry.claudeCliSessionId = undefined;
+  delete entry.cliSessionBindings;
+  delete entry.cliSessionIds;
+  delete entry.claudeCliSessionId;
 }
 
 export function resolveCliSessionReuse(params: {
   binding?: CliSessionBinding;
   authProfileId?: string;
-  authEpoch?: string;
-  authEpochVersion: number;
   extraSystemPromptHash?: string;
-  promptToolNamesHash?: string;
   mcpConfigHash?: string;
-  mcpResumeHash?: string;
-}): {
-  sessionId?: string;
-  invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "mcp";
-} {
+}): { sessionId?: string; invalidatedReason?: "auth-profile" | "system-prompt" | "mcp" } {
   const binding = params.binding;
-  const sessionId = normalizeOptionalString(binding?.sessionId);
+  const sessionId = trimOptional(binding?.sessionId);
   if (!sessionId) {
     return {};
   }
-  if (binding?.forceReuse === true) {
-    return { sessionId };
-  }
-  const currentAuthProfileId = normalizeOptionalString(params.authProfileId);
-  const currentAuthEpoch = normalizeOptionalString(params.authEpoch);
-  const currentExtraSystemPromptHash = normalizeOptionalString(params.extraSystemPromptHash);
-  const currentPromptToolNamesHash = normalizeOptionalString(params.promptToolNamesHash);
-  const currentMcpConfigHash = normalizeOptionalString(params.mcpConfigHash);
-  const currentMcpResumeHash = normalizeOptionalString(params.mcpResumeHash);
-  const storedAuthProfileId = normalizeOptionalString(binding?.authProfileId);
-  const storedAuthEpoch = normalizeOptionalString(binding?.authEpoch);
-  const hasMatchingVersionedAuthEpoch =
-    binding?.authEpochVersion === params.authEpochVersion &&
-    storedAuthEpoch !== undefined &&
-    currentAuthEpoch !== undefined &&
-    storedAuthEpoch === currentAuthEpoch;
+  const currentAuthProfileId = trimOptional(params.authProfileId);
+  const currentExtraSystemPromptHash = trimOptional(params.extraSystemPromptHash);
+  const currentMcpConfigHash = trimOptional(params.mcpConfigHash);
+  const storedAuthProfileId = trimOptional(binding?.authProfileId);
   if (storedAuthProfileId !== currentAuthProfileId) {
-    if (!hasMatchingVersionedAuthEpoch) {
-      return { invalidatedReason: "auth-profile" };
-    }
+    return { invalidatedReason: "auth-profile" };
   }
-  if (
-    binding?.authEpochVersion === params.authEpochVersion &&
-    storedAuthEpoch !== currentAuthEpoch
-  ) {
-    return { invalidatedReason: "auth-epoch" };
-  }
-  const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
+  const storedExtraSystemPromptHash = trimOptional(binding?.extraSystemPromptHash);
   if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {
     return { invalidatedReason: "system-prompt" };
   }
-  const storedPromptToolNamesHash = normalizeOptionalString(binding?.promptToolNamesHash);
-  if (storedPromptToolNamesHash !== currentPromptToolNamesHash) {
-    return { invalidatedReason: "system-prompt" };
-  }
-  const storedMcpResumeHash = normalizeOptionalString(binding?.mcpResumeHash);
-  if (storedMcpResumeHash && currentMcpResumeHash) {
-    if (storedMcpResumeHash !== currentMcpResumeHash) {
-      return { invalidatedReason: "mcp" };
-    }
-    return { sessionId };
-  }
-  const storedMcpConfigHash = normalizeOptionalString(binding?.mcpConfigHash);
+  const storedMcpConfigHash = trimOptional(binding?.mcpConfigHash);
   if (storedMcpConfigHash !== currentMcpConfigHash) {
     return { invalidatedReason: "mcp" };
   }

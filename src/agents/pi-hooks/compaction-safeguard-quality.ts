@@ -1,6 +1,4 @@
-import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
-import { localeLowercasePreservingWhitespace } from "../../shared/string-coerce.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
+import { extractKeywords, isQueryStopWordToken } from "../../plugin-sdk/memory-core-host-query.js";
 import type { CompactionSummarizationInstructions } from "../compaction.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 
@@ -61,7 +59,6 @@ export function buildCompactionStructureInstructions(
     ...REQUIRED_SUMMARY_SECTIONS,
     identifierSectionInstruction,
     "Do not omit unresolved asks from the user.",
-    "When prior compaction summaries are present, re-distill them with new messages and remove stale duplicate detail.",
   ].join("\n");
   const custom = customInstructions?.trim();
   if (!custom) {
@@ -169,7 +166,7 @@ export function extractOpaqueIdentifiers(text: string): string[] {
 }
 
 function tokenizeAskOverlapText(text: string): string[] {
-  const normalized = localeLowercasePreservingWhitespace(text.normalize("NFKC")).trim();
+  const normalized = text.toLocaleLowerCase().normalize("NFKC").trim();
   if (!normalized) {
     return [];
   }
@@ -187,7 +184,7 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
   if (!latestAsk) {
     return true;
   }
-  const askTokens = uniqueStrings(tokenizeAskOverlapText(latestAsk)).slice(
+  const askTokens = Array.from(new Set(tokenizeAskOverlapText(latestAsk))).slice(
     0,
     MAX_ASK_OVERLAP_TOKENS,
   );

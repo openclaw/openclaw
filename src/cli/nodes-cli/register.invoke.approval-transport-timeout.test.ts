@@ -1,7 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals.js";
 import { parseTimeoutMs } from "../parse-timeout.js";
-import { callGatewayCli, callNodePairApprovalGatewayCli } from "./rpc.js";
 
 /**
  * Regression test for #12098:
@@ -19,11 +18,9 @@ import { callGatewayCli, callNodePairApprovalGatewayCli } from "./rpc.js";
  * least approvalTimeoutMs + 10_000.
  */
 
-const { callGatewaySpy } = vi.hoisted(() => ({
-  callGatewaySpy: vi.fn<(opts: Record<string, unknown>) => Promise<{ decision: "allow-once" }>>(
-    async () => ({ decision: "allow-once" }),
-  ),
-}));
+const callGatewaySpy = vi.fn<
+  (opts: Record<string, unknown>) => Promise<{ decision: "allow-once" }>
+>(async () => ({ decision: "allow-once" }));
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: callGatewaySpy,
@@ -34,16 +31,13 @@ vi.mock("../progress.js", () => ({
   withProgress: (_opts: unknown, fn: () => unknown) => fn(),
 }));
 
-function firstGatewayCall(): Record<string, unknown> {
-  const [callOpts] = callGatewaySpy.mock.calls[0] ?? [];
-  if (!callOpts) {
-    throw new Error("expected gateway call");
-  }
-  return callOpts;
-}
-
 describe("exec approval transport timeout (#12098)", () => {
+  let callGatewayCli: typeof import("./rpc.js").callGatewayCli;
   const approvalTransportFloorMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS + 10_000;
+
+  beforeAll(async () => {
+    ({ callGatewayCli } = await import("./rpc.js"));
+  });
 
   beforeEach(() => {
     callGatewaySpy.mockClear();
@@ -56,32 +50,9 @@ describe("exec approval transport timeout (#12098)", () => {
     });
 
     expect(callGatewaySpy).toHaveBeenCalledTimes(1);
-    const callOpts = firstGatewayCall();
+    const callOpts = callGatewaySpy.mock.calls[0][0];
     expect(callOpts.method).toBe("exec.approval.request");
     expect(callOpts.timeoutMs).toBe(35_000);
-  });
-
-  it("callGatewayCli rejects invalid opts.timeout instead of forwarding NaN", async () => {
-    await expect(
-      callGatewayCli("exec.approval.request", { timeout: "nope" } as never, {
-        timeoutMs: 120_000,
-      }),
-    ).rejects.toThrow("Invalid --timeout");
-
-    expect(callGatewaySpy).not.toHaveBeenCalled();
-  });
-
-  it("callNodePairApprovalGatewayCli rejects invalid opts.timeout instead of forwarding NaN", async () => {
-    await expect(
-      callNodePairApprovalGatewayCli(
-        "node.pair.list",
-        { timeout: "Infinity" } as never,
-        {},
-        { scopes: [] },
-      ),
-    ).rejects.toThrow("Invalid --timeout");
-
-    expect(callGatewaySpy).not.toHaveBeenCalled();
   });
 
   it("fix: overriding transportTimeoutMs gives the approval enough transport time", async () => {
@@ -98,7 +69,7 @@ describe("exec approval transport timeout (#12098)", () => {
     );
 
     expect(callGatewaySpy).toHaveBeenCalledTimes(1);
-    const callOpts = firstGatewayCall();
+    const callOpts = callGatewaySpy.mock.calls[0][0];
     expect(callOpts.timeoutMs).toBeGreaterThanOrEqual(approvalTimeoutMs);
     expect(callOpts.timeoutMs).toBe(approvalTransportFloorMs);
   });
@@ -120,7 +91,7 @@ describe("exec approval transport timeout (#12098)", () => {
       { transportTimeoutMs },
     );
 
-    const callOpts = firstGatewayCall();
+    const callOpts = callGatewaySpy.mock.calls[0][0];
     expect(callOpts.timeoutMs).toBe(approvalTransportFloorMs);
   });
 
@@ -138,7 +109,7 @@ describe("exec approval transport timeout (#12098)", () => {
       { transportTimeoutMs },
     );
 
-    const callOpts = firstGatewayCall();
+    const callOpts = callGatewaySpy.mock.calls[0][0];
     expect(callOpts.timeoutMs).toBe(approvalTransportFloorMs);
   });
 });

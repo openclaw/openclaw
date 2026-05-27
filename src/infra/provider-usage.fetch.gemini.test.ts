@@ -2,24 +2,14 @@ import { describe, expect, it } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchGeminiUsage } from "./provider-usage.fetch.gemini.js";
 
-const usageProvider = "openai-codex" as const;
-
 describe("fetchGeminiUsage", () => {
   it("returns HTTP errors for failed requests", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(429, { error: "rate_limited" }),
     );
-    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, "google-gemini-cli");
 
     expect(result.error).toBe("HTTP 429");
-    expect(result.windows).toHaveLength(0);
-  });
-
-  it("returns a stable error for malformed successful usage JSON", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "{not json"));
-    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
-
-    expect(result.error).toBe("Malformed usage response");
     expect(result.windows).toHaveLength(0);
   });
 
@@ -39,7 +29,7 @@ describe("fetchGeminiUsage", () => {
       });
     });
 
-    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, "google-gemini-cli");
 
     expect(result.windows).toHaveLength(2);
     expect(result.windows[0]).toEqual({ label: "Pro", usedPercent: 70 });
@@ -54,11 +44,11 @@ describe("fetchGeminiUsage", () => {
       }),
     );
 
-    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, "google-gemini-cli");
 
     expect(result).toEqual({
-      provider: usageProvider,
-      displayName: "Codex",
+      provider: "google-gemini-cli",
+      displayName: "Gemini",
       windows: [],
     });
   });
@@ -74,7 +64,7 @@ describe("fetchGeminiUsage", () => {
       }),
     );
 
-    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, "google-gemini-cli");
 
     expect(result.windows).toEqual([
       { label: "Pro", usedPercent: 100 },

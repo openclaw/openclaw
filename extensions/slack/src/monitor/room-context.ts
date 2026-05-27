@@ -1,5 +1,4 @@
 import { buildUntrustedChannelMetadata } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function resolveSlackRoomContextHints(params: {
   isRoomish: boolean;
@@ -9,17 +8,19 @@ export function resolveSlackRoomContextHints(params: {
   untrustedChannelMetadata?: ReturnType<typeof buildUntrustedChannelMetadata>;
   groupSystemPrompt?: string;
 } {
-  const untrustedChannelMetadata = params.isRoomish
-    ? buildUntrustedChannelMetadata({
-        source: "slack",
-        label: "Slack channel description",
-        entries: [params.channelInfo?.topic, params.channelInfo?.purpose],
-      })
-    : undefined;
+  if (!params.isRoomish) {
+    return {};
+  }
 
-  const systemPromptParts = [
-    params.isRoomish ? (normalizeOptionalString(params.channelConfig?.systemPrompt) ?? null) : null,
-  ].filter((entry): entry is string => Boolean(entry));
+  const untrustedChannelMetadata = buildUntrustedChannelMetadata({
+    source: "slack",
+    label: "Slack channel description",
+    entries: [params.channelInfo?.topic, params.channelInfo?.purpose],
+  });
+
+  const systemPromptParts = [params.channelConfig?.systemPrompt?.trim() || null].filter(
+    (entry): entry is string => Boolean(entry),
+  );
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
 

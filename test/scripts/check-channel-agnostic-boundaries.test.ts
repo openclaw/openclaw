@@ -64,7 +64,7 @@ describe("check-channel-agnostic-boundaries", () => {
       const payload = { mode: "persistent" };
       const x = cfg.session.threadBindings?.enabled;
     `;
-    expect(findChannelAgnosticBoundaryViolations(source)).toStrictEqual([]);
+    expect(findChannelAgnosticBoundaryViolations(source)).toEqual([]);
   });
 
   it("reverse-deps mode flags channel module re-exports", () => {
@@ -84,7 +84,7 @@ describe("check-channel-agnostic-boundaries", () => {
       const channel = "discord";
       const x = cfg.channels.discord?.threadBindings?.enabled;
     `;
-    expect(findChannelCoreReverseDependencyViolations(source)).toStrictEqual([]);
+    expect(findChannelCoreReverseDependencyViolations(source)).toEqual([]);
   });
 
   it("user-facing text mode flags channel names in string literals", () => {
@@ -103,7 +103,7 @@ describe("check-channel-agnostic-boundaries", () => {
     const source = `
       import { x } from "../discord/monitor/thread-bindings.js";
     `;
-    expect(findAcpUserFacingChannelNameViolations(source)).toStrictEqual([]);
+    expect(findAcpUserFacingChannelNameViolations(source)).toEqual([]);
   });
 
   it("system-mark guard flags hardcoded gear literals", () => {
@@ -122,6 +122,6 @@ describe("check-channel-agnostic-boundaries", () => {
     const source = `
       import { x } from "../infra/system-message.js";
     `;
-    expect(findSystemMarkLiteralViolations(source)).toStrictEqual([]);
+    expect(findSystemMarkLiteralViolations(source)).toEqual([]);
   });
 });

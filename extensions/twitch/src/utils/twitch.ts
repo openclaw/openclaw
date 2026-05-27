@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
  * Twitch-specific utility functions
@@ -19,7 +18,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
  * normalizeTwitchChannel("MyChannel") // "mychannel"
  */
 export function normalizeTwitchChannel(channel: string): string {
-  const trimmed = normalizeLowercaseStringOrEmpty(channel);
+  const trimmed = channel.trim().toLowerCase();
   return trimmed.startsWith("#") ? trimmed.slice(1) : trimmed;
 }
 

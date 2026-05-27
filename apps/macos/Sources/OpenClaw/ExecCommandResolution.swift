@@ -27,7 +27,7 @@ struct ExecCommandResolution {
     {
         // Allowlist resolution must follow actual argv execution for wrappers.
         // `rawCommand` is caller-supplied display text and may be canonicalized.
-        let shell = ExecShellWrapperParser.extractForAllowlist(command: command, rawCommand: rawCommand)
+        let shell = ExecShellWrapperParser.extract(command: command, rawCommand: nil)
         if shell.isWrapper {
             // Fail closed when env modifiers precede a shell wrapper. This mirrors
             // system-run binding behavior where such invocations must stay bound to
@@ -68,8 +68,7 @@ struct ExecCommandResolution {
     static func resolveAllowAlwaysPatterns(
         command: [String],
         cwd: String?,
-        env: [String: String]?,
-        rawCommand: String? = nil) -> [String]
+        env: [String: String]?) -> [String]
     {
         var patterns: [String] = []
         var seen = Set<String>()
@@ -77,7 +76,6 @@ struct ExecCommandResolution {
             command: command,
             cwd: cwd,
             env: env,
-            rawCommand: rawCommand,
             depth: 0,
             patterns: &patterns,
             seen: &seen)
@@ -154,7 +152,6 @@ struct ExecCommandResolution {
         command: [String],
         cwd: String?,
         env: [String: String]?,
-        rawCommand: String?,
         depth: Int,
         patterns: inout [String],
         seen: inout Set<String>)
@@ -165,19 +162,13 @@ struct ExecCommandResolution {
 
         if let token0 = command.first?.trimmingCharacters(in: .whitespacesAndNewlines),
            ExecCommandToken.basenameLower(token0) == "env",
-           let envUnwrapped = ExecEnvInvocationUnwrapper.unwrapWithMetadata(command),
-           !envUnwrapped.command.isEmpty
+           let envUnwrapped = ExecEnvInvocationUnwrapper.unwrap(command),
+           !envUnwrapped.isEmpty
         {
-            if envUnwrapped.usesModifiers,
-               self.isAllowlistShellWrapper(command: envUnwrapped.command, rawCommand: rawCommand)
-            {
-                return
-            }
             self.collectAllowAlwaysPatterns(
-                command: envUnwrapped.command,
+                command: envUnwrapped,
                 cwd: cwd,
                 env: env,
-                rawCommand: rawCommand,
                 depth: depth + 1,
                 patterns: &patterns,
                 seen: &seen)
@@ -189,14 +180,13 @@ struct ExecCommandResolution {
                 command: shellMultiplexer,
                 cwd: cwd,
                 env: env,
-                rawCommand: rawCommand,
                 depth: depth + 1,
                 patterns: &patterns,
                 seen: &seen)
             return
         }
 
-        let shell = ExecShellWrapperParser.extractForAllowlist(command: command, rawCommand: rawCommand)
+        let shell = ExecShellWrapperParser.extract(command: command, rawCommand: nil)
         if shell.isWrapper {
             guard let shellCommand = shell.command,
                   let segments = self.splitShellCommandChain(shellCommand)
@@ -212,7 +202,6 @@ struct ExecCommandResolution {
                     command: tokens,
                     cwd: cwd,
                     env: env,
-                    rawCommand: nil,
                     depth: depth + 1,
                     patterns: &patterns,
                     seen: &seen)
@@ -227,10 +216,6 @@ struct ExecCommandResolution {
             return
         }
         patterns.append(pattern)
-    }
-
-    private static func isAllowlistShellWrapper(command: [String], rawCommand: String?) -> Bool {
-        ExecShellWrapperParser.extractForAllowlist(command: command, rawCommand: rawCommand).isWrapper
     }
 
     private static func unwrapShellMultiplexerInvocation(_ argv: [String]) -> [String]? {

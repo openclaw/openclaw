@@ -17,7 +17,7 @@ export function createStorageMock(): Storage {
       store.delete(key);
     },
     setItem(key: string, value: string) {
-      store.set(key, value);
+      store.set(key, String(value));
     },
   };
 }

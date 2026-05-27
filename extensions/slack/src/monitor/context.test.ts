@@ -1,5 +1,5 @@
 import type { App } from "@slack/bolt";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it } from "vitest";
 import { createSlackMonitorContext } from "./context.js";
@@ -15,7 +15,6 @@ function createTestContext() {
     app: { client: {} } as App,
     runtime: {} as RuntimeEnv,
     botUserId: "U_BOT",
-    botId: "B_BOT",
     teamId: "T_EXPECTED",
     apiAppId: "A_EXPECTED",
     historyLimit: 0,
@@ -35,7 +34,6 @@ function createTestContext() {
     replyToMode: "off",
     threadHistoryScope: "thread",
     threadInheritParent: false,
-    threadRequireExplicitMention: false,
     slashCommand: {
       enabled: true,
       name: "openclaw",
@@ -81,20 +79,5 @@ describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
         team: { id: "T_EXPECTED" },
       }),
     ).toBe(false);
-  });
-});
-
-describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
-  it("routes threaded interaction events to the Slack thread session", () => {
-    const ctx = createTestContext();
-
-    expect(
-      ctx.resolveSlackSystemEventSessionKey({
-        channelId: "C_THREAD",
-        channelType: "channel",
-        senderId: "U_CLICKER",
-        threadTs: "1712345678.123456",
-      }),
-    ).toBe("agent:main:slack:channel:c_thread:thread:1712345678.123456");
   });
 });

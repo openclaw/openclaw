@@ -1,20 +1,16 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
 
-const MIN_NOTE_COLUMNS = 80;
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
-const suppressNotesStorage = new AsyncLocalStorage<boolean>();
 
 function isSuppressedByEnv(value: string | undefined): boolean {
   if (!value) {
     return false;
   }
-  const normalized = normalizeLowercaseStringOrEmpty(value);
+  const normalized = value.trim().toLowerCase();
   if (!normalized) {
     return false;
   }
@@ -149,69 +145,21 @@ function wrapLine(line: string, maxWidth: number): string[] {
   return lines;
 }
 
-function coerceNoteMessage(message: unknown): string {
-  if (typeof message === "string") {
-    return message;
-  }
-  if (message == null) {
-    return "";
-  }
-  if (typeof message === "number" || typeof message === "boolean" || typeof message === "bigint") {
-    return String(message);
-  }
-  if (message instanceof Error) {
-    return message.message ? `${message.name}: ${message.message}` : message.name;
-  }
-  return "";
-}
-
 export function wrapNoteMessage(
-  message: unknown,
+  message: string,
   options: { maxWidth?: number; columns?: number } = {},
 ): string {
-  const text = coerceNoteMessage(message);
-  const columns = options.columns ?? resolveNoteColumns(process.stdout.columns);
+  const columns = options.columns ?? process.stdout.columns ?? 80;
   const maxWidth = options.maxWidth ?? Math.max(40, Math.min(88, columns - 10));
-  return text
+  return message
     .split("\n")
     .flatMap((line) => wrapLine(line, maxWidth))
     .join("\n");
 }
 
-export function resolveNoteColumns(columns: number | undefined): number {
-  if (!Number.isFinite(columns) || !columns || columns < MIN_NOTE_COLUMNS) {
-    return MIN_NOTE_COLUMNS;
-  }
-  return columns;
-}
-
-function createNoteOutput(columns: number): NodeJS.WriteStream {
-  if (process.stdout.columns === columns) {
-    return process.stdout;
-  }
-  const output = Object.create(process.stdout) as NodeJS.WriteStream;
-  Object.defineProperty(output, "columns", {
-    value: columns,
-    configurable: true,
-  });
-  output.write = process.stdout.write.bind(process.stdout);
-  return output;
-}
-
-export function note(message: unknown, title?: string) {
-  if (
-    suppressNotesStorage.getStore() === true ||
-    isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)
-  ) {
+export function note(message: string, title?: string) {
+  if (isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)) {
     return;
   }
-  const columns = resolveNoteColumns(process.stdout.columns);
-  clackNote(wrapNoteMessage(message, { columns }), stylePromptTitle(title), {
-    output: createNoteOutput(columns),
-    format: (line) => line,
-  });
-}
-
-export function withSuppressedNotes<T>(callback: () => T): T {
-  return suppressNotesStorage.run(true, callback);
+  clackNote(wrapNoteMessage(message), stylePromptTitle(title));
 }

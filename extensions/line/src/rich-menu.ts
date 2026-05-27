@@ -1,9 +1,7 @@
+import { readFile } from "node:fs/promises";
 import { messagingApi } from "@line/bot-sdk";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/agent-media-payload";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveLineAccount } from "./accounts.js";
 import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
@@ -38,16 +36,14 @@ export interface CreateRichMenuParams {
 }
 
 interface RichMenuOpts {
-  cfg: OpenClawConfig;
   channelAccessToken?: string;
   accountId?: string;
   verbose?: boolean;
-  mediaLocalRoots?: readonly string[];
 }
 
-function getClient(opts: RichMenuOpts): messagingApi.MessagingApiClient {
+function getClient(opts: RichMenuOpts = {}): messagingApi.MessagingApiClient {
   const account = resolveLineAccount({
-    cfg: opts.cfg,
+    cfg: loadConfig(),
     accountId: opts.accountId,
   });
   const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
@@ -57,9 +53,9 @@ function getClient(opts: RichMenuOpts): messagingApi.MessagingApiClient {
   });
 }
 
-function getBlobClient(opts: RichMenuOpts): messagingApi.MessagingApiBlobClient {
+function getBlobClient(opts: RichMenuOpts = {}): messagingApi.MessagingApiBlobClient {
   const account = resolveLineAccount({
-    cfg: opts.cfg,
+    cfg: loadConfig(),
     accountId: opts.accountId,
   });
   const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
@@ -79,7 +75,7 @@ function chunkUserIds(userIds: string[]): string[][] {
 
 export async function createRichMenu(
   menu: CreateRichMenuParams,
-  opts: RichMenuOpts,
+  opts: RichMenuOpts = {},
 ): Promise<string> {
   const client = getClient(opts);
 
@@ -103,30 +99,24 @@ export async function createRichMenu(
 export async function uploadRichMenuImage(
   richMenuId: string,
   imagePath: string,
-  opts: RichMenuOpts,
+  opts: RichMenuOpts = {},
 ): Promise<void> {
   const blobClient = getBlobClient(opts);
 
-  const media = await loadWebMediaRaw(imagePath, {
-    localRoots: opts.mediaLocalRoots ?? getAgentScopedMediaLocalRoots(opts.cfg),
-  });
-  const contentType =
-    media.contentType === "image/png" || media.contentType === "image/jpeg"
-      ? media.contentType
-      : mimeTypeFromFilePath(imagePath) === "image/png"
-        ? "image/png"
-        : "image/jpeg";
+  const imageData = await readFile(imagePath);
+  const contentType = imagePath.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
 
-  const imageBytes = new ArrayBuffer(media.buffer.byteLength);
-  new Uint8Array(imageBytes).set(media.buffer);
-  await blobClient.setRichMenuImage(richMenuId, new Blob([imageBytes], { type: contentType }));
+  await blobClient.setRichMenuImage(richMenuId, new Blob([imageData], { type: contentType }));
 
   if (opts.verbose) {
     logVerbose(`line: uploaded image to rich menu ${richMenuId}`);
   }
 }
 
-export async function setDefaultRichMenu(richMenuId: string, opts: RichMenuOpts): Promise<void> {
+export async function setDefaultRichMenu(
+  richMenuId: string,
+  opts: RichMenuOpts = {},
+): Promise<void> {
   const client = getClient(opts);
   await client.setDefaultRichMenu(richMenuId);
 
@@ -135,7 +125,7 @@ export async function setDefaultRichMenu(richMenuId: string, opts: RichMenuOpts)
   }
 }
 
-export async function cancelDefaultRichMenu(opts: RichMenuOpts): Promise<void> {
+export async function cancelDefaultRichMenu(opts: RichMenuOpts = {}): Promise<void> {
   const client = getClient(opts);
   await client.cancelDefaultRichMenu();
 
@@ -144,7 +134,7 @@ export async function cancelDefaultRichMenu(opts: RichMenuOpts): Promise<void> {
   }
 }
 
-export async function getDefaultRichMenuId(opts: RichMenuOpts): Promise<string | null> {
+export async function getDefaultRichMenuId(opts: RichMenuOpts = {}): Promise<string | null> {
   const client = getClient(opts);
 
   try {
@@ -158,7 +148,7 @@ export async function getDefaultRichMenuId(opts: RichMenuOpts): Promise<string |
 export async function linkRichMenuToUser(
   userId: string,
   richMenuId: string,
-  opts: RichMenuOpts,
+  opts: RichMenuOpts = {},
 ): Promise<void> {
   const client = getClient(opts);
   await client.linkRichMenuIdToUser(userId, richMenuId);
@@ -171,7 +161,7 @@ export async function linkRichMenuToUser(
 export async function linkRichMenuToUsers(
   userIds: string[],
   richMenuId: string,
-  opts: RichMenuOpts,
+  opts: RichMenuOpts = {},
 ): Promise<void> {
   const client = getClient(opts);
 
@@ -187,7 +177,10 @@ export async function linkRichMenuToUsers(
   }
 }
 
-export async function unlinkRichMenuFromUser(userId: string, opts: RichMenuOpts): Promise<void> {
+export async function unlinkRichMenuFromUser(
+  userId: string,
+  opts: RichMenuOpts = {},
+): Promise<void> {
   const client = getClient(opts);
   await client.unlinkRichMenuIdFromUser(userId);
 
@@ -198,7 +191,7 @@ export async function unlinkRichMenuFromUser(userId: string, opts: RichMenuOpts)
 
 export async function unlinkRichMenuFromUsers(
   userIds: string[],
-  opts: RichMenuOpts,
+  opts: RichMenuOpts = {},
 ): Promise<void> {
   const client = getClient(opts);
 
@@ -215,7 +208,7 @@ export async function unlinkRichMenuFromUsers(
 
 export async function getRichMenuIdOfUser(
   userId: string,
-  opts: RichMenuOpts,
+  opts: RichMenuOpts = {},
 ): Promise<string | null> {
   const client = getClient(opts);
 
@@ -227,7 +220,7 @@ export async function getRichMenuIdOfUser(
   }
 }
 
-export async function getRichMenuList(opts: RichMenuOpts): Promise<RichMenuResponse[]> {
+export async function getRichMenuList(opts: RichMenuOpts = {}): Promise<RichMenuResponse[]> {
   const client = getClient(opts);
   const response = await client.getRichMenuList();
   return response.richmenus ?? [];
@@ -235,7 +228,7 @@ export async function getRichMenuList(opts: RichMenuOpts): Promise<RichMenuRespo
 
 export async function getRichMenu(
   richMenuId: string,
-  opts: RichMenuOpts,
+  opts: RichMenuOpts = {},
 ): Promise<RichMenuResponse | null> {
   const client = getClient(opts);
 
@@ -246,7 +239,7 @@ export async function getRichMenu(
   }
 }
 
-export async function deleteRichMenu(richMenuId: string, opts: RichMenuOpts): Promise<void> {
+export async function deleteRichMenu(richMenuId: string, opts: RichMenuOpts = {}): Promise<void> {
   const client = getClient(opts);
   await client.deleteRichMenu(richMenuId);
 
@@ -258,7 +251,7 @@ export async function deleteRichMenu(richMenuId: string, opts: RichMenuOpts): Pr
 export async function createRichMenuAlias(
   richMenuId: string,
   aliasId: string,
-  opts: RichMenuOpts,
+  opts: RichMenuOpts = {},
 ): Promise<void> {
   const client = getClient(opts);
 
@@ -272,7 +265,7 @@ export async function createRichMenuAlias(
   }
 }
 
-export async function deleteRichMenuAlias(aliasId: string, opts: RichMenuOpts): Promise<void> {
+export async function deleteRichMenuAlias(aliasId: string, opts: RichMenuOpts = {}): Promise<void> {
   const client = getClient(opts);
   await client.deleteRichMenuAlias(aliasId);
 
@@ -323,4 +316,4 @@ export function createDefaultMenuConfig(): CreateRichMenuParams {
   };
 }
 
-export type { RichMenuRequest, RichMenuResponse, RichMenuArea };
+export type { RichMenuRequest, RichMenuResponse, RichMenuArea, Action };

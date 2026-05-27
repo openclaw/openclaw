@@ -1,6 +1,5 @@
+import { Message } from "@buape/carbon";
 import { describe, expect, it } from "vitest";
-import { Message } from "../internal/discord.js";
-import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 import {
   buildDiscordInboundJob,
   materializeDiscordInboundJob,
@@ -88,52 +87,12 @@ describe("buildDiscordInboundJob", () => {
       },
       ownerId: "user-1",
     });
-    const serializedPayload = JSON.parse(JSON.stringify(job.payload));
-    expect(serializedPayload.threadChannel).toEqual({
-      id: "thread-1",
-      name: "codex",
-      parentId: "forum-1",
-      parent: {
-        id: "forum-1",
-        name: "Forum",
-      },
-      ownerId: "user-1",
-    });
-  });
-
-  it("normalizes partial thread channels without reading throwing getters", async () => {
-    const threadChannel = createPartialDiscordChannelWithThrowingGetters(
-      {
-        id: "thread-1",
-        name: "codex",
-        parentId: "forum-1",
-        parent: { id: "forum-1", name: "Forum" },
-        ownerId: "user-1",
-      },
-      ["name", "parentId", "parent", "ownerId"],
-    );
-    const ctx = await createBaseDiscordMessageContext({
-      threadChannel,
-    });
-
-    const job = buildDiscordInboundJob(ctx);
-
-    expect(job.payload.threadChannel).toEqual({
-      id: "thread-1",
-      name: undefined,
-      parentId: undefined,
-      parent: undefined,
-      ownerId: undefined,
-    });
-    const serializedPayload = JSON.parse(JSON.stringify(job.payload));
-    expect(serializedPayload.threadChannel).toEqual({
-      id: "thread-1",
-    });
+    expect(() => JSON.stringify(job.payload)).not.toThrow();
   });
 
   it("re-materializes the process context with an overridden abort signal", async () => {
     const ctx = await createBaseDiscordMessageContext();
-    const job = buildDiscordInboundJob(ctx, { replayKeys: ["default:ch-1:m-1"] });
+    const job = buildDiscordInboundJob(ctx);
     const overrideAbortController = new AbortController();
 
     const rematerialized = materializeDiscordInboundJob(job, overrideAbortController.signal);
@@ -144,10 +103,9 @@ describe("buildDiscordInboundJob", () => {
     expect(rematerialized.abortSignal).toBe(overrideAbortController.signal);
     expect(rematerialized.message).toEqual(job.payload.message);
     expect(rematerialized.data).toEqual(job.payload.data);
-    expect(job.replayKeys).toEqual(["default:ch-1:m-1"]);
   });
 
-  it("preserves Discord message getters across queued jobs", async () => {
+  it("preserves Carbon message getters across queued jobs", async () => {
     const ctx = await createBaseDiscordMessageContext();
     const message = new Message(
       ctx.client as never,

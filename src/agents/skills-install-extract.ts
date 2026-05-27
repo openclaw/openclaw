@@ -7,9 +7,7 @@ import {
   prepareArchiveDestinationDir,
   withStagedArchiveDestination,
 } from "../infra/archive.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { parseTarVerboseMetadata } from "./skills-install-tar-verbose.js";
 import { hasBinary } from "./skills.js";
 
@@ -66,7 +64,10 @@ async function readTarPreflight(params: {
   if (listResult.code !== 0) {
     return commandFailureResult(listResult, "tar list failed");
   }
-  const entries = normalizeStringEntries(listResult.stdout.split("\n"));
+  const entries = listResult.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
 
   const verboseResult = await runCommandWithTimeout(["tar", "tvf", params.archivePath], {
     timeoutMs: params.timeoutMs,
@@ -226,7 +227,7 @@ export async function extractArchive(params: {
 
     return { stdout: "", stderr: `unsupported archive type: ${archiveType}`, code: null };
   } catch (err) {
-    const message = formatErrorMessage(err);
+    const message = err instanceof Error ? err.message : String(err);
     return { stdout: "", stderr: message, code: 1 };
   }
 }

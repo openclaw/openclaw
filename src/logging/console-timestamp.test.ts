@@ -29,7 +29,7 @@ describe("formatConsoleTimestamp", () => {
     return `${year}-${month}-${day}T${h}:${m}:${s}.${ms}${tzSign}${tzHours}:${tzMinutes}`;
   }
 
-  it("pretty style returns local HH:MM:SS without timezone suffix", () => {
+  it("pretty style returns local HH:MM:SS with timezone offset", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T18:01:02.345Z"));
 
@@ -38,7 +38,11 @@ describe("formatConsoleTimestamp", () => {
     const h = pad2(now.getHours());
     const m = pad2(now.getMinutes());
     const s = pad2(now.getSeconds());
-    expect(result).toBe(`${h}:${m}:${s}`);
+    const tzOffset = now.getTimezoneOffset();
+    const tzSign = tzOffset <= 0 ? "+" : "-";
+    const tzHours = pad2(Math.floor(Math.abs(tzOffset) / 60));
+    const tzMinutes = pad2(Math.abs(tzOffset) % 60);
+    expect(result).toBe(`${h}:${m}:${s}${tzSign}${tzHours}:${tzMinutes}`);
   });
 
   it("compact style returns local ISO-like timestamp with timezone offset", () => {

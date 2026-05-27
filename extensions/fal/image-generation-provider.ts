@@ -2,37 +2,18 @@ import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
-import {
-  imageFileExtensionForMimeType,
-  toImageDataUrl,
-} from "openclaw/plugin-sdk/image-generation";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import {
-  assertOkOrThrowHttpError,
-  assertOkOrThrowProviderError,
-  resolveProviderHttpRequestConfig,
-} from "openclaw/plugin-sdk/provider-http";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
-  mergeSsrFPolicies,
   type SsrFPolicy,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
+  ssrfPolicyFromAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  isRecord,
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
 const DEFAULT_FAL_EDIT_SUBPATH = "image-to-image";
 const DEFAULT_OUTPUT_FORMAT = "png";
-const GPT_IMAGE_EDIT_MAX_INPUT_IMAGES = 10;
-const NANO_BANANA_EDIT_MAX_INPUT_IMAGES = 14;
-const FAL_OUTPUT_FORMATS = ["png", "jpeg"] as const;
 const FAL_SUPPORTED_SIZES = [
   "1024x1024",
   "1024x1536",
@@ -42,7 +23,15 @@ const FAL_SUPPORTED_SIZES = [
 ] as const;
 const FAL_SUPPORTED_ASPECT_RATIOS = ["1:1", "4:3", "3:4", "16:9", "9:16"] as const;
 
-const FAL_IMAGE_MALFORMED_RESPONSE = "fal image generation response malformed";
+type FalGeneratedImage = {
+  url?: string;
+  content_type?: string;
+};
+
+type FalImageGenerationResponse = {
+  images?: FalGeneratedImage[];
+  prompt?: string;
+};
 
 type FalImageSize = string | { width: number; height: number };
 type FalNetworkPolicy = {
@@ -53,64 +42,77 @@ type FalNetworkPolicy = {
 
 let falFetchGuard = fetchWithSsrFGuard;
 
-export function setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+export function _setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   falFetchGuard = impl ?? fetchWithSsrFGuard;
 }
 
+function mergeSsrFPolicies(...policies: Array<SsrFPolicy | undefined>): SsrFPolicy | undefined {
+  const merged: SsrFPolicy = {};
+  for (const policy of policies) {
+    if (!policy) {
+      continue;
+    }
+    if (policy.allowPrivateNetwork) {
+      merged.allowPrivateNetwork = true;
+    }
+    if (policy.dangerouslyAllowPrivateNetwork) {
+      merged.dangerouslyAllowPrivateNetwork = true;
+    }
+    if (policy.allowRfc2544BenchmarkRange) {
+      merged.allowRfc2544BenchmarkRange = true;
+    }
+    if (policy.allowedHostnames?.length) {
+      merged.allowedHostnames = Array.from(
+        new Set([...(merged.allowedHostnames ?? []), ...policy.allowedHostnames]),
+      );
+    }
+    if (policy.hostnameAllowlist?.length) {
+      merged.hostnameAllowlist = Array.from(
+        new Set([...(merged.hostnameAllowlist ?? []), ...policy.hostnameAllowlist]),
+      );
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
 function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): boolean {
-  const normalizedHost = normalizeLowercaseStringOrEmpty(hostname);
-  const normalizedSuffix = normalizeLowercaseStringOrEmpty(trustedSuffix);
+  const normalizedHost = hostname.trim().toLowerCase();
+  const normalizedSuffix = trustedSuffix.trim().toLowerCase();
   return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
 }
 
-function parseFalImageGenerationResponse(payload: unknown): {
-  images: Record<string, unknown>[];
-  prompt?: string;
-} {
-  if (!isRecord(payload)) {
-    throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
-  }
-  const rawImages = payload.images;
-  if (rawImages === undefined || rawImages === null) {
-    return { images: [], prompt: normalizeOptionalString(payload.prompt) };
-  }
-  if (!Array.isArray(rawImages)) {
-    throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
-  }
-  const images: Record<string, unknown>[] = [];
-  for (const entry of rawImages) {
-    if (!isRecord(entry)) {
-      throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
-    }
-    images.push(entry);
-  }
-  return { images, prompt: normalizeOptionalString(payload.prompt) };
-}
-
-function resolveFalNetworkPolicy(params: {
-  baseUrl: string;
-  allowPrivateNetwork: boolean;
-}): FalNetworkPolicy {
+function resolveFalNetworkPolicy(
+  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
+): FalNetworkPolicy {
+  const baseUrl = resolveFalBaseUrl(cfg);
+  const explicitBaseUrl = cfg?.models?.providers?.fal?.baseUrl?.trim();
   let parsedBaseUrl: URL;
   try {
-    parsedBaseUrl = new URL(params.baseUrl);
+    parsedBaseUrl = new URL(baseUrl);
   } catch {
     return {};
   }
 
-  const hostSuffix = normalizeLowercaseStringOrEmpty(parsedBaseUrl.hostname);
-  if (!hostSuffix || !params.allowPrivateNetwork) {
+  const hostSuffix = parsedBaseUrl.hostname.trim().toLowerCase();
+  if (!hostSuffix) {
     return {};
   }
 
   const hostPolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostSuffix]);
-  const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(true);
+  const privateNetworkPolicy = explicitBaseUrl
+    ? ssrfPolicyFromAllowPrivateNetwork(true)
+    : undefined;
   const trustedHostPolicy = mergeSsrFPolicies(hostPolicy, privateNetworkPolicy);
   return {
     apiPolicy: trustedHostPolicy,
-    trustedDownloadHostSuffix: hostSuffix,
-    trustedDownloadPolicy: trustedHostPolicy,
+    trustedDownloadHostSuffix: explicitBaseUrl ? hostSuffix : undefined,
+    trustedDownloadPolicy: explicitBaseUrl ? trustedHostPolicy : undefined,
   };
+}
+
+function resolveFalBaseUrl(cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"]): string {
+  const direct = cfg?.models?.providers?.fal?.baseUrl?.trim();
+  return (direct || DEFAULT_FAL_BASE_URL).replace(/\/+$/u, "");
 }
 
 function ensureFalModelPath(model: string | undefined, hasInputImages: boolean): string {
@@ -119,15 +121,11 @@ function ensureFalModelPath(model: string | undefined, hasInputImages: boolean):
     return trimmed;
   }
   if (
-    trimmed.endsWith("/edit") ||
     trimmed.endsWith(`/${DEFAULT_FAL_EDIT_SUBPATH}`) ||
+    trimmed.endsWith("/edit") ||
     trimmed.includes("/image-to-image/")
   ) {
     return trimmed;
-  }
-  // GPT Image 2 and Nano Banana 2 use /edit; Flux uses /image-to-image.
-  if (trimmed.startsWith("openai/gpt-image-") || trimmed.startsWith("fal-ai/nano-banana-")) {
-    return `${trimmed}/edit`;
   }
   return `${trimmed}/${DEFAULT_FAL_EDIT_SUBPATH}`;
 }
@@ -222,10 +220,7 @@ function resolveFalImageSize(params: {
 
   const normalizedAspectRatio = params.aspectRatio?.trim();
   if (normalizedAspectRatio && params.hasInputImages) {
-    return (
-      aspectRatioToEnum(normalizedAspectRatio) ??
-      aspectRatioToDimensions(normalizedAspectRatio, 1024)
-    );
+    throw new Error("fal image edit endpoint does not support aspectRatio overrides");
   }
 
   const edge = mapResolutionToEdge(params.resolution);
@@ -242,6 +237,22 @@ function resolveFalImageSize(params: {
     );
   }
   return undefined;
+}
+
+function toDataUri(buffer: Buffer, mimeType: string): string {
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
+
+function fileExtensionForMimeType(mimeType: string | undefined): string {
+  const normalized = mimeType?.toLowerCase().trim();
+  if (!normalized) {
+    return "png";
+  }
+  if (normalized.includes("jpeg")) {
+    return "jpg";
+  }
+  const slashIndex = normalized.indexOf("/");
+  return slashIndex >= 0 ? normalized.slice(slashIndex + 1) || "png" : "png";
 }
 
 async function fetchImageBuffer(
@@ -267,7 +278,12 @@ async function fetchImageBuffer(
     auditContext: "fal-image-download",
   });
   try {
-    await assertOkOrThrowProviderError(response, "fal image download failed");
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `fal image download failed (${response.status}): ${text || response.statusText}`,
+      );
+    }
     const mimeType = response.headers.get("content-type")?.trim() || "image/png";
     const arrayBuffer = await response.arrayBuffer();
     return { buffer: Buffer.from(arrayBuffer), mimeType };
@@ -282,11 +298,6 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
     label: "fal",
     defaultModel: DEFAULT_FAL_IMAGE_MODEL,
     models: [DEFAULT_FAL_IMAGE_MODEL, `${DEFAULT_FAL_IMAGE_MODEL}/${DEFAULT_FAL_EDIT_SUBPATH}`],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "fal",
-        agentDir,
-      }),
     capabilities: {
       generate: {
         maxCount: 4,
@@ -297,18 +308,15 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       edit: {
         enabled: true,
         maxCount: 4,
-        maxInputImages: GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
+        maxInputImages: 1,
         supportsSize: true,
-        supportsAspectRatio: true,
+        supportsAspectRatio: false,
         supportsResolution: true,
       },
       geometry: {
         sizes: [...FAL_SUPPORTED_SIZES],
         aspectRatios: [...FAL_SUPPORTED_ASPECT_RATIOS],
         resolutions: ["1K", "2K", "4K"],
-      },
-      output: {
-        formats: [...FAL_OUTPUT_FORMATS],
       },
     },
     async generateImage(req) {
@@ -321,8 +329,11 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       if (!auth.apiKey) {
         throw new Error("fal API key missing");
       }
-      const inputImageCount = req.inputImages?.length ?? 0;
-      const hasInputImages = inputImageCount > 0;
+      if ((req.inputImages?.length ?? 0) > 1) {
+        throw new Error("fal image generation currently supports at most one reference image");
+      }
+
+      const hasInputImages = (req.inputImages?.length ?? 0) > 0;
       const imageSize = resolveFalImageSize({
         size: req.size,
         resolution: req.resolution,
@@ -330,71 +341,14 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         hasInputImages,
       });
       const model = ensureFalModelPath(req.model, hasInputImages);
-
-      const isGptImageEditModel = model.startsWith("openai/gpt-image-");
-      const isNanoBananaEditModel = model.startsWith("fal-ai/nano-banana-");
-      if (
-        hasInputImages &&
-        isGptImageEditModel &&
-        inputImageCount > GPT_IMAGE_EDIT_MAX_INPUT_IMAGES
-      ) {
-        throw new Error(
-          `fal GPT Image edit supports at most ${GPT_IMAGE_EDIT_MAX_INPUT_IMAGES} reference images (requested ${inputImageCount})`,
-        );
-      }
-      if (
-        hasInputImages &&
-        isNanoBananaEditModel &&
-        inputImageCount > NANO_BANANA_EDIT_MAX_INPUT_IMAGES
-      ) {
-        throw new Error(
-          `fal Nano Banana edit supports at most ${NANO_BANANA_EDIT_MAX_INPUT_IMAGES} reference images (requested ${inputImageCount})`,
-        );
-      }
-
-      // Flux/custom edit endpoints use the singular image_url contract.
-      if (hasInputImages && !isGptImageEditModel && !isNanoBananaEditModel) {
-        if (inputImageCount > 1) {
-          throw new Error(
-            "fal flux image generation currently supports at most one reference image",
-          );
-        }
-        if (req.aspectRatio) {
-          throw new Error("fal flux image edit endpoint does not support aspectRatio overrides");
-        }
-      }
-      const explicitBaseUrl = req.cfg?.models?.providers?.fal?.baseUrl?.trim();
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: explicitBaseUrl,
-          defaultBaseUrl: DEFAULT_FAL_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Key ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "fal",
-          capability: "image",
-          transport: "http",
-        });
-      const networkPolicy = resolveFalNetworkPolicy({ baseUrl, allowPrivateNetwork });
+      const networkPolicy = resolveFalNetworkPolicy(req.cfg);
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
         num_images: req.count ?? 1,
-        output_format: req.outputFormat ?? DEFAULT_OUTPUT_FORMAT,
+        output_format: DEFAULT_OUTPUT_FORMAT,
       };
       if (imageSize !== undefined) {
-        // NB2 edit uses its own geometry schema; GPT Image 2 and Flux use image_size
-        if (model.startsWith("fal-ai/nano-banana-") && hasInputImages) {
-          if (req.aspectRatio) {
-            requestBody.aspect_ratio = req.aspectRatio;
-          }
-          if (req.resolution) {
-            requestBody.resolution = req.resolution;
-          }
-        } else {
-          requestBody.image_size = imageSize;
-        }
+        requestBody.image_size = imageSize;
       }
 
       if (hasInputImages) {
@@ -402,43 +356,45 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         if (!input) {
           throw new Error("fal image edit request missing reference image");
         }
-        // GPT Image 2 and NB2 use image_urls (array); Flux uses image_url (singular)
-        if (isGptImageEditModel || isNanoBananaEditModel) {
-          requestBody.image_urls = req.inputImages!.map((img) => toImageDataUrl(img));
-        } else {
-          requestBody.image_url = toImageDataUrl(input);
-        }
+        requestBody.image_url = toDataUri(input.buffer, input.mimeType);
       }
+
       const { response, release } = await falFetchGuard({
-        url: `${baseUrl}/${model}`,
+        url: `${resolveFalBaseUrl(req.cfg)}/${model}`,
         init: {
           method: "POST",
-          headers,
+          headers: {
+            Authorization: `Key ${auth.apiKey}`,
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify(requestBody),
         },
-        timeoutMs: req.timeoutMs,
         policy: networkPolicy.apiPolicy,
-        dispatcherPolicy,
         auditContext: "fal-image-generate",
       });
       try {
-        await assertOkOrThrowHttpError(response, "fal image generation failed");
+        if (!response.ok) {
+          const text = await response.text().catch(() => "");
+          throw new Error(
+            `fal image generation failed (${response.status}): ${text || response.statusText}`,
+          );
+        }
 
-        const payload = parseFalImageGenerationResponse(await response.json());
+        const payload = (await response.json()) as FalImageGenerationResponse;
         const images: GeneratedImageAsset[] = [];
         let imageIndex = 0;
-        for (const entry of payload.images) {
-          const url = normalizeOptionalString(entry.url);
+        for (const entry of payload.images ?? []) {
+          const url = entry.url?.trim();
           if (!url) {
-            throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
+            continue;
           }
           const downloaded = await fetchImageBuffer(url, networkPolicy);
           imageIndex += 1;
           images.push({
             buffer: downloaded.buffer,
             mimeType: downloaded.mimeType,
-            fileName: `image-${imageIndex}.${imageFileExtensionForMimeType(
-              downloaded.mimeType || normalizeOptionalString(entry.content_type),
+            fileName: `image-${imageIndex}.${fileExtensionForMimeType(
+              downloaded.mimeType || entry.content_type,
             )}`,
           });
         }

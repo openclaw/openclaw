@@ -5,22 +5,17 @@
  * Enforced at runtime when creating sandbox containers.
  */
 
-import os from "node:os";
-import path from "node:path";
-import { resolveRequiredHomeDir, resolveRequiredOsHomeDir } from "../../infra/home-dir.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
-  getSandboxHostPathPolicyKey,
-  isSandboxHostPathAbsolute,
   normalizeSandboxHostPath,
   resolveSandboxHostPathViaExistingAncestor,
 } from "./host-paths.js";
 import { getBlockedNetworkModeReason } from "./network-mode.js";
 
 // Targeted denylist: host paths that should never be exposed inside sandbox containers.
-const BLOCKED_HOST_PATHS = [
+// Exported for reuse in security audit collectors.
+export const BLOCKED_HOST_PATHS = [
   "/etc",
   "/private/etc",
   "/proc",
@@ -37,26 +32,9 @@ const BLOCKED_HOST_PATHS = [
   "/run/docker.sock",
 ];
 
-const BLOCKED_HOME_SUBPATHS = [
-  ".aws",
-  ".cargo",
-  ".config",
-  ".docker",
-  ".gnupg",
-  ".netrc",
-  ".npm",
-  ".ssh",
-] as const;
-
 const BLOCKED_SECCOMP_PROFILES = new Set(["unconfined"]);
 const BLOCKED_APPARMOR_PROFILES = new Set(["unconfined"]);
 const RESERVED_CONTAINER_TARGET_PATHS = ["/workspace", SANDBOX_AGENT_WORKSPACE_MOUNT];
-let blockedHostPathsCache:
-  | {
-      key: string;
-      paths: string[];
-    }
-  | undefined;
 
 export type ValidateBindMountsOptions = {
   allowedSourceRoots?: string[];
@@ -93,19 +71,18 @@ function parseBindSpec(bind: string): ParsedBindSpec {
  * Parse the host/source path from a Docker bind mount string.
  * Format: `source:target[:mode]`
  */
-function parseBindSourcePath(bind: string): string {
+export function parseBindSourcePath(bind: string): string {
   return parseBindSpec(bind).source.trim();
 }
 
-function parseBindTargetPath(bind: string): string {
+export function parseBindTargetPath(bind: string): string {
   return parseBindSpec(bind).target.trim();
 }
 
 /**
  * Normalize a POSIX path: resolve `.`, `..`, collapse `//`, strip trailing `/`.
- * If it starts with the drive letter, convert it to the upper case.
  */
-function normalizeHostPath(raw: string): string {
+export function normalizeHostPath(raw: string): string {
   return normalizeSandboxHostPath(raw);
 }
 
@@ -118,84 +95,25 @@ function normalizeHostPath(raw: string): string {
  */
 export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   const sourceRaw = parseBindSourcePath(bind);
-  if (!isSandboxHostPathAbsolute(sourceRaw)) {
+  if (!sourceRaw.startsWith("/")) {
     return { kind: "non_absolute", sourcePath: sourceRaw };
   }
+
   const normalized = normalizeHostPath(sourceRaw);
-  const blockedHostPaths = getBlockedHostPaths();
-  const directReason = getBlockedReasonForSourcePath(normalized, blockedHostPaths);
-  if (directReason) {
-    return directReason;
-  }
-
-  const canonical = resolveSandboxHostPathViaExistingAncestor(normalized);
-  if (canonical !== normalized) {
-    return getBlockedReasonForSourcePath(canonical, blockedHostPaths);
-  }
-
-  return null;
+  return getBlockedReasonForSourcePath(normalized);
 }
 
-function getBlockedReasonForSourcePath(
-  sourceNormalized: string,
-  blockedHostPaths: string[],
-): BlockedBindReason | null {
+export function getBlockedReasonForSourcePath(sourceNormalized: string): BlockedBindReason | null {
   if (sourceNormalized === "/") {
     return { kind: "covers", blockedPath: "/" };
   }
-  const sourceKey = getSandboxHostPathPolicyKey(sourceNormalized);
-  for (const blocked of blockedHostPaths) {
-    const blockedKey = getSandboxHostPathPolicyKey(blocked);
-    if (sourceKey === blockedKey || sourceKey.startsWith(`${blockedKey}/`)) {
+  for (const blocked of BLOCKED_HOST_PATHS) {
+    if (sourceNormalized === blocked || sourceNormalized.startsWith(blocked + "/")) {
       return { kind: "targets", blockedPath: blocked };
     }
   }
 
   return null;
-}
-
-function getBlockedHostPaths(): string[] {
-  const cacheKey = JSON.stringify({
-    home: process.env.HOME,
-    openclawHome: process.env.OPENCLAW_HOME,
-    osHome: os.homedir(),
-    userProfile: process.env.USERPROFILE,
-  });
-  if (blockedHostPathsCache?.key === cacheKey) {
-    return blockedHostPathsCache.paths;
-  }
-  const blocked = new Set(BLOCKED_HOST_PATHS.map(normalizeHostPath));
-  for (const home of getBlockedHomeRoots()) {
-    for (const suffix of BLOCKED_HOME_SUBPATHS) {
-      blocked.add(normalizeHostPath(path.posix.join(home, suffix)));
-    }
-  }
-  blockedHostPathsCache = { key: cacheKey, paths: [...blocked] };
-  return blockedHostPathsCache.paths;
-}
-
-function getBlockedHomeRoots(): string[] {
-  const roots = new Set<string>();
-  for (const candidate of [
-    process.env.OPENCLAW_HOME,
-    process.env.HOME,
-    process.env.USERPROFILE,
-    resolveRequiredHomeDir(process.env, os.homedir),
-    resolveRequiredOsHomeDir(process.env, os.homedir),
-  ]) {
-    if (!candidate) {
-      continue;
-    }
-    const normalized = normalizeHostPath(candidate);
-    if (normalized !== "/") {
-      roots.add(normalized);
-    }
-    const canonical = resolveSandboxHostPathViaExistingAncestor(normalized);
-    if (canonical !== "/") {
-      roots.add(canonical);
-    }
-  }
-  return [...roots];
 }
 
 function normalizeAllowedRoots(roots: string[] | undefined): string[] {
@@ -204,7 +122,7 @@ function normalizeAllowedRoots(roots: string[] | undefined): string[] {
   }
   const normalized = roots
     .map((entry) => entry.trim())
-    .filter(isSandboxHostPathAbsolute)
+    .filter((entry) => entry.startsWith("/"))
     .map(normalizeHostPath);
   const expanded = new Set<string>();
   for (const root of normalized) {
@@ -221,9 +139,7 @@ function isPathInsidePosix(root: string, target: string): boolean {
   if (root === "/") {
     return true;
   }
-  const rootKey = getSandboxHostPathPolicyKey(root);
-  const targetKey = getSandboxHostPathPolicyKey(target);
-  return targetKey === rootKey || targetKey.startsWith(`${rootKey}/`);
+  return target === root || target.startsWith(`${root}/`);
 }
 
 function getOutsideAllowedRootsReason(
@@ -267,10 +183,9 @@ function enforceSourcePathPolicy(params: {
   bind: string;
   sourcePath: string;
   allowedRoots: string[];
-  blockedHostPaths: string[];
   allowSourcesOutsideAllowedRoots: boolean;
 }): void {
-  const blockedReason = getBlockedReasonForSourcePath(params.sourcePath, params.blockedHostPaths);
+  const blockedReason = getBlockedReasonForSourcePath(params.sourcePath);
   if (blockedReason) {
     throw formatBindBlockedError({ bind: params.bind, reason: blockedReason });
   }
@@ -287,7 +202,7 @@ function formatBindBlockedError(params: { bind: string; reason: BlockedBindReaso
   if (params.reason.kind === "non_absolute") {
     return new Error(
       `Sandbox security: bind mount "${params.bind}" uses a non-absolute source path ` +
-        `"${params.reason.sourcePath}". Only absolute POSIX or Windows drive-letter paths are supported for sandbox binds.`,
+        `"${params.reason.sourcePath}". Only absolute POSIX paths are supported for sandbox binds.`,
     );
   }
   if (params.reason.kind === "outside_allowed_roots") {
@@ -306,7 +221,7 @@ function formatBindBlockedError(params: { bind: string; reason: BlockedBindReaso
   const verb = params.reason.kind === "covers" ? "covers" : "targets";
   return new Error(
     `Sandbox security: bind mount "${params.bind}" ${verb} blocked path "${params.reason.blockedPath}". ` +
-      "Mounting system directories, credential paths, or Docker socket paths into sandbox containers is not allowed. " +
+      "Mounting system directories (or Docker socket paths) into sandbox containers is not allowed. " +
       "Use project-specific paths instead (e.g. /home/user/myproject).",
   );
 }
@@ -325,7 +240,6 @@ export function validateBindMounts(
   }
 
   const allowedRoots = normalizeAllowedRoots(options?.allowedSourceRoots);
-  const blockedHostPaths = getBlockedHostPaths();
 
   for (const rawBind of binds) {
     const bind = rawBind.trim();
@@ -352,7 +266,6 @@ export function validateBindMounts(
       bind,
       sourcePath: sourceNormalized,
       allowedRoots,
-      blockedHostPaths,
       allowSourcesOutsideAllowedRoots: options?.allowSourcesOutsideAllowedRoots === true,
     });
 
@@ -362,7 +275,6 @@ export function validateBindMounts(
       bind,
       sourcePath: sourceCanonical,
       allowedRoots,
-      blockedHostPaths,
       allowSourcesOutsideAllowedRoots: options?.allowSourcesOutsideAllowedRoots === true,
     });
   }
@@ -394,7 +306,7 @@ export function validateNetworkMode(
 }
 
 export function validateSeccompProfile(profile: string | undefined): void {
-  if (profile && BLOCKED_SECCOMP_PROFILES.has(normalizeOptionalLowercaseString(profile) ?? "")) {
+  if (profile && BLOCKED_SECCOMP_PROFILES.has(profile.trim().toLowerCase())) {
     throw new Error(
       `Sandbox security: seccomp profile "${profile}" is blocked. ` +
         "Disabling seccomp removes syscall filtering and weakens sandbox isolation. " +
@@ -404,7 +316,7 @@ export function validateSeccompProfile(profile: string | undefined): void {
 }
 
 export function validateApparmorProfile(profile: string | undefined): void {
-  if (profile && BLOCKED_APPARMOR_PROFILES.has(normalizeOptionalLowercaseString(profile) ?? "")) {
+  if (profile && BLOCKED_APPARMOR_PROFILES.has(profile.trim().toLowerCase())) {
     throw new Error(
       `Sandbox security: apparmor profile "${profile}" is blocked. ` +
         "Disabling AppArmor removes mandatory access controls and weakens sandbox isolation. " +

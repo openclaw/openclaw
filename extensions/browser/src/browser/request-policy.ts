@@ -1,5 +1,3 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-
 type BrowserRequestProfileParams = {
   query?: Record<string, unknown>;
   body?: unknown;
@@ -32,16 +30,20 @@ export function isPersistentBrowserProfileMutation(method: string, path: string)
 export function resolveRequestedBrowserProfile(
   params: BrowserRequestProfileParams,
 ): string | undefined {
-  const queryProfile = normalizeOptionalString(params.query?.profile);
+  const queryProfile =
+    typeof params.query?.profile === "string" ? params.query.profile.trim() : undefined;
   if (queryProfile) {
     return queryProfile;
   }
   if (params.body && typeof params.body === "object") {
     const bodyProfile =
-      "profile" in params.body ? normalizeOptionalString(params.body.profile) : undefined;
+      "profile" in params.body && typeof params.body.profile === "string"
+        ? params.body.profile.trim()
+        : undefined;
     if (bodyProfile) {
       return bodyProfile;
     }
   }
-  return normalizeOptionalString(params.profile);
+  const explicitProfile = typeof params.profile === "string" ? params.profile.trim() : undefined;
+  return explicitProfile || undefined;
 }

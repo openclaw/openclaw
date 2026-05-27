@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveSecretInputRef,
   type SecretProviderConfig,
@@ -97,20 +97,18 @@ export function buildConfigureCandidatesForScope(params: {
       const refPathExists = entry.refPathSegments
         ? hasPathInAuthoredConfig(entry.refPathSegments)
         : false;
-      return Object.assign(
-        {
-          type: entry.entry.targetType,
-          path: entry.path,
-          pathSegments: [...entry.pathSegments],
-          label: entry.path,
-          configFile: `openclaw.json` as const,
-          expectedResolvedValue: entry.entry.expectedResolvedValue,
-        },
-        resolved.ref ? { existingRef: resolved.ref } : {},
-        pathExists || refPathExists ? {} : { isDerived: true },
-        entry.providerId ? { providerId: entry.providerId } : {},
-        entry.accountId ? { accountId: entry.accountId } : {},
-      );
+      return {
+        type: entry.entry.targetType,
+        path: entry.path,
+        pathSegments: [...entry.pathSegments],
+        label: entry.path,
+        configFile: "openclaw.json" as const,
+        expectedResolvedValue: entry.entry.expectedResolvedValue,
+        ...(resolved.ref ? { existingRef: resolved.ref } : {}),
+        ...(pathExists || refPathExists ? {} : { isDerived: true }),
+        ...(entry.providerId ? { providerId: entry.providerId } : {}),
+        ...(entry.accountId ? { accountId: entry.accountId } : {}),
+      };
     });
 
   const authCandidates =
@@ -132,19 +130,17 @@ export function buildConfigureCandidatesForScope(params: {
               refValue: entry.refValue,
               defaults: params.config.secrets?.defaults,
             });
-            return Object.assign(
-              {
-                type: entry.entry.targetType,
-                path: entry.path,
-                pathSegments: [...entry.pathSegments],
-                label: `${entry.path} (auth profile, agent ${authProfiles.agentId})`,
-                configFile: `auth-profiles.json` as const,
-                expectedResolvedValue: entry.entry.expectedResolvedValue,
-              },
-              resolved.ref ? { existingRef: resolved.ref } : {},
-              { agentId: authProfiles.agentId },
-              authProfileProvider ? { authProfileProvider } : {},
-            );
+            return {
+              type: entry.entry.targetType,
+              path: entry.path,
+              pathSegments: [...entry.pathSegments],
+              label: `${entry.path} (auth profile, agent ${authProfiles.agentId})`,
+              configFile: "auth-profiles.json" as const,
+              expectedResolvedValue: entry.entry.expectedResolvedValue,
+              ...(resolved.ref ? { existingRef: resolved.ref } : {}),
+              agentId: authProfiles.agentId,
+              ...(authProfileProvider ? { authProfileProvider } : {}),
+            };
           });
 
   return [...openclawCandidates, ...authCandidates].toSorted((a, b) =>
@@ -238,20 +234,16 @@ export function buildSecretsConfigurePlan(params: {
     protocolVersion: 1,
     generatedAt: params.generatedAt ?? new Date().toISOString(),
     generatedBy: "openclaw secrets configure",
-    targets: [...params.selectedTargets.values()].map((entry) =>
-      Object.assign(
-        {
-          type: entry.type,
-          path: entry.path,
-          pathSegments: [...entry.pathSegments],
-          ref: entry.ref,
-        },
-        entry.agentId ? { agentId: entry.agentId } : {},
-        entry.providerId ? { providerId: entry.providerId } : {},
-        entry.accountId ? { accountId: entry.accountId } : {},
-        entry.authProfileProvider ? { authProfileProvider: entry.authProfileProvider } : {},
-      ),
-    ),
+    targets: [...params.selectedTargets.values()].map((entry) => ({
+      type: entry.type,
+      path: entry.path,
+      pathSegments: [...entry.pathSegments],
+      ref: entry.ref,
+      ...(entry.agentId ? { agentId: entry.agentId } : {}),
+      ...(entry.providerId ? { providerId: entry.providerId } : {}),
+      ...(entry.accountId ? { accountId: entry.accountId } : {}),
+      ...(entry.authProfileProvider ? { authProfileProvider: entry.authProfileProvider } : {}),
+    })),
     ...(Object.keys(params.providerChanges.upserts).length > 0
       ? { providerUpserts: params.providerChanges.upserts }
       : {}),

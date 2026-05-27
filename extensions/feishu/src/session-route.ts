@@ -2,8 +2,7 @@ import {
   buildChannelOutboundSessionRoute,
   stripChannelTargetPrefix,
   type ChannelOutboundSessionRouteParams,
-} from "openclaw/plugin-sdk/channel-core";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+} from "openclaw/plugin-sdk/core";
 
 export function resolveFeishuOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   let trimmed = stripChannelTargetPrefix(params.target, "feishu", "lark");
@@ -11,7 +10,7 @@ export function resolveFeishuOutboundSessionRoute(params: ChannelOutboundSession
     return null;
   }
 
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  const lower = trimmed.toLowerCase();
   let isGroup = false;
   let typeExplicit = false;
 
@@ -26,7 +25,7 @@ export function resolveFeishuOutboundSessionRoute(params: ChannelOutboundSession
   }
 
   if (!typeExplicit) {
-    const idLower = normalizeLowercaseStringOrEmpty(trimmed);
+    const idLower = trimmed.toLowerCase();
     if (idLower.startsWith("ou_") || idLower.startsWith("on_")) {
       isGroup = false;
     }

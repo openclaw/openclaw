@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
 const {
   normalizeRoute,
@@ -19,7 +18,6 @@ const {
   ) => { ok: boolean; terminal: string; loop?: boolean };
   runDocsLinkAuditCli: (options?: {
     args?: string[];
-    nodeVersion?: string;
     spawnSyncImpl?: (
       command: string,
       args: string[],
@@ -97,8 +95,7 @@ describe("docs-link-audit", () => {
   });
 
   it("builds an English-only docs tree for anchor audits", () => {
-    const tempDirs: string[] = [];
-    const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-fixture-");
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "docs-link-audit-fixture-"));
     const docsRoot = path.join(fixtureRoot, "docs");
     fs.mkdirSync(path.join(docsRoot, "help"), { recursive: true });
     fs.mkdirSync(path.join(docsRoot, "zh-CN", "help"), { recursive: true });
@@ -143,11 +140,11 @@ describe("docs-link-audit", () => {
       });
     } finally {
       fs.rmSync(anchorDocsDir, { recursive: true, force: true });
-      cleanupTempDirs(tempDirs);
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }
   });
 
-  it("uses Mintlify through pnpm dlx for anchor validation", () => {
+  it("prefers a local mint binary for anchor validation", () => {
     let invocation:
       | {
           command: string;
@@ -160,7 +157,6 @@ describe("docs-link-audit", () => {
 
     const exitCode = runDocsLinkAuditCli({
       args: ["--anchors"],
-      nodeVersion: "22.21.1",
       prepareAnchorAuditDocsDirImpl() {
         return anchorDocsDir;
       },
@@ -174,18 +170,15 @@ describe("docs-link-audit", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(invocation).toEqual({
-      command: "pnpm",
-      args: ["dlx", "mint", "broken-links", "--check-anchors"],
-      options: {
-        cwd: anchorDocsDir,
-        stdio: "inherit",
-      },
-    });
+    expect(invocation).toBeDefined();
+    expect(invocation?.command).toBe("mint");
+    expect(invocation?.args).toEqual(["broken-links", "--check-anchors"]);
+    expect(invocation?.options.stdio).toBe("inherit");
+    expect(invocation?.options.cwd).toBe(anchorDocsDir);
     expect(cleanedDir).toBe(anchorDocsDir);
   });
 
-  it("wraps Mintlify with Node 22 when the current Node is too new", () => {
+  it("falls back to pnpm dlx when mint is not on PATH", () => {
     const invocations: Array<{
       command: string;
       args: string[];
@@ -196,7 +189,6 @@ describe("docs-link-audit", () => {
 
     const exitCode = runDocsLinkAuditCli({
       args: ["--anchors"],
-      nodeVersion: "25.3.0",
       prepareAnchorAuditDocsDirImpl() {
         return anchorDocsDir;
       },
@@ -205,32 +197,27 @@ describe("docs-link-audit", () => {
       },
       spawnSyncImpl(command, args, options) {
         invocations.push({ command, args, options });
+        if (command === "mint") {
+          return { status: null, error: { code: "ENOENT" } };
+        }
         return { status: 0 };
       },
     });
 
     expect(exitCode).toBe(0);
     expect(invocations).toHaveLength(2);
-    const [versionCheck, linkCheck] = invocations;
-    if (!versionCheck || !linkCheck) {
-      throw new Error("Expected Mintlify wrapper invocations");
-    }
-    expect(versionCheck).toEqual({
-      command: "fnm",
-      args: [
-        "exec",
-        "--using=22",
-        "node",
-        "-e",
-        "process.exit(Number(process.versions.node.split('.')[0]) === 22 ? 0 : 1)",
-      ],
-      options: { cwd: anchorDocsDir, stdio: "ignore" },
+    expect(invocations[0]).toMatchObject({
+      command: "mint",
+      args: ["broken-links", "--check-anchors"],
+      options: { stdio: "inherit" },
     });
-    expect(linkCheck).toEqual({
-      command: "fnm",
-      args: ["exec", "--using=22", "pnpm", "dlx", "mint", "broken-links", "--check-anchors"],
-      options: { cwd: anchorDocsDir, stdio: "inherit" },
+    expect(invocations[1]).toMatchObject({
+      command: "pnpm",
+      args: ["dlx", "mint", "broken-links", "--check-anchors"],
+      options: { stdio: "inherit" },
     });
+    expect(invocations[0]?.options.cwd).toBe(anchorDocsDir);
+    expect(invocations[1]?.options.cwd).toBe(anchorDocsDir);
     expect(cleanedDir).toBe(anchorDocsDir);
   });
 });

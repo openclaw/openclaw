@@ -1,13 +1,15 @@
 import {
+  buildChannelConfigSchema,
+  BlockStreamingCoalesceSchema,
+  DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ReplyRuntimeConfigSchemaShape,
   ToolPolicySchema,
-  buildChannelConfigSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import { ircChannelConfigUiHints } from "./config-ui-hints.js";
 
 const IrcGroupSchema = z
@@ -42,7 +44,7 @@ const IrcNickServSchema = z
     }
   });
 
-const IrcAccountSchemaBase = z
+export const IrcAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
@@ -68,7 +70,7 @@ const IrcAccountSchemaBase = z
   })
   .strict();
 
-const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
+export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,

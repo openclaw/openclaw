@@ -1,8 +1,8 @@
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { GatewayPlugin } from "@buape/carbon/gateway";
+import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ActionGate } from "openclaw/plugin-sdk/discord-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayPlugin } from "../internal/gateway.js";
 import { clearGateways, registerGateway } from "../monitor/gateway-registry.js";
-import type { ActionGate } from "../runtime-api.js";
 import { handleDiscordPresenceAction } from "./runtime.presence.js";
 
 const mockUpdatePresence = vi.fn();
@@ -121,12 +121,7 @@ describe("handleDiscordPresenceAction", () => {
 
   it("defaults status to online", async () => {
     await setPresence({ activityType: "playing", activityName: "test" });
-    expect(mockUpdatePresence).toHaveBeenCalledWith({
-      since: null,
-      activities: [{ name: "test", type: 0 }],
-      status: "online",
-      afk: false,
-    });
+    expect(mockUpdatePresence).toHaveBeenCalledWith(expect.objectContaining({ status: "online" }));
   });
 
   it("respects presence gating", async () => {

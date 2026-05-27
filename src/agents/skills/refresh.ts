@@ -1,46 +1,30 @@
 import os from "node:os";
 import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
-import {
-  bumpSkillsSnapshotVersion,
-  resetSkillsRefreshStateForTest,
-  setSkillsChangeListenerErrorHandler,
-} from "./refresh-state.js";
-export {
-  bumpSkillsSnapshotVersion,
-  getSkillsSnapshotVersion,
-  registerSkillsChangeListener,
-  shouldRefreshSnapshotForVersion,
-  type SkillsChangeEvent,
-} from "./refresh-state.js";
 
-type SkillsPathWatchState = {
+type SkillsChangeEvent = {
+  workspaceDir?: string;
+  reason: "watch" | "manual" | "remote-node";
+  changedPath?: string;
+};
+
+type SkillsWatchState = {
   watcher: FSWatcher;
+  pathsKey: string;
   debounceMs: number;
   timer?: ReturnType<typeof setTimeout>;
   pendingPath?: string;
-  readonly subscribers: Set<string>;
 };
 
 const log = createSubsystemLogger("gateway/skills");
-// One watcher per unique watched directory. Agent workspaces that include the
-// same shared skill root (the global skills dir, the home skills dir, or a
-// configured extra/plugin dir) subscribe to the same watcher instead of each
-// opening its own, so open file descriptors scale with distinct directories
-// rather than with agent count.
-const pathWatchers = new Map<string, SkillsPathWatchState>();
-// Watch targets each workspace is currently subscribed to, used to reconcile
-// subscriptions and to detect watch-target changes across calls.
-const workspaceWatchTargets = new Map<string, string[]>();
-
-setSkillsChangeListenerErrorHandler((err) => {
-  log.warn(`skills change listener failed: ${String(err)}`);
-});
+const listeners = new Set<(event: SkillsChangeEvent) => void>();
+const workspaceVersions = new Map<string, number>();
+const watchers = new Map<string, SkillsWatchState>();
+let globalVersion = 0;
 
 export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.git([\\/]|$)/,
@@ -57,6 +41,21 @@ export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.cache([\\/]|$)/,
 ];
 
+function bumpVersion(current: number): number {
+  const now = Date.now();
+  return now <= current ? current + 1 : now;
+}
+
+function emit(event: SkillsChangeEvent) {
+  for (const listener of listeners) {
+    try {
+      listener(event);
+    } catch (err) {
+      log.warn(`skills change listener failed: ${String(err)}`);
+    }
+  }
+}
+
 function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): string[] {
   const paths: string[] = [];
   if (workspaceDir.trim()) {
@@ -67,7 +66,7 @@ function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): strin
   paths.push(path.join(os.homedir(), ".agents", "skills"));
   const extraDirsRaw = config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw
-    .map((d) => normalizeOptionalString(d) ?? "")
+    .map((d) => (typeof d === "string" ? d.trim() : ""))
     .filter(Boolean)
     .map((dir) => resolveUserPath(dir));
   paths.push(...extraDirs);
@@ -76,68 +75,109 @@ function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): strin
   return paths;
 }
 
-function toWatchRoot(raw: string): string {
-  const normalized = raw.replaceAll("\\", "/");
-  return normalized.replace(/\/+$/, "") || normalized;
+function toWatchGlobRoot(raw: string): string {
+  // Chokidar treats globs as POSIX-ish patterns. Normalize Windows separators
+  // so `*` works consistently across platforms.
+  return raw.replaceAll("\\", "/").replace(/\/+$/, "");
 }
 
 function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): string[] {
+  // Skills are defined by SKILL.md; watch only those files to avoid traversing
+  // or watching unrelated large trees (e.g. datasets) that can exhaust FDs.
   const targets = new Set<string>();
   for (const root of resolveWatchPaths(workspaceDir, config)) {
-    targets.add(toWatchRoot(root));
+    const globRoot = toWatchGlobRoot(root);
+    // Some configs point directly at a skill folder.
+    targets.add(`${globRoot}/SKILL.md`);
+    // Standard layout: <skillsRoot>/<skillName>/SKILL.md
+    targets.add(`${globRoot}/*/SKILL.md`);
   }
   return Array.from(targets).toSorted();
 }
 
-export function shouldIgnoreSkillsWatchPath(
-  watchPath: string,
-  stats?: { isDirectory?: () => boolean },
-): boolean {
-  if (DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(watchPath))) {
-    return true;
-  }
-  if (stats?.isDirectory?.()) {
-    return false;
-  }
-  if (!stats) {
-    return false;
-  }
-  const normalized = watchPath.replaceAll("\\", "/");
-  return path.posix.basename(normalized) !== "SKILL.md";
+export function registerSkillsChangeListener(listener: (event: SkillsChangeEvent) => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
-function resolveWatchDebounceMs(config?: OpenClawConfig): number {
-  const raw = config?.skills?.load?.watchDebounceMs;
-  return typeof raw === "number" && Number.isFinite(raw) ? Math.max(0, raw) : 250;
+export function bumpSkillsSnapshotVersion(params?: {
+  workspaceDir?: string;
+  reason?: SkillsChangeEvent["reason"];
+  changedPath?: string;
+}): number {
+  const reason = params?.reason ?? "manual";
+  const changedPath = params?.changedPath;
+  if (params?.workspaceDir) {
+    const current = workspaceVersions.get(params.workspaceDir) ?? 0;
+    const next = bumpVersion(current);
+    workspaceVersions.set(params.workspaceDir, next);
+    emit({ workspaceDir: params.workspaceDir, reason, changedPath });
+    return next;
+  }
+  globalVersion = bumpVersion(globalVersion);
+  emit({ reason, changedPath });
+  return globalVersion;
 }
 
-// Requires resolveWatchTargets to produce a stable-order result (it returns a
-// sorted array); positional comparison is intentional for hot-path efficiency.
-function sameWatchTargets(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) {
-    return false;
+export function getSkillsSnapshotVersion(workspaceDir?: string): number {
+  if (!workspaceDir) {
+    return globalVersion;
   }
-  for (let index = 0; index < a.length; index++) {
-    if (a[index] !== b[index]) {
-      return false;
+  const local = workspaceVersions.get(workspaceDir) ?? 0;
+  return Math.max(globalVersion, local);
+}
+
+export function ensureSkillsWatcher(params: { workspaceDir: string; config?: OpenClawConfig }) {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir) {
+    return;
+  }
+  const watchEnabled = params.config?.skills?.load?.watch !== false;
+  const debounceMsRaw = params.config?.skills?.load?.watchDebounceMs;
+  const debounceMs =
+    typeof debounceMsRaw === "number" && Number.isFinite(debounceMsRaw)
+      ? Math.max(0, debounceMsRaw)
+      : 250;
+
+  const existing = watchers.get(workspaceDir);
+  if (!watchEnabled) {
+    if (existing) {
+      watchers.delete(workspaceDir);
+      if (existing.timer) {
+        clearTimeout(existing.timer);
+      }
+      void existing.watcher.close().catch(() => {});
     }
+    return;
   }
-  return true;
-}
 
-function createSkillsPathWatcher(watchPath: string, debounceMs: number): SkillsPathWatchState {
-  const watcher = chokidar.watch(watchPath, {
+  const watchTargets = resolveWatchTargets(workspaceDir, params.config);
+  const pathsKey = watchTargets.join("|");
+  if (existing && existing.pathsKey === pathsKey && existing.debounceMs === debounceMs) {
+    return;
+  }
+  if (existing) {
+    watchers.delete(workspaceDir);
+    if (existing.timer) {
+      clearTimeout(existing.timer);
+    }
+    void existing.watcher.close().catch(() => {});
+  }
+
+  const watcher = chokidar.watch(watchTargets, {
     ignoreInitial: true,
-    // Skill discovery reads root skills, direct child skills, and one grouped skill level.
-    depth: 2,
     awaitWriteFinish: {
       stabilityThreshold: debounceMs,
       pollInterval: 100,
     },
-    ignored: shouldIgnoreSkillsWatchPath,
+    // Avoid FD exhaustion on macOS when a workspace contains huge trees.
+    // This watcher only needs to react to SKILL.md changes.
+    ignored: DEFAULT_SKILLS_WATCH_IGNORED,
   });
 
-  const state: SkillsPathWatchState = { watcher, debounceMs, subscribers: new Set<string>() };
+  const state: SkillsWatchState = { watcher, pathsKey, debounceMs };
 
   const schedule = (changedPath?: string) => {
     state.pendingPath = changedPath ?? state.pendingPath;
@@ -148,134 +188,31 @@ function createSkillsPathWatcher(watchPath: string, debounceMs: number): SkillsP
       const pendingPath = state.pendingPath;
       state.pendingPath = undefined;
       state.timer = undefined;
-      // Fan the change out to every workspace subscribed to this directory so a
-      // shared skill root refreshes the snapshot for all agents that use it.
-      for (const workspaceDir of state.subscribers) {
-        bumpSkillsSnapshotVersion({
-          workspaceDir,
-          reason: "watch",
-          changedPath: pendingPath,
-        });
-      }
+      bumpSkillsSnapshotVersion({
+        workspaceDir,
+        reason: "watch",
+        changedPath: pendingPath,
+      });
     }, debounceMs);
   };
 
   watcher.on("add", (p) => schedule(p));
   watcher.on("change", (p) => schedule(p));
   watcher.on("unlink", (p) => schedule(p));
-  watcher.on("unlinkDir", (p) => schedule(p));
   watcher.on("error", (err) => {
-    log.warn(`skills watcher error (${watchPath}): ${String(err)}`);
+    log.warn(`skills watcher error (${workspaceDir}): ${String(err)}`);
   });
 
-  return state;
-}
-
-function teardownSkillsPathWatcher(state: SkillsPathWatchState): void {
-  if (state.timer) {
-    clearTimeout(state.timer);
-  }
-  void state.watcher.close().catch(() => {});
-}
-
-function subscribeWorkspaceToPath(
-  workspaceDir: string,
-  watchPath: string,
-  debounceMs: number,
-): void {
-  const existing = pathWatchers.get(watchPath);
-  if (existing && existing.debounceMs === debounceMs) {
-    existing.subscribers.add(workspaceDir);
-    return;
-  }
-  if (existing) {
-    // Debounce changed (config reload): rebuild the shared watcher while
-    // preserving existing subscribers. Debounce is a gateway-global config
-    // value, so all workspaces normally request the same value and this branch
-    // does not fire; if it does, the most recent requested debounce wins for
-    // every subscriber of the shared path (last-writer-wins).
-    const next = createSkillsPathWatcher(watchPath, debounceMs);
-    for (const subscriber of existing.subscribers) {
-      next.subscribers.add(subscriber);
-    }
-    next.subscribers.add(workspaceDir);
-    teardownSkillsPathWatcher(existing);
-    pathWatchers.set(watchPath, next);
-    return;
-  }
-  const state = createSkillsPathWatcher(watchPath, debounceMs);
-  state.subscribers.add(workspaceDir);
-  pathWatchers.set(watchPath, state);
-}
-
-function unsubscribeWorkspaceFromPath(workspaceDir: string, watchPath: string): void {
-  const state = pathWatchers.get(watchPath);
-  if (!state) {
-    return;
-  }
-  state.subscribers.delete(workspaceDir);
-  if (state.subscribers.size === 0) {
-    teardownSkillsPathWatcher(state);
-    pathWatchers.delete(watchPath);
-  }
-}
-
-export function ensureSkillsWatcher(params: { workspaceDir: string; config?: OpenClawConfig }) {
-  const workspaceDir = params.workspaceDir.trim();
-  if (!workspaceDir) {
-    return;
-  }
-  const watchEnabled = params.config?.skills?.load?.watch !== false;
-  const debounceMs = resolveWatchDebounceMs(params.config);
-  const previousTargets = workspaceWatchTargets.get(workspaceDir) ?? [];
-
-  if (!watchEnabled) {
-    if (previousTargets.length > 0) {
-      for (const watchPath of previousTargets) {
-        unsubscribeWorkspaceFromPath(workspaceDir, watchPath);
-      }
-      workspaceWatchTargets.delete(workspaceDir);
-    }
-    return;
-  }
-
-  const watchTargets = resolveWatchTargets(workspaceDir, params.config);
-  const targetsUnchanged = sameWatchTargets(previousTargets, watchTargets);
-  const debounceUnchanged = watchTargets.every(
-    // undefined for paths not yet watched -> false -> fall through to subscribe.
-    (watchPath) => pathWatchers.get(watchPath)?.debounceMs === debounceMs,
-  );
-  if (targetsUnchanged && debounceUnchanged) {
-    return;
-  }
-  const watchTargetsChanged = previousTargets.length > 0 && !targetsUnchanged;
-
-  const nextTargets = new Set(watchTargets);
-  for (const watchPath of previousTargets) {
-    if (!nextTargets.has(watchPath)) {
-      unsubscribeWorkspaceFromPath(workspaceDir, watchPath);
-    }
-  }
-  for (const watchPath of watchTargets) {
-    subscribeWorkspaceToPath(workspaceDir, watchPath, debounceMs);
-  }
-  workspaceWatchTargets.set(workspaceDir, watchTargets);
-
-  if (watchTargetsChanged) {
-    bumpSkillsSnapshotVersion({
-      workspaceDir,
-      reason: "watch-targets",
-      changedPath: watchTargets.join("|"),
-    });
-  }
+  watchers.set(workspaceDir, state);
 }
 
 export async function resetSkillsRefreshForTest(): Promise<void> {
-  resetSkillsRefreshStateForTest();
+  listeners.clear();
+  workspaceVersions.clear();
+  globalVersion = 0;
 
-  const active = Array.from(pathWatchers.values());
-  pathWatchers.clear();
-  workspaceWatchTargets.clear();
+  const active = Array.from(watchers.values());
+  watchers.clear();
   await Promise.all(
     active.map(async (state) => {
       if (state.timer) {

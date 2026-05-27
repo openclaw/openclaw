@@ -1,5 +1,3 @@
-import { normalizeOptionalString } from "../string-coerce.ts";
-
 export type NodeTargetOption = {
   id: string;
   label: string;
@@ -23,13 +21,13 @@ export function resolveConfigAgents(config: Record<string, unknown> | null): Con
       return;
     }
     const record = entry as Record<string, unknown>;
-    const id = normalizeOptionalString(record.id) ?? "";
+    const id = typeof record.id === "string" ? record.id.trim() : "";
     if (!id) {
       return;
     }
-    const name = normalizeOptionalString(record.name);
+    const name = typeof record.name === "string" ? record.name.trim() : undefined;
     const isDefault = record.default === true;
-    agents.push({ id, name, isDefault, index, record });
+    agents.push({ id, name: name || undefined, isDefault, index, record });
   });
 
   return agents;
@@ -49,11 +47,15 @@ export function resolveNodeTargets(
       continue;
     }
 
-    const nodeId = normalizeOptionalString(node.nodeId) ?? "";
+    const nodeId = typeof node.nodeId === "string" ? node.nodeId.trim() : "";
     if (!nodeId) {
       continue;
     }
-    const displayName = normalizeOptionalString(node.displayName) ?? nodeId;
+
+    const displayName =
+      typeof node.displayName === "string" && node.displayName.trim()
+        ? node.displayName.trim()
+        : nodeId;
     list.push({
       id: nodeId,
       label: displayName === nodeId ? nodeId : `${displayName} · ${nodeId}`,

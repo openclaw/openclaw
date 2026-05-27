@@ -1,51 +1,28 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { resolveCronDeliveryPlan, resolveFailureDestination } from "./delivery-plan.js";
-import { makeCronJob } from "./delivery.test-helpers.js";
+import { describe, expect, it } from "vitest";
+import { resolveCronDeliveryPlan, resolveFailureDestination } from "./delivery.js";
+import type { CronJob } from "./types.js";
 
-function createPrefixOnlyChannelPlugin(
-  id: string,
-  targetPrefixes?: readonly string[],
-): ChannelPlugin {
+function makeJob(overrides: Partial<CronJob>): CronJob {
+  const now = Date.now();
   return {
-    ...createChannelTestPluginBase({ id }),
-    messaging: targetPrefixes ? { targetPrefixes } : {},
+    id: "job-1",
+    name: "test",
+    enabled: true,
+    createdAtMs: now,
+    updatedAtMs: now,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "hello" },
+    state: {},
+    ...overrides,
   };
 }
 
-function setCronDeliveryTestRegistry(
-  plugins: Array<{ pluginId: string; plugin: ChannelPlugin }>,
-): void {
-  setActivePluginRegistry(
-    createTestRegistry(
-      plugins.map((entry) => ({
-        ...entry,
-        source: `test:${entry.pluginId}`,
-      })),
-    ),
-  );
-}
-
 describe("resolveCronDeliveryPlan", () => {
-  beforeEach(() => {
-    setCronDeliveryTestRegistry([
-      {
-        pluginId: "telegram",
-        plugin: createPrefixOnlyChannelPlugin("telegram", ["telegram", "tg"]),
-      },
-      { pluginId: "slack", plugin: createPrefixOnlyChannelPlugin("slack", ["slack"]) },
-    ]);
-  });
-
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-  });
-
   it("defaults to announce when delivery object has no mode", () => {
     const plan = resolveCronDeliveryPlan(
-      makeCronJob({
+      makeJob({
         delivery: { channel: "telegram", to: "123", mode: undefined as never },
       }),
     );
@@ -55,21 +32,20 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.to).toBe("123");
   });
 
-  it("defaults missing isolated agentTurn delivery to announce", () => {
+  it("respects legacy payload deliver=false", () => {
     const plan = resolveCronDeliveryPlan(
-      makeCronJob({
+      makeJob({
         delivery: undefined,
-        payload: { kind: "agentTurn", message: "hello" },
+        payload: { kind: "agentTurn", message: "hello", deliver: false },
       }),
     );
-    expect(plan.mode).toBe("announce");
-    expect(plan.requested).toBe(true);
-    expect(plan.channel).toBe("last");
+    expect(plan.mode).toBe("none");
+    expect(plan.requested).toBe(false);
   });
 
   it("resolves mode=none with requested=false and no channel (#21808)", () => {
     const plan = resolveCronDeliveryPlan(
-      makeCronJob({
+      makeJob({
         delivery: { mode: "none", to: "telegram:123" },
       }),
     );
@@ -81,7 +57,7 @@ describe("resolveCronDeliveryPlan", () => {
 
   it("resolves webhook mode without channel routing", () => {
     const plan = resolveCronDeliveryPlan(
-      makeCronJob({
+      makeJob({
         delivery: { mode: "webhook", to: "https://example.invalid/cron" },
       }),
     );
@@ -93,7 +69,7 @@ describe("resolveCronDeliveryPlan", () => {
 
   it("threads delivery.accountId when explicitly configured", () => {
     const plan = resolveCronDeliveryPlan(
-      makeCronJob({
+      makeJob({
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -108,110 +84,12 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.to).toBe("123");
     expect(plan.accountId).toBe("bot-a");
   });
-
-  it("threads delivery.threadId when explicitly configured", () => {
-    const plan = resolveCronDeliveryPlan(
-      makeCronJob({
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "-1001234567890",
-          threadId: "99",
-        },
-      }),
-    );
-    expect(plan.mode).toBe("announce");
-    expect(plan.requested).toBe(true);
-    expect(plan.channel).toBe("telegram");
-    expect(plan.to).toBe("-1001234567890");
-    expect(plan.threadId).toBe("99");
-  });
-
-  it("uses a provider-prefixed announce target as the channel when channel is last", () => {
-    const plan = resolveCronDeliveryPlan(
-      makeCronJob({
-        delivery: {
-          mode: "announce",
-          channel: "last",
-          to: "telegram:123",
-        },
-      }),
-    );
-    expect(plan.mode).toBe("announce");
-    expect(plan.channel).toBe("telegram");
-    expect(plan.to).toBe("telegram:123");
-  });
-
-  it("uses Synology Chat provider prefixes with underscores and short spelling", () => {
-    setCronDeliveryTestRegistry([
-      {
-        pluginId: "synology-chat",
-        plugin: createPrefixOnlyChannelPlugin("synology-chat", [
-          "synology-chat",
-          "synology_chat",
-          "synology",
-        ]),
-      },
-    ]);
-
-    for (const to of ["synology-chat:123", "synology_chat:123", "synology:123"]) {
-      const plan = resolveCronDeliveryPlan(
-        makeCronJob({
-          delivery: {
-            mode: "announce",
-            channel: "last",
-            to,
-          },
-        }),
-      );
-      expect(plan.mode).toBe("announce");
-      expect(plan.channel).toBe("synology-chat");
-      expect(plan.to).toBe(to);
-    }
-  });
-
-  it("uses iMessage target prefixes as provider selection", () => {
-    setCronDeliveryTestRegistry([
-      {
-        pluginId: "imessage",
-        plugin: createPrefixOnlyChannelPlugin("imessage", ["imessage"]),
-      },
-      { pluginId: "imessage", plugin: createPrefixOnlyChannelPlugin("imessage") },
-    ]);
-
-    const plan = resolveCronDeliveryPlan(
-      makeCronJob({
-        delivery: {
-          mode: "announce",
-          channel: "last",
-          to: "imessage:+15551234567",
-        },
-      }),
-    );
-    expect(plan.mode).toBe("announce");
-    expect(plan.channel).toBe("imessage");
-    expect(plan.to).toBe("imessage:+15551234567");
-  });
 });
 
 describe("resolveFailureDestination", () => {
-  beforeEach(() => {
-    setCronDeliveryTestRegistry([
-      {
-        pluginId: "telegram",
-        plugin: createPrefixOnlyChannelPlugin("telegram", ["telegram", "tg"]),
-      },
-      { pluginId: "slack", plugin: createPrefixOnlyChannelPlugin("slack", ["slack"]) },
-    ]);
-  });
-
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-  });
-
   it("merges global defaults with job-level overrides", () => {
     const plan = resolveFailureDestination(
-      makeCronJob({
+      makeJob({
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -236,7 +114,7 @@ describe("resolveFailureDestination", () => {
 
   it("returns null for webhook mode without destination URL", () => {
     const plan = resolveFailureDestination(
-      makeCronJob({
+      makeJob({
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -251,7 +129,7 @@ describe("resolveFailureDestination", () => {
 
   it("returns null when failure destination matches primary delivery target", () => {
     const plan = resolveFailureDestination(
-      makeCronJob({
+      makeJob({
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -270,27 +148,9 @@ describe("resolveFailureDestination", () => {
     expect(plan).toBeNull();
   });
 
-  it("returns null when provider-prefixed failure destination matches a provider-prefixed primary target", () => {
-    const plan = resolveFailureDestination(
-      makeCronJob({
-        delivery: {
-          mode: "announce",
-          channel: "last",
-          to: "telegram:123",
-          failureDestination: {
-            mode: "announce",
-            to: "telegram:123",
-          },
-        },
-      }),
-      undefined,
-    );
-    expect(plan).toBeNull();
-  });
-
   it("returns null when webhook failure destination matches the primary webhook target", () => {
     const plan = resolveFailureDestination(
-      makeCronJob({
+      makeJob({
         sessionTarget: "main",
         payload: { kind: "systemEvent", text: "tick" },
         delivery: {
@@ -309,7 +169,7 @@ describe("resolveFailureDestination", () => {
 
   it("does not reuse inherited announce recipient when switching failure destination to webhook", () => {
     const plan = resolveFailureDestination(
-      makeCronJob({
+      makeJob({
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -330,7 +190,7 @@ describe("resolveFailureDestination", () => {
 
   it("allows job-level failure destination fields to clear inherited global values", () => {
     const plan = resolveFailureDestination(
-      makeCronJob({
+      makeJob({
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -354,29 +214,6 @@ describe("resolveFailureDestination", () => {
       mode: "announce",
       channel: "last",
       to: undefined,
-      accountId: undefined,
-    });
-  });
-
-  it("uses a provider-prefixed failure destination as the announce channel", () => {
-    const plan = resolveFailureDestination(
-      makeCronJob({
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "111",
-          failureDestination: {
-            mode: "announce",
-            to: "slack:U123",
-          },
-        },
-      }),
-      undefined,
-    );
-    expect(plan).toEqual({
-      mode: "announce",
-      channel: "slack",
-      to: "slack:U123",
       accountId: undefined,
     });
   });

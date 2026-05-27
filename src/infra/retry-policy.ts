@@ -4,32 +4,31 @@ import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
 
 export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
 
-export const CHANNEL_API_RETRY_DEFAULTS = {
+export const TELEGRAM_RETRY_DEFAULTS = {
   attempts: 3,
   minDelayMs: 400,
   maxDelayMs: 30_000,
   jitter: 0.1,
 };
 
-const CHANNEL_API_RETRY_RE =
-  /429|421|timeout|connect|reset|closed|unavailable|temporarily|misdirected request/i;
+const TELEGRAM_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;
 const log = createSubsystemLogger("retry-policy");
 
-function resolveChannelApiShouldRetry(params: {
+function resolveTelegramShouldRetry(params: {
   shouldRetry?: (err: unknown) => boolean;
   strictShouldRetry?: boolean;
 }) {
   if (!params.shouldRetry) {
-    return (err: unknown) => CHANNEL_API_RETRY_RE.test(formatErrorMessage(err));
+    return (err: unknown) => TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
   }
   if (params.strictShouldRetry) {
     return params.shouldRetry;
   }
   return (err: unknown) =>
-    params.shouldRetry?.(err) || CHANNEL_API_RETRY_RE.test(formatErrorMessage(err));
+    params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
 }
 
-function getChannelApiRetryAfterMs(err: unknown): number | undefined {
+function getTelegramRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
@@ -82,36 +81,36 @@ export function createRateLimitRetryRunner(params: {
     });
 }
 
-export function createChannelApiRetryRunner(params: {
+export function createTelegramRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;
   verbose?: boolean;
   shouldRetry?: (err: unknown) => boolean;
   /**
    * When true, the custom shouldRetry predicate is used exclusively —
-   * the default channel API fallback regex is NOT OR'd in.
+   * the default TELEGRAM_RETRY_RE fallback regex is NOT OR'd in.
    * Use this for non-idempotent operations (e.g. sendMessage) where
    * the regex fallback would cause duplicate message delivery.
    */
   strictShouldRetry?: boolean;
 }): RetryRunner {
-  const retryConfig = resolveRetryConfig(CHANNEL_API_RETRY_DEFAULTS, {
+  const retryConfig = resolveRetryConfig(TELEGRAM_RETRY_DEFAULTS, {
     ...params.configRetry,
     ...params.retry,
   });
-  const shouldRetry = resolveChannelApiShouldRetry(params);
+  const shouldRetry = resolveTelegramShouldRetry(params);
 
   return <T>(fn: () => Promise<T>, label?: string) =>
     retryAsync(fn, {
       ...retryConfig,
       label,
       shouldRetry,
-      retryAfterMs: getChannelApiRetryAfterMs,
+      retryAfterMs: getTelegramRetryAfterMs,
       onRetry: params.verbose
         ? (info) => {
             const maxRetries = Math.max(1, info.maxAttempts - 1);
             log.warn(
-              `channel send retry ${info.attempt}/${maxRetries} for ${info.label ?? label ?? "request"} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
+              `telegram send retry ${info.attempt}/${maxRetries} for ${info.label ?? label ?? "request"} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
             );
           }
         : undefined,

@@ -1,11 +1,10 @@
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
-import { findFinalTagMatches } from "./final-tags.js";
 export type ReasoningTagMode = "strict" | "preserve";
 export type ReasoningTagTrim = "none" | "start" | "both";
 
-const QUICK_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking|final)\b/i;
-const THINKING_TAG_RE =
-  /<\s*(\/?)\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
+const QUICK_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking|final)\b/i;
+const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/gi;
+const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
   if (mode === "none") {
@@ -15,13 +14,6 @@ function applyTrim(value: string, mode: ReasoningTagTrim): string {
     return value.trimStart();
   }
   return value.trim();
-}
-
-export function hasOrphanReasoningCloseBoundary(params: {
-  before: string;
-  after: string;
-}): boolean {
-  return params.before.trim().length > 0 && params.after.trim().length > 0;
 }
 
 export function stripReasoningTagsFromText(
@@ -42,21 +34,15 @@ export function stripReasoningTagsFromText(
   const trimMode = options?.trim ?? "both";
 
   let cleaned = text;
-  const matches = findFinalTagMatches(cleaned);
-  THINKING_TAG_RE.lastIndex = 0;
-  const hasThinkingTag = THINKING_TAG_RE.test(cleaned);
-  THINKING_TAG_RE.lastIndex = 0;
-  if (matches.length === 0 && !hasThinkingTag) {
-    return text;
-  }
-  if (matches.length > 0) {
+  if (FINAL_TAG_RE.test(cleaned)) {
+    FINAL_TAG_RE.lastIndex = 0;
     const finalMatches: Array<{ start: number; length: number; inCode: boolean }> = [];
     const preCodeRegions = findCodeRegions(cleaned);
-    for (const match of matches) {
-      const start = match.index;
+    for (const match of cleaned.matchAll(FINAL_TAG_RE)) {
+      const start = match.index ?? 0;
       finalMatches.push({
         start,
-        length: match.text.length,
+        length: match[0].length,
         inCode: isInsideCode(start, preCodeRegions),
       });
     }
@@ -67,6 +53,8 @@ export function stripReasoningTagsFromText(
         cleaned = cleaned.slice(0, m.start) + cleaned.slice(m.start + m.length);
       }
     }
+  } else {
+    FINAL_TAG_RE.lastIndex = 0;
   }
 
   const codeRegions = findCodeRegions(cleaned);
@@ -74,8 +62,7 @@ export function stripReasoningTagsFromText(
   THINKING_TAG_RE.lastIndex = 0;
   let result = "";
   let lastIndex = 0;
-  let thinkingDepth = 0;
-  let firstUnclosedContentIndex: number | undefined;
+  let inThinking = false;
 
   for (const match of cleaned.matchAll(THINKING_TAG_RE)) {
     const idx = match.index ?? 0;
@@ -85,48 +72,21 @@ export function stripReasoningTagsFromText(
       continue;
     }
 
-    if (thinkingDepth === 0) {
-      if (isClose) {
-        const afterIndex = idx + match[0].length;
-        const before = cleaned.slice(lastIndex, idx);
-        const after = cleaned.slice(afterIndex);
-        if (hasOrphanReasoningCloseBoundary({ before, after })) {
-          result = "";
-        } else {
-          result += before;
-        }
-        lastIndex = afterIndex;
-        continue;
-      }
+    if (!inThinking) {
       result += cleaned.slice(lastIndex, idx);
-      thinkingDepth = 1;
-      firstUnclosedContentIndex = idx + match[0].length;
-    } else if (isClose) {
-      thinkingDepth -= 1;
-      if (thinkingDepth === 0) {
-        firstUnclosedContentIndex = undefined;
+      if (!isClose) {
+        inThinking = true;
       }
-    } else {
-      thinkingDepth += 1;
+    } else if (isClose) {
+      inThinking = false;
     }
 
     lastIndex = idx + match[0].length;
   }
 
-  if (thinkingDepth === 0 || mode === "preserve") {
+  if (!inThinking || mode === "preserve") {
     result += cleaned.slice(lastIndex);
   }
 
-  const trimmedResult = applyTrim(result, trimMode);
-  if (
-    mode === "strict" &&
-    thinkingDepth > 0 &&
-    !trimmedResult &&
-    firstUnclosedContentIndex !== undefined &&
-    cleaned.trim()
-  ) {
-    return applyTrim(cleaned.slice(firstUnclosedContentIndex), trimMode);
-  }
-
-  return trimmedResult;
+  return applyTrim(result, trimMode);
 }

@@ -1,7 +1,6 @@
-import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
 export type LinkChannelContext = {
@@ -14,13 +13,8 @@ export type LinkChannelContext = {
 
 export async function resolveLinkChannelContext(
   cfg: OpenClawConfig,
-  options: { sourceConfig?: OpenClawConfig } = {},
 ): Promise<LinkChannelContext | null> {
-  const sourceConfig = options.sourceConfig ?? cfg;
-  for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
-    activationSourceConfig: sourceConfig,
-    includeSetupFallbackPlugins: false,
-  })) {
+  for (const plugin of listChannelPlugins()) {
     const { defaultAccountId, account, enabled, configured } =
       await resolveDefaultChannelAccountContext(plugin, cfg, {
         mode: "read_only",

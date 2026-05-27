@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assertNoWindowsNetworkPath } from "../infra/local-file-access.js";
-import { isPathInside } from "../infra/path-guards.js";
-import { isInboundPathAllowed } from "./inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
-import { resolveInboundMediaReference } from "./media-reference.js";
 
 export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
@@ -33,13 +30,8 @@ export function getDefaultLocalRoots(): readonly string[] {
 export async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
-  options?: { inboundRoots?: readonly string[] },
 ): Promise<void> {
   if (localRoots === "any") {
-    return;
-  }
-  const inboundReference = await resolveInboundMediaReference(mediaPath).catch(() => null);
-  if (inboundReference) {
     return;
   }
   try {
@@ -48,12 +40,6 @@ export async function assertLocalMediaAllowed(
     throw new LocalMediaAccessError("network-path-not-allowed", (err as Error).message, {
       cause: err,
     });
-  }
-  if (
-    options?.inboundRoots?.length &&
-    isInboundPathAllowed({ filePath: mediaPath, roots: options.inboundRoots })
-  ) {
-    return;
   }
   const roots = localRoots ?? getDefaultLocalRoots();
   let resolved: string;
@@ -68,7 +54,7 @@ export async function assertLocalMediaAllowed(
     if (workspaceRoot) {
       const stateDir = path.dirname(workspaceRoot);
       const rel = path.relative(stateDir, resolved);
-      if (rel && isPathInside(stateDir, resolved)) {
+      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
         const firstSegment = rel.split(path.sep)[0] ?? "";
         if (firstSegment.startsWith("workspace-")) {
           throw new LocalMediaAccessError(
@@ -93,7 +79,7 @@ export async function assertLocalMediaAllowed(
         `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
       );
     }
-    if (isPathInside(resolvedRoot, resolved)) {
+    if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
       return;
     }
   }

@@ -1,4 +1,4 @@
-type IMessageMonitorClient = {
+export type IMessageMonitorClient = {
   request: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
   stop: () => Promise<void>;
 };

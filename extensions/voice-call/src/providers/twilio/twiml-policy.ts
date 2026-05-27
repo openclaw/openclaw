@@ -1,7 +1,8 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WebhookContext } from "../../types.js";
 
-type TwimlRequestView = {
+export type TwimlResponseKind = "empty" | "pause" | "queue" | "stored" | "stream";
+
+export type TwimlRequestView = {
   callStatus: string | null;
   direction: string | null;
   isStatusCallback: boolean;
@@ -9,14 +10,14 @@ type TwimlRequestView = {
   callIdFromQuery?: string;
 };
 
-type TwimlPolicyInput = TwimlRequestView & {
+export type TwimlPolicyInput = TwimlRequestView & {
   hasStoredTwiml: boolean;
   isNotifyCall: boolean;
   hasActiveStreams: boolean;
   canStream: boolean;
 };
 
-type TwimlDecision =
+export type TwimlDecision =
   | {
       kind: "empty" | "pause" | "queue";
       consumeStoredTwimlCallId?: string;
@@ -39,8 +40,11 @@ function isOutboundDirection(direction: string | null): boolean {
 
 export function readTwimlRequestView(ctx: WebhookContext): TwimlRequestView {
   const params = new URLSearchParams(ctx.rawBody);
-  const type = normalizeOptionalString(ctx.query?.type);
-  const callIdFromQuery = normalizeOptionalString(ctx.query?.callId);
+  const type = typeof ctx.query?.type === "string" ? ctx.query.type.trim() : undefined;
+  const callIdFromQuery =
+    typeof ctx.query?.callId === "string" && ctx.query.callId.trim()
+      ? ctx.query.callId.trim()
+      : undefined;
 
   return {
     callStatus: params.get("CallStatus"),

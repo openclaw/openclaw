@@ -6,39 +6,14 @@ enum StatusActivityBuilder {
         appModel: NodeAppModel,
         voiceWakeEnabled: Bool,
         cameraHUDText: String?,
-        cameraHUDKind: NodeAppModel.CameraHUDKind?) -> StatusPill.Activity?
-    {
+        cameraHUDKind: NodeAppModel.CameraHUDKind?
+    ) -> StatusPill.Activity? {
         // Keep the top pill consistent across tabs (camera + voice wake + pairing states).
         if appModel.isBackgrounded {
             return StatusPill.Activity(
                 title: "Foreground required",
                 systemImage: "exclamationmark.triangle.fill",
                 tint: .orange)
-        }
-
-        if let gatewayProblem = appModel.lastGatewayProblem {
-            switch gatewayProblem.kind {
-            case .pairingRequired,
-                 .pairingRoleUpgradeRequired,
-                 .pairingScopeUpgradeRequired,
-                 .pairingMetadataUpgradeRequired:
-                return StatusPill.Activity(
-                    title: "Approval pending",
-                    systemImage: "person.crop.circle.badge.clock",
-                    tint: .orange)
-            case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
-                return StatusPill.Activity(
-                    title: "Check network",
-                    systemImage: "wifi.exclamationmark",
-                    tint: .orange)
-            default:
-                if gatewayProblem.pauseReconnect {
-                    return StatusPill.Activity(
-                        title: "Action required",
-                        systemImage: "exclamationmark.triangle.fill",
-                        tint: .orange)
-                }
-            }
         }
 
         let gatewayStatus = appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -93,3 +68,4 @@ enum StatusActivityBuilder {
         return nil
     }
 }
+

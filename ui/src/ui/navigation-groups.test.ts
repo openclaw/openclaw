@@ -1,51 +1,42 @@
-import { describe, expect, it } from "vitest";
-import {
-  SETTINGS_TABS,
-  TAB_GROUPS,
-  isSettingsTab,
-  isTabInGroup,
-  tabFromPath,
-} from "./navigation.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../test-helpers/storage.ts";
+
+type NavigationModule = typeof import("./navigation.ts");
 
 describe("TAB_GROUPS", () => {
-  it("collapses detailed settings slices into one sidebar entry", () => {
-    const settings = TAB_GROUPS.find((group) => group.label === "settings");
-    expect(settings?.tabs).toEqual(["config"]);
-    expect(SETTINGS_TABS.every((tab) => isSettingsTab(tab))).toBe(true);
+  let navigation: NavigationModule;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+    navigation = await import("./navigation.ts");
   });
 
-  it("keeps channel management out of the primary control sidebar", () => {
-    const control = TAB_GROUPS.find((group) => group.label === "control");
-    expect(control?.tabs).toEqual([
-      "overview",
-      "activity",
-      "instances",
-      "sessions",
-      "usage",
-      "cron",
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("does not expose unfinished settings slices in the sidebar", () => {
+    const settings = navigation.TAB_GROUPS.find((group) => group.label === "settings");
+    expect(settings?.tabs).toEqual([
+      "config",
+      "communications",
+      "appearance",
+      "automation",
+      "infrastructure",
+      "aiAgents",
+      "debug",
+      "logs",
     ]);
-    expect(SETTINGS_TABS).toContain("channels");
-  });
-
-  it("keeps the settings group active for nested settings routes", () => {
-    const settings = TAB_GROUPS.find((group) => group.label === "settings");
-    if (!settings) {
-      throw new Error("Expected settings group");
-    }
-
-    expect(isTabInGroup(settings, "appearance")).toBe(true);
-    expect(isTabInGroup(settings, "channels")).toBe(true);
-    expect(isTabInGroup(settings, "debug")).toBe(true);
-    expect(isTabInGroup(settings, "chat")).toBe(false);
   });
 
   it("routes every published settings slice", () => {
-    expect(tabFromPath("/communications")).toBe("communications");
-    expect(tabFromPath("/appearance")).toBe("appearance");
-    expect(tabFromPath("/automation")).toBe("automation");
-    expect(tabFromPath("/infrastructure")).toBe("infrastructure");
-    expect(tabFromPath("/ai-agents")).toBe("aiAgents");
-    expect(tabFromPath("/config")).toBe("config");
-    expect(tabFromPath("/channels")).toBe("channels");
+    expect(navigation.tabFromPath("/communications")).toBe("communications");
+    expect(navigation.tabFromPath("/appearance")).toBe("appearance");
+    expect(navigation.tabFromPath("/automation")).toBe("automation");
+    expect(navigation.tabFromPath("/infrastructure")).toBe("infrastructure");
+    expect(navigation.tabFromPath("/ai-agents")).toBe("aiAgents");
+    expect(navigation.tabFromPath("/config")).toBe("config");
   });
 });

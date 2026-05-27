@@ -1,7 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-
 const MIN_DUPLICATE_TEXT_LENGTH = 10;
-const MIN_REVERSE_SUBSTRING_DUPLICATE_RATIO = 0.5;
 
 /**
  * Normalize text for duplicate comparison.
@@ -11,7 +8,9 @@ const MIN_REVERSE_SUBSTRING_DUPLICATE_RATIO = 0.5;
  * - Collapses multiple spaces to single space
  */
 export function normalizeTextForComparison(text: string): string {
-  return normalizeLowercaseStringOrEmpty(text)
+  return text
+    .trim()
+    .toLowerCase()
     .replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -31,13 +30,7 @@ export function isMessagingToolDuplicateNormalized(
     if (!normalizedSent || normalizedSent.length < MIN_DUPLICATE_TEXT_LENGTH) {
       return false;
     }
-    if (normalized.includes(normalizedSent)) {
-      return true;
-    }
-    return (
-      normalizedSent.includes(normalized) &&
-      normalized.length >= normalizedSent.length * MIN_REVERSE_SUBSTRING_DUPLICATE_RATIO
-    );
+    return normalized.includes(normalizedSent) || normalizedSent.includes(normalized);
   });
 }
 

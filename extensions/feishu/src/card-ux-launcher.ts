@@ -1,16 +1,15 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { FEISHU_APPROVAL_REQUEST_ACTION } from "./card-ux-approval.js";
 import { buildFeishuCardButton, buildFeishuCardInteractionContext } from "./card-ux-shared.js";
 import { sendCardFeishu } from "./send.js";
 
-const FEISHU_QUICK_ACTION_CARD_TTL_MS = 10 * 60_000;
+export const FEISHU_QUICK_ACTION_CARD_TTL_MS = 10 * 60_000;
 
 const QUICK_ACTION_MENU_KEYS = new Set(["quick-actions", "quick_actions", "launcher"]);
 
 export function isFeishuQuickActionMenuEventKey(eventKey: string): boolean {
-  return QUICK_ACTION_MENU_KEYS.has(normalizeOptionalLowercaseString(eventKey) ?? "");
+  return QUICK_ACTION_MENU_KEYS.has(eventKey.trim().toLowerCase());
 }
 
 export function createQuickActionLauncherCard(params: {
@@ -24,7 +23,7 @@ export function createQuickActionLauncherCard(params: {
   return {
     schema: "2.0",
     config: {
-      width_mode: "fill",
+      wide_screen_mode: true,
     },
     header: {
       title: {

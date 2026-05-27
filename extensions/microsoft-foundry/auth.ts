@@ -98,11 +98,7 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
           label: `${sub.name} (${sub.id})`,
         })),
       });
-      const match = subs.find((sub) => sub.id === selectedId);
-      if (!match) {
-        throw new Error(`Selected subscription not found: ${selectedId}`);
-      }
-      selectedSub = match;
+      selectedSub = subs.find((sub) => sub.id === selectedId)!;
       tenantId ??= selectedSub.tenantId;
     }
 
@@ -130,13 +126,11 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
           selectedResource,
           resourceDeployments,
         );
-        discoveredDeployments = resourceDeployments.map((deployment) =>
-          Object.assign(
-            { name: deployment.name },
-            deployment.modelName ? { modelName: deployment.modelName } : {},
-            { api: resolveFoundryApi(deployment.name, deployment.modelName) },
-          ),
-        );
+        discoveredDeployments = resourceDeployments.map((deployment) => ({
+          name: deployment.name,
+          ...(deployment.modelName ? { modelName: deployment.modelName } : {}),
+          api: resolveFoundryApi(deployment.name, deployment.modelName),
+        }));
         endpoint = selectedResource.endpoint;
         modelId = selectedDeployment.name;
         modelNameHint = resolveConfiguredModelNameHint(modelId, selectedDeployment.modelName);

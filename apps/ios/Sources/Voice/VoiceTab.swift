@@ -9,14 +9,6 @@ struct VoiceTab: View {
     var body: some View {
         NavigationStack {
             List {
-                if self.appModel.talkMode.gatewayTalkPermissionState.requiresTalkPermissionAction {
-                    Section {
-                        TalkPermissionPromptView(style: .card)
-                            .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
-                            .listRowBackground(Color.clear)
-                    }
-                }
-
                 Section("Status") {
                     LabeledContent("Voice Wake", value: self.voiceWakeEnabled ? "Enabled" : "Disabled")
                     LabeledContent("Listener", value: self.voiceWake.isListening ? "Listening" : "Idle")
@@ -24,9 +16,6 @@ struct VoiceTab: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     LabeledContent("Talk Mode", value: self.talkEnabled ? "Enabled" : "Disabled")
-                    LabeledContent(
-                        "Talk Permission",
-                        value: self.appModel.talkMode.gatewayTalkPermissionState.statusLabel)
                 }
 
                 Section("Notes") {

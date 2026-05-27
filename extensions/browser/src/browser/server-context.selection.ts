@@ -1,8 +1,6 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
-import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
+import { closeChromeMcpTab, focusChromeMcpTab } from "./chrome-mcp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
@@ -14,8 +12,7 @@ import { resolveTargetIdFromTabs } from "./target-id.js";
 type SelectionDeps = {
   profile: ResolvedBrowserProfile;
   getProfileState: () => ProfileRuntimeState;
-  getCdpControlPolicy: () => SsrFPolicy | undefined;
-  ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
+  ensureBrowserAvailable: () => Promise<void>;
   listTabs: () => Promise<BrowserTab[]>;
   openTab: (url: string) => Promise<BrowserTab>;
 };
@@ -29,7 +26,6 @@ type SelectionOps = {
 export function createProfileSelectionOps({
   profile,
   getProfileState,
-  getCdpControlPolicy,
   ensureBrowserAvailable,
   listTabs,
   openTab,
@@ -60,7 +56,7 @@ export function createProfileSelectionOps({
     };
 
     const pickDefault = () => {
-      const last = normalizeOptionalString(profileState.lastTargetId) ?? "";
+      const last = profileState.lastTargetId?.trim() || "";
       const lastResolved = last ? resolveById(last) : null;
       if (lastResolved && lastResolved !== "AMBIGUOUS") {
         return lastResolved;
@@ -76,7 +72,7 @@ export function createProfileSelectionOps({
       throw new BrowserTargetAmbiguousError();
     }
     if (!chosen) {
-      throw new BrowserTabNotFoundError(targetId ? { input: targetId } : undefined);
+      throw new BrowserTabNotFoundError();
     }
     profileState.lastTargetId = chosen.targetId;
     return chosen;
@@ -89,7 +85,7 @@ export function createProfileSelectionOps({
       if (resolved.reason === "ambiguous") {
         throw new BrowserTargetAmbiguousError();
       }
-      throw new BrowserTabNotFoundError({ input: targetId });
+      throw new BrowserTabNotFoundError();
     }
     return resolved.targetId;
   };
@@ -98,8 +94,7 @@ export function createProfileSelectionOps({
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
 
     if (capabilities.usesChromeMcp) {
-      const { focusChromeMcpTab } = await getChromeMcpModule();
-      await focusChromeMcpTab(profile.name, resolvedTargetId, profile);
+      await focusChromeMcpTab(profile.name, resolvedTargetId, profile.userDataDir);
       const profileState = getProfileState();
       profileState.lastTargetId = resolvedTargetId;
       return;
@@ -113,7 +108,6 @@ export function createProfileSelectionOps({
         await focusPageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
-          ssrfPolicy: getCdpControlPolicy(),
         });
         const profileState = getProfileState();
         profileState.lastTargetId = resolvedTargetId;
@@ -121,12 +115,7 @@ export function createProfileSelectionOps({
       }
     }
 
-    await fetchOk(
-      appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`),
-      undefined,
-      undefined,
-      getCdpControlPolicy(),
-    );
+    await fetchOk(appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`));
     const profileState = getProfileState();
     profileState.lastTargetId = resolvedTargetId;
   };
@@ -135,8 +124,7 @@ export function createProfileSelectionOps({
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
 
     if (capabilities.usesChromeMcp) {
-      const { closeChromeMcpTab } = await getChromeMcpModule();
-      await closeChromeMcpTab(profile.name, resolvedTargetId, profile);
+      await closeChromeMcpTab(profile.name, resolvedTargetId, profile.userDataDir);
       return;
     }
 
@@ -149,18 +137,12 @@ export function createProfileSelectionOps({
         await closePageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
-          ssrfPolicy: getCdpControlPolicy(),
         });
         return;
       }
     }
 
-    await fetchOk(
-      appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
-      undefined,
-      undefined,
-      getCdpControlPolicy(),
-    );
+    await fetchOk(appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`));
   };
 
   return {

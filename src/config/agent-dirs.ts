@@ -2,12 +2,11 @@ import os from "node:os";
 import path from "node:path";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveStateDir } from "./paths.js";
 import type { OpenClawConfig } from "./types.js";
 
-type DuplicateAgentDir = {
+export type DuplicateAgentDir = {
   agentDir: string;
   agentIds: string[];
 };
@@ -25,7 +24,7 @@ export class DuplicateAgentDirError extends Error {
 function canonicalizeAgentDir(agentDir: string): string {
   const resolved = path.resolve(agentDir);
   if (process.platform === "darwin" || process.platform === "win32") {
-    return normalizeLowercaseStringOrEmpty(resolved);
+    return resolved.toLowerCase();
   }
   return resolved;
 }

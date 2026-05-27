@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { Component, SelectItem } from "@earendil-works/pi-tui";
+import type { Component, SelectItem } from "@mariozechner/pi-tui";
 import { createSearchableSelectList } from "./components/selectors.js";
 
 type LocalShellDeps = {
@@ -133,7 +133,9 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
             deps.chatLog.addSystem(`[local] ${line}`);
           }
         }
-        deps.chatLog.addSystem(`[local] exit ${code ?? "?"}${signal ? ` (signal ${signal})` : ""}`);
+        deps.chatLog.addSystem(
+          `[local] exit ${code ?? "?"}${signal ? ` (signal ${String(signal)})` : ""}`,
+        );
         deps.tui.requestRender();
         resolve();
       });

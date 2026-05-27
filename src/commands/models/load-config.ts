@@ -1,12 +1,12 @@
-import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
+import { getModelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import {
   getRuntimeConfig,
-  getRuntimeConfigSourceSnapshot,
+  readSourceConfigSnapshotForWrite,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
-  getModelsCommandSecretTargetIds,
-} from "./load-config.runtime.js";
+} from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
 
 export type LoadedModelsConfig = {
   sourceConfig: OpenClawConfig;
@@ -14,19 +14,34 @@ export type LoadedModelsConfig = {
   diagnostics: string[];
 };
 
+async function loadSourceConfigSnapshot(fallback: OpenClawConfig): Promise<OpenClawConfig> {
+  try {
+    const { snapshot } = await readSourceConfigSnapshotForWrite();
+    if (snapshot.valid) {
+      return snapshot.sourceConfig;
+    }
+  } catch {
+    // Fall back to runtime-loaded config if source snapshot cannot be read.
+  }
+  return fallback;
+}
+
 export async function loadModelsConfigWithSource(params: {
   commandName: string;
   runtime?: RuntimeEnv;
 }): Promise<LoadedModelsConfig> {
   const runtimeConfig = getRuntimeConfig();
-  const pinnedSourceConfig = getRuntimeConfigSourceSnapshot();
-  const sourceConfig = pinnedSourceConfig ?? runtimeConfig;
-  const { resolvedConfig, diagnostics } = await resolveCommandConfigWithSecrets({
+  const sourceConfig = await loadSourceConfigSnapshot(runtimeConfig);
+  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
     config: runtimeConfig,
     commandName: params.commandName,
     targetIds: getModelsCommandSecretTargetIds(),
-    runtime: params.runtime,
   });
+  if (params.runtime) {
+    for (const entry of diagnostics) {
+      params.runtime.log(`[secrets] ${entry}`);
+    }
+  }
   setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
   return {
     sourceConfig,

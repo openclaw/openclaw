@@ -7,7 +7,7 @@
 // Metric Types
 // ============================================================================
 
-type EventMetricName =
+export type EventMetricName =
   | "event.received"
   | "event.processed"
   | "event.duplicate"
@@ -22,7 +22,7 @@ type EventMetricName =
   | "event.rejected.decrypt_failed"
   | "event.rejected.self_message";
 
-type RelayMetricName =
+export type RelayMetricName =
   | "relay.connect"
   | "relay.disconnect"
   | "relay.reconnect"
@@ -37,11 +37,11 @@ type RelayMetricName =
   | "relay.circuit_breaker.close"
   | "relay.circuit_breaker.half_open";
 
-type RateLimitMetricName = "rate_limit.per_sender" | "rate_limit.global";
+export type RateLimitMetricName = "rate_limit.per_sender" | "rate_limit.global";
 
-type DecryptMetricName = "decrypt.success" | "decrypt.failure";
+export type DecryptMetricName = "decrypt.success" | "decrypt.failure";
 
-type MemoryMetricName = "memory.seen_tracker_size" | "memory.rate_limiter_entries";
+export type MemoryMetricName = "memory.seen_tracker_size" | "memory.rate_limiter_entries";
 
 export type MetricName =
   | EventMetricName
@@ -83,7 +83,7 @@ export interface MetricEvent {
   labels?: Record<string, string | number>;
 }
 
-type OnMetricCallback = (event: MetricEvent) => void;
+export type OnMetricCallback = (event: MetricEvent) => void;
 
 // ============================================================================
 // Metrics Snapshot (for getMetrics())

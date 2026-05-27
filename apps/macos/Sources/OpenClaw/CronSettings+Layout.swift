@@ -2,19 +2,15 @@ import SwiftUI
 
 extension CronSettings {
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             self.header
             self.schedulerBanner
             self.content
             Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .settingsDetailContent()
         .onAppear {
-            self.updateActiveWork(active: self.isActive)
-        }
-        .onChange(of: self.isActive) { _, active in
-            self.updateActiveWork(active: active)
+            self.store.start()
+            self.channelsStore.start()
         }
         .onDisappear {
             self.store.stop()
@@ -52,16 +48,10 @@ extension CronSettings {
                 Text(job.displayName)
             }
         }
-    }
-
-    private func updateActiveWork(active: Bool) {
-        if active {
-            self.store.start()
-            self.channelsStore.start()
-        } else {
-            self.store.stop()
-            self.channelsStore.stop()
-        }
+        .onChange(of: self.store.selectedJobId) { _, newValue in
+                guard let newValue else { return }
+                Task { await self.store.refreshRuns(jobId: newValue) }
+            }
     }
 
     var schedulerBanner: some View {
@@ -99,18 +89,16 @@ extension CronSettings {
     }
 
     var header: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Cron Jobs")
-                    .font(.title3.weight(.semibold))
-                Text("Manage Gateway cron jobs and inspect run history.")
-                    .font(.callout)
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Cron")
+                    .font(.headline)
+                Text("Manage Gateway cron jobs (main session vs isolated runs) and inspect run history.")
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-
-            Spacer(minLength: 16)
-
+            Spacer()
             HStack(spacing: 8) {
                 Button {
                     Task { await self.store.refreshJobs() }
@@ -145,34 +133,14 @@ extension CronSettings {
                         .foregroundStyle(.secondary)
                 }
 
-                ScrollView(.vertical) {
-                    LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(self.store.jobs) { job in
-                            Button {
-                                self.selectJob(job.id)
-                            } label: {
-                                self.jobRow(job)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 8)
-                                    .background(
-                                        self.store.selectedJobId == job.id
-                                            ? Color.accentColor.opacity(0.18) : .clear)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
+                List(selection: self.$store.selectedJobId) {
+                    ForEach(self.store.jobs) { job in
+                        self.jobRow(job)
+                            .tag(job.id)
                             .contextMenu { self.jobContextMenu(job) }
-                        }
-
-                        if self.store.jobs.isEmpty {
-                            Text("No cron jobs yet.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                        }
                     }
-                    .padding(.vertical, 4)
                 }
+                .listStyle(.inset)
             }
             .frame(width: 250)
 
@@ -181,11 +149,6 @@ extension CronSettings {
             self.detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-    }
-
-    private func selectJob(_ id: String) {
-        self.store.selectedJobId = id
-        Task { await self.store.refreshRuns(jobId: id) }
     }
 
     @ViewBuilder

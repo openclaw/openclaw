@@ -1,4 +1,4 @@
-import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+import type { FailoverReason } from "./pi-embedded-helpers.js";
 
 export type ModelCandidate = {
   provider: string;

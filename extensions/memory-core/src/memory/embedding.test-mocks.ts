@@ -1,20 +1,20 @@
-import { vi, type Mock } from "vitest";
+import { vi } from "vitest";
 import "./test-runtime-mocks.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
-type EmbedBatchMock = Mock<(texts: string[]) => Promise<number[][]>>;
-type EmbedQueryMock = Mock<() => Promise<number[]>>;
+// oxlint-disable-next-line typescript/no-explicit-any
+type AnyMock = any;
 
 const hoisted = vi.hoisted(() => ({
   embedBatch: vi.fn(async (texts: string[]) => texts.map(() => [0, 1, 0])),
   embedQuery: vi.fn(async () => [0, 1, 0]),
 }));
 
-export function getEmbedBatchMock(): EmbedBatchMock {
+export function getEmbedBatchMock(): AnyMock {
   return hoisted.embedBatch;
 }
 
-export function getEmbedQueryMock(): EmbedQueryMock {
+export function getEmbedQueryMock(): AnyMock {
   return hoisted.embedQuery;
 }
 

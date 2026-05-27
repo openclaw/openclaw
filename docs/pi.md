@@ -1,12 +1,14 @@
 ---
+title: "Pi Integration Architecture"
 summary: "Architecture of OpenClaw's embedded Pi agent integration and session lifecycle"
-title: "Pi integration architecture"
 read_when:
   - Understanding Pi SDK integration design in OpenClaw
   - Modifying agent session lifecycle, tooling, or provider wiring for Pi
 ---
 
-OpenClaw integrates with [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) and its sibling packages (`pi-ai`, `pi-agent-core`, `pi-tui`) to power its AI agent capabilities.
+# Pi Integration Architecture
+
+This document describes how OpenClaw integrates with [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) and its sibling packages (`pi-ai`, `pi-agent-core`, `pi-tui`) to power its AI agent capabilities.
 
 ## Overview
 
@@ -19,14 +21,14 @@ OpenClaw uses the pi SDK to embed an AI coding agent into its messaging gateway 
 - Multi-account auth profile rotation with failover
 - Provider-agnostic model switching
 
-## Package dependencies
+## Package Dependencies
 
 ```json
 {
-  "@earendil-works/pi-agent-core": "0.75.1",
-  "@earendil-works/pi-ai": "0.75.1",
-  "@earendil-works/pi-coding-agent": "0.75.1",
-  "@earendil-works/pi-tui": "0.75.1"
+  "@mariozechner/pi-agent-core": "0.61.1",
+  "@mariozechner/pi-ai": "0.61.1",
+  "@mariozechner/pi-coding-agent": "0.61.1",
+  "@mariozechner/pi-tui": "0.61.1"
 }
 ```
 
@@ -37,7 +39,7 @@ OpenClaw uses the pi SDK to embed an AI coding agent into its messaging gateway 
 | `pi-coding-agent` | High-level SDK: `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, built-in tools |
 | `pi-tui`          | Terminal UI components (used in OpenClaw's local TUI mode)                                             |
 
-## File structure
+## File Structure
 
 ```
 src/agents/
@@ -135,7 +137,7 @@ directories instead of under `src/agents/tools`, for example:
 - the Telegram plugin action runtime file
 - the WhatsApp plugin action runtime file
 
-## Core integration flow
+## Core Integration Flow
 
 ### 1. Running an Embedded Agent
 
@@ -152,7 +154,7 @@ const result = await runEmbeddedPiAgent({
   config: openclawConfig,
   prompt: "Hello, how are you?",
   provider: "anthropic",
-  model: "claude-sonnet-4-6",
+  model: "claude-sonnet-4-20250514",
   timeoutMs: 120_000,
   runId: "run-abc",
   onBlockReply: async (payload) => {
@@ -171,7 +173,7 @@ import {
   DefaultResourceLoader,
   SessionManager,
   SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+} from "@mariozechner/pi-coding-agent";
 
 const resourceLoader = new DefaultResourceLoader({
   cwd: resolvedWorkspace,
@@ -223,7 +225,7 @@ Events handled include:
 - `tool_execution_start` / `tool_execution_update` / `tool_execution_end`
 - `turn_start` / `turn_end`
 - `agent_start` / `agent_end`
-- `compaction_start` / `compaction_end`
+- `auto_compaction_start` / `auto_compaction_end`
 
 ### 4. Prompting
 
@@ -239,9 +241,9 @@ Image injection is prompt-local: OpenClaw loads image refs from the current prom
 passes them via `images` for that turn only. It does not re-scan older history turns
 to re-inject image payloads.
 
-## Tool architecture
+## Tool Architecture
 
-### Tool pipeline
+### Tool Pipeline
 
 1. **Base Tools**: pi's `codingTools` (read, bash, edit, write)
 2. **Custom Replacements**: OpenClaw replaces bash with `exec`/`process`, customizes read/edit/write for sandbox
@@ -251,7 +253,7 @@ to re-inject image payloads.
 6. **Schema Normalization**: Schemas cleaned for Gemini/OpenAI quirks
 7. **AbortSignal Wrapping**: Tools wrapped to respect abort signals
 
-### Tool definition adapter
+### Tool Definition Adapter
 
 pi-agent-core's `AgentTool` has a different `execute` signature than pi-coding-agent's `ToolDefinition`. The adapter in `pi-tool-definition-adapter.ts` bridges this:
 
@@ -270,7 +272,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
 }
 ```
 
-### Tool split strategy
+### Tool Split Strategy
 
 `splitSdkTools()` passes all tools via `customTools`:
 
@@ -285,9 +287,9 @@ export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: 
 
 This ensures OpenClaw's policy filtering, sandbox integration, and extended toolset remain consistent across providers.
 
-## System prompt construction
+## System Prompt Construction
 
-The system prompt is built in `buildAgentSystemPrompt()` (`system-prompt.ts`). It assembles a full prompt with sections including Tooling, Tool Call Style, Safety guardrails, OpenClaw Control, Skills, Docs, Workspace, Sandbox, Messaging, Assistant Output Directives, Voice, Silent Replies, Heartbeats, Runtime metadata, plus Memory and Reactions when enabled, and optional context files and extra system prompt content. Sections are trimmed for minimal prompt mode used by subagents.
+The system prompt is built in `buildAgentSystemPrompt()` (`system-prompt.ts`). It assembles a full prompt with sections including Tooling, Tool Call Style, Safety guardrails, OpenClaw CLI reference, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime metadata, plus Memory and Reactions when enabled, and optional context files and extra system prompt content. Sections are trimmed for minimal prompt mode used by subagents.
 
 The prompt is applied after session creation via `applySystemPromptOverrideToSession()`:
 
@@ -296,9 +298,9 @@ const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 applySystemPromptOverrideToSession(session, systemPromptOverride);
 ```
 
-## Session management
+## Session Management
 
-### Session files
+### Session Files
 
 Sessions are JSONL files with tree structure (id/parentId linking). Pi's `SessionManager` handles persistence:
 
@@ -308,7 +310,7 @@ const sessionManager = SessionManager.open(params.sessionFile);
 
 OpenClaw wraps this with `guardSessionManager()` for tool result safety.
 
-### Session caching
+### Session Caching
 
 `session-manager-cache.ts` caches SessionManager instances to avoid repeated file parsing:
 
@@ -318,18 +320,13 @@ sessionManager = SessionManager.open(params.sessionFile);
 trackSessionManagerAccess(params.sessionFile);
 ```
 
-### History limiting
+### History Limiting
 
 `limitHistoryTurns()` trims conversation history based on channel type (DM vs group).
 
 ### Compaction
 
-Auto-compaction triggers on context overflow. Common overflow signatures
-include `request_too_large`, `context length exceeded`, `input exceeds the
-maximum number of tokens`, `input token count exceeds the maximum number of
-input tokens`, `input is too long for the model`, and `ollama error: context
-length exceeded`. `compactEmbeddedPiSessionDirect()` handles manual
-compaction:
+Auto-compaction triggers on context overflow. `compactEmbeddedPiSessionDirect()` handles manual compaction:
 
 ```typescript
 const compactResult = await compactEmbeddedPiSessionDirect({
@@ -337,9 +334,9 @@ const compactResult = await compactEmbeddedPiSessionDirect({
 });
 ```
 
-## Authentication and model resolution
+## Authentication & Model Resolution
 
-### Auth profiles
+### Auth Profiles
 
 OpenClaw maintains an auth profile store with multiple API keys per provider:
 
@@ -355,7 +352,7 @@ await markAuthProfileFailure({ store, profileId, reason, cfg, agentDir });
 const rotated = await advanceAuthProfile();
 ```
 
-### Model resolution
+### Model Resolution
 
 ```typescript
 import { resolveModel } from "./pi-embedded-runner/model.js";
@@ -387,11 +384,11 @@ if (fallbackConfigured && isFailoverErrorMessage(errorText)) {
 }
 ```
 
-## Pi extensions
+## Pi Extensions
 
 OpenClaw loads custom pi extensions for specialized behavior:
 
-### Compaction safeguard
+### Compaction Safeguard
 
 `src/agents/pi-hooks/compaction-safeguard.ts` adds guardrails to compaction, including adaptive token budgeting plus tool failure and file operation summaries:
 
@@ -402,7 +399,7 @@ if (resolveCompactionMode(params.cfg) === "safeguard") {
 }
 ```
 
-### Context pruning
+### Context Pruning
 
 `src/agents/pi-hooks/context-pruning.ts` implements cache-TTL based context pruning:
 
@@ -418,9 +415,9 @@ if (cfg?.agents?.defaults?.contextPruning?.mode === "cache-ttl") {
 }
 ```
 
-## Streaming and block replies
+## Streaming & Block Replies
 
-### Block chunking
+### Block Chunking
 
 `EmbeddedBlockChunker` manages streaming text into discrete reply blocks:
 
@@ -439,7 +436,7 @@ const stripBlockTags = (text: string, state: { thinking: boolean; final: boolean
 };
 ```
 
-### Reply directives
+### Reply Directives
 
 Reply directives like `[[media:url]]`, `[[voice]]`, `[[reply:id]]` are parsed and extracted:
 
@@ -447,9 +444,9 @@ Reply directives like `[[media:url]]`, `[[voice]]`, `[[reply:id]]` are parsed an
 const { text: cleanedText, mediaUrls, audioAsVoice, replyToId } = consumeReplyDirectives(chunk);
 ```
 
-## Error handling
+## Error Handling
 
-### Error classification
+### Error Classification
 
 `pi-embedded-helpers.ts` classifies errors for appropriate handling:
 
@@ -462,7 +459,7 @@ isFailoverAssistantError(...)         // Should failover
 classifyFailoverReason(errorText)     // "auth" | "rate_limit" | "quota" | "timeout" | ...
 ```
 
-### Thinking level fallback
+### Thinking Level Fallback
 
 If a thinking level is unsupported, it falls back:
 
@@ -477,7 +474,7 @@ if (fallbackThinking) {
 }
 ```
 
-## Sandbox integration
+## Sandbox Integration
 
 When sandbox mode is enabled, tools and paths are constrained:
 
@@ -501,11 +498,13 @@ if (sandboxRoot) {
 
 - Refusal magic string scrubbing
 - Turn validation for consecutive roles
-- Strict upstream Pi tool parameter validation
+- Claude Code parameter compatibility
 
 ### Google/Gemini
 
-- Plugin-owned tool schema sanitization
+- Turn ordering fixes (`applyGoogleTurnOrderingFix`)
+- Tool schema sanitization (`sanitizeToolsForGoogle`)
+- Session history sanitization (`sanitizeSessionHistory`)
 
 ### OpenAI
 
@@ -518,12 +517,12 @@ OpenClaw also has a local TUI mode that uses pi-tui components directly:
 
 ```typescript
 // src/tui/tui.ts
-import { ... } from "@earendil-works/pi-tui";
+import { ... } from "@mariozechner/pi-tui";
 ```
 
 This provides the interactive terminal experience similar to pi's native mode.
 
-## Key differences from Pi CLI
+## Key Differences from Pi CLI
 
 | Aspect          | Pi CLI                  | OpenClaw Embedded                                                                              |
 | --------------- | ----------------------- | ---------------------------------------------------------------------------------------------- |
@@ -535,7 +534,7 @@ This provides the interactive terminal experience similar to pi's native mode.
 | Extensions      | Loaded from disk        | Programmatic + disk paths                                                                      |
 | Event handling  | TUI rendering           | Callback-based (onBlockReply, etc.)                                                            |
 
-## Future considerations
+## Future Considerations
 
 Areas for potential rework:
 
@@ -566,8 +565,3 @@ Live/opt-in:
 - `src/agents/pi-embedded-runner-extraparams.live.test.ts` (enable `OPENCLAW_LIVE_TEST=1`)
 
 For current run commands, see [Pi Development Workflow](/pi-dev).
-
-## Related
-
-- [Pi development workflow](/pi-dev)
-- [Install overview](/install)

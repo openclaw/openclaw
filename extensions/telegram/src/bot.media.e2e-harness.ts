@@ -1,13 +1,9 @@
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, vi, type Mock } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import {
-  resetTopicNameCacheForTest,
-  setTelegramTopicNameStoreFactoryForTest,
-} from "./topic-name-cache.js";
 
 type TelegramBotRuntimeForTest = NonNullable<
   Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
@@ -15,13 +11,12 @@ type TelegramBotRuntimeForTest = NonNullable<
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyHarnessParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
-type ReadRemoteMediaBufferFn =
-  typeof import("openclaw/plugin-sdk/media-runtime").readRemoteMediaBuffer;
+type FetchRemoteMediaFn = typeof import("openclaw/plugin-sdk/media-runtime").fetchRemoteMedia;
 
-const useSpy: Mock = vi.fn();
-const middlewareUseSpy: Mock = vi.fn();
+export const useSpy: Mock = vi.fn();
+export const middlewareUseSpy: Mock = vi.fn();
 export const onSpy: Mock = vi.fn();
-const stopSpy: Mock = vi.fn();
+export const stopSpy: Mock = vi.fn();
 export const sendChatActionSpy: Mock = vi.fn();
 
 function defaultUndiciFetch(input: RequestInfo | URL, init?: RequestInit) {
@@ -30,14 +25,14 @@ function defaultUndiciFetch(input: RequestInfo | URL, init?: RequestInit) {
 
 export const undiciFetchSpy: Mock = vi.fn(defaultUndiciFetch);
 
-function resetUndiciFetchMock() {
+export function resetUndiciFetchMock() {
   undiciFetchSpy.mockReset();
   undiciFetchSpy.mockImplementation(defaultUndiciFetch);
 }
 
-async function defaultReadRemoteMediaBuffer(
-  params: Parameters<ReadRemoteMediaBufferFn>[0],
-): ReturnType<ReadRemoteMediaBufferFn> {
+async function defaultFetchRemoteMedia(
+  params: Parameters<FetchRemoteMediaFn>[0],
+): ReturnType<FetchRemoteMediaFn> {
   if (!params.fetchImpl) {
     throw new Error(`Missing fetchImpl for ${params.url}`);
   }
@@ -52,14 +47,14 @@ async function defaultReadRemoteMediaBuffer(
     buffer: Buffer.from(arrayBuffer),
     contentType: response.headers.get("content-type") ?? undefined,
     fileName: params.filePathHint ? path.basename(params.filePathHint) : undefined,
-  } as Awaited<ReturnType<ReadRemoteMediaBufferFn>>;
+  } as Awaited<ReturnType<FetchRemoteMediaFn>>;
 }
 
-export const readRemoteMediaBufferSpy: Mock = vi.fn(defaultReadRemoteMediaBuffer);
+export const fetchRemoteMediaSpy: Mock = vi.fn(defaultFetchRemoteMedia);
 
-export function resetReadRemoteMediaBufferMock() {
-  readRemoteMediaBufferSpy.mockReset();
-  readRemoteMediaBufferSpy.mockImplementation(defaultReadRemoteMediaBuffer);
+export function resetFetchRemoteMediaMock() {
+  fetchRemoteMediaSpy.mockReset();
+  fetchRemoteMediaSpy.mockImplementation(defaultFetchRemoteMedia);
 }
 
 async function defaultSaveMediaBuffer(buffer: Buffer, contentType?: string) {
@@ -89,7 +84,7 @@ export function setNextSavedMediaPath(params: {
   );
 }
 
-function resetSaveMediaBufferMock() {
+export function resetSaveMediaBufferMock() {
   saveMediaBufferSpy.mockReset();
   saveMediaBufferSpy.mockImplementation(defaultSaveMediaBuffer);
 }
@@ -112,32 +107,6 @@ const apiStub: ApiStub = {
 
 const throttlerSpy = vi.fn(() => "throttler");
 
-type TopicNameStoreFactory = NonNullable<
-  Parameters<typeof setTelegramTopicNameStoreFactoryForTest>[0]
->;
-type TopicNamePersistentStore = ReturnType<TopicNameStoreFactory>;
-type TopicNameEntry = Awaited<ReturnType<TopicNamePersistentStore["entries"]>>[number]["value"];
-
-const topicNameStoresForTest = new Map<string, Map<string, TopicNameEntry>>();
-
-setTelegramTopicNameStoreFactoryForTest((namespace) => {
-  let store = topicNameStoresForTest.get(namespace);
-  if (!store) {
-    store = new Map();
-    topicNameStoresForTest.set(namespace, store);
-  }
-  return {
-    register: async (key, value) => {
-      store.set(key, value);
-    },
-    entries: async () => [...store.entries()].map(([key, value]) => ({ key, value })),
-    delete: async (key) => store.delete(key),
-    clear: async () => {
-      store.clear();
-    },
-  };
-});
-
 export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
   Bot: class {
     api = apiStub;
@@ -158,7 +127,6 @@ const mediaHarnessReplySpy = vi.hoisted(() =>
     return undefined;
   }),
 );
-export { mediaHarnessReplySpy };
 
 const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
   vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(async (params: DispatchReplyHarnessParams) => {
@@ -176,10 +144,10 @@ const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
 );
 
 export const telegramBotDepsForTest: TelegramBotDeps = {
-  getRuntimeConfig: (() =>
+  loadConfig: (() =>
     ({
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
-    }) as OpenClawConfig) as TelegramBotDeps["getRuntimeConfig"],
+    }) as OpenClawConfig) as TelegramBotDeps["loadConfig"],
   resolveStorePath: vi.fn(
     (storePath?: string) => storePath ?? "/tmp/telegram-media-sessions.json",
   ) as TelegramBotDeps["resolveStorePath"],
@@ -202,11 +170,9 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
 
 beforeEach(() => {
   resetInboundDedupe();
-  topicNameStoresForTest.clear();
-  resetTopicNameCacheForTest();
   resetSaveMediaBufferMock();
   resetUndiciFetchMock();
-  resetReadRemoteMediaBufferMock();
+  resetFetchRemoteMediaMock();
 });
 
 vi.doMock("./bot.runtime.js", () => ({
@@ -217,75 +183,73 @@ vi.mock("undici", async (importOriginal) => {
   const actual = await importOriginal<typeof import("undici")>();
   return {
     ...actual,
-    Agent: vi.fn(function MockAgent(this: { options?: unknown }, options?: unknown) {
-      this.options = options;
-    }),
-    EnvHttpProxyAgent: vi.fn(function MockEnvHttpProxyAgent(
-      this: { options?: unknown },
-      options?: unknown,
-    ) {
-      this.options = options;
-    }),
-    ProxyAgent: vi.fn(function MockProxyAgent(this: { options?: unknown }, options?: unknown) {
-      this.options = options;
-    }),
     fetch: (...args: Parameters<typeof undiciFetchSpy>) => undiciFetchSpy(...args),
-    setGlobalDispatcher: vi.fn(),
   };
 });
 
-vi.mock("./telegram-media.runtime.js", () => ({
-  readRemoteMediaBuffer: (...args: Parameters<typeof readRemoteMediaBufferSpy>) =>
-    readRemoteMediaBufferSpy(...args),
-  getAgentScopedMediaLocalRoots: vi.fn(() => []),
-  saveMediaBuffer: (...args: Parameters<typeof saveMediaBufferSpy>) => saveMediaBufferSpy(...args),
-  saveRemoteMedia: async (...args: Parameters<typeof readRemoteMediaBufferSpy>) => {
-    const fetched = (await readRemoteMediaBufferSpy(...args)) as {
-      buffer: Buffer;
-      contentType?: string;
-      fileName?: string;
-    };
-    return await saveMediaBufferSpy(
-      fetched.buffer,
-      fetched.contentType,
-      "inbound",
-      args[0]?.maxBytes,
-      args[0]?.originalFilename ?? fetched.fileName ?? args[0]?.filePathHint,
-    );
-  },
-}));
+export async function mockMediaRuntimeModuleForTest(
+  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/media-runtime")>,
+) {
+  const actual = await importOriginal();
+  const mockModule = Object.create(null) as Record<string, unknown>;
+  Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
+  Object.defineProperty(mockModule, "fetchRemoteMedia", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: (...args: Parameters<typeof fetchRemoteMediaSpy>) => fetchRemoteMediaSpy(...args),
+  });
+  Object.defineProperty(mockModule, "saveMediaBuffer", {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value: (...args: Parameters<typeof saveMediaBufferSpy>) => saveMediaBufferSpy(...args),
+  });
+  return mockModule;
+}
 
-vi.doMock("./bot-message-context.session.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./bot-message-context.session.runtime.js")>(
-    "./bot-message-context.session.runtime.js",
-  );
+vi.mock("openclaw/plugin-sdk/media-runtime", mockMediaRuntimeModuleForTest);
+
+vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
-    readSessionUpdatedAt: () => undefined,
-    resolveStorePath: (storePath?: string) => storePath ?? "/tmp/sessions.json",
+    loadConfig: telegramBotDepsForTest.loadConfig,
+    updateLastRoute: vi.fn(async () => undefined),
   };
 });
 
-vi.mock("./bot.agent.runtime.js", () => ({
-  resolveDefaultAgentId: vi.fn(() => "default"),
-}));
+vi.doMock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+  return {
+    ...actual,
+    findModelInCatalog: vi.fn(() => undefined),
+    loadModelCatalog: vi.fn(async () => []),
+    modelSupportsVision: vi.fn(() => false),
+    resolveDefaultModelForAgent: vi.fn(() => ({
+      provider: "openai",
+      model: "gpt-test",
+    })),
+  };
+});
 
-vi.mock("./bot-handlers.agent.runtime.js", () => ({
-  resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveDefaultAgentId: vi.fn(() => "default"),
-  resolveDefaultModelForAgent: vi.fn(() => ({
-    provider: "openai",
-    model: "gpt-test",
-  })),
-}));
+vi.doMock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    readChannelAllowFromStore: telegramBotDepsForTest.readChannelAllowFromStore,
+    upsertChannelPairingRequest: vi.fn(async () => ({
+      code: "PAIRCODE",
+      created: true,
+    })),
+  };
+});
 
-vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
-  findModelInCatalog: vi.fn(() => undefined),
-  loadModelCatalog: vi.fn(async () => []),
-  modelSupportsVision: vi.fn(() => false),
-  resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveDefaultModelForAgent: vi.fn(() => ({
-    provider: "openai",
-    model: "gpt-test",
-  })),
-}));
+vi.doMock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    getReplyFromConfig: mediaHarnessReplySpy,
+    __replySpy: mediaHarnessReplySpy,
+  };
+});

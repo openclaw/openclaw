@@ -2,60 +2,11 @@ import type {
   ChannelMessagingAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
-} from "../../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildChannelOutboundSessionRoute } from "../../plugin-sdk/core.js";
+} from "../../channels/plugins/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
-function readTestDefaultTo(cfg: OpenClawConfig, channelId: string): string | undefined {
-  const channels = cfg.channels as Record<string, { defaultTo?: unknown }> | undefined;
-  const value = channels?.[channelId]?.defaultTo;
-  return typeof value === "string" ? value : undefined;
-}
-
-function stripTestPrefix(raw: string, channelId: string): string {
-  return raw.replace(new RegExp(`^${channelId}:`, "i"), "").trim();
-}
-
-export function parseForumTargetForTest(raw: string): {
-  roomId: string;
-  threadId?: number;
-  chatType: "direct" | "group" | "unknown";
-} {
-  const trimmed = stripTestPrefix(raw.trim(), "forum");
-  const topicMatch = /^(.*):topic:(\d+)$/i.exec(trimmed);
-  const roomId = topicMatch?.[1]?.trim() || trimmed;
-  const threadId = topicMatch?.[2] ? Number.parseInt(topicMatch[2], 10) : undefined;
-  const chatType = roomId.startsWith("dm:")
-    ? "direct"
-    : roomId.startsWith("room:")
-      ? "group"
-      : "unknown";
-  return { roomId, threadId, chatType };
-}
-
-function normalizeGenericTargetForTest(raw: string, channelId: string): string | null {
-  const normalized = stripTestPrefix(raw, channelId).toLowerCase().replace(/\s+/gu, "-");
-  if (!normalized || normalized === "invalid") {
-    return null;
-  }
-  return normalized;
-}
-
-function createGenericResolveTarget(
-  channelId: string,
-  label: string,
-): ChannelOutboundAdapter["resolveTarget"] {
-  return ({ to }) => {
-    const normalized = to ? normalizeGenericTargetForTest(to, channelId) : null;
-    if (!normalized) {
-      return { ok: false, error: new Error(`${label} target is required`) };
-    }
-    return { ok: true, to: normalized };
-  };
-}
-
-export function parseTelegramTargetForTest(raw: string): {
+function parseTelegramTargetForTest(raw: string): {
   chatId: string;
   messageThreadId?: number;
   chatType: "direct" | "group" | "unknown";
@@ -63,13 +14,8 @@ export function parseTelegramTargetForTest(raw: string): {
   const trimmed = raw.trim();
   const withoutPrefix = trimmed.replace(/^telegram:/i, "").trim();
   const topicMatch = withoutPrefix.match(/^(.*):topic:(\d+)$/i);
-  const colonMatch = withoutPrefix.match(/^(-?\d+):(\d+)$/i);
-  const chatId = topicMatch?.[1]?.trim() || colonMatch?.[1] || withoutPrefix;
-  const messageThreadId = topicMatch?.[2]
-    ? Number.parseInt(topicMatch[2], 10)
-    : colonMatch?.[2]
-      ? Number.parseInt(colonMatch[2], 10)
-      : undefined;
+  const chatId = topicMatch?.[1]?.trim() || withoutPrefix;
+  const messageThreadId = topicMatch?.[2] ? Number.parseInt(topicMatch[2], 10) : undefined;
   const numericId = chatId.startsWith("-") ? chatId.slice(1) : chatId;
   const chatType =
     /^\d+$/.test(numericId) && !chatId.startsWith("-100")
@@ -80,68 +26,70 @@ export function parseTelegramTargetForTest(raw: string): {
   return { chatId, messageThreadId, chatType };
 }
 
+function normalizeWhatsAppTargetForTest(raw: string): string | null {
+  const trimmed = raw
+    .trim()
+    .replace(/^whatsapp:/i, "")
+    .trim();
+  if (!trimmed) {
+    return null;
+  }
+  const lowered = trimmed.toLowerCase();
+  if (lowered.endsWith("@g.us")) {
+    const normalized = lowered.replace(/\s+/gu, "");
+    return /^\d+@g\.us$/u.test(normalized) ? normalized : null;
+  }
+  const digits = trimmed.replace(/\D/gu, "");
+  const normalized = digits ? `+${digits}` : "";
+  return /^\+\d{7,15}$/u.test(normalized) ? normalized : null;
+}
+
+function createWhatsAppResolveTarget(label = "WhatsApp"): ChannelOutboundAdapter["resolveTarget"] {
+  return ({ to }) => {
+    const normalized = to ? normalizeWhatsAppTargetForTest(to) : null;
+    if (!normalized) {
+      return { ok: false, error: new Error(`${label} target is required`) };
+    }
+    return { ok: true, to: normalized };
+  };
+}
+
+function createTelegramResolveTarget(label = "Telegram"): ChannelOutboundAdapter["resolveTarget"] {
+  return ({ to }) => {
+    const trimmed = to?.trim();
+    if (!trimmed) {
+      return { ok: false, error: new Error(`${label} target is required`) };
+    }
+    return { ok: true, to: parseTelegramTargetForTest(trimmed).chatId };
+  };
+}
+
 export const telegramMessagingForTest: ChannelMessagingAdapter = {
-  targetPrefixes: ["telegram", "tg"],
+  parseExplicitTarget: ({ raw }) => {
+    const target = parseTelegramTargetForTest(raw);
+    return {
+      to: target.chatId,
+      threadId: target.messageThreadId,
+      chatType: target.chatType === "unknown" ? undefined : target.chatType,
+    };
+  },
   inferTargetChatType: ({ to }) => {
     const target = parseTelegramTargetForTest(to);
     return target.chatType === "unknown" ? undefined : target.chatType;
   },
-  resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target, resolvedTarget, threadId }) => {
-    const parsed = parseTelegramTargetForTest(target);
-    const resolvedThreadId = parsed.messageThreadId ?? threadId ?? undefined;
-    const isGroup =
-      parsed.chatType === "group" ||
-      (parsed.chatType === "unknown" &&
-        resolvedTarget?.kind !== undefined &&
-        resolvedTarget.kind !== "user");
-    const peerId =
-      isGroup && resolvedThreadId ? `${parsed.chatId}:topic:${resolvedThreadId}` : parsed.chatId;
-    return buildChannelOutboundSessionRoute({
-      cfg,
-      agentId,
-      channel: "telegram",
-      accountId,
-      peer: {
-        kind: isGroup ? "group" : "direct",
-        id: peerId,
-      },
-      chatType: isGroup ? "group" : "direct",
-      from: isGroup ? `telegram:group:${peerId}` : `telegram:${parsed.chatId}`,
-      to: parsed.chatId,
-      ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}),
-    });
-  },
 };
 
-export const forumMessagingForTest: ChannelMessagingAdapter = {
-  targetPrefixes: ["forum"],
+export const whatsappMessagingForTest: ChannelMessagingAdapter = {
   inferTargetChatType: ({ to }) => {
-    const target = parseForumTargetForTest(to);
-    return target.chatType === "unknown" ? undefined : target.chatType;
+    const normalized = normalizeWhatsAppTargetForTest(to);
+    if (!normalized) {
+      return undefined;
+    }
+    return normalized.endsWith("@g.us") ? "group" : "direct";
   },
   targetResolver: {
-    hint: "<room|dm target>",
+    hint: "<E.164|group JID>",
   },
-  resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target, threadId }) => {
-    const parsed = parseForumTargetForTest(target);
-    const resolvedThreadId = parsed.threadId ?? threadId ?? undefined;
-    const chatType = parsed.chatType === "direct" ? "direct" : "group";
-    return buildChannelOutboundSessionRoute({
-      cfg,
-      agentId,
-      channel: "forum",
-      accountId,
-      peer: {
-        kind: chatType,
-        id: parsed.roomId,
-      },
-      chatType,
-      from: chatType === "direct" ? `forum:${parsed.roomId}` : `forum:group:${parsed.roomId}`,
-      to: parsed.roomId,
-      ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}),
-    });
-  },
-  preserveHeartbeatThreadIdForGroupRoute: true,
 };
 
 export function createTestChannelPlugin(params: {
@@ -175,45 +123,54 @@ export function createTestChannelPlugin(params: {
   };
 }
 
-export function createGenericTargetTestPlugin(
-  id: ChannelPlugin["id"],
-  label = String(id),
-): ChannelPlugin {
+export function createTelegramTestPlugin(): ChannelPlugin {
   return createTestChannelPlugin({
-    id,
-    label,
+    id: "telegram",
+    label: "Telegram",
     outbound: {
       deliveryMode: "direct",
-      sendText: async () => ({ channel: id, messageId: `${id}-msg` }),
-      resolveTarget: createGenericResolveTarget(String(id), label),
+      sendText: async () => ({ channel: "telegram", messageId: "telegram-msg" }),
+      resolveTarget: createTelegramResolveTarget(),
     },
-    messaging: {
-      targetPrefixes: [String(id)],
-    },
-    resolveDefaultTo: ({ cfg }) => readTestDefaultTo(cfg, String(id)),
+    messaging: telegramMessagingForTest,
+    resolveDefaultTo: ({ cfg }) =>
+      typeof cfg.channels?.telegram?.defaultTo === "string"
+        ? cfg.channels.telegram.defaultTo
+        : undefined,
   });
 }
 
-export function createForumTargetTestPlugin(): ChannelPlugin {
+export function createWhatsAppTestPlugin(): ChannelPlugin {
   return createTestChannelPlugin({
-    id: "forum",
-    label: "Forum",
+    id: "whatsapp",
+    label: "WhatsApp",
     outbound: {
       deliveryMode: "direct",
-      sendText: async () => ({ channel: "forum", messageId: "forum-msg" }),
-      resolveTarget: createGenericResolveTarget("forum", "Forum"),
+      sendText: async () => ({ channel: "whatsapp", messageId: "whatsapp-msg" }),
+      resolveTarget: createWhatsAppResolveTarget(),
     },
-    messaging: forumMessagingForTest,
-    resolveDefaultTo: ({ cfg }) => readTestDefaultTo(cfg, "forum"),
+    messaging: whatsappMessagingForTest,
+    resolveDefaultTo: ({ cfg }) =>
+      typeof cfg.channels?.whatsapp?.defaultTo === "string"
+        ? cfg.channels.whatsapp.defaultTo
+        : undefined,
+  });
+}
+
+export function createNoopOutboundChannelPlugin(
+  id: "discord" | "imessage" | "slack",
+): ChannelPlugin {
+  return createTestChannelPlugin({
+    id,
+    outbound: {
+      deliveryMode: "direct",
+      sendText: async () => ({ channel: id, messageId: `${id}-msg` }),
+    },
   });
 }
 
 export function createTargetsTestRegistry(
-  plugins: ChannelPlugin[] = [
-    createGenericTargetTestPlugin("alpha", "Alpha"),
-    createGenericTargetTestPlugin("beta", "Beta"),
-    createForumTargetTestPlugin(),
-  ],
+  plugins: ChannelPlugin[] = [createWhatsAppTestPlugin(), createTelegramTestPlugin()],
 ) {
   return createTestRegistry(
     plugins.map((plugin) => ({

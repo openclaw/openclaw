@@ -1,5 +1,4 @@
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient, type IrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
@@ -10,7 +9,7 @@ import type { RuntimeEnv } from "./runtime-api.js";
 import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
-type IrcMonitorOptions = {
+export type IrcMonitorOptions = {
   accountId?: string;
   config?: CoreConfig;
   runtime?: RuntimeEnv;
@@ -35,7 +34,7 @@ export function resolveIrcInboundTarget(params: { target: string; senderNick: st
 
 export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ stop: () => void }> {
   const core = getIrcRuntime();
-  const cfg = opts.config ?? (core.config.current() as CoreConfig);
+  const cfg = opts.config ?? (core.config.loadConfig() as CoreConfig);
   const account = resolveIrcAccount({
     cfg,
     accountId: opts.accountId,
@@ -80,10 +79,7 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
         if (!client) {
           return;
         }
-        if (
-          normalizeLowercaseStringOrEmpty(event.senderNick) ===
-          normalizeLowercaseStringOrEmpty(client.nick)
-        ) {
+        if (event.senderNick.toLowerCase() === client.nick.toLowerCase()) {
           return;
         }
 

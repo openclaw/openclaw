@@ -1,4 +1,4 @@
-import { Type, type Static } from "typebox";
+import { Type, type Static } from "@sinclair/typebox";
 
 const CHAT_ACTION_VALUES = ["members", "info", "member_info"] as const;
 const MEMBER_ID_TYPE_VALUES = ["open_id", "user_id", "union_id"] as const;

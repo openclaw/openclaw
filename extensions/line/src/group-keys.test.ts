@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveExactLineGroupConfigKey,
   resolveLineGroupConfigEntry,
+  resolveLineGroupHistoryKey,
   resolveLineGroupLookupIds,
   resolveLineGroupsConfig,
 } from "./group-keys.js";
@@ -38,6 +39,14 @@ describe("resolveLineGroupConfigEntry", () => {
   });
 });
 
+describe("resolveLineGroupHistoryKey", () => {
+  it("uses the raw group or room id as the shared LINE peer key", () => {
+    expect(resolveLineGroupHistoryKey({ groupId: "g1" })).toBe("g1");
+    expect(resolveLineGroupHistoryKey({ roomId: "r1" })).toBe("r1");
+    expect(resolveLineGroupHistoryKey({})).toBeUndefined();
+  });
+});
+
 describe("account-scoped LINE groups", () => {
   it("resolves the effective account-scoped groups map", () => {
     const cfg = {
@@ -55,6 +64,7 @@ describe("account-scoped LINE groups", () => {
           },
         },
       },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(resolveLineGroupsConfig(cfg, "work")).toEqual({
@@ -87,6 +97,7 @@ describe("line group policy", () => {
           },
         },
       },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(resolveLineGroupRequireMention({ cfg, groupId: "r123" })).toBe(false);
@@ -116,6 +127,7 @@ describe("line group policy", () => {
           },
         },
       },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(resolveLineGroupRequireMention({ cfg, groupId: "g123", accountId: "work" })).toBe(false);

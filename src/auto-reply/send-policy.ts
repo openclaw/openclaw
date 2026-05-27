@@ -1,11 +1,9 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeCommandBody } from "./commands-registry.js";
-import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 
-type SendPolicyOverride = "allow" | "deny";
+export type SendPolicyOverride = "allow" | "deny";
 
-function normalizeSendPolicyOverride(raw?: string | null): SendPolicyOverride | undefined {
-  const value = normalizeOptionalLowercaseString(raw);
+export function normalizeSendPolicyOverride(raw?: string | null): SendPolicyOverride | undefined {
+  const value = raw?.trim().toLowerCase();
   if (!value) {
     return undefined;
   }
@@ -29,13 +27,12 @@ export function parseSendPolicyCommand(raw?: string): {
   if (!trimmed) {
     return { hasCommand: false };
   }
-  const stripped = stripInboundMetadata(trimmed);
-  const normalized = normalizeCommandBody(stripped);
+  const normalized = normalizeCommandBody(trimmed);
   const match = normalized.match(/^\/send(?:\s+([a-zA-Z]+))?\s*$/i);
   if (!match) {
     return { hasCommand: false };
   }
-  const token = normalizeOptionalLowercaseString(match[1]);
+  const token = match[1]?.trim().toLowerCase();
   if (!token) {
     return { hasCommand: true };
   }

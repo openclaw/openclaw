@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -22,18 +21,6 @@ export type MatrixStoredCredentials = {
   lastUsedAt?: string;
 };
 
-type MatrixCredentialsSource = "current" | "legacy";
-
-type MatrixCredentialsFileLoadResult =
-  | {
-      kind: "loaded";
-      source: MatrixCredentialsSource;
-      credentials: MatrixStoredCredentials | null;
-    }
-  | {
-      kind: "missing";
-    };
-
 function resolveStateDir(env: NodeJS.ProcessEnv): string {
   try {
     return getMatrixRuntime().state.resolveStateDir(env, os.homedir);
@@ -49,13 +36,13 @@ function resolveStateDir(env: NodeJS.ProcessEnv): string {
   }
 }
 
-function resolveLegacyMatrixCredentialsPath(env: NodeJS.ProcessEnv): string {
+function resolveLegacyMatrixCredentialsPath(env: NodeJS.ProcessEnv): string | null {
   return path.join(resolveMatrixCredentialsDir(env), "credentials.json");
 }
 
 function shouldReadLegacyCredentialsForAccount(accountId?: string | null): boolean {
   const normalizedAccountId = normalizeAccountId(accountId);
-  const cfg = getMatrixRuntime().config.current() as OpenClawConfig;
+  const cfg = getMatrixRuntime().config.loadConfig();
   if (!cfg.channels?.matrix || typeof cfg.channels.matrix !== "object") {
     return normalizedAccountId === DEFAULT_ACCOUNT_ID;
   }
@@ -89,35 +76,6 @@ function parseMatrixCredentialsFile(filePath: string): MatrixStoredCredentials |
   return parsed as MatrixStoredCredentials;
 }
 
-function loadMatrixCredentialsFile(
-  filePath: string,
-  source: MatrixCredentialsSource,
-): MatrixCredentialsFileLoadResult {
-  try {
-    return {
-      kind: "loaded",
-      source,
-      credentials: parseMatrixCredentialsFile(filePath),
-    };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return { kind: "missing" };
-    }
-    throw error;
-  }
-}
-
-function loadLegacyMatrixCredentialsWithCurrentFallback(params: {
-  legacyPath: string;
-  currentPath: string;
-}): MatrixCredentialsFileLoadResult {
-  const legacy = loadMatrixCredentialsFile(params.legacyPath, "legacy");
-  if (legacy.kind === "loaded") {
-    return legacy;
-  }
-  return loadMatrixCredentialsFile(params.currentPath, "current");
-}
-
 export function resolveMatrixCredentialsDir(
   env: NodeJS.ProcessEnv = process.env,
   stateDir?: string,
@@ -138,36 +96,30 @@ export function loadMatrixCredentials(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
 ): MatrixStoredCredentials | null {
-  const currentPath = resolveMatrixCredentialsPath(env, accountId);
+  const credPath = resolveMatrixCredentialsPath(env, accountId);
   try {
-    const current = loadMatrixCredentialsFile(currentPath, "current");
-    if (current.kind === "loaded") {
-      return current.credentials;
+    if (fs.existsSync(credPath)) {
+      return parseMatrixCredentialsFile(credPath);
     }
 
     const legacyPath = resolveLegacyMigrationSourcePath(env, accountId);
-    if (!legacyPath) {
+    if (!legacyPath || !fs.existsSync(legacyPath)) {
       return null;
     }
 
-    const loaded = loadLegacyMatrixCredentialsWithCurrentFallback({
-      legacyPath,
-      currentPath,
-    });
-    if (loaded.kind !== "loaded" || !loaded.credentials) {
+    const parsed = parseMatrixCredentialsFile(legacyPath);
+    if (!parsed) {
       return null;
     }
 
-    if (loaded.source === "legacy") {
-      try {
-        fs.mkdirSync(path.dirname(currentPath), { recursive: true });
-        fs.renameSync(legacyPath, currentPath);
-      } catch {
-        // Keep returning the legacy credentials even if migration fails.
-      }
+    try {
+      fs.mkdirSync(path.dirname(credPath), { recursive: true });
+      fs.renameSync(legacyPath, credPath);
+    } catch {
+      // Keep returning the legacy credentials even if migration fails.
     }
 
-    return loaded.credentials;
+    return parsed;
   } catch {
     return null;
   }
@@ -186,7 +138,9 @@ export function clearMatrixCredentials(
       continue;
     }
     try {
-      fs.unlinkSync(filePath);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
     } catch {
       // ignore
     }

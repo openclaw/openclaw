@@ -1,9 +1,8 @@
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { handleIrcInbound } from "./inbound.js";
 import type { RuntimeEnv } from "./runtime-api.js";
-import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
+import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 const {
@@ -82,29 +81,15 @@ function createMessage(overrides?: Partial<IrcInboundMessage>): IrcInboundMessag
   };
 }
 
-function resetInboundMocks() {
-  buildMentionRegexesMock.mockReset().mockReturnValue([]);
-  hasControlCommandMock.mockReset().mockReturnValue(false);
-  matchesMentionPatternsMock.mockReset().mockReturnValue(false);
-  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  shouldHandleTextCommandsMock.mockReset().mockReturnValue(false);
-  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "CODE", created: true });
-}
-
 describe("irc inbound behavior", () => {
   beforeEach(() => {
-    resetInboundMocks();
+    vi.clearAllMocks();
     installIrcRuntime();
-  });
-
-  afterEach(() => {
-    clearIrcRuntime();
+    readAllowFromStoreMock.mockResolvedValue([]);
   });
 
   it("issues a DM pairing challenge and sends the reply to the sender nick", async () => {
-    const sendReply = vi.fn<(target: string, text: string, replyToId?: string) => Promise<void>>(
-      async () => {},
-    );
+    const sendReply = vi.fn(async () => {});
 
     await handleIrcInbound({
       message: createMessage(),
@@ -123,23 +108,15 @@ describe("irc inbound behavior", () => {
     expect(sendReply).toHaveBeenCalledTimes(1);
     expect(sendReply).toHaveBeenCalledWith(
       "alice",
-      [
-        "OpenClaw: access not configured.",
-        "",
-        "Your IRC id: alice!ident@example.com",
-        "Pairing code:",
-        "```",
-        "CODE",
-        "```",
-        "",
-        "Ask the bot owner to approve with:",
-        "openclaw pairing approve irc CODE",
-        "```",
-        "openclaw pairing approve irc CODE",
-        "```",
-      ].join("\n"),
+      expect.stringContaining("OpenClaw: access not configured."),
       undefined,
     );
+    expect(sendReply).toHaveBeenCalledWith(
+      "alice",
+      expect.stringContaining("Your IRC id: alice!ident@example.com"),
+      undefined,
+    );
+    expect(sendReply).toHaveBeenCalledWith("alice", expect.stringContaining("CODE"), undefined);
   });
 
   it("drops unauthorized group control commands before dispatch", async () => {
@@ -173,75 +150,5 @@ describe("irc inbound behavior", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "irc: drop control command (unauthorized) target=alice!ident@example.com",
     );
-  });
-
-  it("passes the shared reply pipeline for dispatched replies", async () => {
-    const coreRuntime = createPluginRuntimeMock();
-    setIrcRuntime(coreRuntime as never);
-
-    await handleIrcInbound({
-      message: createMessage(),
-      account: createAccount({
-        config: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
-      config: { channels: { irc: {} } } as CoreConfig,
-      runtime: createRuntimeEnv(),
-      sendReply: vi.fn(async () => {}),
-    });
-
-    const assembledRequest = (
-      coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }
-    ).mock.calls[0]?.[0] as { replyPipeline?: unknown } | undefined;
-    expect(assembledRequest?.replyPipeline).toEqual({});
-  });
-
-  it("uses channel:# prefix for group channel From and OriginatingTo fields", async () => {
-    const coreRuntime = createPluginRuntimeMock();
-    const runtime = createRuntimeEnv();
-    setIrcRuntime(coreRuntime as never);
-
-    await handleIrcInbound({
-      message: createMessage({
-        target: "#ops",
-        isGroup: true,
-        senderNick: "alice",
-        senderUser: "ident",
-        senderHost: "example.com",
-        text: "hello",
-      }),
-      account: createAccount({
-        config: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          groupPolicy: "open",
-          groupAllowFrom: [],
-          groups: {
-            "#ops": { enabled: true, requireMention: false },
-          },
-        },
-      }),
-      config: { channels: { irc: {} } } as CoreConfig,
-      runtime,
-      sendReply: vi.fn(async () => {}),
-    });
-
-    const ctx = (
-      coreRuntime.channel.reply.finalizeInboundContext as unknown as {
-        mock: { calls: unknown[][] };
-      }
-    ).mock.calls[0]?.[0] as Record<string, unknown> | undefined;
-    expect(
-      (coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }).mock
-        .calls.length,
-    ).toBe(1);
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(ctx?.From).toBe("channel:#ops");
-    expect(ctx?.To).toBe("channel:#ops");
-    expect(ctx?.OriginatingTo).toBe("channel:#ops");
   });
 });

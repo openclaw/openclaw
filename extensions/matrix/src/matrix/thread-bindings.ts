@@ -1,15 +1,13 @@
-import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
-import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SessionBindingAdapter } from "openclaw/plugin-sdk/conversation-runtime";
 import {
+  readJsonFileWithFallback,
   registerSessionBindingAdapter,
+  resolveAgentIdFromSessionKey,
   resolveThreadBindingFarewellText,
-  type SessionBindingAdapter,
   unregisterSessionBindingAdapter,
-} from "openclaw/plugin-sdk/thread-bindings-session-runtime";
-import { claimCurrentTokenStorageState, resolveMatrixStateFilePath } from "./client/storage.js";
+  writeJsonFileAtomically,
+} from "../runtime-api.js";
+import { resolveMatrixStateFilePath } from "./client/storage.js";
 import type { MatrixAuth } from "./client/types.js";
 import type { MatrixClient } from "./sdk.js";
 import { sendMessageMatrix } from "./send.js";
@@ -41,6 +39,22 @@ type StoredMatrixThreadBindingState = {
   bindings: MatrixThreadBindingRecord[];
 };
 
+function normalizeDurationMs(raw: unknown, fallback: number): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return fallback;
+  }
+  return Math.max(0, Math.floor(raw));
+}
+
+function normalizeText(raw: unknown): string {
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+function normalizeConversationId(raw: unknown): string | undefined {
+  const trimmed = normalizeText(raw);
+  return trimmed || undefined;
+}
+
 function resolveBindingsPath(params: {
   auth: MatrixAuth;
   accountId: string;
@@ -66,9 +80,9 @@ async function loadBindingsFromDisk(filePath: string, accountId: string) {
   }
   const loaded: MatrixThreadBindingRecord[] = [];
   for (const entry of value.bindings) {
-    const conversationId = normalizeOptionalString(entry?.conversationId);
-    const parentConversationId = normalizeOptionalString(entry?.parentConversationId);
-    const targetSessionKey = normalizeOptionalString(entry?.targetSessionKey) ?? "";
+    const conversationId = normalizeConversationId(entry?.conversationId);
+    const parentConversationId = normalizeConversationId(entry?.parentConversationId);
+    const targetSessionKey = normalizeText(entry?.targetSessionKey);
     if (!conversationId || !targetSessionKey) {
       continue;
     }
@@ -86,9 +100,9 @@ async function loadBindingsFromDisk(filePath: string, accountId: string) {
       ...(parentConversationId ? { parentConversationId } : {}),
       targetKind: entry?.targetKind === "subagent" ? "subagent" : "acp",
       targetSessionKey,
-      agentId: normalizeOptionalString(entry?.agentId) || undefined,
-      label: normalizeOptionalString(entry?.label) || undefined,
-      boundBy: normalizeOptionalString(entry?.boundBy) || undefined,
+      agentId: normalizeText(entry?.agentId) || undefined,
+      label: normalizeText(entry?.label) || undefined,
+      boundBy: normalizeText(entry?.boundBy) || undefined,
       boundAt,
       lastActivityAt: Math.max(lastActivityAt, boundAt),
       idleTimeoutMs:
@@ -109,7 +123,7 @@ function toStoredBindingsState(
 ): StoredMatrixThreadBindingState {
   return {
     version: STORE_VERSION,
-    bindings: [...bindings].toSorted((a, b) => a.boundAt - b.boundAt),
+    bindings: [...bindings].sort((a, b) => a.boundAt - b.boundAt),
   };
 }
 
@@ -118,29 +132,25 @@ async function persistBindingsSnapshot(
   bindings: MatrixThreadBindingRecord[],
 ): Promise<void> {
   await writeJsonFileAtomically(filePath, toStoredBindingsState(bindings));
-  claimCurrentTokenStorageState({
-    rootDir: path.dirname(filePath),
-  });
 }
 
 function buildMatrixBindingIntroText(params: {
   metadata?: Record<string, unknown>;
   targetSessionKey: string;
 }): string {
-  const introText = normalizeOptionalString(params.metadata?.introText);
+  const introText = normalizeText(params.metadata?.introText);
   if (introText) {
     return introText;
   }
-  const label = normalizeOptionalString(params.metadata?.label);
+  const label = normalizeText(params.metadata?.label);
   const agentId =
-    normalizeOptionalString(params.metadata?.agentId) ||
+    normalizeText(params.metadata?.agentId) ||
     resolveAgentIdFromSessionKey(params.targetSessionKey);
   const base = label || agentId || "session";
   return `⚙️ ${base} session active. Messages here go directly to this session.`;
 }
 
 async function sendBindingMessage(params: {
-  cfg: OpenClawConfig;
   client: MatrixClient;
   accountId: string;
   roomId: string;
@@ -152,7 +162,6 @@ async function sendBindingMessage(params: {
     return null;
   }
   const result = await sendMessageMatrix(`room:${params.roomId}`, trimmed, {
-    cfg: params.cfg,
     client: params.client,
     accountId: params.accountId,
     ...(params.threadId ? { threadId: params.threadId } : {}),
@@ -161,7 +170,6 @@ async function sendBindingMessage(params: {
 }
 
 async function sendFarewellMessage(params: {
-  cfg: OpenClawConfig;
   client: MatrixClient;
   accountId: string;
   record: MatrixThreadBindingRecord;
@@ -182,7 +190,6 @@ async function sendFarewellMessage(params: {
     maxAgeMs,
   });
   await sendBindingMessage({
-    cfg: params.cfg,
     client: params.client,
     accountId: params.accountId,
     roomId,
@@ -196,7 +203,6 @@ async function sendFarewellMessage(params: {
 }
 
 export async function createMatrixThreadBindingManager(params: {
-  cfg: OpenClawConfig;
   accountId: string;
   auth: MatrixAuth;
   client: MatrixClient;
@@ -291,7 +297,6 @@ export async function createMatrixThreadBindingManager(params: {
     accountId: params.accountId,
     getIdleTimeoutMs: () => defaults.idleTimeoutMs,
     getMaxAgeMs: () => defaults.maxAgeMs,
-    persist,
     getByConversation: ({ conversationId, parentConversationId }) =>
       listBindingsForAccount(params.accountId).find((entry) => {
         if (entry.conversationId !== conversationId.trim()) {
@@ -386,7 +391,6 @@ export async function createMatrixThreadBindingManager(params: {
     await Promise.all(
       removed.map(async (record) => {
         await sendFarewellMessage({
-          cfg: params.cfg,
           client: params.client,
           accountId: params.accountId,
           record,
@@ -413,7 +417,7 @@ export async function createMatrixThreadBindingManager(params: {
     capabilities: { placements: ["current", "child"], bindSupported: true, unbindSupported: true },
     bind: async (input) => {
       const conversationId = input.conversation.conversationId.trim();
-      const parentConversationId = normalizeOptionalString(input.conversation.parentConversationId);
+      const parentConversationId = input.conversation.parentConversationId?.trim() || undefined;
       const targetSessionKey = input.targetSessionKey.trim();
       if (!conversationId || !targetSessionKey) {
         return null;
@@ -429,7 +433,6 @@ export async function createMatrixThreadBindingManager(params: {
       if (input.placement === "child") {
         const roomId = parentConversationId || conversationId;
         const rootEventId = await sendBindingMessage({
-          cfg: params.cfg,
           client: params.client,
           accountId: params.accountId,
           roomId,
@@ -450,10 +453,9 @@ export async function createMatrixThreadBindingManager(params: {
         targetKind: toMatrixBindingTargetKind(input.targetKind),
         targetSessionKey,
         agentId:
-          normalizeOptionalString(input.metadata?.agentId) ||
-          resolveAgentIdFromSessionKey(targetSessionKey),
-        label: normalizeOptionalString(input.metadata?.label) || undefined,
-        boundBy: normalizeOptionalString(input.metadata?.boundBy) || "system",
+          normalizeText(input.metadata?.agentId) || resolveAgentIdFromSessionKey(targetSessionKey),
+        label: normalizeText(input.metadata?.label) || undefined,
+        boundBy: normalizeText(input.metadata?.boundBy) || "system",
         boundAt: now,
         lastActivityAt: now,
         idleTimeoutMs: defaults.idleTimeoutMs,
@@ -469,7 +471,6 @@ export async function createMatrixThreadBindingManager(params: {
             ? boundConversationId
             : undefined;
         await sendBindingMessage({
-          cfg: params.cfg,
           client: params.client,
           accountId: params.accountId,
           roomId,

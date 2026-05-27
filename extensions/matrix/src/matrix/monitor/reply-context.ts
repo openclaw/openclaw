@@ -5,10 +5,9 @@ import type { MatrixRawEvent } from "./types.js";
 const MAX_CACHED_REPLY_CONTEXTS = 256;
 const MAX_REPLY_BODY_LENGTH = 500;
 
-type MatrixReplyContext = {
+export type MatrixReplyContext = {
   replyToBody?: string;
   replyToSender?: string;
-  replyToSenderId?: string;
 };
 
 function truncateReplyBody(value: string): string {
@@ -86,7 +85,6 @@ export function createMatrixReplyContextResolver(params: {
     return remember(cacheKey, {
       replyToBody,
       replyToSender: senderName ?? senderId,
-      replyToSenderId: senderId,
     });
   };
 }

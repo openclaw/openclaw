@@ -1,6 +1,5 @@
 import {
   createAllowFromSection,
-  createSetupTranslator,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
@@ -12,32 +11,26 @@ import {
   type ChannelSetupWizard,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
-import {
-  normalizeOptionalString,
-  normalizeStringEntries,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import type { SynologyChatAccountRaw, SynologyChatChannelConfig } from "./types.js";
-
-const t = createSetupTranslator();
 
 const channel = "synology-chat" as const;
 const DEFAULT_WEBHOOK_PATH = "/webhook/synology";
 
 const SYNOLOGY_SETUP_HELP_LINES = [
-  t("wizard.synologyChat.helpIncomingWebhook"),
-  t("wizard.synologyChat.helpOutgoingWebhook"),
-  t("wizard.synologyChat.helpPointWebhook", { path: DEFAULT_WEBHOOK_PATH }),
-  t("wizard.synologyChat.helpAllowedUsers"),
+  "1) Create an incoming webhook in Synology Chat and copy its URL",
+  "2) Create an outgoing webhook and copy its secret token",
+  `3) Point the outgoing webhook to https://<gateway-host>${DEFAULT_WEBHOOK_PATH}`,
+  "4) Keep allowed user IDs handy for DM allowlisting",
   `Docs: ${formatDocsLink("/channels/synology-chat", "channels/synology-chat")}`,
 ];
 
 const SYNOLOGY_ALLOW_FROM_HELP_LINES = [
-  t("wizard.synologyChat.allowlistIntro"),
-  t("wizard.synologyChat.examples"),
+  "Allowlist Synology Chat DMs by numeric user id.",
+  "Examples:",
   "- 123456",
   "- synology-chat:123456",
-  t("wizard.synologyChat.multipleEntries"),
+  "Multiple entries: comma-separated.",
   `Docs: ${formatDocsLink("/channels/synology-chat", "channels/synology-chat")}`,
 ];
 
@@ -79,8 +72,11 @@ function patchSynologyChatAccountConfig(params: {
     };
   }
 
-  const nextAccounts = { ...channelConfig.accounts } as Record<string, Record<string, unknown>>;
-  const nextAccountConfig = { ...nextAccounts[params.accountId] };
+  const nextAccounts = { ...(channelConfig.accounts ?? {}) } as Record<
+    string,
+    Record<string, unknown>
+  >;
+  const nextAccountConfig = { ...(nextAccounts[params.accountId] ?? {}) };
   for (const field of params.clearFields ?? []) {
     delete nextAccountConfig[field];
   }
@@ -129,28 +125,19 @@ function validateWebhookPath(value: string): string | undefined {
 }
 
 function parseSynologyUserId(value: string): string | null {
-  const cleaned = value.replace(/^synology(?:[-_]?chat)?:/i, "").trim();
+  const cleaned = value.replace(/^synology-chat:/i, "").trim();
   return /^\d+$/.test(cleaned) ? cleaned : null;
-}
-
-function normalizeSynologyAllowedUserId(value: unknown): string {
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint"
-  ) {
-    return `${value}`.trim();
-  }
-  return "";
 }
 
 function resolveExistingAllowedUserIds(cfg: OpenClawConfig, accountId: string): string[] {
   const raw = getRawAccountConfig(cfg, accountId).allowedUserIds;
   if (Array.isArray(raw)) {
-    return raw.map(normalizeSynologyAllowedUserId).filter(Boolean);
+    return raw.map((value) => String(value).trim()).filter(Boolean);
   }
-  return normalizeStringEntries(normalizeSynologyAllowedUserId(raw).split(","));
+  return String(raw ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 export const synologyChatSetupAdapter: ChannelSetupAdapter = {
@@ -192,23 +179,19 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
   channel,
   status: createStandardChannelSetupStatus({
     channelLabel: "Synology Chat",
-    configuredLabel: t("wizard.channels.statusConfigured"),
-    unconfiguredLabel: t("wizard.channels.statusNeedsTokenIncomingWebhook"),
-    configuredHint: t("wizard.channels.statusConfigured"),
-    unconfiguredHint: t("wizard.channels.statusNeedsTokenIncomingWebhook"),
+    configuredLabel: "configured",
+    unconfiguredLabel: "needs token + incoming webhook",
+    configuredHint: "configured",
+    unconfiguredHint: "needs token + incoming webhook",
     configuredScore: 1,
     unconfiguredScore: 0,
     includeStatusLine: true,
-    resolveConfigured: ({ cfg, accountId }) =>
-      accountId
-        ? isSynologyChatConfigured(cfg, accountId)
-        : listAccountIds(cfg).some((candidateAccountId) =>
-            isSynologyChatConfigured(cfg, candidateAccountId),
-          ),
+    resolveConfigured: ({ cfg }) =>
+      listAccountIds(cfg).some((accountId) => isSynologyChatConfigured(cfg, accountId)),
     resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listAccountIds(cfg).length || 0}`],
   }),
   introNote: {
-    title: t("wizard.synologyChat.setupTitle"),
+    title: "Synology Chat webhook setup",
     lines: SYNOLOGY_SETUP_HELP_LINES,
   },
   credentials: [
@@ -217,22 +200,22 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
       providerHint: channel,
       credentialLabel: "outgoing webhook token",
       preferredEnvVar: "SYNOLOGY_CHAT_TOKEN",
-      helpTitle: t("wizard.synologyChat.webhookTokenTitle"),
+      helpTitle: "Synology Chat webhook token",
       helpLines: SYNOLOGY_SETUP_HELP_LINES,
-      envPrompt: t("wizard.synologyChat.tokenEnvPrompt"),
-      keepPrompt: t("wizard.synologyChat.tokenKeep"),
-      inputPrompt: t("wizard.synologyChat.tokenInput"),
+      envPrompt: "SYNOLOGY_CHAT_TOKEN detected. Use env var?",
+      keepPrompt: "Synology Chat webhook token already configured. Keep it?",
+      inputPrompt: "Enter Synology Chat outgoing webhook token",
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
       inspect: ({ cfg, accountId }) => {
         const account = resolveAccount(cfg, accountId);
         const raw = getRawAccountConfig(cfg, accountId);
         return {
           accountConfigured: isSynologyChatConfigured(cfg, accountId),
-          hasConfiguredValue: Boolean(normalizeOptionalString(raw.token)),
-          resolvedValue: normalizeOptionalString(account.token),
+          hasConfiguredValue: Boolean(raw.token?.trim()),
+          resolvedValue: account.token.trim() || undefined,
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? normalizeOptionalString(process.env.SYNOLOGY_CHAT_TOKEN)
+              ? process.env.SYNOLOGY_CHAT_TOKEN?.trim() || undefined
               : undefined,
         };
       },
@@ -256,16 +239,16 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
   textInputs: [
     {
       inputKey: "url",
-      message: t("wizard.synologyChat.incomingWebhookUrlPrompt"),
+      message: "Incoming webhook URL",
       placeholder:
         "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=incoming...",
-      helpTitle: t("wizard.synologyChat.incomingWebhookTitle"),
+      helpTitle: "Synology Chat incoming webhook",
       helpLines: [
-        t("wizard.synologyChat.incomingWebhookHelpUseUrl"),
-        t("wizard.synologyChat.incomingWebhookHelpReplies"),
+        "Use the incoming webhook URL from Synology Chat integrations.",
+        "This is the URL OpenClaw uses to send replies back to Chat.",
       ],
       currentValue: ({ cfg, accountId }) => getRawAccountConfig(cfg, accountId).incomingUrl?.trim(),
-      keepPrompt: (value) => t("wizard.synologyChat.incomingWebhookKeep", { value }),
+      keepPrompt: (value) => `Incoming webhook URL set (${value}). Keep it?`,
       validate: ({ value }) => validateWebhookUrl(value),
       applySet: async ({ cfg, accountId, value }) =>
         patchSynologyChatAccountConfig({
@@ -277,17 +260,17 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
     },
     {
       inputKey: "webhookPath",
-      message: t("wizard.synologyChat.outgoingWebhookPathPrompt"),
+      message: "Outgoing webhook path (optional)",
       placeholder: DEFAULT_WEBHOOK_PATH,
       required: false,
       applyEmptyValue: true,
-      helpTitle: t("wizard.synologyChat.outgoingWebhookPathTitle"),
+      helpTitle: "Synology Chat outgoing webhook path",
       helpLines: [
-        t("wizard.synologyChat.defaultPath", { path: DEFAULT_WEBHOOK_PATH }),
-        t("wizard.synologyChat.outgoingWebhookPathHelp"),
+        `Default path: ${DEFAULT_WEBHOOK_PATH}`,
+        "Change this only if you need multiple Synology Chat webhook routes.",
       ],
       currentValue: ({ cfg, accountId }) => getRawAccountConfig(cfg, accountId).webhookPath?.trim(),
-      keepPrompt: (value) => t("wizard.synologyChat.outgoingWebhookPathKeep", { value }),
+      keepPrompt: (value) => `Outgoing webhook path set (${value}). Keep it?`,
       validate: ({ value }) => validateWebhookPath(value),
       applySet: async ({ cfg, accountId, value }) =>
         patchSynologyChatAccountConfig({
@@ -300,11 +283,11 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
     },
   ],
   allowFrom: createAllowFromSection({
-    helpTitle: t("wizard.synologyChat.allowlistTitle"),
+    helpTitle: "Synology Chat allowlist",
     helpLines: SYNOLOGY_ALLOW_FROM_HELP_LINES,
-    message: t("wizard.synologyChat.allowedUserIdsPrompt"),
+    message: "Allowed Synology Chat user ids",
     placeholder: "123456, 987654",
-    invalidWithoutCredentialNote: t("wizard.synologyChat.allowedUserIdsInvalid"),
+    invalidWithoutCredentialNote: "Synology Chat user ids must be numeric.",
     parseInputs: splitSetupEntries,
     parseId: parseSynologyUserId,
     apply: async ({ cfg, accountId, allowFrom }) =>
@@ -322,10 +305,10 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
       }),
   }),
   completionNote: {
-    title: t("wizard.synologyChat.accessControlTitle"),
+    title: "Synology Chat access control",
     lines: [
       `Default outgoing webhook path: ${DEFAULT_WEBHOOK_PATH}`,
-      'Set allowed user IDs, or manually switch `channels.synology-chat.dmPolicy` to `"open"` with `allowedUserIds: ["*"]` for public DMs.',
+      'Set allowed user IDs, or manually switch `channels.synology-chat.dmPolicy` to `"open"` for public DMs.',
       'With `dmPolicy="allowlist"`, an empty allowedUserIds list blocks the route from starting.',
       `Docs: ${formatDocsLink("/channels/synology-chat", "channels/synology-chat")}`,
     ],

@@ -3,12 +3,6 @@ import Foundation
 enum CommandResolver {
     private static let projectRootDefaultsKey = "openclaw.gatewayProjectRootPath"
     private static let helperName = "openclaw"
-    static let strictHostKeyCheckingSSHOptions = [
-        "-o", "StrictHostKeyChecking=yes",
-    ]
-    static let updateHostKeysSSHOptions = [
-        "-o", "UpdateHostKeys=yes",
-    ]
 
     static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
@@ -241,8 +235,7 @@ enum CommandResolver {
         extraArgs: [String] = [],
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil,
-        searchPaths: [String]? = nil,
-        projectRoot: URL? = nil) -> [String]
+        searchPaths: [String]? = nil) -> [String]
     {
         let settings = self.connectionSettings(defaults: defaults, configRoot: configRoot)
         if settings.mode == .remote, let ssh = self.sshNodeCommand(
@@ -253,7 +246,7 @@ enum CommandResolver {
             return ssh
         }
 
-        let root = projectRoot ?? self.projectRoot()
+        let root = self.projectRoot()
         if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
             return [openclawPath, subcommand] + extraArgs
         }
@@ -296,16 +289,14 @@ enum CommandResolver {
         extraArgs: [String] = [],
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil,
-        searchPaths: [String]? = nil,
-        projectRoot: URL? = nil) -> [String]
+        searchPaths: [String]? = nil) -> [String]
     {
         self.openclawNodeCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
             defaults: defaults,
             configRoot: configRoot,
-            searchPaths: searchPaths,
-            projectRoot: projectRoot)
+            searchPaths: searchPaths)
     }
 
     // MARK: - SSH helpers
@@ -403,7 +394,9 @@ enum CommandResolver {
         """
         let options: [String] = [
             "-o", "BatchMode=yes",
-        ] + self.strictHostKeyCheckingSSHOptions + self.updateHostKeysSSHOptions
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "UpdateHostKeys=yes",
+        ]
         let args = self.sshArguments(
             target: parsed,
             identity: settings.identity,
@@ -426,15 +419,10 @@ enum CommandResolver {
     {
         let root = configRoot ?? OpenClawConfigFile.loadDict()
         let mode = ConnectionModeResolver.resolve(root: root, defaults: defaults).mode
-        let remote = (root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
-        let target = defaults.string(forKey: remoteTargetKey)?.nonEmpty
-            ?? remote?["sshTarget"] as? String
-            ?? ""
-        let identity = defaults.string(forKey: remoteIdentityKey)?.nonEmpty
-            ?? remote?["sshIdentity"] as? String
-            ?? ""
-        let projectRoot = defaults.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
-        let cliPath = defaults.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
+        let target = defaults.string(forKey: remoteTargetKey) ?? ""
+        let identity = defaults.string(forKey: remoteIdentityKey) ?? ""
+        let projectRoot = defaults.string(forKey: remoteProjectRootKey) ?? ""
+        let cliPath = defaults.string(forKey: remoteCliPathKey) ?? ""
         return RemoteSettings(
             mode: mode,
             target: self.sanitizedTarget(target),

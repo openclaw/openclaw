@@ -11,12 +11,12 @@ export type GoogleChatUser = {
   type?: string;
 };
 
-type GoogleChatThread = {
+export type GoogleChatThread = {
   name?: string;
   threadKey?: string;
 };
 
-type GoogleChatAttachmentDataRef = {
+export type GoogleChatAttachmentDataRef = {
   resourceName?: string;
   attachmentUploadToken?: string;
 };
@@ -32,7 +32,7 @@ export type GoogleChatAttachment = {
   driveDataRef?: Record<string, unknown>;
 };
 
-type GoogleChatUserMention = {
+export type GoogleChatUserMention = {
   user?: GoogleChatUser;
   type?: string;
 };

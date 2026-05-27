@@ -1,9 +1,8 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
+import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
 
-type VoiceWakeConfig = {
+export type VoiceWakeConfig = {
   triggers: string[];
   updatedAtMs: number;
 };
@@ -17,7 +16,7 @@ function resolvePath(baseDir?: string) {
 
 function sanitizeTriggers(triggers: string[] | undefined | null): string[] {
   const cleaned = (triggers ?? [])
-    .map((w) => normalizeOptionalString(w) ?? "")
+    .map((w) => (typeof w === "string" ? w.trim() : ""))
     .filter((w) => w.length > 0);
   return cleaned.length > 0 ? cleaned : DEFAULT_TRIGGERS;
 }
@@ -30,7 +29,7 @@ export function defaultVoiceWakeTriggers() {
 
 export async function loadVoiceWakeConfig(baseDir?: string): Promise<VoiceWakeConfig> {
   const filePath = resolvePath(baseDir);
-  const existing = await tryReadJson<VoiceWakeConfig>(filePath);
+  const existing = await readJsonFile<VoiceWakeConfig>(filePath);
   if (!existing) {
     return { triggers: defaultVoiceWakeTriggers(), updatedAtMs: 0 };
   }
@@ -54,7 +53,7 @@ export async function setVoiceWakeTriggers(
       triggers: sanitized,
       updatedAtMs: Date.now(),
     };
-    await writeJson(filePath, next);
+    await writeJsonAtomic(filePath, next);
     return next;
   });
 }

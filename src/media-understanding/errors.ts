@@ -1,9 +1,8 @@
-type MediaUnderstandingSkipReason =
+export type MediaUnderstandingSkipReason =
   | "maxBytes"
   | "timeout"
   | "unsupported"
   | "empty"
-  | "blocked"
   | "tooSmall";
 
 export class MediaUnderstandingSkipError extends Error {

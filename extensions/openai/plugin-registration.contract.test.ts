@@ -1,9 +1,13 @@
-import { pluginRegistrationContractCases } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { describePluginRegistrationContract } from "openclaw/plugin-sdk/plugin-test-contracts";
+import { describePluginRegistrationContract } from "../../test/helpers/plugins/plugin-registration-contract.js";
 
 describePluginRegistrationContract({
-  ...pluginRegistrationContractCases.openai,
-  videoGenerationProviderIds: ["openai"],
+  pluginId: "openai",
+  providerIds: ["openai", "openai-codex"],
+  speechProviderIds: ["openai"],
+  mediaUnderstandingProviderIds: ["openai", "openai-codex"],
+  imageGenerationProviderIds: ["openai"],
+  cliBackendIds: ["codex-cli"],
+  requireSpeechVoices: true,
+  requireDescribeImages: true,
   requireGenerateImage: true,
-  requireGenerateVideo: true,
 });

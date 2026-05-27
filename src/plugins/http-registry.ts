@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
@@ -10,19 +9,12 @@ export type PluginHttpRouteHandler = (
   res: ServerResponse,
 ) => Promise<boolean | void> | boolean | void;
 
-const pluginHttpRouteRegistryScope = new AsyncLocalStorage<PluginRegistry>();
-
-export function withPluginHttpRouteRegistry<T>(registry: PluginRegistry, run: () => T): T {
-  return pluginHttpRouteRegistryScope.run(registry, run);
-}
-
 export function registerPluginHttpRoute(params: {
   path?: string | null;
   fallbackPath?: string | null;
   handler: PluginHttpRouteHandler;
   auth: PluginHttpRouteRegistration["auth"];
   match?: PluginHttpRouteRegistration["match"];
-  gatewayRuntimeScopeSurface?: PluginHttpRouteRegistration["gatewayRuntimeScopeSurface"];
   replaceExisting?: boolean;
   pluginId?: string;
   source?: string;
@@ -30,10 +22,7 @@ export function registerPluginHttpRoute(params: {
   log?: (message: string) => void;
   registry?: PluginRegistry;
 }): () => void {
-  const registry =
-    params.registry ??
-    pluginHttpRouteRegistryScope.getStore() ??
-    requireActivePluginHttpRouteRegistry();
+  const registry = params.registry ?? requireActivePluginHttpRouteRegistry();
   const routes = registry.httpRoutes ?? [];
   registry.httpRoutes = routes;
 
@@ -89,9 +78,6 @@ export function registerPluginHttpRoute(params: {
     handler: params.handler,
     auth: params.auth,
     match: routeMatch,
-    ...(params.gatewayRuntimeScopeSurface
-      ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
-      : {}),
     pluginId: params.pluginId,
     source: params.source,
   };

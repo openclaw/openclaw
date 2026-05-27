@@ -1,24 +1,20 @@
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import type {
-  SandboxBackendCommandParams,
-  SandboxBackendCommandResult,
-} from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
+  SandboxBackendCommandParams,
+  SandboxBackendCommandResult,
   SandboxBackendHandle,
   SandboxBackendManager,
-} from "./backend.types.js";
+} from "./backend.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   createRemoteShellSandboxFsBridge,
   type RemoteShellSandboxHandle,
 } from "./remote-fs-bridge.js";
-import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 import {
+  buildExecRemoteCommand,
   buildRemoteCommand,
   buildSshSandboxArgv,
-  buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   runSshSandboxCommand,
@@ -143,20 +139,20 @@ class SshSandboxBackendImpl {
       remoteWorkspaceDir: this.params.runtimePaths.remoteWorkspaceDir,
       remoteAgentWorkspaceDir: this.params.runtimePaths.remoteAgentWorkspaceDir,
       buildExecSpec: async ({ command, workdir, env, usePty }) => {
-        const remoteCommand = buildValidatedExecRemoteCommand({
+        await this.ensureRuntime();
+        const sshSession = await this.createSession();
+        const remoteCommand = buildExecRemoteCommand({
           command,
           workdir: workdir ?? this.params.runtimePaths.remoteWorkspaceDir,
           env,
         });
-        await this.ensureRuntime();
-        const sshSession = await this.createSession();
         return {
           argv: buildSshSandboxArgv({
             session: sshSession,
             remoteCommand,
             tty: usePty,
           }),
-          env: sanitizeEnvVars(process.env).allowed,
+          env: process.env,
           stdinMode: "pipe-open",
           finalizeToken: { sshSession } satisfies PendingExec,
         };
@@ -294,7 +290,8 @@ function resolveSshRuntimePaths(workspaceRoot: string, scopeKey: string): Resolv
 
 function buildSshSandboxRuntimeId(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
-  const safe = normalizeLowercaseStringOrEmpty(trimmed)
+  const safe = trimmed
+    .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 32);

@@ -8,7 +8,7 @@ import {
   CHUTES_DEFAULT_MODEL_REF,
   CHUTES_MODEL_CATALOG,
   buildChutesModelDefinition,
-} from "./models.js";
+} from "./api.js";
 
 export { CHUTES_DEFAULT_MODEL_REF };
 

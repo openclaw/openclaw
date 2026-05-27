@@ -1,11 +1,10 @@
-import { normalizeChatChannelId } from "../channels/ids.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
+import type { OpenClawConfig } from "../config/config.js";
 
 export function setPluginEnabledInConfig(
   config: OpenClawConfig,
   pluginId: string,
   enabled: boolean,
-  options: { updateChannelConfig?: boolean } = {},
 ): OpenClawConfig {
   const builtInChannelId = normalizeChatChannelId(pluginId);
   const resolvedId = builtInChannelId ?? pluginId;
@@ -24,7 +23,7 @@ export function setPluginEnabledInConfig(
     },
   };
 
-  if (!builtInChannelId || options.updateChannelConfig === false) {
+  if (!builtInChannelId) {
     return next;
   }
 

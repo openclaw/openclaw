@@ -1,7 +1,4 @@
-/**
- * @deprecated Public SDK subpath has no bundled extension production imports.
- * Prefer provider-setup or plugin-owned setup helpers for new provider code.
- */
+// Focused self-hosted provider setup helpers for OpenAI-compatible backends.
 export type {
   OpenClawPluginApi,
   ProviderAuthContext,

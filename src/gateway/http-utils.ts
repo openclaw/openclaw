@@ -1,43 +1,44 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
-import { getRuntimeConfig } from "../config/io.js";
-import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+  buildAllowedModelSet,
+  modelKey,
+  parseModelRef,
+  resolveDefaultModelForAgent,
+} from "../agents/model-selection.js";
+import { loadConfig } from "../config/config.js";
+import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { getHeader } from "./http-auth-utils.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
-
-export {
-  authorizeGatewayHttpRequestOrReply,
-  authorizeScopedGatewayHttpRequestOrReply,
-  checkGatewayHttpRequestAuth,
-  getBearerToken,
-  getHeader,
-  isGatewayBearerHttpRequest,
-  resolveHttpBrowserOriginPolicy,
-  resolveHttpSenderIsOwner,
-  resolveOpenAiCompatibleHttpOperatorScopes,
-  resolveOpenAiCompatibleHttpSenderIsOwner,
-  resolveSharedSecretHttpOperatorScopes,
-  resolveTrustedHttpOperatorScopes,
-  type AuthorizedGatewayHttpRequest,
-  type GatewayHttpRequestAuthCheckResult,
-} from "./http-auth-utils.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
 
-function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
+export function getHeader(req: IncomingMessage, name: string): string | undefined {
+  const raw = req.headers[name.toLowerCase()];
+  if (typeof raw === "string") {
+    return raw;
+  }
+  if (Array.isArray(raw)) {
+    return raw[0];
+  }
+  return undefined;
+}
+
+export function getBearerToken(req: IncomingMessage): string | undefined {
+  const raw = getHeader(req, "authorization")?.trim() ?? "";
+  if (!raw.toLowerCase().startsWith("bearer ")) {
+    return undefined;
+  }
+  const token = raw.slice(7).trim();
+  return token || undefined;
+}
+
+export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   const raw =
-    normalizeOptionalString(getHeader(req, "x-openclaw-agent-id")) ||
-    normalizeOptionalString(getHeader(req, "x-openclaw-agent")) ||
+    getHeader(req, "x-openclaw-agent-id")?.trim() ||
+    getHeader(req, "x-openclaw-agent")?.trim() ||
     "";
   if (!raw) {
     return undefined;
@@ -47,13 +48,13 @@ function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
 
 export function resolveAgentIdFromModel(
   model: string | undefined,
-  cfg = getRuntimeConfig(),
+  cfg = loadConfig(),
 ): string | undefined {
   const raw = model?.trim();
   if (!raw) {
     return undefined;
   }
-  const lowered = normalizeLowercaseStringOrEmpty(raw);
+  const lowered = raw.toLowerCase();
   if (lowered === OPENCLAW_MODEL_ID || lowered === OPENCLAW_DEFAULT_MODEL_ID) {
     return resolveDefaultAgentId(cfg);
   }
@@ -85,37 +86,23 @@ export async function resolveOpenAiCompatModelOverride(params: {
     return {};
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = loadConfig();
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
   const defaultProvider = defaultModelRef.provider;
-  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
-    config: cfg,
-    env: process.env,
-  });
-  const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot.plugins,
-  };
-  const parsed = parseModelRef(raw, defaultProvider, {
-    allowManifestNormalization: true,
-    allowPluginNormalization: true,
-    ...modelManifestContext,
-  });
+  const parsed = parseModelRef(raw, defaultProvider);
   if (!parsed) {
     return { errorMessage: "Invalid `x-openclaw-model`." };
   }
 
   const catalog = await loadGatewayModelCatalog();
-  const policy = createModelVisibilityPolicy({
+  const allowed = buildAllowedModelSet({
     cfg,
     catalog,
     defaultProvider,
     agentId: params.agentId,
-    allowManifestNormalization: true,
-    allowPluginNormalization: true,
-    ...modelManifestContext,
   });
   const normalized = modelKey(parsed.provider, parsed.model);
-  if (!policy.allowsKey(normalized)) {
+  if (!allowed.allowAny && !allowed.allowedKeys.has(normalized)) {
     return {
       errorMessage: `Model '${normalized}' is not allowed for agent '${params.agentId}'.`,
     };
@@ -128,7 +115,7 @@ export function resolveAgentIdForRequest(params: {
   req: IncomingMessage;
   model: string | undefined;
 }): string {
-  const cfg = getRuntimeConfig();
+  const cfg = loadConfig();
   const fromHeader = resolveAgentIdFromHeader(params.req);
   if (fromHeader) {
     return fromHeader;
@@ -138,7 +125,7 @@ export function resolveAgentIdForRequest(params: {
   return fromModel ?? resolveDefaultAgentId(cfg);
 }
 
-function resolveSessionKey(params: {
+export function resolveSessionKey(params: {
   req: IncomingMessage;
   agentId: string;
   user?: string | undefined;

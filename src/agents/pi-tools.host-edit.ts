@@ -1,7 +1,6 @@
+import os from "node:os";
 import path from "node:path";
-import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
-import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
-import { getToolParamsRecord } from "./pi-tools.params.js";
+import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 type EditToolRecoveryOptions = {
@@ -11,20 +10,19 @@ type EditToolRecoveryOptions = {
 
 type EditToolParams = {
   pathParam?: string;
-  edits: EditReplacement[];
-};
-
-type EditReplacement = {
-  oldText: string;
-  newText: string;
+  oldText?: string;
+  newText?: string;
 };
 
 const EDIT_MISMATCH_MESSAGE = "Could not find the exact text in";
 const EDIT_MISMATCH_HINT_LIMIT = 800;
 
+/** Resolve path for edit recovery: expand ~ and resolve relative paths against root. */
 function resolveEditPath(root: string, pathParam: string): string {
-  const home = resolveOsHomeDir();
-  const expanded = home ? expandHomePrefix(pathParam, { home }) : pathParam;
+  const expanded =
+    pathParam.startsWith("~/") || pathParam === "~"
+      ? pathParam.replace(/^~/, os.homedir())
+      : pathParam;
   return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(root, expanded);
 }
 
@@ -38,30 +36,13 @@ function readStringParam(record: Record<string, unknown> | undefined, ...keys: s
   return undefined;
 }
 
-function readEditReplacements(record: Record<string, unknown> | undefined): EditReplacement[] {
-  if (!Array.isArray(record?.edits)) {
-    return [];
-  }
-  return record.edits.flatMap((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return [];
-    }
-    const replacement = entry as Record<string, unknown>;
-    if (typeof replacement.oldText !== "string" || replacement.oldText.trim().length === 0) {
-      return [];
-    }
-    if (typeof replacement.newText !== "string") {
-      return [];
-    }
-    return [{ oldText: replacement.oldText, newText: replacement.newText }];
-  });
-}
-
 function readEditToolParams(params: unknown): EditToolParams {
-  const record = getToolParamsRecord(params);
+  const record =
+    params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
   return {
-    pathParam: readStringParam(record, "path", "file_path", "filePath", "filepath", "file"),
-    edits: readEditReplacements(record),
+    pathParam: readStringParam(record, "path", "file_path", "file"),
+    oldText: readStringParam(record, "oldText", "old_string", "old_text", "oldString"),
+    newText: readStringParam(record, "newText", "new_string", "new_text", "newString"),
   };
 }
 
@@ -76,12 +57,15 @@ function removeExactOccurrences(content: string, needle: string): string {
 function didEditLikelyApply(params: {
   originalContent?: string;
   currentContent: string;
-  edits: EditReplacement[];
+  oldText?: string;
+  newText: string;
 }) {
-  if (params.edits.length === 0) {
-    return false;
-  }
   const normalizedCurrent = normalizeToLF(params.currentContent);
+  const normalizedNew = normalizeToLF(params.newText);
+  const normalizedOld =
+    typeof params.oldText === "string" && params.oldText.length > 0
+      ? normalizeToLF(params.oldText)
+      : undefined;
   const normalizedOriginal =
     typeof params.originalContent === "string" ? normalizeToLF(params.originalContent) : undefined;
 
@@ -89,39 +73,28 @@ function didEditLikelyApply(params: {
     return false;
   }
 
-  let withoutInsertedNewText = normalizedCurrent;
-  for (const edit of params.edits) {
-    const normalizedNew = normalizeToLF(edit.newText);
-    if (normalizedNew.length > 0 && !normalizedCurrent.includes(normalizedNew)) {
-      return false;
-    }
-    withoutInsertedNewText =
-      normalizedNew.length > 0
-        ? removeExactOccurrences(withoutInsertedNewText, normalizedNew)
-        : withoutInsertedNewText;
+  if (normalizedNew.length > 0 && !normalizedCurrent.includes(normalizedNew)) {
+    return false;
   }
 
-  for (const edit of params.edits) {
-    const normalizedOld = normalizeToLF(edit.oldText);
-    if (withoutInsertedNewText.includes(normalizedOld)) {
-      return false;
-    }
+  const withoutInsertedNewText =
+    normalizedNew.length > 0
+      ? removeExactOccurrences(normalizedCurrent, normalizedNew)
+      : normalizedCurrent;
+  if (normalizedOld && withoutInsertedNewText.includes(normalizedOld)) {
+    return false;
   }
 
   return true;
 }
 
-function buildEditSuccessResult(pathParam: string, editCount: number): AgentToolResult<unknown> {
-  const text =
-    editCount > 1
-      ? `Successfully replaced ${editCount} block(s) in ${pathParam}.`
-      : `Successfully replaced text in ${pathParam}.`;
+function buildEditSuccessResult(pathParam: string): AgentToolResult<unknown> {
   return {
     isError: false,
     content: [
       {
         type: "text",
-        text,
+        text: `Successfully replaced text in ${pathParam}.`,
       },
     ],
     details: { diff: "", firstChangedLine: undefined },
@@ -159,12 +132,12 @@ export function wrapEditToolWithRecovery(
       signal: AbortSignal | undefined,
       onUpdate?: AgentToolUpdateCallback<unknown>,
     ) => {
-      const { pathParam, edits } = readEditToolParams(params);
+      const { pathParam, oldText, newText } = readEditToolParams(params);
       const absolutePath =
         typeof pathParam === "string" ? resolveEditPath(options.root, pathParam) : undefined;
       let originalContent: string | undefined;
 
-      if (absolutePath && edits.length > 0) {
+      if (absolutePath && newText !== undefined) {
         try {
           originalContent = await options.readFile(absolutePath);
         } catch {
@@ -186,15 +159,16 @@ export function wrapEditToolWithRecovery(
           // Fall through to the original error if readback fails.
         }
 
-        if (typeof currentContent === "string" && edits.length > 0) {
+        if (typeof currentContent === "string" && newText !== undefined) {
           if (
             didEditLikelyApply({
               originalContent,
               currentContent,
-              edits,
+              oldText,
+              newText,
             })
           ) {
-            return buildEditSuccessResult(pathParam ?? absolutePath, edits.length);
+            return buildEditSuccessResult(pathParam ?? absolutePath);
           }
         }
 

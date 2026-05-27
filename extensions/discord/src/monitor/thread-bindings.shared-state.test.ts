@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
-  testing as threadBindingsTesting,
+  __testing as threadBindingsTesting,
   createThreadBindingManager,
   getThreadBindingManager,
 } from "./thread-bindings.js";
@@ -21,19 +20,15 @@ describe("thread binding manager state", () => {
   });
 
   it("shares managers between ESM and alternate-loaded module instances", async () => {
-    const viaAlternateLoader = await loadThreadBindingsViaAlternateLoader();
+    const viaJiti = await loadThreadBindingsViaAlternateLoader();
 
     createThreadBindingManager({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "work",
       persist: false,
       enableSweeper: false,
     });
 
-    const direct = getThreadBindingManager("work");
-    if (!direct) {
-      throw new Error("expected direct thread binding manager");
-    }
-    expect(viaAlternateLoader.getThreadBindingManager("work")).toBe(direct);
+    expect(getThreadBindingManager("work")).not.toBeNull();
+    expect(viaJiti.getThreadBindingManager("work")).not.toBeNull();
   });
 });

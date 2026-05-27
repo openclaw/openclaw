@@ -131,7 +131,7 @@ describe("resolveGatewayCredentialsFromConfig", () => {
         urlOverride: "wss://example.com",
       },
     );
-    expect(resolved).toStrictEqual({});
+    expect(resolved).toEqual({});
   });
 
   it("uses env credentials for env-sourced url overrides", () => {
@@ -283,48 +283,8 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     });
   });
 
-  it("throws when trusted-proxy local password SecretRef cannot resolve", () => {
-    expect(() => resolveLocalModeWithUnresolvedPassword("trusted-proxy")).toThrow(
-      "gateway.auth.password",
-    );
-  });
-
-  it("resolves trusted-proxy local password credentials", () => {
-    const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: cfg({
-        gateway: {
-          mode: "local",
-          auth: {
-            mode: "trusted-proxy",
-            password: "local-trusted-proxy-password", // pragma: allowlist secret
-          },
-        },
-      }),
-      env: {} as NodeJS.ProcessEnv,
-    });
-
-    expect(resolved).toEqual({
-      token: undefined,
-      password: "local-trusted-proxy-password", // pragma: allowlist secret
-    });
-  });
-
-  it("does not use remote password as trusted-proxy local fallback", () => {
-    const resolved = resolveGatewayCredentialsFromConfig({
-      cfg: cfg({
-        gateway: {
-          mode: "local",
-          auth: {
-            mode: "trusted-proxy",
-          },
-          remote: {
-            password: "remote-password", // pragma: allowlist secret
-          },
-        },
-      }),
-      env: {} as NodeJS.ProcessEnv,
-    });
-
+  it("ignores unresolved local password ref when local auth mode is trusted-proxy", () => {
+    const resolved = resolveLocalModeWithUnresolvedPassword("trusted-proxy");
     expect(resolved).toEqual({
       token: undefined,
       password: undefined,
@@ -488,7 +448,7 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     ).toThrow("gateway.auth.token");
   });
 
-  it("uses remote password when remote token ref is unresolved", () => {
+  it("does not throw for unresolved remote token ref when password is available", () => {
     const resolved = resolveGatewayCredentialsFromConfig({
       cfg: {
         gateway: {

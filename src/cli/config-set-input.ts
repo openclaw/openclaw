@@ -1,18 +1,11 @@
 import fs from "node:fs";
 import JSON5 from "json5";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
 
 export type ConfigSetOptions = {
   strictJson?: boolean;
-  /** @deprecated Use strictJson. */
   json?: boolean;
   dryRun?: boolean;
   allowExec?: boolean;
-  merge?: boolean;
-  replace?: boolean;
   refProvider?: string;
   refSource?: string;
   refId?: string;
@@ -45,7 +38,8 @@ export type ConfigSetBatchEntry = {
 
 export function hasBatchMode(opts: ConfigSetOptions): boolean {
   return Boolean(
-    normalizeOptionalString(opts.batchJson) || normalizeOptionalString(opts.batchFile),
+    (opts.batchJson && opts.batchJson.trim().length > 0) ||
+    (opts.batchFile && opts.batchFile.trim().length > 0),
   );
 }
 
@@ -93,7 +87,7 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
       throw new Error(`${sourceLabel}[${index}] must be an object.`);
     }
     const typed = entry as Record<string, unknown>;
-    const path = normalizeOptionalString(typed.path) ?? "";
+    const path = typeof typed.path === "string" ? typed.path.trim() : "";
     if (!path) {
       throw new Error(`${sourceLabel}[${index}].path is required.`);
     }
@@ -117,10 +111,8 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
 }
 
 export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] | null {
-  const batchJson = normalizeOptionalString(opts.batchJson);
-  const batchFile = normalizeOptionalString(opts.batchFile);
-  const hasInline = Boolean(batchJson);
-  const hasFile = Boolean(batchFile);
+  const hasInline = Boolean(opts.batchJson && opts.batchJson.trim().length > 0);
+  const hasFile = Boolean(opts.batchFile && opts.batchFile.trim().length > 0);
   if (!hasInline && !hasFile) {
     return null;
   }
@@ -128,9 +120,9 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
     throw new Error("Use either --batch-json or --batch-file, not both.");
   }
   if (hasInline) {
-    return parseBatchEntries(batchJson as string, "--batch-json");
+    return parseBatchEntries(opts.batchJson as string, "--batch-json");
   }
-  const pathname = normalizeStringifiedOptionalString(opts.batchFile) ?? "";
+  const pathname = (opts.batchFile as string).trim();
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
   }

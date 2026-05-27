@@ -1,12 +1,8 @@
-import { asPositiveSafeInteger } from "../shared/number-coercion.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-
 export type SessionTranscriptUpdate = {
   sessionFile: string;
   sessionKey?: string;
   message?: unknown;
   messageId?: string;
-  messageSeq?: number;
 };
 
 type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
@@ -29,23 +25,20 @@ export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUp
           sessionKey: update.sessionKey,
           message: update.message,
           messageId: update.messageId,
-          messageSeq: update.messageSeq,
         };
-  const trimmed = normalizeOptionalString(normalized.sessionFile);
+  const trimmed = normalized.sessionFile.trim();
   if (!trimmed) {
     return;
   }
-  const messageSeq = asPositiveSafeInteger(normalized.messageSeq);
   const nextUpdate: SessionTranscriptUpdate = {
     sessionFile: trimmed,
-    ...(normalizeOptionalString(normalized.sessionKey)
-      ? { sessionKey: normalizeOptionalString(normalized.sessionKey) }
+    ...(typeof normalized.sessionKey === "string" && normalized.sessionKey.trim()
+      ? { sessionKey: normalized.sessionKey.trim() }
       : {}),
     ...(normalized.message !== undefined ? { message: normalized.message } : {}),
-    ...(normalizeOptionalString(normalized.messageId)
-      ? { messageId: normalizeOptionalString(normalized.messageId) }
+    ...(typeof normalized.messageId === "string" && normalized.messageId.trim()
+      ? { messageId: normalized.messageId.trim() }
       : {}),
-    ...(messageSeq !== undefined ? { messageSeq } : {}),
   };
   for (const listener of SESSION_TRANSCRIPT_LISTENERS) {
     try {

@@ -5,15 +5,13 @@ read_when:
 title: "Nextcloud Talk"
 ---
 
-Status: bundled plugin (webhook bot). Direct messages, rooms, reactions, and markdown messages are supported.
+# Nextcloud Talk (plugin)
 
-## Bundled plugin
+Status: supported via plugin (webhook bot). Direct messages, rooms, reactions, and markdown messages are supported.
 
-Nextcloud Talk ships as a bundled plugin in current OpenClaw releases, so
-normal packaged builds do not need a separate install.
+## Plugin required
 
-If you are on an older build or a custom install that excludes Nextcloud Talk,
-install the npm package directly:
+Nextcloud Talk ships as a plugin and is not bundled with the core install.
 
 Install via CLI (npm registry):
 
@@ -21,57 +19,30 @@ Install via CLI (npm registry):
 openclaw plugins install @openclaw/nextcloud-talk
 ```
 
-Use the bare package to follow the current official release tag. Pin an exact
-version only when you need a reproducible install.
-
 Local checkout (when running from a git repo):
 
 ```bash
 openclaw plugins install ./path/to/local/nextcloud-talk-plugin
 ```
 
+If you choose Nextcloud Talk during setup and a git checkout is detected,
+OpenClaw will offer the local install path automatically.
+
 Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
-1. Ensure the Nextcloud Talk plugin is available.
-   - Current packaged OpenClaw releases already bundle it.
-   - Older/custom installs can add it manually with the commands above.
+1. Install the Nextcloud Talk plugin.
 2. On your Nextcloud server, create a bot:
 
    ```bash
-   ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature webhook --feature response --feature reaction
+   ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature reaction
    ```
 
 3. Enable the bot in the target room settings.
 4. Configure OpenClaw:
    - Config: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - Or env: `NEXTCLOUD_TALK_BOT_SECRET` (default account only)
-
-   CLI setup:
-
-   ```bash
-   openclaw channels add --channel nextcloud-talk \
-     --url https://cloud.example.com \
-     --token "<shared-secret>"
-   ```
-
-   Equivalent explicit fields:
-
-   ```bash
-   openclaw channels add --channel nextcloud-talk \
-     --base-url https://cloud.example.com \
-     --secret "<shared-secret>"
-   ```
-
-   File-backed secret:
-
-   ```bash
-   openclaw channels add --channel nextcloud-talk \
-     --base-url https://cloud.example.com \
-     --secret-file /path/to/nextcloud-talk-secret
-   ```
-
 5. Restart the gateway (or finish setup).
 
 Minimal config:
@@ -157,7 +128,6 @@ Provider options:
 - `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled`.
 - `channels.nextcloud-talk.groupAllowFrom`: group allowlist (user IDs).
 - `channels.nextcloud-talk.rooms`: per-room settings and allowlist.
-- Static sender access groups can be referenced from `allowFrom` and `groupAllowFrom` with `accessGroup:<name>`.
 - `channels.nextcloud-talk.historyLimit`: group history limit (0 disables).
 - `channels.nextcloud-talk.dmHistoryLimit`: DM history limit (0 disables).
 - `channels.nextcloud-talk.dms`: per-DM overrides (historyLimit).
@@ -166,11 +136,3 @@ Provider options:
 - `channels.nextcloud-talk.blockStreaming`: disable block streaming for this channel.
 - `channels.nextcloud-talk.blockStreamingCoalesce`: block streaming coalesce tuning.
 - `channels.nextcloud-talk.mediaMaxMb`: inbound media cap (MB).
-
-## Related
-
-- [Channels Overview](/channels) — all supported channels
-- [Pairing](/channels/pairing) — DM authentication and pairing flow
-- [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
-- [Security](/gateway/security) — access model and hardening

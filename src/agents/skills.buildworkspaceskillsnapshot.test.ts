@@ -1,31 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { withPathResolutionEnv } from "../test-utils/env.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
-import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
-import { writeSkill, writeWorkspaceSkills } from "./skills.e2e-test-helpers.js";
-import {
-  restoreMockSkillsHomeEnv,
-  setMockSkillsHomeEnv,
-  type SkillsHomeEnvSnapshot,
-} from "./skills/home-env.test-support.js";
-import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./skills/workspace.js";
-
-vi.mock("./skills/plugin-skills.js", () => ({
-  resolvePluginSkillDirs: () => [],
-}));
+import { writeSkill } from "./skills.e2e-test-helpers.js";
+import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./skills.js";
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-snapshot-suite-");
 let truncationWorkspaceTemplateDir = "";
 let nestedRepoTemplateDir = "";
-let tempHome: TempHomeEnv | null = null;
-let skillsHomeEnv: SkillsHomeEnvSnapshot | null = null;
 
 beforeAll(async () => {
   await fixtureSuite.setup();
-  tempHome = await createTempHomeEnv("openclaw-skills-snapshot-home-");
-  skillsHomeEnv = setMockSkillsHomeEnv(tempHome.home);
   truncationWorkspaceTemplateDir = await fixtureSuite.createCaseDir(
     "template-truncation-workspace",
   );
@@ -50,19 +36,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (skillsHomeEnv) {
-    await restoreMockSkillsHomeEnv(skillsHomeEnv);
-    skillsHomeEnv = null;
-  }
-  if (tempHome) {
-    await tempHome.restore();
-    tempHome = null;
-  }
   await fixtureSuite.cleanup();
 });
 
 function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
-  return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
+  return withEnv({ HOME: workspaceDir, PATH: "" }, cb);
 }
 
 function buildSnapshot(
@@ -105,7 +83,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
     const snapshot = buildSnapshot(workspaceDir);
 
     expect(snapshot.prompt).toBe("");
-    expect(snapshot.skills).toStrictEqual([]);
+    expect(snapshot.skills).toEqual([]);
   });
 
   it("omits disable-model-invocation skills from the prompt", async () => {
@@ -126,8 +104,10 @@ describe("buildWorkspaceSkillSnapshot", () => {
 
     expect(snapshot.prompt).toContain("visible-skill");
     expect(snapshot.prompt).not.toContain("hidden-skill");
-    expect(snapshot.skills.map((skill) => skill.name)).toContain("hidden-skill");
-    expect(snapshot.skills.map((skill) => skill.name)).toContain("visible-skill");
+    expect(snapshot.skills.map((skill) => skill.name).toSorted()).toEqual([
+      "hidden-skill",
+      "visible-skill",
+    ]);
   });
 
   it("keeps prompt output aligned with buildWorkspaceSkillsPrompt", async () => {
@@ -197,33 +177,6 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.prompt.length).toBeLessThan(2000);
   });
 
-  it("uses agents.list[].skills as a full replacement for inherited defaults", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    await writeWorkspaceSkills(workspaceDir, [
-      { name: "github", description: "GitHub" },
-      { name: "weather", description: "Weather" },
-      { name: "docs-search", description: "Docs" },
-    ]);
-
-    const snapshot = buildSnapshot(workspaceDir, {
-      agentId: "writer",
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github", "weather"],
-          },
-          list: [{ id: "writer", skills: ["docs-search", "github"] }],
-        },
-      },
-    });
-
-    expect(snapshot.skills.map((skill) => skill.name).toSorted()).toEqual([
-      "docs-search",
-      "github",
-    ]);
-    expect(snapshot.skillFilter).toEqual(["docs-search", "github"]);
-  });
-
   it("limits discovery for nested repo-style skills roots (dir/skills/*)", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const repoDir = await cloneTemplateDir(nestedRepoTemplateDir, "skills-repo");
@@ -246,17 +199,10 @@ describe("buildWorkspaceSkillSnapshot", () => {
       }),
     );
 
-    const skillNames = snapshot.skills.map((skill) => skill.name);
-    expect(skillNames).toStrictEqual([
-      "repo-skill-00",
-      "repo-skill-01",
-      "repo-skill-02",
-      "repo-skill-03",
-      "repo-skill-04",
-    ]);
-    for (const name of skillNames) {
-      expect(snapshot.prompt).toContain(name);
-    }
+    // We should only have loaded a small subset.
+    expect(snapshot.skills.length).toBeLessThanOrEqual(5);
+    expect(snapshot.prompt).toContain("repo-skill-00");
+    expect(snapshot.prompt).not.toContain("repo-skill-07");
   });
 
   it("skips skills whose SKILL.md exceeds maxSkillFileBytes", async () => {

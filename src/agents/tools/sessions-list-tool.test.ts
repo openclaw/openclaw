@@ -1,75 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSessionsListTool } from "./sessions-list-tool.js";
-
-const mocks = vi.hoisted(() => ({
-  gatewayCall: vi.fn(),
-  createAgentToAgentPolicy: vi.fn(() => ({})),
-  createSessionVisibilityGuard: vi.fn(async () => ({
-    check: () => ({ allowed: true }),
-  })),
-  resolveEffectiveSessionToolsVisibility: vi.fn(() => "all"),
-  resolveSandboxedSessionToolContext: vi.fn(() => ({
-    mainKey: "main",
-    alias: "main",
-    requesterInternalKey: undefined,
-    restrictToSpawned: false,
-  })),
-}));
-
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => mocks.gatewayCall(opts),
-}));
-
-vi.mock("./sessions-helpers.js", async (importActual) => {
-  const actual = await importActual<typeof import("./sessions-helpers.js")>();
-  return {
-    ...actual,
-    createAgentToAgentPolicy: () => mocks.createAgentToAgentPolicy(),
-    createSessionVisibilityGuard: async () => await mocks.createSessionVisibilityGuard(),
-    resolveEffectiveSessionToolsVisibility: () => mocks.resolveEffectiveSessionToolsVisibility(),
-    resolveSandboxedSessionToolContext: () => mocks.resolveSandboxedSessionToolContext(),
-  };
-});
-
-type SessionsListDetails = {
-  sessions?: Array<{
-    deliveryContext?: {
-      accountId?: string;
-      channel?: string;
-      threadId?: string | number;
-      to?: string;
-    };
-    elevatedLevel?: string;
-    fastMode?: boolean;
-    reasoningLevel?: string;
-    responseUsage?: string;
-    thinkingLevel?: string;
-    verboseLevel?: string;
-  }>;
-};
-
-function getSessionsListDetails(result: { details?: unknown }): SessionsListDetails {
-  return result.details as SessionsListDetails;
-}
 
 describe("sessions-list-tool", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.createAgentToAgentPolicy.mockReturnValue({});
-    mocks.createSessionVisibilityGuard.mockResolvedValue({
-      check: () => ({ allowed: true }),
-    });
-    mocks.resolveEffectiveSessionToolsVisibility.mockReturnValue("all");
-    mocks.resolveSandboxedSessionToolContext.mockReturnValue({
-      mainKey: "main",
-      alias: "main",
-      requesterInternalKey: undefined,
-      restrictToSpawned: false,
-    });
+    vi.resetModules();
   });
 
   it("keeps deliveryContext.threadId in sessions_list results", async () => {
-    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+    const gatewayCallMock = vi.fn(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
@@ -102,10 +39,43 @@ describe("sessions-list-tool", () => {
       }
       return {};
     });
+
+    vi.doMock("../../gateway/call.js", () => ({
+      callGateway: gatewayCallMock,
+    }));
+    vi.doMock("./sessions-helpers.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./sessions-helpers.js")>("./sessions-helpers.js");
+      return {
+        ...actual,
+        createAgentToAgentPolicy: () => ({}),
+        createSessionVisibilityGuard: async () => ({
+          check: () => ({ allowed: true }),
+        }),
+        resolveEffectiveSessionToolsVisibility: () => "all",
+        resolveSandboxedSessionToolContext: () => ({
+          mainKey: "main",
+          alias: "main",
+          requesterInternalKey: undefined,
+          restrictToSpawned: false,
+        }),
+      };
+    });
+
+    const { createSessionsListTool } = await import("./sessions-list-tool.js");
     const tool = createSessionsListTool({ config: {} as never });
 
     const result = await tool.execute("call-1", {});
-    const details = getSessionsListDetails(result);
+    const details = result.details as {
+      sessions?: Array<{
+        deliveryContext?: {
+          channel?: string;
+          to?: string;
+          accountId?: string;
+          threadId?: string | number;
+        };
+      }>;
+    };
 
     expect(details.sessions?.[0]?.deliveryContext).toEqual({
       channel: "discord",
@@ -122,7 +92,7 @@ describe("sessions-list-tool", () => {
   });
 
   it("keeps numeric deliveryContext.threadId in sessions_list results", async () => {
-    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+    const gatewayCallMock = vi.fn(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
@@ -144,10 +114,43 @@ describe("sessions-list-tool", () => {
       }
       return {};
     });
+
+    vi.doMock("../../gateway/call.js", () => ({
+      callGateway: gatewayCallMock,
+    }));
+    vi.doMock("./sessions-helpers.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./sessions-helpers.js")>("./sessions-helpers.js");
+      return {
+        ...actual,
+        createAgentToAgentPolicy: () => ({}),
+        createSessionVisibilityGuard: async () => ({
+          check: () => ({ allowed: true }),
+        }),
+        resolveEffectiveSessionToolsVisibility: () => "all",
+        resolveSandboxedSessionToolContext: () => ({
+          mainKey: "main",
+          alias: "main",
+          requesterInternalKey: undefined,
+          restrictToSpawned: false,
+        }),
+      };
+    });
+
+    const { createSessionsListTool } = await import("./sessions-list-tool.js");
     const tool = createSessionsListTool({ config: {} as never });
 
     const result = await tool.execute("call-2", {});
-    const details = getSessionsListDetails(result);
+    const details = result.details as {
+      sessions?: Array<{
+        deliveryContext?: {
+          channel?: string;
+          to?: string;
+          accountId?: string;
+          threadId?: string | number;
+        };
+      }>;
+    };
 
     expect(details.sessions?.[0]?.deliveryContext).toEqual({
       channel: "telegram",
@@ -158,7 +161,7 @@ describe("sessions-list-tool", () => {
   });
 
   it("keeps live session setting metadata in sessions_list results", async () => {
-    mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+    const gatewayCallMock = vi.fn(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
@@ -180,17 +183,51 @@ describe("sessions-list-tool", () => {
       }
       return {};
     });
+
+    vi.doMock("../../gateway/call.js", () => ({
+      callGateway: gatewayCallMock,
+    }));
+    vi.doMock("./sessions-helpers.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./sessions-helpers.js")>("./sessions-helpers.js");
+      return {
+        ...actual,
+        createAgentToAgentPolicy: () => ({}),
+        createSessionVisibilityGuard: async () => ({
+          check: () => ({ allowed: true }),
+        }),
+        resolveEffectiveSessionToolsVisibility: () => "all",
+        resolveSandboxedSessionToolContext: () => ({
+          mainKey: "main",
+          alias: "main",
+          requesterInternalKey: undefined,
+          restrictToSpawned: false,
+        }),
+      };
+    });
+
+    const { createSessionsListTool } = await import("./sessions-list-tool.js");
     const tool = createSessionsListTool({ config: {} as never });
 
     const result = await tool.execute("call-3", {});
-    const details = getSessionsListDetails(result);
+    const details = result.details as {
+      sessions?: Array<{
+        thinkingLevel?: string;
+        fastMode?: boolean;
+        verboseLevel?: string;
+        reasoningLevel?: string;
+        elevatedLevel?: string;
+        responseUsage?: string;
+      }>;
+    };
 
-    const session = details.sessions?.[0];
-    expect(session?.thinkingLevel).toBe("high");
-    expect(session?.fastMode).toBe(true);
-    expect(session?.verboseLevel).toBe("on");
-    expect(session?.reasoningLevel).toBe("deep");
-    expect(session?.elevatedLevel).toBe("on");
-    expect(session?.responseUsage).toBe("full");
+    expect(details.sessions?.[0]).toMatchObject({
+      thinkingLevel: "high",
+      fastMode: true,
+      verboseLevel: "on",
+      reasoningLevel: "deep",
+      elevatedLevel: "on",
+      responseUsage: "full",
+    });
   });
 });

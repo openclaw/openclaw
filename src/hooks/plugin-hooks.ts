@@ -1,19 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  normalizePluginsConfigWithResolver,
-  resolveEffectivePluginActivationState,
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
   resolveMemorySlotDecision,
-} from "../plugins/config-policy.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { hasKind } from "../plugins/slots.js";
+} from "../plugins/config-state.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 
 const log = createSubsystemLogger("hooks");
 
-type PluginHookDirEntry = {
+export type PluginHookDirEntry = {
   dir: string;
   pluginId: string;
 };
@@ -26,20 +25,17 @@ export function resolvePluginHookDirs(params: {
   if (!workspaceDir) {
     return [];
   }
-  const metadataSnapshot = loadPluginMetadataSnapshot({
+  const registry = loadPluginManifestRegistry({
     workspaceDir,
-    config: params.config ?? {},
-    env: process.env,
+    config: params.config,
+    // Hook discovery should reflect freshly written bundle manifests immediately.
+    cache: false,
   });
-  const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     return [];
   }
 
-  const normalizedPlugins = normalizePluginsConfigWithResolver(
-    params.config?.plugins,
-    metadataSnapshot.normalizePluginId,
-  );
+  const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
@@ -49,13 +45,13 @@ export function resolvePluginHookDirs(params: {
     if (!record.hooks || record.hooks.length === 0) {
       continue;
     }
-    const activationState = resolveEffectivePluginActivationState({
+    const enableState = resolveEffectiveEnableState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.config,
     });
-    if (!activationState.activated) {
+    if (!enableState.enabled) {
       continue;
     }
 
@@ -68,7 +64,7 @@ export function resolvePluginHookDirs(params: {
     if (!memoryDecision.enabled) {
       continue;
     }
-    if (memoryDecision.selected && hasKind(record.kind, "memory")) {
+    if (memoryDecision.selected && record.kind === "memory") {
       selectedMemoryPluginId = record.id;
     }
 

@@ -10,7 +10,7 @@ export function validateDottedDecimalIPv4Input(value: string | undefined): strin
   return "Invalid IPv4 address (e.g., 192.168.1.100)";
 }
 
-/** @deprecated Use validateDottedDecimalIPv4Input. */
+// Backward-compatible alias for callers using the old helper name.
 export function validateIPv4AddressInput(value: string | undefined): string | undefined {
   return validateDottedDecimalIPv4Input(value);
 }

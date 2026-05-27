@@ -1,5 +1,3 @@
-export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-
 export type AgentMediaPayload = {
   MediaPath?: string;
   MediaType?: string;

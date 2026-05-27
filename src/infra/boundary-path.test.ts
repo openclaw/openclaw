@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { resolveRootPath, resolveRootPathSync } from "./boundary-path.js";
+import { resolveBoundaryPath, resolveBoundaryPathSync } from "./boundary-path.js";
 import { isPathInside } from "./path-guards.js";
 
 function createSeededRandom(seed: number): () => number {
@@ -13,7 +13,7 @@ function createSeededRandom(seed: number): () => number {
   };
 }
 
-describe("resolveRootPath", () => {
+describe("resolveBoundaryPath", () => {
   it("resolves symlink parents with non-existent leafs inside root", async () => {
     if (process.platform === "win32") {
       return;
@@ -27,7 +27,7 @@ describe("resolveRootPath", () => {
       await fs.symlink(targetDir, linkPath);
 
       const unresolved = path.join(linkPath, "missing.txt");
-      const result = await resolveRootPath({
+      const result = await resolveBoundaryPath({
         absolutePath: unresolved,
         rootPath: root,
         boundaryLabel: "sandbox root",
@@ -56,14 +56,14 @@ describe("resolveRootPath", () => {
       const dangling = path.join(linkPath, "missing.txt");
 
       await expect(
-        resolveRootPath({
+        resolveBoundaryPath({
           absolutePath: dangling,
           rootPath: root,
           boundaryLabel: "sandbox root",
         }),
       ).rejects.toThrow(/Symlink escapes sandbox root/i);
       expect(() =>
-        resolveRootPathSync({
+        resolveBoundaryPathSync({
           absolutePath: dangling,
           rootPath: root,
           boundaryLabel: "sandbox root",
@@ -88,14 +88,14 @@ describe("resolveRootPath", () => {
       await fs.symlink(outsideFile, linkPath);
 
       await expect(
-        resolveRootPath({
+        resolveBoundaryPath({
           absolutePath: linkPath,
           rootPath: root,
           boundaryLabel: "sandbox root",
         }),
       ).rejects.toThrow(/Symlink escapes sandbox root/i);
 
-      const allowed = await resolveRootPath({
+      const allowed = await resolveBoundaryPath({
         absolutePath: linkPath,
         rootPath: root,
         boundaryLabel: "sandbox root",
@@ -121,7 +121,7 @@ describe("resolveRootPath", () => {
       await fs.writeFile(path.join(root, fileName), "export default {}", "utf8");
       await fs.symlink(root, aliasRoot);
 
-      const resolved = await resolveRootPath({
+      const resolved = await resolveBoundaryPath({
         absolutePath: path.join(aliasRoot, fileName),
         rootPath: await fs.realpath(root),
         boundaryLabel: "plugin root",
@@ -129,7 +129,7 @@ describe("resolveRootPath", () => {
       expect(resolved.exists).toBe(true);
       expect(isPathInside(resolved.rootCanonicalPath, resolved.canonicalPath)).toBe(true);
 
-      const resolvedSync = resolveRootPathSync({
+      const resolvedSync = resolveBoundaryPathSync({
         absolutePath: path.join(aliasRoot, fileName),
         rootPath: await fs.realpath(root),
         boundaryLabel: "plugin root",
@@ -167,7 +167,7 @@ describe("resolveRootPath", () => {
         const useLink = rand() > 0.5;
         const safeBase = useLink ? safeLinkBase : safeRealBase;
         const safeCandidate = path.join(safeBase, `new-${token}.txt`);
-        const safeResolved = await resolveRootPath({
+        const safeResolved = await resolveBoundaryPath({
           absolutePath: safeCandidate,
           rootPath: root,
           boundaryLabel: "sandbox root",
@@ -176,7 +176,7 @@ describe("resolveRootPath", () => {
 
         const unsafeCandidate = path.join(escapeLink, `new-${token}.txt`);
         await expect(
-          resolveRootPath({
+          resolveBoundaryPath({
             absolutePath: unsafeCandidate,
             rootPath: root,
             boundaryLabel: "sandbox root",

@@ -35,14 +35,7 @@ export async function guardedJsonApiRequest<T = unknown>(
     }
 
     const text = await response.text();
-    if (!text) {
-      return undefined as T;
-    }
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      throw new Error(`${params.errorPrefix}: malformed JSON response`);
-    }
+    return text ? (JSON.parse(text) as T) : (undefined as T);
   } finally {
     await release();
   }

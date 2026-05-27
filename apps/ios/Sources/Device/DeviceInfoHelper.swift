@@ -1,6 +1,7 @@
-import Darwin
 import Foundation
 import UIKit
+
+import Darwin
 
 /// Shared device and platform info for Settings, gateway node payloads, and device status.
 enum DeviceInfoHelper {
@@ -49,11 +50,9 @@ enum DeviceInfoHelper {
         return trimmed.isEmpty ? "unknown" : trimmed
     }
 
-    /// Canonical app version when present, otherwise the Apple marketing version.
+    /// App marketing version only, e.g. "2026.2.0" or "dev".
     static func appVersion() -> String {
-        (Bundle.main.infoDictionary?["OpenClawCanonicalVersion"] as? String)
-            ?? (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
-            ?? "dev"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
     }
 
     /// App build string, e.g. "123" or "".
@@ -64,8 +63,8 @@ enum DeviceInfoHelper {
 
     /// Display string for Settings: "1.2.3" or "1.2.3 (456)" when build differs.
     static func openClawVersionString() -> String {
-        let version = self.appVersion()
-        let build = self.appBuild()
+        let version = appVersion()
+        let build = appBuild()
         if build.isEmpty || build == version {
             return version
         }

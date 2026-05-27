@@ -6,6 +6,8 @@ read_when:
 title: "Quick start"
 ---
 
+# Quick start
+
 <Info>
 Quick start is now part of [Getting Started](/start/getting-started).
 </Info>
@@ -18,8 +20,3 @@ Quick start is now part of [Getting Started](/start/getting-started).
     Full CLI onboarding reference and advanced options.
   </Card>
 </Columns>
-
-## Related
-
-- [Getting started](/start/getting-started)
-- [Install overview](/install)

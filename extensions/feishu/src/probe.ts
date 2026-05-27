@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
 import type { FeishuProbeResult } from "./types.js";
@@ -18,19 +17,20 @@ export type ProbeFeishuOptions = {
   abortSignal?: AbortSignal;
 };
 
-type FeishuPingResponse = {
+type FeishuBotInfoResponse = {
   code: number;
   msg?: string;
-  data?: { pingBotInfo?: { botID?: string; botName?: string } };
+  bot?: { bot_name?: string; open_id?: string };
+  data?: { bot?: { bot_name?: string; open_id?: string } };
 };
 
 type FeishuRequestClient = ReturnType<typeof createFeishuClient> & {
   request(params: {
-    method: "POST";
+    method: "GET";
     url: string;
-    data: Record<string, unknown>;
+    data: Record<string, never>;
     timeout: number;
-  }): Promise<FeishuPingResponse>;
+  }): Promise<FeishuBotInfoResponse>;
 };
 
 function setCachedProbeResult(
@@ -80,14 +80,12 @@ export async function probeFeishu(
 
   try {
     const client = createFeishuClient(creds) as FeishuRequestClient;
-    // Feishu-provided endpoint for OpenClaw, supported on both Feishu (CN)
-    // and Lark (international). No OAuth scopes required. Validates
-    // credentials and registers the app as an AI agent (智能体).
-    const responseResult = await raceWithTimeoutAndAbort<FeishuPingResponse>(
+    // Use bot/v3/info API to get bot information
+    const responseResult = await raceWithTimeoutAndAbort<FeishuBotInfoResponse>(
       client.request({
-        method: "POST",
-        url: "/open-apis/bot/v1/openclaw_bot/ping",
-        data: { needBotInfo: true },
+        method: "GET",
+        url: "/open-apis/bot/v3/info",
+        data: {},
         timeout: timeoutMs,
       }),
       {
@@ -136,14 +134,14 @@ export async function probeFeishu(
       );
     }
 
-    const botInfo = response.data?.pingBotInfo;
+    const bot = response.bot || response.data?.bot;
     return setCachedProbeResult(
       cacheKey,
       {
         ok: true,
         appId: creds.appId,
-        botName: botInfo?.botName,
-        botOpenId: botInfo?.botID,
+        botName: bot?.bot_name,
+        botOpenId: bot?.open_id,
       },
       PROBE_SUCCESS_TTL_MS,
     );
@@ -153,7 +151,7 @@ export async function probeFeishu(
       {
         ok: false,
         appId: creds.appId,
-        error: formatErrorMessage(err),
+        error: err instanceof Error ? err.message : String(err),
       },
       PROBE_ERROR_TTL_MS,
     );

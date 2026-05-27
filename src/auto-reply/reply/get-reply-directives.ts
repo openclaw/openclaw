@@ -1,105 +1,43 @@
 import { listAgentEntries } from "../../agents/agent-scope.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
+import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import {
-  normalizeThinkLevel,
-  type ElevatedLevel,
-  type ReasoningLevel,
-  type ThinkLevel,
-  type VerboseLevel,
-} from "../thinking.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
 import { type InlineDirectives, parseInlineDirectives } from "./directive-handling.parse.js";
-import {
-  reserveSkillCommandNames,
-  resolveConfiguredDirectiveAliases,
-} from "./get-reply-directive-aliases.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
-import { type ReplyExecOverrides, resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
-import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { CURRENT_MESSAGE_MARKER, stripMentions, stripStructuralPrefixes } from "./mentions.js";
-import {
-  createFastTestModelSelectionState,
-  createModelSelectionState,
-  resolveContextTokens,
-} from "./model-selection.js";
+import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { stripInlineStatus } from "./reply-inline.js";
-import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
+type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
-const commandsRegistryLoader = createLazyImportLoader(
-  () => import("../commands-registry.runtime.js"),
-);
-const skillCommandsLoader = createLazyImportLoader(() => import("../skill-commands.runtime.js"));
+let commandsRegistryPromise: Promise<typeof import("../commands-registry.runtime.js")> | null =
+  null;
+let skillCommandsPromise: Promise<typeof import("../skill-commands.runtime.js")> | null = null;
 
 function loadCommandsRegistry() {
-  return commandsRegistryLoader.load();
+  commandsRegistryPromise ??= import("../commands-registry.runtime.js");
+  return commandsRegistryPromise;
 }
 
 function loadSkillCommands() {
-  return skillCommandsLoader.load();
-}
-
-function canUseFastExplicitModelDirective(params: {
-  directives: InlineDirectives;
-  defaultProvider: string;
-  aliasIndex: ModelAliasIndex;
-}): boolean {
-  const raw = normalizeOptionalString(params.directives.rawModelDirective);
-  if (!raw || /^[0-9]+$/.test(raw)) {
-    return false;
-  }
-  return Boolean(
-    resolveModelRefFromString({
-      raw,
-      defaultProvider: params.defaultProvider,
-      aliasIndex: params.aliasIndex,
-    }),
-  );
-}
-
-function resolveDirectiveCommandText(params: { ctx: MsgContext; sessionCtx: TemplateContext }) {
-  const commandSource =
-    params.sessionCtx.BodyForCommands ??
-    params.sessionCtx.CommandBody ??
-    params.sessionCtx.RawBody ??
-    params.sessionCtx.Transcript ??
-    params.sessionCtx.BodyStripped ??
-    params.sessionCtx.Body ??
-    params.ctx.BodyForCommands ??
-    params.ctx.CommandBody ??
-    params.ctx.RawBody ??
-    "";
-  const promptSource =
-    params.sessionCtx.BodyForAgent ??
-    params.sessionCtx.BodyStripped ??
-    params.sessionCtx.Body ??
-    "";
-  return {
-    commandSource,
-    promptSource,
-    commandText: commandSource || promptSource,
-  };
+  skillCommandsPromise ??= import("../skill-commands.runtime.js");
+  return skillCommandsPromise;
 }
 
 export type ReplyDirectiveContinuation = {
@@ -119,7 +57,7 @@ export type ReplyDirectiveContinuation = {
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
-  execOverrides?: ReplyExecOverrides;
+  execOverrides?: ExecOverrides;
   blockStreamingEnabled: boolean;
   blockReplyChunking?: {
     minChars: number;
@@ -142,6 +80,23 @@ export type ReplyDirectiveContinuation = {
   };
 };
 
+function resolveExecOverrides(params: {
+  directives: InlineDirectives;
+  sessionEntry?: SessionEntry;
+}): ExecOverrides | undefined {
+  const host =
+    params.directives.execHost ?? (params.sessionEntry?.execHost as ExecOverrides["host"]);
+  const security =
+    params.directives.execSecurity ??
+    (params.sessionEntry?.execSecurity as ExecOverrides["security"]);
+  const ask = params.directives.execAsk ?? (params.sessionEntry?.execAsk as ExecOverrides["ask"]);
+  const node = params.directives.execNode ?? params.sessionEntry?.execNode;
+  if (!host && !security && !ask && !node) {
+    return undefined;
+  }
+  return { host, security, ask, node };
+}
+
 export type ReplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | { kind: "continue"; result: ReplyDirectiveContinuation };
@@ -162,16 +117,12 @@ export async function resolveReplyDirectives(params: {
   groupResolution: Parameters<typeof resolveGroupRequireMention>[0]["groupResolution"];
   isGroup: boolean;
   triggerBodyNormalized: string;
-  resetTriggered: boolean;
   commandAuthorized: boolean;
   defaultProvider: string;
   defaultModel: string;
-  primaryProvider?: string;
-  primaryModel?: string;
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;
-  skipStoredModelOverride?: boolean;
   hasResolvedHeartbeatModelOverride: boolean;
   typing: TypingController;
   opts?: GetReplyOptions;
@@ -193,15 +144,11 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
     isGroup,
     triggerBodyNormalized,
-    resetTriggered,
     commandAuthorized,
     defaultProvider,
     defaultModel,
-    primaryProvider,
-    primaryModel,
     provider: initialProvider,
     model: initialModel,
-    skipStoredModelOverride,
     hasResolvedHeartbeatModelOverride,
     typing,
     opts,
@@ -210,16 +157,24 @@ export async function resolveReplyDirectives(params: {
   const agentEntry = listAgentEntries(cfg).find(
     (entry) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
   );
-  const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
   let provider = initialProvider;
   let model = initialModel;
 
   // Prefer CommandBody/RawBody (clean message without structural context) for directive parsing.
   // Keep `Body`/`BodyStripped` as the best-available prompt text (may include context).
-  const { commandText } = resolveDirectiveCommandText({
-    ctx,
-    sessionCtx,
-  });
+  const commandSource =
+    sessionCtx.BodyForCommands ??
+    sessionCtx.CommandBody ??
+    sessionCtx.RawBody ??
+    sessionCtx.Transcript ??
+    sessionCtx.BodyStripped ??
+    sessionCtx.Body ??
+    ctx.BodyForCommands ??
+    ctx.CommandBody ??
+    ctx.RawBody ??
+    "";
+  const promptSource = sessionCtx.BodyForAgent ?? sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  const commandText = commandSource || promptSource;
   const command = buildCommandContext({
     ctx,
     cfg,
@@ -235,27 +190,21 @@ export async function resolveReplyDirectives(params: {
     commandSource: ctx.CommandSource,
   });
   const commandTextHasSlash = commandText.includes("/");
-  const hasConfiguredModelAliases =
-    commandTextHasSlash &&
-    Object.values(cfg.agents?.defaults?.models ?? {}).some((entry) =>
-      Boolean(normalizeOptionalString(entry.alias)),
-    );
   const reservedCommands = new Set<string>();
-  if (hasConfiguredModelAliases) {
+  if (commandTextHasSlash) {
     const { listChatCommands } = await loadCommandsRegistry();
     for (const chatCommand of listChatCommands()) {
       for (const alias of chatCommand.textAliases) {
-        reservedCommands.add(normalizeLowercaseStringOrEmpty(alias.replace(/^\//, "")));
+        reservedCommands.add(alias.replace(/^\//, "").toLowerCase());
       }
     }
   }
 
-  const rawAliases = hasConfiguredModelAliases
-    ? resolveConfiguredDirectiveAliases({
-        cfg,
-        commandTextHasSlash,
-        reservedCommands,
-      })
+  const rawAliases = commandTextHasSlash
+    ? Object.values(cfg.agents?.defaults?.models ?? {})
+        .map((entry) => entry.alias?.trim())
+        .filter((alias): alias is string => Boolean(alias))
+        .filter((alias) => !reservedCommands.has(alias.toLowerCase()))
     : [];
 
   // Only load workspace skill commands when we actually need them to filter aliases.
@@ -265,14 +214,15 @@ export async function resolveReplyDirectives(params: {
       ? (await loadSkillCommands()).listSkillCommandsForWorkspace({
           workspaceDir,
           cfg,
-          agentId,
           skillFilter,
         })
       : [];
-  reserveSkillCommandNames({ reservedCommands, skillCommands });
+  for (const command of skillCommands) {
+    reservedCommands.add(command.name.toLowerCase());
+  }
 
   const configuredAliases = rawAliases.filter(
-    (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
+    (alias) => !reservedCommands.has(alias.toLowerCase()),
   );
   const allowStatusDirective = allowTextCommands && command.isAuthorizedSender;
   let parsedDirectives = parseInlineDirectives(commandText, {
@@ -305,7 +255,6 @@ export async function resolveReplyDirectives(params: {
   const hasInlineDirective =
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||
-    parsedDirectives.hasTraceDirective ||
     parsedDirectives.hasFastDirective ||
     parsedDirectives.hasReasoningDirective ||
     parsedDirectives.hasElevatedDirective ||
@@ -333,20 +282,14 @@ export async function resolveReplyDirectives(params: {
   }
   // Use command.isAuthorizedSender (resolved authorization) instead of raw commandAuthorized
   // to ensure inline directives work when commands.allowFrom grants access (e.g., LINE).
-  const unauthorizedReasoningDirectiveAttempt =
-    !command.isAuthorizedSender && parsedDirectives.hasReasoningDirective;
   let directives = command.isAuthorizedSender
     ? parsedDirectives
     : {
         ...parsedDirectives,
         hasThinkDirective: false,
-        clearThinkLevel: false,
         hasVerboseDirective: false,
         hasFastDirective: false,
-        clearFastMode: false,
         hasReasoningDirective: false,
-        reasoningLevel: undefined,
-        rawReasoningLevel: undefined,
         hasStatusDirective: false,
         hasModelDirective: false,
         hasQueueDirective: false,
@@ -355,9 +298,6 @@ export async function resolveReplyDirectives(params: {
   const existingBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   let cleanedBody = (() => {
     if (!existingBody) {
-      if (resetTriggered) {
-        return "";
-      }
       return parsedDirectives.cleaned;
     }
     if (!sessionCtx.CommandBody && !sessionCtx.RawBody) {
@@ -392,11 +332,8 @@ export async function resolveReplyDirectives(params: {
   sessionCtx.Body = cleanedBody;
   sessionCtx.BodyStripped = cleanedBody;
 
-  const messageProviderKey = normalizeOptionalString(sessionCtx.Provider)
-    ? normalizeLowercaseStringOrEmpty(sessionCtx.Provider)
-    : normalizeOptionalString(ctx.Provider)
-      ? normalizeLowercaseStringOrEmpty(ctx.Provider)
-      : "";
+  const messageProviderKey =
+    sessionCtx.Provider?.trim().toLowerCase() ?? ctx.Provider?.trim().toLowerCase() ?? "";
   const elevated = resolveElevatedPermissions({
     cfg,
     agentId,
@@ -410,7 +347,7 @@ export async function resolveReplyDirectives(params: {
     typing.cleanup();
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg,
-      sessionKey: resolveRuntimePolicySessionKey({ cfg, ctx, sessionKey: ctx.SessionKey }),
+      sessionKey: ctx.SessionKey,
     }).sandboxed;
     return {
       kind: "reply",
@@ -430,54 +367,30 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
-  const sessionThinkLevel = directives.clearThinkLevel
-    ? undefined
-    : (targetSessionEntry?.thinkingLevel as ThinkLevel | undefined);
   const resolvedThinkLevel =
-    normalizeThinkLevel(opts?.thinkingLevelOverride) ?? directives.thinkLevel ?? sessionThinkLevel;
+    directives.thinkLevel ?? (sessionEntry?.thinkingLevel as ThinkLevel | undefined);
   const resolvedFastMode =
-    opts?.fastModeOverride ??
     directives.fastMode ??
     resolveFastModeState({
       cfg,
       provider,
       model,
       agentId,
-      sessionEntry: directives.clearFastMode ? undefined : targetSessionEntry,
+      sessionEntry,
     }).enabled;
 
   const resolvedVerboseLevel =
     directives.verboseLevel ??
-    (targetSessionEntry?.verboseLevel as VerboseLevel | undefined) ??
+    (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
     (agentCfg?.verboseDefault as VerboseLevel | undefined);
-  const configuredReasoningDefault =
-    (agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
-    (agentCfg?.reasoningDefault as ReasoningLevel | undefined);
-  const canUseReasoningState =
-    command.isAuthorizedSender ||
-    command.senderIsOwner ||
-    (Array.isArray(ctx.GatewayClientScopes) && ctx.GatewayClientScopes.includes("operator.admin"));
-  const rawSessionReasoningLevel = targetSessionEntry?.reasoningLevel as
-    | ReasoningLevel
-    | null
-    | undefined;
-  const sessionReasoningLevel = canUseReasoningState ? rawSessionReasoningLevel : undefined;
-  const blockedSessionReasoningLevel =
-    rawSessionReasoningLevel !== undefined &&
-    rawSessionReasoningLevel !== null &&
-    !canUseReasoningState;
-  const reasoningUsesConfiguredDefault =
-    directives.reasoningLevel === undefined &&
-    sessionReasoningLevel == null &&
-    configuredReasoningDefault != null;
   let resolvedReasoningLevel: ReasoningLevel =
-    directives.reasoningLevel ?? sessionReasoningLevel ?? configuredReasoningDefault ?? "off";
-  if (reasoningUsesConfiguredDefault && !canUseReasoningState) {
-    resolvedReasoningLevel = "off";
-  }
+    directives.reasoningLevel ??
+    (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+    (agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
+    "off";
   const resolvedElevatedLevel = elevatedAllowed
     ? (directives.elevatedLevel ??
-      (targetSessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
+      (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
       (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
       "on")
     : "off";
@@ -496,51 +409,23 @@ export async function resolveReplyDirectives(params: {
   const blockReplyChunking = blockStreamingEnabled
     ? resolveBlockStreamingChunking(cfg, sessionCtx.Provider, sessionCtx.AccountId)
     : undefined;
-  const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
+
+  const modelState = await createModelSelectionState({
     cfg,
-    isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
+    agentId,
+    agentCfg,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    parentSessionKey: ctx.ParentSessionKey,
+    storePath,
+    defaultProvider,
+    defaultModel,
+    provider,
+    model,
+    hasModelDirective: directives.hasModelDirective,
+    hasResolvedHeartbeatModelOverride,
   });
-
-  const useFastModelSelection =
-    useFastReplyRuntime &&
-    !hasResolvedHeartbeatModelOverride &&
-    !(agentCfg?.models && Object.keys(agentCfg.models).length > 0) &&
-    !normalizeOptionalString(targetSessionEntry?.modelOverride) &&
-    !normalizeOptionalString(targetSessionEntry?.providerOverride) &&
-    (!directives.hasModelDirective ||
-      canUseFastExplicitModelDirective({
-        directives,
-        defaultProvider,
-        aliasIndex: params.aliasIndex,
-      }));
-
-  const modelState = useFastModelSelection
-    ? createFastTestModelSelectionState({
-        agentCfg,
-        provider,
-        model,
-      })
-    : await createModelSelectionState({
-        cfg,
-        agentId,
-        agentCfg,
-        sessionEntry: targetSessionEntry,
-        sessionStore,
-        sessionKey,
-        parentSessionKey:
-          targetSessionEntry?.parentSessionKey ?? ctx.ModelParentSessionKey ?? ctx.ParentSessionKey,
-        storePath,
-        defaultProvider,
-        defaultModel,
-        primaryProvider,
-        primaryModel,
-        provider,
-        model,
-        hasModelDirective: directives.hasModelDirective,
-        skipStoredModelOverride,
-        hasResolvedHeartbeatModelOverride,
-        isHeartbeat: opts?.isHeartbeat === true,
-      });
   provider = modelState.provider;
   model = modelState.model;
   const resolvedThinkLevelWithDefault =
@@ -548,50 +433,33 @@ export async function resolveReplyDirectives(params: {
     (await modelState.resolveDefaultThinkingLevel()) ??
     (agentCfg?.thinkingDefault as ThinkLevel | undefined);
 
-  const thinkingExplicitlySet =
-    directives.thinkLevel !== undefined ||
-    sessionThinkLevel !== undefined ||
-    agentCfg?.thinkingDefault !== undefined;
-
   // When neither directive nor session nor agent set reasoning, default to model capability
   // (e.g. OpenRouter with reasoning: true). Skip model default when thinking is active
-  // or when thinking was explicitly disabled.
+  // to avoid redundant Reasoning: output alongside internal thinking blocks.
   const hasAgentReasoningDefault =
-    (agentEntry?.reasoningDefault !== undefined && agentEntry?.reasoningDefault !== null) ||
-    (agentCfg?.reasoningDefault !== undefined && agentCfg?.reasoningDefault !== null);
+    agentEntry?.reasoningDefault !== undefined && agentEntry?.reasoningDefault !== null;
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
-    unauthorizedReasoningDirectiveAttempt ||
-    blockedSessionReasoningLevel ||
-    (sessionReasoningLevel !== undefined && sessionReasoningLevel !== null) ||
+    (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null) ||
     hasAgentReasoningDefault;
   const thinkingActive = resolvedThinkLevelWithDefault !== "off";
-  if (
-    !reasoningExplicitlySet &&
-    resolvedReasoningLevel === "off" &&
-    !thinkingActive &&
-    !thinkingExplicitlySet
-  ) {
+  if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
     resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
   }
 
-  let contextTokens = useFastReplyRuntime
-    ? (agentCfg?.contextTokens ?? DEFAULT_CONTEXT_TOKENS)
-    : resolveContextTokens({
-        cfg,
-        agentCfg,
-        provider,
-        model,
-      });
+  let contextTokens = resolveContextTokens({
+    cfg,
+    agentCfg,
+    provider,
+    model,
+  });
 
   const initialModelLabel = `${provider}/${model}`;
   const formatModelSwitchEvent = (label: string, alias?: string) =>
     alias ? `Model switched to ${alias} (${label}).` : `Model switched to ${label}.`;
   const isModelListAlias =
     directives.hasModelDirective &&
-    ["status", "list"].includes(
-      normalizeLowercaseStringOrEmpty(normalizeOptionalString(directives.rawModelDirective)),
-    );
+    ["status", "list"].includes(directives.rawModelDirective?.trim().toLowerCase() ?? "");
   const effectiveModelDirective = isModelListAlias ? undefined : directives.rawModelDirective;
 
   const inlineStatusRequested = hasInlineStatus && allowTextCommands && command.isAuthorizedSender;
@@ -601,10 +469,9 @@ export async function resolveReplyDirectives(params: {
     cfg,
     agentId,
     agentDir,
-    workspaceDir,
     agentCfg,
     agentEntry,
-    sessionEntry: targetSessionEntry,
+    sessionEntry,
     sessionStore,
     sessionKey,
     storePath,
@@ -639,11 +506,7 @@ export async function resolveReplyDirectives(params: {
   model = applyResult.model;
   contextTokens = applyResult.contextTokens;
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
-  const execOverrides = resolveReplyExecOverrides({
-    directives,
-    sessionEntry: targetSessionEntry,
-    agentExecDefaults: agentEntry?.tools?.exec,
-  });
+  const execOverrides = resolveExecOverrides({ directives, sessionEntry });
 
   return {
     kind: "continue",

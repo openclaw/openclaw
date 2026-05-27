@@ -11,16 +11,8 @@ const MAX_GRACE_MS = 60_000;
  *
  * This gives child processes a chance to clean up (close connections, remove
  * temp files, terminate their own children) before being hard-killed.
- *
- * When the child was spawned with `detached: false` (e.g. service-managed
- * runtime under launchd/systemd), pass `detached: false` to skip the Unix
- * `process.kill(-pid, ...)` group-kill — it would otherwise target the
- * gateway's own process group and SIGTERM the gateway itself. (#71662)
  */
-export function killProcessTree(
-  pid: number,
-  opts?: { graceMs?: number; detached?: boolean },
-): void {
+export function killProcessTree(pid: number, opts?: { graceMs?: number }): void {
   if (!Number.isFinite(pid) || pid <= 0) {
     return;
   }
@@ -32,34 +24,7 @@ export function killProcessTree(
     return;
   }
 
-  const useGroupKill = opts?.detached !== false;
-  signalProcessTreeUnix(pid, "SIGTERM", useGroupKill);
-  setTimeout(() => {
-    const stillAlive = useGroupKill
-      ? isProcessAlive(-pid) || isProcessAlive(pid)
-      : isProcessAlive(pid);
-    if (!stillAlive) {
-      return;
-    }
-    signalProcessTreeUnix(pid, "SIGKILL", useGroupKill);
-  }, graceMs).unref(); // Don't block event loop exit
-}
-
-export function signalProcessTree(
-  pid: number,
-  signal: "SIGTERM" | "SIGKILL",
-  opts?: { detached?: boolean },
-): void {
-  if (!Number.isFinite(pid) || pid <= 0) {
-    return;
-  }
-
-  if (process.platform === "win32") {
-    signalProcessTreeWindows(pid, signal);
-    return;
-  }
-
-  signalProcessTreeUnix(pid, signal, opts?.detached !== false);
+  killProcessTreeUnix(pid, graceMs);
 }
 
 function normalizeGraceMs(value?: number): number {
@@ -78,28 +43,39 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function signalProcessTreeUnix(
-  pid: number,
-  signal: "SIGTERM" | "SIGKILL",
-  useGroupKill: boolean,
-): void {
-  // Prefer process-group signals (`-pid`) when the child was spawned detached
-  // so it has its own group; otherwise stick to the direct pid to avoid
-  // signaling our own process group (the gateway). (#71662)
-  if (useGroupKill) {
+function killProcessTreeUnix(pid: number, graceMs: number): void {
+  // Step 1: Try graceful SIGTERM to process group
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    // Process group doesn't exist or we lack permission - try direct
     try {
-      process.kill(-pid, signal);
-      return;
+      process.kill(pid, "SIGTERM");
     } catch {
-      // Process group doesn't exist or we lack permission - try direct.
+      // Already gone
+      return;
     }
   }
 
-  try {
-    process.kill(pid, signal);
-  } catch {
-    // Already gone
-  }
+  // Step 2: Wait grace period, then SIGKILL if still alive
+  setTimeout(() => {
+    if (isProcessAlive(-pid)) {
+      try {
+        process.kill(-pid, "SIGKILL");
+        return;
+      } catch {
+        // Fall through to direct pid kill
+      }
+    }
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Process exited between liveness check and kill
+    }
+  }, graceMs).unref(); // Don't block event loop exit
 }
 
 function runTaskkill(args: string[]): void {
@@ -116,7 +92,7 @@ function runTaskkill(args: string[]): void {
 
 function killProcessTreeWindows(pid: number, graceMs: number): void {
   // Step 1: Try graceful termination (taskkill without /F)
-  signalProcessTreeWindows(pid, "SIGTERM");
+  runTaskkill(["/T", "/PID", String(pid)]);
 
   // Step 2: Wait grace period, then force kill only if pid still exists.
   // This avoids unconditional delayed /F kills after graceful shutdown.
@@ -124,12 +100,6 @@ function killProcessTreeWindows(pid: number, graceMs: number): void {
     if (!isProcessAlive(pid)) {
       return;
     }
-    signalProcessTreeWindows(pid, "SIGKILL");
+    runTaskkill(["/F", "/T", "/PID", String(pid)]);
   }, graceMs).unref(); // Don't block event loop exit
-}
-
-function signalProcessTreeWindows(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
-  const args =
-    signal === "SIGKILL" ? ["/F", "/T", "/PID", String(pid)] : ["/T", "/PID", String(pid)];
-  runTaskkill(args);
 }

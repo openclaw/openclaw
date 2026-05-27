@@ -1,9 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  getSessionBindingService,
+  isPluginOwnedSessionBindingRecord,
   resolveConfiguredBindingRoute,
-  resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import {
+  deriveLastRoutePolicy,
+  resolveAgentIdFromSessionKey,
+  resolveAgentRoute,
+} from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveIMessageInboundConversationId } from "./conversation-id.js";
 
@@ -44,21 +49,31 @@ export function resolveIMessageConversationRoute(params: {
     },
   }).route;
 
-  const runtimeRoute = resolveRuntimeConversationBindingRoute({
-    route,
-    conversation: {
-      channel: "imessage",
-      accountId: params.accountId,
-      conversationId,
-    },
+  const runtimeBinding = getSessionBindingService().resolveByConversation({
+    channel: "imessage",
+    accountId: params.accountId,
+    conversationId,
   });
-  route = runtimeRoute.route;
-  if (runtimeRoute.bindingRecord && !runtimeRoute.boundSessionKey) {
-    logVerbose(`imessage: plugin-bound conversation ${conversationId}`);
-  } else if (runtimeRoute.boundSessionKey) {
-    logVerbose(
-      `imessage: routed via bound conversation ${conversationId} -> ${runtimeRoute.boundSessionKey}`,
-    );
+  const boundSessionKey = runtimeBinding?.targetSessionKey?.trim();
+  if (!runtimeBinding || !boundSessionKey) {
+    return route;
   }
-  return route;
+
+  getSessionBindingService().touch(runtimeBinding.bindingId);
+  if (isPluginOwnedSessionBindingRecord(runtimeBinding)) {
+    logVerbose(`imessage: plugin-bound conversation ${conversationId}`);
+    return route;
+  }
+
+  logVerbose(`imessage: routed via bound conversation ${conversationId} -> ${boundSessionKey}`);
+  return {
+    ...route,
+    sessionKey: boundSessionKey,
+    agentId: resolveAgentIdFromSessionKey(boundSessionKey),
+    lastRoutePolicy: deriveLastRoutePolicy({
+      sessionKey: boundSessionKey,
+      mainSessionKey: route.mainSessionKey,
+    }),
+    matchedBy: "binding.channel",
+  };
 }

@@ -3,9 +3,6 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { normalizeOptionalString } from "../src/shared/string-coerce.ts";
-import { maskIdentifier, previewForDevToolLog, redactHomePath } from "./lib/dev-tooling-safety.ts";
 
 type Args = {
   agentId: string;
@@ -14,11 +11,12 @@ type Args = {
 };
 
 const mask = (value: string) => {
-  return maskIdentifier(
-    value,
-    value.trim().length >= 12 ? 6 : 4,
-    value.trim().length >= 12 ? 6 : 4,
-  );
+  const compact = value.trim();
+  if (!compact) {
+    return "missing";
+  }
+  const edge = compact.length >= 12 ? 6 : 4;
+  return `${compact.slice(0, edge)}…${compact.slice(-edge)}`;
 };
 
 const parseArgs = (): Args => {
@@ -30,7 +28,7 @@ const parseArgs = (): Args => {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--agent" && args[i + 1]) {
-      agentId = args[++i].trim() || "main";
+      agentId = String(args[++i]).trim() || "main";
       continue;
     }
     if (arg === "--reveal") {
@@ -38,7 +36,7 @@ const parseArgs = (): Args => {
       continue;
     }
     if (arg === "--session-key" && args[i + 1]) {
-      sessionKey = normalizeOptionalString(args[++i]);
+      sessionKey = String(args[++i]).trim() || undefined;
       continue;
     }
   }
@@ -57,11 +55,6 @@ const loadAuthProfiles = (agentId: string) => {
   };
   return { authPath, store };
 };
-
-const CLAUDE_COOKIE_HOST_SQL =
-  "(host_key = 'claude.ai' OR host_key = '.claude.ai' OR host_key LIKE '%.claude.ai')";
-const CLAUDE_FIREFOX_COOKIE_HOST_SQL =
-  "(host = 'claude.ai' OR host = '.claude.ai' OR host LIKE '%.claude.ai')";
 
 const pickAnthropicTokens = (store: {
   profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
@@ -197,7 +190,7 @@ const queryChromeCookieDb = (cookieDb: string): string | null => {
           SELECT
             COALESCE(NULLIF(value,''), hex(encrypted_value))
           FROM cookies
-          WHERE ${CLAUDE_COOKIE_HOST_SQL}
+          WHERE (host_key LIKE '%claude.ai%' OR host_key = '.claude.ai')
             AND name = 'sessionKey'
           LIMIT 1;
         `,
@@ -233,7 +226,7 @@ const queryFirefoxCookieDb = (cookieDb: string): string | null => {
         `
           SELECT value
           FROM moz_cookies
-          WHERE ${CLAUDE_FIREFOX_COOKIE_HOST_SQL}
+          WHERE (host LIKE '%claude.ai%' OR host = '.claude.ai')
             AND name = 'sessionKey'
           LIMIT 1;
         `,
@@ -245,8 +238,6 @@ const queryFirefoxCookieDb = (cookieDb: string): string | null => {
     return null;
   }
 };
-
-const browserRootLabel = (root: string): string => path.basename(root) || "browser";
 
 const findClaudeSessionKey = (): { sessionKey: string; source: string } | null => {
   if (process.platform !== "darwin") {
@@ -268,7 +259,7 @@ const findClaudeSessionKey = (): { sessionKey: string; source: string } | null =
       }
       const value = queryFirefoxCookieDb(db);
       if (value) {
-        return { sessionKey: value, source: `firefox:${entry}` };
+        return { sessionKey: value, source: `firefox:${db}` };
       }
     }
   }
@@ -295,7 +286,7 @@ const findClaudeSessionKey = (): { sessionKey: string; source: string } | null =
       }
       const value = queryChromeCookieDb(db);
       if (value) {
-        return { sessionKey: value, source: `chromium:${browserRootLabel(root)}/${profile}` };
+        return { sessionKey: value, source: `chromium:${db}` };
       }
     }
   }
@@ -331,7 +322,7 @@ const fetchClaudeWebUsage = async (sessionKey: string) => {
 const main = async () => {
   const opts = parseArgs();
   const { authPath, store } = loadAuthProfiles(opts.agentId);
-  console.log(`Auth file: ${redactHomePath(authPath)}`);
+  console.log(`Auth file: ${authPath}`);
 
   const keychain = readClaudeCliKeychain();
   if (keychain) {
@@ -342,7 +333,7 @@ const main = async () => {
     console.log(
       `OAuth usage (keychain): HTTP ${oauth.status} (${oauth.contentType ?? "no content-type"})`,
     );
-    console.log(previewForDevToolLog(oauth.text, 200));
+    console.log(oauth.text.slice(0, 200).replace(/\s+/g, " ").trim());
   } else {
     console.log("Claude Code CLI keychain: missing/unreadable");
   }
@@ -359,19 +350,20 @@ const main = async () => {
       console.log(
         `OAuth usage (${entry.profileId}): HTTP ${oauth.status} (${oauth.contentType ?? "no content-type"})`,
       );
-      console.log(previewForDevToolLog(oauth.text, 200));
+      console.log(oauth.text.slice(0, 200).replace(/\s+/g, " ").trim());
     }
   }
 
-  const envSessionKey =
-    process.env.CLAUDE_AI_SESSION_KEY?.trim() || process.env.CLAUDE_WEB_SESSION_KEY?.trim();
-  const discoveredSession = opts.sessionKey || envSessionKey ? null : findClaudeSessionKey();
-  const sessionKey = opts.sessionKey?.trim() || envSessionKey || discoveredSession?.sessionKey;
+  const sessionKey =
+    opts.sessionKey?.trim() ||
+    process.env.CLAUDE_AI_SESSION_KEY?.trim() ||
+    process.env.CLAUDE_WEB_SESSION_KEY?.trim() ||
+    findClaudeSessionKey()?.sessionKey;
   const source = opts.sessionKey
     ? "--session-key"
-    : envSessionKey
+    : process.env.CLAUDE_AI_SESSION_KEY || process.env.CLAUDE_WEB_SESSION_KEY
       ? "env"
-      : (discoveredSession?.source ?? "auto");
+      : (findClaudeSessionKey()?.source ?? "auto");
 
   if (!sessionKey) {
     console.log(
@@ -386,25 +378,11 @@ const main = async () => {
   const web = await fetchClaudeWebUsage(sessionKey);
   if (!web.ok) {
     console.log(`Claude web: ${web.step} HTTP ${web.status}`);
-    console.log(previewForDevToolLog(web.body, 400));
+    console.log(String(web.body).slice(0, 400).replace(/\s+/g, " ").trim());
     return;
   }
   console.log(`Claude web: org=${web.orgId} OK`);
-  console.log(previewForDevToolLog(web.body, 400));
+  console.log(web.body.slice(0, 400).replace(/\s+/g, " ").trim());
 };
 
-export const testing = {
-  CLAUDE_COOKIE_HOST_SQL,
-  CLAUDE_FIREFOX_COOKIE_HOST_SQL,
-  browserRootLabel,
-  mask,
-};
-
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await main().catch((error) => {
-    console.error(
-      previewForDevToolLog(error instanceof Error ? error.message : String(error), 800),
-    );
-    process.exitCode = 1;
-  });
-}
+await main();

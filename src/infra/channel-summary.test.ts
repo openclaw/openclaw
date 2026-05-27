@@ -1,14 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { buildChannelSummary } from "./channel-summary.js";
-
-const isFixtureAccountConfigured = (account: unknown) =>
-  Boolean((account as { configured?: boolean }).configured);
-const isFixtureAccountEnabled = (account: unknown) =>
-  Boolean((account as { enabled?: boolean }).enabled);
-const summaryPluginActions = {
-  describeMessageTool: () => ({ actions: ["send"] as const }),
-};
 
 function makeSlackHttpSummaryPlugin(): ChannelPlugin {
   return {
@@ -59,10 +53,12 @@ function makeSlackHttpSummaryPlugin(): ChannelPlugin {
         botTokenSource: "config",
         botTokenStatus: "available",
       }),
-      isConfigured: isFixtureAccountConfigured,
+      isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
       isEnabled: () => true,
     },
-    actions: summaryPluginActions,
+    actions: {
+      describeMessageTool: () => ({ actions: ["send"] }),
+    },
   };
 }
 
@@ -70,21 +66,9 @@ function makeTelegramSummaryPlugin(params: {
   enabled: boolean;
   configured: boolean;
   linked?: boolean;
-  statusState?: string;
   authAgeMs?: number;
   allowFrom?: string[];
 }): ChannelPlugin {
-  const getAccount = () => ({
-    accountId: "primary",
-    name: "Main Bot",
-    enabled: params.enabled,
-    configured: params.configured,
-    linked: params.linked,
-    allowFrom: params.allowFrom ?? [],
-    dmPolicy: "mutuals",
-    tokenSource: "env",
-  });
-
   return {
     id: "telegram",
     meta: {
@@ -98,38 +82,45 @@ function makeTelegramSummaryPlugin(params: {
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
-      inspectAccount: getAccount,
-      resolveAccount: getAccount,
-      isConfigured: isFixtureAccountConfigured,
-      isEnabled: isFixtureAccountEnabled,
+      inspectAccount: () => ({
+        accountId: "primary",
+        name: "Main Bot",
+        enabled: params.enabled,
+        configured: params.configured,
+        linked: params.linked,
+        allowFrom: params.allowFrom ?? [],
+        dmPolicy: "mutuals",
+        tokenSource: "env",
+      }),
+      resolveAccount: () => ({
+        accountId: "primary",
+        name: "Main Bot",
+        enabled: params.enabled,
+        configured: params.configured,
+        linked: params.linked,
+        allowFrom: params.allowFrom ?? [],
+        dmPolicy: "mutuals",
+        tokenSource: "env",
+      }),
+      isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      isEnabled: (account) => Boolean((account as { enabled?: boolean }).enabled),
       formatAllowFrom: () => ["alice", "bob", "carol"],
     },
     status: {
       buildChannelSummary: async () => ({
-        statusState: params.statusState,
         linked: params.linked,
         configured: params.configured,
         authAgeMs: params.authAgeMs,
         self: { e164: "+15551234567" },
       }),
     },
-    actions: summaryPluginActions,
+    actions: {
+      describeMessageTool: () => ({ actions: ["send"] }),
+    },
   };
 }
 
 function makeSignalSummaryPlugin(params: { enabled: boolean; configured: boolean }): ChannelPlugin {
-  const getAccount = () => ({
-    accountId: "desktop",
-    name: "Desktop",
-    enabled: params.enabled,
-    configured: params.configured,
-    appTokenSource: "env",
-    baseUrl: "https://signal.example.test",
-    port: 31337,
-    cliPath: "/usr/local/bin/signal-cli",
-    dbPath: "/tmp/signal.db",
-  });
-
   return {
     id: "signal",
     meta: {
@@ -143,12 +134,34 @@ function makeSignalSummaryPlugin(params: { enabled: boolean; configured: boolean
     config: {
       listAccountIds: () => ["desktop"],
       defaultAccountId: () => "desktop",
-      inspectAccount: getAccount,
-      resolveAccount: getAccount,
-      isConfigured: isFixtureAccountConfigured,
-      isEnabled: isFixtureAccountEnabled,
+      inspectAccount: () => ({
+        accountId: "desktop",
+        name: "Desktop",
+        enabled: params.enabled,
+        configured: params.configured,
+        appTokenSource: "env",
+        baseUrl: "https://signal.example.test",
+        port: 31337,
+        cliPath: "/usr/local/bin/signal-cli",
+        dbPath: "/tmp/signal.db",
+      }),
+      resolveAccount: () => ({
+        accountId: "desktop",
+        name: "Desktop",
+        enabled: params.enabled,
+        configured: params.configured,
+        appTokenSource: "env",
+        baseUrl: "https://signal.example.test",
+        port: 31337,
+        cliPath: "/usr/local/bin/signal-cli",
+        dbPath: "/tmp/signal.db",
+      }),
+      isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      isEnabled: (account) => Boolean((account as { enabled?: boolean }).enabled),
     },
-    actions: summaryPluginActions,
+    actions: {
+      describeMessageTool: () => ({ actions: ["send"] }),
+    },
   };
 }
 
@@ -158,12 +171,6 @@ function makeFallbackSummaryPlugin(params: {
   accountIds?: string[];
   defaultAccountId?: string;
 }): ChannelPlugin {
-  const getAccount = (_cfg: unknown, accountId?: string | null) => ({
-    accountId,
-    enabled: params.enabled,
-    configured: params.configured,
-  });
-
   return {
     id: "fallback-plugin",
     meta: {
@@ -177,21 +184,40 @@ function makeFallbackSummaryPlugin(params: {
     config: {
       listAccountIds: () => params.accountIds ?? [],
       defaultAccountId: () => params.defaultAccountId ?? "default",
-      inspectAccount: getAccount,
-      resolveAccount: getAccount,
-      isConfigured: isFixtureAccountConfigured,
-      isEnabled: isFixtureAccountEnabled,
+      inspectAccount: (_cfg, accountId) => ({
+        accountId,
+        enabled: params.enabled,
+        configured: params.configured,
+      }),
+      resolveAccount: (_cfg, accountId) => ({
+        accountId,
+        enabled: params.enabled,
+        configured: params.configured,
+      }),
+      isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      isEnabled: (account) => Boolean((account as { enabled?: boolean }).enabled),
     },
-    actions: summaryPluginActions,
+    actions: {
+      describeMessageTool: () => ({ actions: ["send"] }),
+    },
   };
 }
 
 describe("buildChannelSummary", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
   it("preserves Slack HTTP signing-secret unavailable state from source config", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "slack", plugin: makeSlackHttpSummaryPlugin(), source: "test" },
+      ]),
+    );
+
     const lines = await buildChannelSummary({ marker: "resolved", channels: {} } as never, {
       colorize: false,
       includeAllowFrom: false,
-      plugins: [makeSlackHttpSummaryPlugin()],
       sourceConfig: { marker: "source", channels: {} } as never,
     });
 
@@ -202,28 +228,44 @@ describe("buildChannelSummary", () => {
   });
 
   it("shows disabled status without configured account detail lines", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: makeTelegramSummaryPlugin({ enabled: false, configured: false }),
+          source: "test",
+        },
+      ]),
+    );
+
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
       includeAllowFrom: true,
-      plugins: [makeTelegramSummaryPlugin({ enabled: false, configured: false })],
     });
 
     expect(lines).toEqual(["Telegram: disabled +15551234567"]);
   });
 
   it("includes linked summary metadata and truncates allow-from details", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: makeTelegramSummaryPlugin({
+            enabled: true,
+            configured: true,
+            linked: true,
+            authAgeMs: 300_000,
+            allowFrom: ["alice", "bob", "carol"],
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
       includeAllowFrom: true,
-      plugins: [
-        makeTelegramSummaryPlugin({
-          enabled: true,
-          configured: true,
-          linked: true,
-          authAgeMs: 300_000,
-          allowFrom: ["alice", "bob", "carol"],
-        }),
-      ],
     });
 
     expect(lines).toContain("Telegram: linked +15551234567 auth 5m ago");
@@ -231,43 +273,43 @@ describe("buildChannelSummary", () => {
   });
 
   it("shows not-linked status when linked metadata is explicitly false", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: makeTelegramSummaryPlugin({
+            enabled: true,
+            configured: true,
+            linked: false,
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
       includeAllowFrom: false,
-      plugins: [
-        makeTelegramSummaryPlugin({
-          enabled: true,
-          configured: true,
-          linked: false,
-        }),
-      ],
     });
 
     expect(lines).toContain("Telegram: not linked +15551234567");
     expect(lines).toContain("  - primary (Main Bot) (dm:mutuals, token:env)");
   });
 
-  it("prefers plugin statusState when provided", async () => {
-    const lines = await buildChannelSummary({ channels: {} } as never, {
-      colorize: false,
-      includeAllowFrom: false,
-      plugins: [
-        makeTelegramSummaryPlugin({
-          enabled: true,
-          configured: true,
-          statusState: "unstable",
-        }),
-      ],
-    });
-
-    expect(lines).toContain("Telegram: auth stabilizing +15551234567");
-  });
-
   it("renders non-slack account detail fields for configured accounts", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "signal",
+          plugin: makeSignalSummaryPlugin({ enabled: false, configured: true }),
+          source: "test",
+        },
+      ]),
+    );
+
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
       includeAllowFrom: false,
-      plugins: [makeSignalSummaryPlugin({ enabled: false, configured: true })],
     });
 
     expect(lines).toEqual([
@@ -277,33 +319,47 @@ describe("buildChannelSummary", () => {
   });
 
   it("uses the channel label and default account id when no accounts exist", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "fallback-plugin",
+          plugin: makeFallbackSummaryPlugin({
+            enabled: true,
+            configured: true,
+            accountIds: [],
+            defaultAccountId: "fallback-account",
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
       includeAllowFrom: false,
-      plugins: [
-        makeFallbackSummaryPlugin({
-          enabled: true,
-          configured: true,
-          accountIds: [],
-          defaultAccountId: "fallback-account",
-        }),
-      ],
     });
 
     expect(lines).toEqual(["Fallback: configured", "  - fallback-account"]);
   });
 
   it("shows not-configured status when enabled accounts exist without configured ones", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "fallback-plugin",
+          plugin: makeFallbackSummaryPlugin({
+            enabled: true,
+            configured: false,
+            accountIds: ["fallback-account"],
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
       includeAllowFrom: false,
-      plugins: [
-        makeFallbackSummaryPlugin({
-          enabled: true,
-          configured: false,
-          accountIds: ["fallback-account"],
-        }),
-      ],
     });
 
     expect(lines).toEqual(["Fallback: not configured"]);

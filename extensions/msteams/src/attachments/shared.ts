@@ -1,17 +1,11 @@
-import { Buffer } from "node:buffer";
 import { lookup } from "node:dns/promises";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
   isPrivateIpAddress,
   normalizeHostnameSuffixAllowlist,
-  type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-policy";
-import {
-  isRecord,
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+} from "../../runtime-api.js";
+import type { SsrFPolicy } from "../../runtime-api.js";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -29,17 +23,12 @@ type InlineImageCandidate =
       placeholder: string;
     };
 
-type InlineImageLimitOptions = {
-  maxInlineBytes?: number;
-  maxInlineTotalBytes?: number;
-};
-
-const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
+export const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
 
 export const IMG_SRC_RE = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
 export const ATTACHMENT_TAG_RE = /<attachment[^>]+id=["']([^"']+)["'][^>]*>/gi;
 
-const DEFAULT_MEDIA_HOST_ALLOWLIST = [
+export const DEFAULT_MEDIA_HOST_ALLOWLIST = [
   "graph.microsoft.com",
   "graph.microsoft.us",
   "graph.microsoft.de",
@@ -67,7 +56,7 @@ const DEFAULT_MEDIA_HOST_ALLOWLIST = [
   "microsoft.com",
 ] as const;
 
-const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
+export const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
   "api.botframework.com",
   "botframework.com",
   // Bot Framework Service URL (smba.trafficmanager.net) used for outbound
@@ -80,114 +69,9 @@ const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
 ] as const;
 
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
-export { isRecord };
 
-// Keep this local; importing the broad media-runtime SDK barrel pulls image/audio runtimes into
-// hot MSTeams attachment tests for one tiny estimator.
-export function estimateBase64DecodedBytes(base64: string): number {
-  let effectiveLen = 0;
-  for (let i = 0; i < base64.length; i += 1) {
-    const code = base64.charCodeAt(i);
-    if (code <= 0x20) {
-      continue;
-    }
-    effectiveLen += 1;
-  }
-
-  if (effectiveLen === 0) {
-    return 0;
-  }
-
-  let padding = 0;
-  let end = base64.length - 1;
-  while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
-    end -= 1;
-  }
-  if (end >= 0 && base64[end] === "=") {
-    padding = 1;
-    end -= 1;
-    while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
-      end -= 1;
-    }
-    if (end >= 0 && base64[end] === "=") {
-      padding = 2;
-    }
-  }
-
-  const estimated = Math.floor((effectiveLen * 3) / 4) - padding;
-  return Math.max(0, estimated);
-}
-
-/**
- * Host suffixes for SharePoint/OneDrive shared links that must be fetched via
- * the Graph `/shares/{shareId}/driveItem/content` endpoint instead of directly.
- *
- * Direct fetches of SharePoint/OneDrive shared URLs return empty/HTML landing
- * pages unless encoded as a Graph share id. See
- * https://learn.microsoft.com/en-us/graph/api/shares-get for the encoding.
- */
-const GRAPH_SHARED_LINK_HOST_SUFFIXES = [
-  ".sharepoint.com",
-  ".sharepoint.us",
-  ".sharepoint.de",
-  ".sharepoint.cn",
-  ".sharepoint-df.com",
-  "1drv.ms",
-  "onedrive.live.com",
-  "onedrive.com",
-] as const;
-
-/**
- * Returns true when the URL points at a SharePoint or OneDrive host whose
- * shared-link content must be fetched through the Graph shares API rather
- * than directly.
- */
-export function isGraphSharedLinkUrl(url: string): boolean {
-  let host: string;
-  try {
-    host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
-  } catch {
-    return false;
-  }
-  if (!host) {
-    return false;
-  }
-  return GRAPH_SHARED_LINK_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(suffix));
-}
-
-/**
- * Encode a SharePoint/OneDrive URL as a Graph shareId using the documented
- * `u!` + base64url (no padding) scheme:
- * https://learn.microsoft.com/en-us/graph/api/shares-get#encoding-sharing-urls
- */
-export function encodeGraphShareId(url: string): string {
-  // Buffer.from(...).toString("base64url") already returns base64url without
-  // padding, matching the Graph spec exactly.
-  return `u!${Buffer.from(url, "utf8").toString("base64url")}`;
-}
-
-/**
- * When `url` is a SharePoint/OneDrive shared link, return the matching
- * `GET /shares/{shareId}/driveItem/content` URL that actually yields the file
- * bytes. Returns `undefined` for non-shared-link URLs so callers can fall
- * through to the existing fetch path.
- */
-export function tryBuildGraphSharesUrlForSharedLink(url: string): string | undefined {
-  if (!isGraphSharedLinkUrl(url)) {
-    return undefined;
-  }
-  return `${GRAPH_ROOT}/shares/${encodeGraphShareId(url)}/driveItem/content`;
-}
-
-export function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
-  let current: unknown = value;
-  for (const key of keys) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[key as keyof typeof current];
-  }
-  return normalizeOptionalString(current);
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 export function resolveRequestUrl(input: RequestInfo | URL): string {
@@ -200,11 +84,7 @@ export function resolveRequestUrl(input: RequestInfo | URL): string {
   if (typeof input === "object" && input && "url" in input && typeof input.url === "string") {
     return input.url;
   }
-  try {
-    return JSON.stringify(input);
-  } catch {
-    return "";
-  }
+  return String(input);
 }
 
 export function normalizeContentType(value: unknown): string | undefined {
@@ -220,9 +100,9 @@ export function inferPlaceholder(params: {
   fileName?: string;
   fileType?: string;
 }): string {
-  const mime = normalizeLowercaseStringOrEmpty(params.contentType ?? "");
-  const name = normalizeLowercaseStringOrEmpty(params.fileName ?? "");
-  const fileType = normalizeLowercaseStringOrEmpty(params.fileType ?? "");
+  const mime = params.contentType?.toLowerCase() ?? "";
+  const name = params.fileName?.toLowerCase() ?? "";
+  const fileType = params.fileType?.toLowerCase() ?? "";
 
   const looksLikeImage =
     mime.startsWith("image/") || IMAGE_EXT_RE.test(name) || IMAGE_EXT_RE.test(`x.${fileType}`);
@@ -307,73 +187,25 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
   return text;
 }
 
-function canonicalizeInlineBase64Payload(value: string): string | undefined {
-  let cleaned = "";
-  let padding = 0;
-  let sawPadding = false;
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x20) {
-      continue;
-    }
-    if (code === 0x3d) {
-      padding += 1;
-      if (padding > 2) {
-        return undefined;
-      }
-      sawPadding = true;
-      cleaned += "=";
-      continue;
-    }
-    const isDataChar =
-      (code >= 0x41 && code <= 0x5a) ||
-      (code >= 0x61 && code <= 0x7a) ||
-      (code >= 0x30 && code <= 0x39) ||
-      code === 0x2b ||
-      code === 0x2f;
-    if (sawPadding || !isDataChar) {
-      return undefined;
-    }
-    cleaned += value[index];
-  }
-  return cleaned && cleaned.length % 4 === 0 ? cleaned : undefined;
-}
-
-function decodeDataImageWithLimits(
-  src: string,
-  opts: { maxInlineBytes?: number },
-): { candidate: InlineImageCandidate | null; estimatedBytes: number } {
+function decodeDataImage(src: string): InlineImageCandidate | null {
   const match = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/i.exec(src);
   if (!match) {
-    return { candidate: null, estimatedBytes: 0 };
+    return null;
   }
-  const contentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
+  const contentType = match[1]?.toLowerCase();
   const isBase64 = Boolean(match[2]);
   if (!isBase64) {
-    return { candidate: null, estimatedBytes: 0 };
+    return null;
   }
   const payload = match[3] ?? "";
-  const canonicalPayload = canonicalizeInlineBase64Payload(payload);
-  if (!canonicalPayload) {
-    return { candidate: null, estimatedBytes: 0 };
+  if (!payload) {
+    return null;
   }
-
-  const estimatedBytes = estimateBase64DecodedBytes(canonicalPayload);
-  if (estimatedBytes <= 0) {
-    return { candidate: null, estimatedBytes: 0 };
-  }
-  if (typeof opts.maxInlineBytes === "number" && estimatedBytes > opts.maxInlineBytes) {
-    return { candidate: null, estimatedBytes };
-  }
-
   try {
-    const data = Buffer.from(canonicalPayload, "base64");
-    return {
-      candidate: { kind: "data", data, contentType, placeholder: "<media:image>" },
-      estimatedBytes,
-    };
+    const data = Buffer.from(payload, "base64");
+    return { kind: "data", data, contentType, placeholder: "<media:image>" };
   } catch {
-    return { candidate: null, estimatedBytes: 0 };
+    return null;
   }
 }
 
@@ -389,11 +221,9 @@ function fileHintFromUrl(src: string): string | undefined {
 
 export function extractInlineImageCandidates(
   attachments: MSTeamsAttachmentLike[],
-  limits?: InlineImageLimitOptions,
 ): InlineImageCandidate[] {
   const out: InlineImageCandidate[] = [];
-  let totalEstimatedInlineBytes = 0;
-  outerLoop: for (const att of attachments) {
+  for (const att of attachments) {
     const html = extractHtmlFromAttachment(att);
     if (!html) {
       continue;
@@ -404,18 +234,8 @@ export function extractInlineImageCandidates(
       const src = match[1]?.trim();
       if (src && !src.startsWith("cid:")) {
         if (src.startsWith("data:")) {
-          const { candidate: decoded, estimatedBytes } = decodeDataImageWithLimits(src, {
-            maxInlineBytes: limits?.maxInlineBytes,
-          });
+          const decoded = decodeDataImage(src);
           if (decoded) {
-            const nextTotal = totalEstimatedInlineBytes + estimatedBytes;
-            if (
-              typeof limits?.maxInlineTotalBytes === "number" &&
-              nextTotal > limits.maxInlineTotalBytes
-            ) {
-              break outerLoop;
-            }
-            totalEstimatedInlineBytes = nextTotal;
             out.push(decoded);
           }
         } else {
@@ -435,7 +255,7 @@ export function extractInlineImageCandidates(
 
 export function safeHostForUrl(url: string): string {
   try {
-    return normalizeLowercaseStringOrEmpty(new URL(url).hostname);
+    return new URL(url).hostname.toLowerCase();
   } catch {
     return "invalid-url";
   }
@@ -453,19 +273,6 @@ export type MSTeamsAttachmentFetchPolicy = {
   allowHosts: string[];
   authAllowHosts: string[];
 };
-
-/**
- * Logger surface for attachment download errors. Structured so callers can
- * pass `MSTeamsMonitorLogger` directly without adapters. Optional `warn`/
- * `error` methods prevent silent swallowing of fetch failures — see issue
- * #63396 where empty `catch {}` blocks hid a Node 24+ undici incompatibility.
- */
-export type MSTeamsAttachmentDownloadLogger = {
-  warn?: (message: string, meta?: Record<string, unknown>) => void;
-  error?: (message: string, meta?: Record<string, unknown>) => void;
-};
-
-export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
 
 export function resolveAttachmentFetchPolicy(params?: {
   allowHosts?: string[];
@@ -518,7 +325,7 @@ export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress
  */
 export async function resolveAndValidateIP(
   hostname: string,
-  resolveFn?: MSTeamsAttachmentResolveFn,
+  resolveFn?: (hostname: string) => Promise<{ address: string }>,
 ): Promise<string> {
   const resolve = resolveFn ?? lookup;
   let resolved: { address: string };
@@ -555,10 +362,10 @@ export async function safeFetch(params: {
   authorizationAllowHosts?: string[];
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  resolveFn?: MSTeamsAttachmentResolveFn;
+  resolveFn?: (hostname: string) => Promise<{ address: string }>;
 }): Promise<Response> {
   const fetchFn = params.fetchFn ?? fetch;
-  const resolveFn = params.resolveFn ?? lookup;
+  const resolveFn = params.resolveFn;
   const hasDispatcher = Boolean(
     params.requestInit &&
     typeof params.requestInit === "object" &&
@@ -642,7 +449,7 @@ export async function safeFetchWithPolicy(params: {
   policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  resolveFn?: MSTeamsAttachmentResolveFn;
+  resolveFn?: (hostname: string) => Promise<{ address: string }>;
 }): Promise<Response> {
   return await safeFetch({
     url: params.url,

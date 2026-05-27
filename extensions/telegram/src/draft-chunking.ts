@@ -1,6 +1,5 @@
-import { resolveChannelStreamingPreviewChunk } from "openclaw/plugin-sdk/channel-streaming";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
@@ -21,9 +20,7 @@ export function resolveTelegramDraftStreamingChunking(
   });
   const normalizedAccountId = normalizeAccountId(accountId);
   const accountCfg = resolveAccountEntry(cfg?.channels?.telegram?.accounts, normalizedAccountId);
-  const draftCfg =
-    resolveChannelStreamingPreviewChunk(accountCfg) ??
-    resolveChannelStreamingPreviewChunk(cfg?.channels?.telegram);
+  const draftCfg = accountCfg?.draftChunk ?? cfg?.channels?.telegram?.draftChunk;
 
   const maxRequested = Math.max(
     1,

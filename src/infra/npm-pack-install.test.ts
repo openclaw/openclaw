@@ -7,10 +7,8 @@ import {
   installFromNpmSpecArchiveWithInstaller,
 } from "./npm-pack-install.js";
 
-vi.mock("./install-source-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("./install-source-utils.js")>(
-    "./install-source-utils.js",
-  );
+vi.mock("./install-source-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./install-source-utils.js")>();
   return {
     ...actual,
     withTempDir: vi.fn(async (_prefix: string, fn: (tmpDir: string) => Promise<unknown>) => {
@@ -90,15 +88,7 @@ describe("installFromNpmSpecArchive", () => {
 
     expect(result).toEqual({ ok: false, error: "pack failed" });
     expect(installFromArchive).not.toHaveBeenCalled();
-    const withTempDirMock = vi.mocked(withTempDir);
-    expect(withTempDirMock).toHaveBeenCalledTimes(1);
-    const tempDirCall = withTempDirMock.mock.calls[0];
-    if (tempDirCall === undefined) {
-      throw new Error("expected temp dir call");
-    }
-    const [tempDirPrefix, tempDirCallback] = tempDirCall;
-    expect(tempDirPrefix).toBe("openclaw-test-");
-    expect(tempDirCallback).toBeTypeOf("function");
+    expect(withTempDir).toHaveBeenCalledWith("openclaw-test-", expect.any(Function));
   });
 
   it("rejects unsupported npm specs before packing", async () => {
@@ -131,11 +121,7 @@ describe("installFromNpmSpecArchive", () => {
     const okResult = expectWrappedOkResult(result, { ok: true, target: "done" });
     expect(okResult.integrityDrift).toBeUndefined();
     expect(okResult.npmResolution.resolvedSpec).toBe("@openclaw/test@1.0.0");
-    const resolvedAt = okResult.npmResolution.resolvedAt;
-    if (!resolvedAt) {
-      throw new Error("expected npm resolution timestamp");
-    }
-    expect(Date.parse(resolvedAt)).not.toBeNaN();
+    expect(okResult.npmResolution.resolvedAt).toBeTruthy();
     expect(installFromArchive).toHaveBeenCalledWith({ archivePath: "/tmp/openclaw-test.tgz" });
   });
 
@@ -175,7 +161,7 @@ describe("installFromNpmSpecArchive", () => {
     expect(installFromArchive).not.toHaveBeenCalled();
   });
 
-  it("warns and aborts on drift when no callback is configured", async () => {
+  it("warns and proceeds on drift when no callback is configured", async () => {
     mockPackedSuccess({ integrity: "sha512-new" });
     const warn = vi.fn();
     const installFromArchive = vi.fn(async () => ({ ok: true as const, id: "plugin-1" }));
@@ -186,14 +172,14 @@ describe("installFromNpmSpecArchive", () => {
       installFromArchive,
     });
 
-    expect(result).toEqual({
-      ok: false,
-      error: "aborted: npm package integrity drift detected for @openclaw/test@1.0.0",
+    const okResult = expectWrappedOkResult(result, { ok: true, id: "plugin-1" });
+    expect(okResult.integrityDrift).toEqual({
+      expectedIntegrity: "sha512-old",
+      actualIntegrity: "sha512-new",
     });
     expect(warn).toHaveBeenCalledWith(
       "Integrity drift detected for @openclaw/test@1.0.0: expected sha512-old, got sha512-new",
     );
-    expect(installFromArchive).not.toHaveBeenCalled();
   });
 
   it("returns installer failures to callers for domain-specific handling", async () => {

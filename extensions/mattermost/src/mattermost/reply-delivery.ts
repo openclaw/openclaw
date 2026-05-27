@@ -1,11 +1,13 @@
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   deliverTextOrMediaReply,
-  isReasoningReplyPayload,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  getAgentScopedMediaLocalRoots,
+  type OpenClawConfig,
+  type PluginRuntime,
+  type ReplyPayload,
+} from "./runtime-api.js";
 
 type MarkdownTableMode = Parameters<PluginRuntime["channel"]["text"]["convertMarkdownTables"]>[1];
 
@@ -13,21 +15,13 @@ type SendMattermostMessage = (
   to: string,
   text: string,
   opts: {
-    cfg: OpenClawConfig;
+    cfg?: OpenClawConfig;
     accountId?: string;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
     replyToId?: string;
   },
 ) => Promise<unknown>;
-
-/**
- * Result of `deliverMattermostReplyPayload`. Callers in `monitor.ts` use this
- * to distinguish a successful visible send from an intentionally suppressed
- * reasoning payload from a substantive payload that ended up sending nothing
- * (the silent-completion symptom in #80501).
- */
-export type MattermostReplyDeliveryOutcome = "reasoning_skipped" | "empty" | "text" | "media";
 
 export async function deliverMattermostReplyPayload(params: {
   core: PluginRuntime;
@@ -40,10 +34,7 @@ export async function deliverMattermostReplyPayload(params: {
   textLimit: number;
   tableMode: MarkdownTableMode;
   sendMessage: SendMattermostMessage;
-}): Promise<MattermostReplyDeliveryOutcome> {
-  if (isReasoningReplyPayload(params.payload)) {
-    return "reasoning_skipped";
-  }
+}): Promise<void> {
   const reply = resolveSendableOutboundReplyParts(params.payload, {
     text: params.core.channel.text.convertMarkdownTables(
       params.payload.text ?? "",
@@ -56,7 +47,7 @@ export async function deliverMattermostReplyPayload(params: {
     "mattermost",
     params.accountId,
   );
-  return await deliverTextOrMediaReply({
+  await deliverTextOrMediaReply({
     payload: params.payload,
     text: reply.text,
     chunkText: (value) =>

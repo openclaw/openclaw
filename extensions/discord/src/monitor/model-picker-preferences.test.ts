@@ -62,6 +62,6 @@ describe("discord model picker preferences", () => {
       env,
       scope: { userId: "789" },
     });
-    expect(recent).toStrictEqual([]);
+    expect(recent).toEqual([]);
   });
 });

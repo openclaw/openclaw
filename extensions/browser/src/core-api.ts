@@ -9,7 +9,6 @@ export {
   browserCreateProfile,
   browserConsoleMessages,
   browserDeleteProfile,
-  browserDoctor,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -53,8 +52,6 @@ export {
 export type {
   BrowserCreateProfileResult,
   BrowserDeleteProfileResult,
-  BrowserDoctorCheck,
-  BrowserDoctorReport,
   BrowserFormField,
   BrowserResetProfileResult,
   BrowserRouteRegistrar,
@@ -67,49 +64,47 @@ export type {
 } from "./browser-runtime.js";
 export {
   callGatewayTool,
+  createSubsystemLogger,
   danger,
+  defaultRuntime,
   detectMime,
+  ErrorCodes,
+  errorShape,
   formatCliCommand,
   formatDocsLink,
   formatHelpExamples,
+  addGatewayClientOptions,
+  callGatewayFromCli,
   inheritOptionFromParent,
   info,
   imageResultFromFile,
+  isNodeCommandAllowed,
   jsonResult,
   listNodes,
-  optionalStringEnum,
-  readStringParam,
-  resolveNodeIdFromList,
-  selectDefaultNodeFromList,
-  stringEnum,
-  theme,
-} from "./sdk-setup-tools.js";
-export {
-  getRuntimeConfig,
+  loadConfig,
   normalizePluginsConfig,
+  optionalStringEnum,
   parseBooleanValue,
-  resolveEffectiveEnableState,
-  shortenHomePath,
-} from "./sdk-config.js";
-export {
-  addGatewayClientOptions,
-  callGatewayFromCli,
-  defaultRuntime,
-  ErrorCodes,
-  errorShape,
-  isNodeCommandAllowed,
+  readStringParam,
   respondUnavailableOnNodeInvokeError,
+  resolveEffectiveEnableState,
+  resolveNodeIdFromList,
   resolveNodeCommandAllowlist,
   runCommandWithRuntime,
+  selectDefaultNodeFromList,
   safeParseJson,
+  shortenHomePath,
+  stringEnum,
+  theme,
   withTimeout,
-} from "./sdk-node-runtime.js";
-export { createSubsystemLogger, wrapExternalContent } from "./sdk-security-runtime.js";
-export type { AnyAgentTool, NodeListNode } from "./sdk-setup-tools.js";
-export type { OpenClawConfig } from "./sdk-config.js";
+  wrapExternalContent,
+} from "openclaw/plugin-sdk/browser-support";
 export type {
+  AnyAgentTool,
   GatewayRequestHandlers,
   GatewayRpcOpts,
+  NodeListNode,
   NodeSession,
+  OpenClawConfig,
   OpenClawPluginService,
-} from "./sdk-node-runtime.js";
+} from "openclaw/plugin-sdk/browser-support";

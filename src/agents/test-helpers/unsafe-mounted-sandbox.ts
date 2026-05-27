@@ -6,7 +6,7 @@ import type { SandboxFsBridge, SandboxResolvedPath } from "../sandbox/fs-bridge.
 import { createSandboxFsBridgeFromResolver } from "./host-sandbox-fs-bridge.js";
 import { createPiToolsSandboxContext } from "./pi-tools-sandbox-context.js";
 
-function createUnsafeMountedBridge(params: {
+export function createUnsafeMountedBridge(params: {
   root: string;
   agentHostRoot: string;
   workspaceContainerRoot?: string;
@@ -49,7 +49,6 @@ function createUnsafeMountedBridge(params: {
 export function createUnsafeMountedSandbox(params: {
   sandboxRoot: string;
   agentRoot: string;
-  workspaceAccess?: "none" | "ro" | "rw";
   workspaceContainerRoot?: string;
 }): SandboxContext {
   const bridge = createUnsafeMountedBridge({
@@ -60,7 +59,7 @@ export function createUnsafeMountedSandbox(params: {
   return createPiToolsSandboxContext({
     workspaceDir: params.sandboxRoot,
     agentWorkspaceDir: params.agentRoot,
-    workspaceAccess: params.workspaceAccess ?? "rw",
+    workspaceAccess: "rw",
     fsBridge: bridge,
     tools: { allow: [], deny: [] },
   });
@@ -68,18 +67,13 @@ export function createUnsafeMountedSandbox(params: {
 
 export async function withUnsafeMountedSandboxHarness(
   run: (ctx: { sandboxRoot: string; agentRoot: string; sandbox: SandboxContext }) => Promise<void>,
-  options?: { workspaceAccess?: "none" | "ro" | "rw" },
 ) {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-mounts-"));
   const sandboxRoot = path.join(stateDir, "sandbox");
   const agentRoot = path.join(stateDir, "agent");
   await fs.mkdir(sandboxRoot, { recursive: true });
   await fs.mkdir(agentRoot, { recursive: true });
-  const sandbox = createUnsafeMountedSandbox({
-    sandboxRoot,
-    agentRoot,
-    workspaceAccess: options?.workspaceAccess,
-  });
+  const sandbox = createUnsafeMountedSandbox({ sandboxRoot, agentRoot });
   try {
     await run({ sandboxRoot, agentRoot, sandbox });
   } finally {

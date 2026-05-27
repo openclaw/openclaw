@@ -1,30 +1,31 @@
-import { configureFsSafePython } from "@openclaw/fs-safe/config";
-export { root } from "@openclaw/fs-safe/root";
-export { isPathInside, isPathInsideWithRealpath } from "@openclaw/fs-safe/path";
-export {
-  assertNoSymlinkParents,
-  readRegularFile,
-  statRegularFile,
-  type RegularFileStatResult,
-} from "@openclaw/fs-safe/advanced";
-export { walkDirectory, type WalkDirectoryEntry } from "@openclaw/fs-safe/walk";
+import type { Stats } from "node:fs";
+import fs from "node:fs/promises";
 
-const hasPythonModeOverride =
-  process.env.FS_SAFE_PYTHON_MODE != null || process.env.OPENCLAW_FS_SAFE_PYTHON_MODE != null;
-
-if (!hasPythonModeOverride) {
-  configureFsSafePython({ mode: "off" });
-}
+export type RegularFileStatResult = { missing: true } | { missing: false; stat: Stats };
 
 export function isFileMissingError(
   err: unknown,
-): err is NodeJS.ErrnoException & { code: "ENOENT" | "ENOTDIR" | "not-found" } {
+): err is NodeJS.ErrnoException & { code: "ENOENT" } {
   return Boolean(
     err &&
     typeof err === "object" &&
     "code" in err &&
-    ((err as Partial<NodeJS.ErrnoException>).code === "ENOENT" ||
-      (err as Partial<NodeJS.ErrnoException>).code === "ENOTDIR" ||
-      (err as { code?: unknown }).code === "not-found"),
+    (err as Partial<NodeJS.ErrnoException>).code === "ENOENT",
   );
+}
+
+export async function statRegularFile(absPath: string): Promise<RegularFileStatResult> {
+  let stat: Stats;
+  try {
+    stat = await fs.lstat(absPath);
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return { missing: true };
+    }
+    throw err;
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error("path required");
+  }
+  return { missing: false, stat };
 }

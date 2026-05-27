@@ -1,10 +1,8 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-
 export function resolveThreadBindingConversationIdFromBindingId(params: {
   accountId: string;
   bindingId?: string;
 }): string | undefined {
-  const bindingId = normalizeOptionalString(params.bindingId);
+  const bindingId = params.bindingId?.trim();
   if (!bindingId) {
     return undefined;
   }
@@ -12,6 +10,6 @@ export function resolveThreadBindingConversationIdFromBindingId(params: {
   if (!bindingId.startsWith(prefix)) {
     return undefined;
   }
-  const conversationId = normalizeOptionalString(bindingId.slice(prefix.length));
+  const conversationId = bindingId.slice(prefix.length).trim();
   return conversationId || undefined;
 }

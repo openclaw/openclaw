@@ -1,8 +1,6 @@
-import actualFs from "node:fs";
-import actualFsPromises from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type FakeFsEntry = { kind: "file"; content: string } | { kind: "dir" };
 
@@ -41,14 +39,15 @@ function expectResolvedPackageRoot(
   return expect(asyncResolver(opts)).resolves.toBe(expected);
 }
 
-const mockFsModule = () => {
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
   const wrapped = {
-    ...actualFs,
+    ...actual,
     existsSync: (p: string) =>
-      isFixturePath(p) ? state.entries.has(abs(p)) : actualFs.existsSync(p),
+      isFixturePath(p) ? state.entries.has(abs(p)) : actual.existsSync(p),
     readFileSync: (p: string, encoding?: BufferEncoding) => {
       if (!isFixturePath(p)) {
-        return actualFs.readFileSync(p, encoding);
+        return actual.readFileSync(p, encoding);
       }
       const entry = state.entries.get(abs(p));
       if (!entry || entry.kind !== "file") {
@@ -58,7 +57,7 @@ const mockFsModule = () => {
     },
     statSync: (p: string) => {
       if (!isFixturePath(p)) {
-        return actualFs.statSync(p);
+        return actual.statSync(p);
       }
       const entry = state.entries.get(abs(p));
       if (!entry) {
@@ -78,17 +77,18 @@ const mockFsModule = () => {
             }
             return state.realpaths.get(resolved) ?? resolved;
           })()
-        : actualFs.realpathSync(p),
+        : actual.realpathSync(p),
   };
-  return wrapped;
-};
+  return { ...wrapped, default: wrapped };
+});
 
-const mockFsPromisesModule = () => {
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
   const wrapped = {
-    ...actualFsPromises,
+    ...actual,
     readFile: async (p: string, encoding?: BufferEncoding) => {
       if (!isFixturePath(p)) {
-        return await actualFsPromises.readFile(p, encoding);
+        return await actual.readFile(p, encoding);
       }
       const entry = state.entries.get(abs(p));
       if (!entry || entry.kind !== "file") {
@@ -97,29 +97,17 @@ const mockFsPromisesModule = () => {
       return entry.content;
     },
   };
-  return wrapped;
-};
-
-vi.mock("./openclaw-root.fs.runtime.js", () => ({
-  openClawRootFsSync: mockFsModule(),
-  openClawRootFs: mockFsPromisesModule(),
-}));
+  return { ...wrapped, default: wrapped };
+});
 
 describe("resolveOpenClawPackageRoot", () => {
   let resolveOpenClawPackageRoot: typeof import("./openclaw-root.js").resolveOpenClawPackageRoot;
   let resolveOpenClawPackageRootSync: typeof import("./openclaw-root.js").resolveOpenClawPackageRootSync;
-  let clearOpenClawPackageRootCaches: typeof import("./openclaw-root.js").testing.clearOpenClawPackageRootCaches;
 
-  beforeAll(async () => {
-    ({
-      resolveOpenClawPackageRoot,
-      resolveOpenClawPackageRootSync,
-      testing: { clearOpenClawPackageRootCaches },
-    } = await import("./openclaw-root.js"));
-  });
-
-  beforeEach(() => {
-    clearOpenClawPackageRootCaches();
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } =
+      await import("./openclaw-root.js"));
     state.entries.clear();
     state.realpaths.clear();
     state.realpathErrors.clear();

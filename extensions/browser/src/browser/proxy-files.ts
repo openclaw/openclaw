@@ -1,6 +1,6 @@
 import { saveMediaBuffer } from "../media/store.js";
 
-type BrowserProxyFile = {
+export type BrowserProxyFile = {
   path: string;
   base64: string;
   mimeType?: string;

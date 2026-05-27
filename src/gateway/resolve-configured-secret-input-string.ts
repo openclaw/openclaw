@@ -1,14 +1,21 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveSecretRefValues } from "../secrets/resolve.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type SecretInputUnresolvedReasonStyle = "generic" | "detailed"; // pragma: allowlist secret
-type ConfiguredSecretInputSource =
+export type ConfiguredSecretInputSource =
   | "config"
   | "secretRef" // pragma: allowlist secret
   | "fallback";
+
+function trimToUndefined(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
 
 function buildUnresolvedReason(params: {
   path: string;
@@ -41,7 +48,7 @@ export async function resolveConfiguredSecretInputString(params: {
     defaults: params.config.secrets?.defaults,
   });
   if (!ref) {
-    return { value: normalizeOptionalString(params.value) };
+    return { value: trimToUndefined(params.value) };
   }
 
   const refLabel = `${ref.source}:${ref.provider}:${ref.id}`;
@@ -61,8 +68,8 @@ export async function resolveConfiguredSecretInputString(params: {
         }),
       };
     }
-    const trimmed = normalizeOptionalString(resolvedValue);
-    if (!trimmed) {
+    const trimmed = resolvedValue.trim();
+    if (trimmed.length === 0) {
       return {
         unresolvedRefReason: buildUnresolvedReason({
           path: params.path,
@@ -102,7 +109,7 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
     value: params.value,
     defaults: params.config.secrets?.defaults,
   });
-  const configValue = !ref ? normalizeOptionalString(params.value) : undefined;
+  const configValue = !ref ? trimToUndefined(params.value) : undefined;
   if (configValue) {
     return {
       value: configValue,

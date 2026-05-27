@@ -14,12 +14,10 @@ import {
   replaceConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { normalizeAgentModelRefForConfig, toAgentModelListLike } from "../../config/model-input.js";
+import { toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-export { normalizeAlias } from "./alias-name.js";
-export { isLocalBaseUrl } from "./list.local-url.js";
 
 export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
   if (opts.json && opts.plain) {
@@ -50,6 +48,22 @@ export const formatMs = (value?: number | null) => {
   return `${Math.round(value / 100) / 10}s`;
 };
 
+export const isLocalBaseUrl = (baseUrl: string) => {
+  try {
+    const url = new URL(baseUrl);
+    const host = url.hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "::1" ||
+      host.endsWith(".local")
+    );
+  } catch {
+    return false;
+  }
+};
+
 export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -59,21 +73,15 @@ export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
   return snapshot.runtimeConfig ?? snapshot.config;
 }
 
-export type UpdateConfigContext = {
-  runtimeConfig: OpenClawConfig;
-};
-
 export async function updateConfig(
-  mutator: (cfg: OpenClawConfig, context: UpdateConfigContext) => OpenClawConfig,
+  mutator: (cfg: OpenClawConfig) => OpenClawConfig,
 ): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
-  const sourceConfig = structuredClone(snapshot.sourceConfig ?? snapshot.config);
-  const runtimeConfig = structuredClone(snapshot.runtimeConfig ?? snapshot.config);
-  const next = mutator(sourceConfig, { runtimeConfig });
+  const next = mutator(structuredClone(snapshot.sourceConfig ?? snapshot.config));
   await replaceConfigFile({
     nextConfig: next,
     baseHash: snapshot.hash,
@@ -100,22 +108,6 @@ export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig })
   return resolved.ref;
 }
 
-function resolveAuthoredModelAliasTarget(params: {
-  raw: string;
-  cfg: OpenClawConfig;
-}): { provider: string; model: string } | undefined {
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-  });
-  const resolved = resolveModelRefFromString({
-    raw: params.raw,
-    defaultProvider: DEFAULT_PROVIDER,
-    aliasIndex,
-  });
-  return resolved?.alias ? resolved.ref : undefined;
-}
-
 export function resolveModelKeysFromEntries(params: {
   cfg: OpenClawConfig;
   entries: readonly string[];
@@ -140,13 +132,24 @@ export function buildAllowlistSet(cfg: OpenClawConfig): Set<string> {
   const allowed = new Set<string>();
   const models = cfg.agents?.defaults?.models ?? {};
   for (const raw of Object.keys(models)) {
-    const parsed = parseModelRef(raw, DEFAULT_PROVIDER);
+    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
     if (!parsed) {
       continue;
     }
     allowed.add(modelKey(parsed.provider, parsed.model));
   }
   return allowed;
+}
+
+export function normalizeAlias(alias: string): string {
+  const trimmed = alias.trim();
+  if (!trimmed) {
+    throw new Error("Alias cannot be empty.");
+  }
+  if (!/^[A-Za-z0-9_.:-]+$/.test(trimmed)) {
+    throw new Error("Alias must use letters, numbers, dots, underscores, colons, or dashes.");
+  }
+  return trimmed;
 }
 
 export function resolveKnownAgentId(params: {
@@ -174,39 +177,15 @@ export function upsertCanonicalModelConfigEntry(
   params: { provider: string; model: string },
 ) {
   const key = modelKey(params.provider, params.model);
-  const legacyKeys = [
-    legacyModelKey(params.provider, params.model),
-    `${params.provider}/${key}`,
-  ].filter(
-    (legacyKey): legacyKey is string =>
-      typeof legacyKey === "string" && legacyKey.length > 0 && legacyKey !== key,
-  );
-  let legacyEntry: AgentModelEntryConfig | undefined;
-  for (const legacyKey of legacyKeys) {
-    const entry = models[legacyKey];
-    if (!entry) {
-      continue;
+  const legacyKey = legacyModelKey(params.provider, params.model);
+  if (!models[key]) {
+    if (legacyKey && models[legacyKey]) {
+      models[key] = models[legacyKey];
+    } else {
+      models[key] = {};
     }
-    Object.assign((legacyEntry ??= {}), entry);
-    legacyEntry.params = {
-      ...legacyEntry.params,
-      ...entry.params,
-    };
   }
-
-  if (legacyEntry) {
-    models[key] = {
-      ...legacyEntry,
-      ...models[key],
-      params: {
-        ...legacyEntry.params,
-        ...models[key]?.params,
-      },
-    };
-  } else if (!models[key]) {
-    models[key] = {};
-  }
-  for (const legacyKey of legacyKeys) {
+  if (legacyKey) {
     delete models[legacyKey];
   }
   return key;
@@ -219,36 +198,20 @@ export function mergePrimaryFallbackConfig(
   const base = existing && typeof existing === "object" ? existing : undefined;
   const next: PrimaryFallbackConfig = { ...base };
   if (patch.primary !== undefined) {
-    next.primary = normalizeAgentModelRefForConfig(patch.primary);
+    next.primary = patch.primary;
   }
   if (patch.fallbacks !== undefined) {
-    next.fallbacks = patch.fallbacks.map((fallback) => normalizeAgentModelRefForConfig(fallback));
-  } else if (next.fallbacks !== undefined) {
-    next.fallbacks = next.fallbacks.map((fallback) => normalizeAgentModelRefForConfig(fallback));
+    next.fallbacks = patch.fallbacks;
   }
   return next;
 }
 
 export function applyDefaultModelPrimaryUpdate(params: {
   cfg: OpenClawConfig;
-  resolveCfg?: OpenClawConfig;
   modelRaw: string;
   field: "model" | "imageModel";
 }): OpenClawConfig {
-  const resolved =
-    params.resolveCfg && params.resolveCfg !== params.cfg
-      ? (resolveAuthoredModelAliasTarget({
-          raw: params.modelRaw,
-          cfg: params.cfg,
-        }) ??
-        resolveModelTarget({
-          raw: params.modelRaw,
-          cfg: params.resolveCfg,
-        }))
-      : resolveModelTarget({
-          raw: params.modelRaw,
-          cfg: params.cfg,
-        });
+  const resolved = resolveModelTarget({ raw: params.modelRaw, cfg: params.cfg });
   const nextModels = {
     ...params.cfg.agents?.defaults?.models,
   } as Record<string, AgentModelEntryConfig>;

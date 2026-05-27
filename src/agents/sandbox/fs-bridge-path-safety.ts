@@ -1,21 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
+import { openBoundaryFile, type BoundaryFileOpenResult } from "../../infra/boundary-file-read.js";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
-import { openRootFile, type RootFileOpenResult } from "./fs-bridge-path-safety.runtime.js";
+import type { SafeOpenSyncAllowedType } from "../../infra/safe-open-sync.js";
 import type { SandboxResolvedFsPath, SandboxFsMount } from "./fs-paths.js";
-import {
-  isPathInsideContainerRoot,
-  normalizeContainerPath,
-  relativePathEscapesContainerRoot,
-} from "./path-utils.js";
-
-type BoundaryAllowedType = "file" | "directory";
+import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
 
 export type PathSafetyOptions = {
   action: string;
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
-  allowedType?: BoundaryAllowedType;
+  allowedType?: SafeOpenSyncAllowedType;
 };
 
 export type PathSafetyCheck = {
@@ -74,7 +69,7 @@ export class SandboxFsPathGuard {
 
   async openReadableFile(
     target: SandboxResolvedFsPath,
-  ): Promise<RootFileOpenResult & { ok: true }> {
+  ): Promise<BoundaryFileOpenResult & { ok: true }> {
     const opened = await this.openBoundaryWithinRequiredMount(target, "read files");
     if (!opened.ok) {
       throw opened.error instanceof Error
@@ -100,7 +95,7 @@ export class SandboxFsPathGuard {
     action: string;
   }): PinnedSandboxEntry {
     const relativeParentPath = path.posix.relative(params.mount.containerRoot, params.parentPath);
-    if (relativePathEscapesContainerRoot(relativeParentPath)) {
+    if (relativeParentPath.startsWith("..") || path.posix.isAbsolute(relativeParentPath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.targetPath}`,
       );
@@ -115,7 +110,7 @@ export class SandboxFsPathGuard {
   private async assertGuardedPathSafety(
     target: SandboxResolvedFsPath,
     options: PathSafetyOptions,
-    guarded: RootFileOpenResult,
+    guarded: BoundaryFileOpenResult,
   ) {
     if (!guarded.ok) {
       if (guarded.reason !== "path") {
@@ -150,11 +145,11 @@ export class SandboxFsPathGuard {
     action: string,
     options?: {
       aliasPolicy?: PathAliasPolicy;
-      allowedType?: BoundaryAllowedType;
+      allowedType?: SafeOpenSyncAllowedType;
     },
-  ): Promise<RootFileOpenResult> {
+  ): Promise<BoundaryFileOpenResult> {
     const lexicalMount = this.resolveRequiredMount(target.containerPath, action);
-    const guarded = await openRootFile({
+    const guarded = await openBoundaryFile({
       absolutePath: target.hostPath,
       rootPath: lexicalMount.hostRoot,
       boundaryLabel: "sandbox mount root",
@@ -221,7 +216,7 @@ export class SandboxFsPathGuard {
   ): PinnedSandboxDirectoryEntry {
     const mount = this.resolveRequiredMount(target.containerPath, action);
     const relativePath = path.posix.relative(mount.containerRoot, target.containerPath);
-    if (relativePathEscapesContainerRoot(relativePath)) {
+    if (relativePath.startsWith("..") || path.posix.isAbsolute(relativePath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${action}: ${target.containerPath}`,
       );

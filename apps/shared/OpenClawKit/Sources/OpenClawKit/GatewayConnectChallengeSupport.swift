@@ -9,9 +9,9 @@ public enum GatewayConnectChallengeSupport {
         return trimmed
     }
 
-    public static func waitForNonce(
+    public static func waitForNonce<E: Error>(
         timeoutSeconds: Double,
-        onTimeout: @escaping @Sendable () -> some Error,
+        onTimeout: @escaping @Sendable () -> E,
         receiveNonce: @escaping @Sendable () async throws -> String?) async throws -> String
     {
         try await AsyncTimeout.withTimeout(

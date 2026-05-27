@@ -1,16 +1,15 @@
-import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectBinary } from "./detect-binary.js";
-import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import { isWSL } from "./wsl.js";
 
-type BrowserOpenCommand = {
+export type BrowserOpenCommand = {
   argv: string[] | null;
   reason?: string;
   command?: string;
+  quoteUrl?: boolean;
 };
 
-type BrowserOpenSupport = {
+export type BrowserOpenSupport = {
   ok: boolean;
   reason?: string;
   command?: string;
@@ -23,23 +22,6 @@ function shouldSkipBrowserOpenInTests(): boolean {
   return process.env.NODE_ENV === "test";
 }
 
-function resolveWindowsRundll32Path(): string {
-  const { systemRoot } = getWindowsInstallRoots();
-  return path.win32.join(systemRoot, "System32", "rundll32.exe");
-}
-
-function normalizeBrowserOpenUrl(raw: string): string | null {
-  try {
-    const parsed = new URL(raw);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return null;
-    }
-    return parsed.toString();
-  } catch {
-    return null;
-  }
-}
-
 export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   const platform = process.platform;
   const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
@@ -48,15 +30,15 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
     Boolean(process.env.SSH_TTY) ||
     Boolean(process.env.SSH_CONNECTION);
 
-  if (isSsh && !hasDisplay && platform !== "win32" && platform !== "darwin") {
+  if (isSsh && !hasDisplay && platform !== "win32") {
     return { argv: null, reason: "ssh-no-display" };
   }
 
   if (platform === "win32") {
-    const rundll32 = resolveWindowsRundll32Path();
     return {
-      argv: [rundll32, "url.dll,FileProtocolHandler"],
-      command: rundll32,
+      argv: ["cmd", "/c", "start", ""],
+      command: "cmd",
+      quoteUrl: true,
     };
   }
 
@@ -100,18 +82,44 @@ export async function openUrl(url: string): Promise<boolean> {
   if (shouldSkipBrowserOpenInTests()) {
     return false;
   }
-  const normalizedUrl = normalizeBrowserOpenUrl(url);
-  if (!normalizedUrl) {
-    return false;
-  }
   const resolved = await resolveBrowserOpenCommand();
   if (!resolved.argv) {
     return false;
   }
+  const quoteUrl = resolved.quoteUrl === true;
   const command = [...resolved.argv];
-  command.push(normalizedUrl);
+  if (quoteUrl) {
+    if (command.at(-1) === "") {
+      command[command.length - 1] = '""';
+    }
+    command.push(`"${url}"`);
+  } else {
+    command.push(url);
+  }
   try {
-    await runCommandWithTimeout(command, { timeoutMs: 5_000 });
+    await runCommandWithTimeout(command, {
+      timeoutMs: 5_000,
+      windowsVerbatimArguments: quoteUrl,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function openUrlInBackground(url: string): Promise<boolean> {
+  if (shouldSkipBrowserOpenInTests()) {
+    return false;
+  }
+  if (process.platform !== "darwin") {
+    return false;
+  }
+  const resolved = await resolveBrowserOpenCommand();
+  if (!resolved.argv || resolved.command !== "open") {
+    return false;
+  }
+  try {
+    await runCommandWithTimeout(["open", "-g", url], { timeoutMs: 5_000 });
     return true;
   } catch {
     return false;

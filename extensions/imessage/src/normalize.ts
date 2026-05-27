@@ -1,12 +1,13 @@
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const SERVICE_PREFIXES = ["imessage:", "sms:", "auto:"] as const;
 const CHAT_TARGET_PREFIX_RE =
   /^(chat_id:|chatid:|chat:|chat_guid:|chatguid:|guid:|chat_identifier:|chatidentifier:|chatident:)/i;
+
+function trimMessagingTarget(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  return trimmed || undefined;
+}
 
 function looksLikeHandleOrPhoneTarget(params: {
   raw: string;
@@ -26,12 +27,12 @@ function looksLikeHandleOrPhoneTarget(params: {
   return (params.phonePattern ?? /^\+?\d{3,}$/).test(trimmed);
 }
 
-function normalizeIMessageHandle(raw: string): string {
+export function normalizeIMessageHandle(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     return "";
   }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const lowered = trimmed.toLowerCase();
   if (lowered.startsWith("imessage:")) {
     return normalizeIMessageHandle(trimmed.slice("imessage:".length));
   }
@@ -47,10 +48,10 @@ function normalizeIMessageHandle(raw: string): string {
       return "";
     }
     const value = trimmed.slice(prefix.length).trim();
-    return `${normalizeLowercaseStringOrEmpty(prefix)}${value}`;
+    return `${prefix.toLowerCase()}${value}`;
   }
   if (trimmed.includes("@")) {
-    return normalizeLowercaseStringOrEmpty(trimmed);
+    return trimmed.toLowerCase();
   }
   const normalized = normalizeE164(trimmed);
   if (normalized) {
@@ -60,12 +61,12 @@ function normalizeIMessageHandle(raw: string): string {
 }
 
 export function normalizeIMessageMessagingTarget(raw: string): string | undefined {
-  const trimmed = normalizeOptionalString(raw);
+  const trimmed = trimMessagingTarget(raw);
   if (!trimmed) {
     return undefined;
   }
 
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  const lower = trimmed.toLowerCase();
   for (const prefix of SERVICE_PREFIXES) {
     if (lower.startsWith(prefix)) {
       const remainder = trimmed.slice(prefix.length).trim();
@@ -85,7 +86,7 @@ export function normalizeIMessageMessagingTarget(raw: string): string | undefine
 }
 
 export function looksLikeIMessageTargetId(raw: string): boolean {
-  const trimmed = normalizeOptionalString(raw);
+  const trimmed = trimMessagingTarget(raw);
   if (!trimmed) {
     return false;
   }

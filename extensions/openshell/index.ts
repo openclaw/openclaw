@@ -1,4 +1,4 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import {
   createOpenShellSandboxBackendFactory,
@@ -6,12 +6,12 @@ import {
 } from "./src/backend.js";
 import { createOpenShellPluginConfigSchema, resolveOpenShellPluginConfig } from "./src/config.js";
 
-export default definePluginEntry({
+const plugin = {
   id: "openshell",
   name: "OpenShell Sandbox",
   description: "OpenShell-backed sandbox runtime for agent exec and file tools.",
   configSchema: createOpenShellPluginConfigSchema(),
-  register(api) {
+  register(api: OpenClawPluginApi) {
     if (api.registrationMode !== "full") {
       return;
     }
@@ -25,4 +25,6 @@ export default definePluginEntry({
       }),
     });
   },
-});
+};
+
+export default plugin;

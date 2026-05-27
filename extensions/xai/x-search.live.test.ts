@@ -1,4 +1,3 @@
-import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { createXSearchTool } from "./x-search.js";
 
@@ -11,40 +10,22 @@ describeLive("xai x_search live", () => {
   it("queries X through xAI Responses", async () => {
     const tool = createXSearchTool({
       config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                xSearch: {
-                  enabled: true,
-                  model: "grok-4-1-fast-non-reasoning",
-                  maxTurns: 1,
-                  timeoutSeconds: 60,
-                },
-              },
+        tools: {
+          web: {
+            x_search: {
+              enabled: true,
+              model: "grok-4-1-fast-non-reasoning",
             },
           },
         },
       },
     });
 
-    if (!tool) {
-      throw new Error("expected x_search tool to be registered");
-    }
-    let result: Awaited<ReturnType<typeof tool.execute>>;
-    try {
-      result = await tool.execute("x-search:live", {
-        query: "OpenClaw from:steipete",
-        to_date: "2026-03-28",
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (isBillingErrorMessage(message)) {
-        console.warn(`[xai:x-search:live] skip: billing drift: ${message}`);
-        return;
-      }
-      throw error;
-    }
+    expect(tool).toBeTruthy();
+    const result = await tool!.execute("x-search:live", {
+      query: "OpenClaw from:steipete",
+      to_date: "2026-03-28",
+    });
 
     const details = (result.details ?? {}) as {
       provider?: string;
@@ -55,15 +36,6 @@ describeLive("xai x_search live", () => {
       message?: string;
     };
 
-    const errorMessage =
-      details.error && details.message
-        ? `${details.error} ${details.message}`
-        : details.error || details.message || "";
-    if (isBillingErrorMessage(errorMessage)) {
-      console.warn(`[xai:x-search:live] skip: billing drift: ${errorMessage}`);
-      return;
-    }
-
     expect(details.error, details.message).toBeUndefined();
     expect(details.provider).toBe("xai");
     expect(details.content?.trim().length ?? 0).toBeGreaterThan(0);
@@ -72,5 +44,5 @@ describeLive("xai x_search live", () => {
       (Array.isArray(details.citations) ? details.citations.length : 0) +
       (Array.isArray(details.inlineCitations) ? details.inlineCitations.length : 0);
     expect(citationCount).toBeGreaterThan(0);
-  }, 75_000);
+  }, 45_000);
 });

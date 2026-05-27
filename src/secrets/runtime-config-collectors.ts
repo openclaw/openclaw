@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { PluginOrigin } from "../plugins/types.js";
 import { collectChannelConfigAssignments } from "./runtime-config-collectors-channels.js";
 import { collectCoreConfigAssignments } from "./runtime-config-collectors-core.js";
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
@@ -22,7 +22,6 @@ export function collectConfigAssignments(params: {
     config: params.config,
     defaults,
     context: params.context,
-    loadablePluginOrigins: params.loadablePluginOrigins,
   });
 
   collectPluginConfigAssignments({

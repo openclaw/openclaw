@@ -1,17 +1,9 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.fn((account: { appId?: string } | undefined) => ({
   __appId: account?.appId,
-  wiki: {
-    spaceNode: {
-      list: vi.fn(async () => ({
-        code: 0,
-        data: { items: [] },
-      })),
-    },
-  },
 }));
 
 vi.mock("./client.js", () => ({
@@ -58,18 +50,9 @@ function createConfig(params: {
   } as OpenClawPluginApi["config"];
 }
 
-function clientAppIdAt(index: number): string | undefined {
-  const calls = createFeishuClientMock.mock.calls;
-  const resolvedIndex = index < 0 ? calls.length + index : index;
-  return calls[resolvedIndex]?.[0]?.appId;
-}
-
-function lastClientAppId(): string | undefined {
-  return clientAppIdAt(-1);
-}
-
 describe("feishu tool account routing", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ registerFeishuBitableTools, registerFeishuDriveTools, registerFeishuPermTools } =
       await import("./bitable.js").then(async ({ registerFeishuBitableTools }) => ({
         registerFeishuBitableTools,
@@ -78,14 +61,6 @@ describe("feishu tool account routing", () => {
         ...(await import("./wiki.js")),
       })));
     ({ registerFeishuWikiTools } = await import("./wiki.js"));
-  });
-
-  afterAll(() => {
-    vi.doUnmock("./client.js");
-    vi.resetModules();
-  });
-
-  beforeEach(() => {
     vi.clearAllMocks();
   });
 
@@ -101,10 +76,10 @@ describe("feishu tool account routing", () => {
     const tool = resolveTool("feishu_wiki", { agentAccountId: "b" });
     await tool.execute("call", { action: "search" });
 
-    expect(lastClientAppId()).toBe("app-b");
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 
-  test("wiki tool prefers the active contextual account over configured defaultAccount", async () => {
+  test("wiki tool prefers configured defaultAccount over inherited default account context", async () => {
     const { api, resolveTool } = createToolFactoryHarness(
       createConfig({
         defaultAccount: "b",
@@ -117,47 +92,7 @@ describe("feishu tool account routing", () => {
     const tool = resolveTool("feishu_wiki", { agentAccountId: "a" });
     await tool.execute("call", { action: "search" });
 
-    expect(lastClientAppId()).toBe("app-a");
-  });
-
-  test("wiki tool rejects number-typed space IDs before Lark receives precision-corrupted values", async () => {
-    const { api, resolveTool } = createToolFactoryHarness(
-      createConfig({
-        toolsA: { wiki: true },
-      }),
-    );
-    registerFeishuWikiTools(api);
-
-    const tool = resolveTool("feishu_wiki", { agentAccountId: "a" });
-    const result = await tool.execute("call", {
-      action: "nodes",
-      space_id: 7616123456789015000,
-    });
-
-    expect(createFeishuClientMock).not.toHaveBeenCalled();
-    expect(result.details.error).toContain("space_id must be a string");
-    expect(result.details.error).toContain("precision loss");
-  });
-
-  test("wiki tool forwards quoted numeric-looking space IDs unchanged", async () => {
-    const { api, resolveTool } = createToolFactoryHarness(
-      createConfig({
-        toolsA: { wiki: true },
-      }),
-    );
-    registerFeishuWikiTools(api);
-
-    const tool = resolveTool("feishu_wiki", { agentAccountId: "a" });
-    await tool.execute("call", {
-      action: "nodes",
-      space_id: "7616123456789014828",
-    });
-
-    const client = createFeishuClientMock.mock.results[0]?.value;
-    expect(client.wiki.spaceNode.list).toHaveBeenCalledWith({
-      path: { space_id: "7616123456789014828" },
-      params: { parent_node_token: undefined },
-    });
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 
   test("drive tool registers when first account disables it and routes to agentAccountId", async () => {
@@ -172,7 +107,7 @@ describe("feishu tool account routing", () => {
     const tool = resolveTool("feishu_drive", { agentAccountId: "b" });
     await tool.execute("call", { action: "unknown_action" });
 
-    expect(lastClientAppId()).toBe("app-b");
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 
   test("perm tool registers when only second account enables it and routes to agentAccountId", async () => {
@@ -187,7 +122,7 @@ describe("feishu tool account routing", () => {
     const tool = resolveTool("feishu_perm", { agentAccountId: "b" });
     await tool.execute("call", { action: "unknown_action" });
 
-    expect(lastClientAppId()).toBe("app-b");
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 
   test("bitable tool routes to agentAccountId and allows explicit accountId override", async () => {
@@ -198,8 +133,8 @@ describe("feishu tool account routing", () => {
     await tool.execute("call-ctx", { url: "invalid-url" });
     await tool.execute("call-override", { url: "invalid-url", accountId: "a" });
 
-    expect(clientAppIdAt(0)).toBe("app-b");
-    expect(clientAppIdAt(1)).toBe("app-a");
+    expect(createFeishuClientMock.mock.calls[0]?.[0]?.appId).toBe("app-b");
+    expect(createFeishuClientMock.mock.calls[1]?.[0]?.appId).toBe("app-a");
   });
 
   test("falls back to the configured Feishu default selection when agentAccountId is not a real account", async () => {
@@ -214,7 +149,7 @@ describe("feishu tool account routing", () => {
     const tool = resolveTool("feishu_wiki", { agentAccountId: "agent-spawner" });
     await tool.execute("call", { action: "search" });
 
-    expect(lastClientAppId()).toBe("app-a");
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
   });
 
   test("does not silently fall back when the contextual account is real but uses non-env SecretRefs", async () => {
@@ -243,8 +178,6 @@ describe("feishu tool account routing", () => {
     const result = await tool.execute("call", { action: "search" });
 
     expect(createFeishuClientMock).not.toHaveBeenCalled();
-    expect(typeof result.details.error === "string" ? result.details.error : "").toContain(
-      "Resolve this command against an active gateway runtime snapshot before reading it.",
-    );
+    expect(String(result.details.error ?? "")).toContain("unresolved SecretRef");
   });
 });

@@ -1,76 +1,121 @@
-import { describe, expect, it, vi } from "vitest";
-import { captureSubagentCompletionReplyUsing } from "./subagent-announce-capture.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const chatHistoryMock = vi.fn<(sessionKey: string) => Promise<{ messages?: Array<unknown> }>>(
+  async (_sessionKey: string) => ({ messages: [] }),
+);
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: vi.fn(async (request: unknown) => {
+    const typed = request as { method?: string; params?: { sessionKey?: string } };
+    if (typed.method === "chat.history") {
+      return await chatHistoryMock(typed.params?.sessionKey ?? "");
+    }
+    return {};
+  }),
+}));
 
 describe("captureSubagentCompletionReply", () => {
-  it("returns immediate assistant output from history without polling", async () => {
-    const readSubagentOutput = vi
-      .fn<(sessionKey: string) => Promise<string | undefined>>()
-      .mockResolvedValue("Immediate assistant completion");
+  let previousFastTestEnv: string | undefined;
+  let captureSubagentCompletionReply: (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
 
-    const result = await captureSubagentCompletionReplyUsing({
-      sessionKey: "agent:main:subagent:child",
-      maxWaitMs: 50,
-      retryIntervalMs: 8,
-      readSubagentOutput,
+  async function loadFreshSubagentAnnounceModuleForTest() {
+    vi.resetModules();
+    ({ captureSubagentCompletionReply } = await import("./subagent-announce.js"));
+  }
+
+  beforeAll(async () => {
+    previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
+    process.env.OPENCLAW_TEST_FAST = "1";
+  });
+
+  afterAll(() => {
+    if (previousFastTestEnv === undefined) {
+      delete process.env.OPENCLAW_TEST_FAST;
+      return;
+    }
+    process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+  });
+
+  beforeEach(async () => {
+    await loadFreshSubagentAnnounceModuleForTest();
+    chatHistoryMock.mockReset().mockResolvedValue({ messages: [] });
+  });
+
+  it("returns immediate assistant output from history without polling", async () => {
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Immediate assistant completion" }],
+        },
+      ],
     });
 
+    const result = await captureSubagentCompletionReply("agent:main:subagent:child");
+
     expect(result).toBe("Immediate assistant completion");
-    expect(readSubagentOutput).toHaveBeenCalledTimes(1);
+    expect(chatHistoryMock).toHaveBeenCalledTimes(1);
   });
 
   it("polls briefly and returns late tool output once available", async () => {
     vi.useFakeTimers();
-    const readSubagentOutput = vi
-      .fn<(sessionKey: string) => Promise<string | undefined>>()
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce("Late tool result completion");
+    chatHistoryMock
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            role: "toolResult",
+            content: [
+              {
+                type: "text",
+                text: "Late tool result completion",
+              },
+            ],
+          },
+        ],
+      });
 
-    const pending = captureSubagentCompletionReplyUsing({
-      sessionKey: "agent:main:subagent:child",
-      maxWaitMs: 50,
-      retryIntervalMs: 8,
-      readSubagentOutput,
-    });
+    const pending = captureSubagentCompletionReply("agent:main:subagent:child");
     await vi.runAllTimersAsync();
     const result = await pending;
 
     expect(result).toBe("Late tool result completion");
-    expect(readSubagentOutput).toHaveBeenCalledTimes(3);
+    expect(chatHistoryMock).toHaveBeenCalledTimes(3);
     vi.useRealTimers();
   });
 
   it("returns undefined when no completion output arrives before retry window closes", async () => {
     vi.useFakeTimers();
-    const readSubagentOutput = vi
-      .fn<(sessionKey: string) => Promise<string | undefined>>()
-      .mockResolvedValue(undefined);
+    chatHistoryMock.mockResolvedValue({ messages: [] });
 
-    const pending = captureSubagentCompletionReplyUsing({
-      sessionKey: "agent:main:subagent:child",
-      maxWaitMs: 50,
-      retryIntervalMs: 8,
-      readSubagentOutput,
-    });
+    const pending = captureSubagentCompletionReply("agent:main:subagent:child");
     await vi.runAllTimersAsync();
     const result = await pending;
 
     expect(result).toBeUndefined();
-    expect(readSubagentOutput).toHaveBeenCalledTimes(8);
+    expect(chatHistoryMock).toHaveBeenCalled();
     vi.useRealTimers();
   });
 
   it("returns partial assistant progress when the latest assistant turn is tool-only", async () => {
-    const readSubagentOutput = vi
-      .fn<(sessionKey: string) => Promise<string | undefined>>()
-      .mockResolvedValue("Mapped the modules.");
-
-    const result = await captureSubagentCompletionReplyUsing({
-      sessionKey: "agent:main:subagent:child",
-      maxWaitMs: 50,
-      retryIntervalMs: 8,
-      readSubagentOutput,
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Mapped the modules." },
+            { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-2", name: "exec", arguments: {} }],
+        },
+      ],
     });
+
+    const result = await captureSubagentCompletionReply("agent:main:subagent:child");
 
     expect(result).toBe("Mapped the modules.");
   });

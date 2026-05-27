@@ -1,8 +1,10 @@
-import type { OpenClawPluginApi } from "../runtime-api.js";
+import type { AnyAgentTool, OpenClawPluginApi } from "../runtime-api.js";
 
 type ToolContextLike = {
   agentAccountId?: string;
 };
+
+type ToolFactoryLike = (ctx: ToolContextLike) => AnyAgentTool | AnyAgentTool[] | null | undefined;
 
 export type ToolLike = {
   name: string;
@@ -13,18 +15,16 @@ export type ToolLike = {
 };
 
 type RegisteredTool = {
-  tool: unknown;
+  tool: AnyAgentTool | ToolFactoryLike;
   opts?: { name?: string };
 };
 
-function toToolList(value: unknown): unknown[] {
-  if (!value) {
-    return [];
-  }
+function toToolList(value: AnyAgentTool | AnyAgentTool[] | null | undefined): AnyAgentTool[] {
+  if (!value) return [];
   return Array.isArray(value) ? value : [value];
 }
 
-function asToolLike(tool: unknown, fallbackName?: string): ToolLike {
+function asToolLike(tool: AnyAgentTool, fallbackName?: string): ToolLike {
   const candidate = tool as Partial<ToolLike>;
   const name = candidate.name ?? fallbackName;
   const execute = candidate.execute;

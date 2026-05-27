@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-function makeBaseReq(
+export function makeBaseReq(
   method: string,
   opts: { headers?: Record<string, string>; url?: string } = {},
 ): IncomingMessage & { destroyed: boolean } {
@@ -44,27 +44,17 @@ export function makeStalledReq(
   return makeBaseReq(method, opts);
 }
 
-export function makeRes(): ServerResponse & { status: number; body: string } {
+export function makeRes(): ServerResponse & { _status: number; _body: string } {
   const res = {
-    status: 0,
-    body: "",
+    _status: 0,
+    _body: "",
     writeHead(statusCode: number, _headers: Record<string, string>) {
-      res.status = statusCode;
+      res._status = statusCode;
     },
     end(body?: string) {
-      res.body = body ?? "";
+      res._body = body ?? "";
     },
-  } as unknown as ServerResponse & { status: number; body: string };
-  Object.defineProperty(res, "statusCode", {
-    configurable: true,
-    enumerable: true,
-    get() {
-      return res.status;
-    },
-    set(value: number) {
-      res.status = value;
-    },
-  });
+  } as unknown as ServerResponse & { _status: number; _body: string };
   return res;
 }
 

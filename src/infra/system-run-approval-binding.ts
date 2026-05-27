@@ -4,7 +4,7 @@ import type {
   SystemRunApprovalFileOperand,
   SystemRunApprovalPlan,
 } from "./exec-approvals.js";
-import { normalizeHostOverrideEnvVarKey } from "./host-env-security.js";
+import { normalizeEnvVarKey } from "./host-env-security.js";
 import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
 type NormalizedSystemRunEnvEntry = [key: string, value: string];
@@ -75,7 +75,7 @@ function normalizeSystemRunEnvEntries(env: unknown): NormalizedSystemRunEnvEntry
     if (typeof rawValue !== "string") {
       continue;
     }
-    const key = normalizeHostOverrideEnvVarKey(rawKey);
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (!key) {
       continue;
     }
@@ -162,16 +162,6 @@ export function matchSystemRunApprovalEnvHash(params: {
   actualEnvHash: string | null;
   actualEnvKeys: string[];
 }): SystemRunApprovalMatchResult {
-  // Fail closed if callers provide inconsistent hash/key state. This guards against
-  // normalization drift between approval and execution paths.
-  if (!params.expectedEnvHash && !params.actualEnvHash && params.actualEnvKeys.length > 0) {
-    return {
-      ok: false,
-      code: "APPROVAL_ENV_BINDING_MISSING",
-      message: "approval id missing env binding for requested env overrides",
-      details: { envKeys: params.actualEnvKeys },
-    };
-  }
   if (!params.expectedEnvHash && !params.actualEnvHash) {
     return { ok: true };
   }

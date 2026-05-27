@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  findMessagingTmpdirCallLines,
-  messagingTmpdirGuardSourceRoots,
-} from "../../scripts/check-no-random-messaging-tmp.mjs";
+import { findMessagingTmpdirCallLines } from "../../scripts/check-no-random-messaging-tmp.mjs";
 
 describe("check-no-random-messaging-tmp", () => {
   it("finds os.tmpdir calls imported from node:os", () => {
@@ -34,7 +31,7 @@ describe("check-no-random-messaging-tmp", () => {
       // os.tmpdir()
       const text = "tmpdir()";
     `;
-    expect(findMessagingTmpdirCallLines(source)).toStrictEqual([]);
+    expect(findMessagingTmpdirCallLines(source)).toEqual([]);
   });
 
   it("ignores tmpdir symbols that are not imported from node:os", () => {
@@ -42,10 +39,6 @@ describe("check-no-random-messaging-tmp", () => {
       const tmpdir = () => "/tmp";
       const dir = tmpdir();
     `;
-    expect(findMessagingTmpdirCallLines(source)).toStrictEqual([]);
-  });
-
-  it("guards src/media against host tmpdir usage", () => {
-    expect(messagingTmpdirGuardSourceRoots).toContain("src/media");
+    expect(findMessagingTmpdirCallLines(source)).toEqual([]);
   });
 });

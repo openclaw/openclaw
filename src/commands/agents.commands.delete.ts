@@ -1,17 +1,10 @@
-import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import {
-  purgeAgentSessionStoreEntries,
-  resolveSessionTranscriptsDirForAgent,
-} from "../config/sessions.js";
-import { callGateway, isGatewayTransportError } from "../gateway/call.js";
+import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { createQuietRuntime, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
@@ -22,35 +15,6 @@ type AgentsDeleteOptions = {
   force?: boolean;
   json?: boolean;
 };
-
-type AgentsDeleteGatewayResult = {
-  ok: true;
-  agentId: string;
-  removedBindings: number;
-};
-
-async function maybeDeleteAgentThroughGateway(params: {
-  agentId: string;
-  deleteFiles: boolean;
-}): Promise<AgentsDeleteGatewayResult | null> {
-  try {
-    return await callGateway<AgentsDeleteGatewayResult>({
-      method: "agents.delete",
-      params: {
-        agentId: params.agentId,
-        deleteFiles: params.deleteFiles,
-      },
-      mode: GATEWAY_CLIENT_MODES.CLI,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      requiredMethods: ["agents.delete"],
-    });
-  } catch (error) {
-    if (isGatewayTransportError(error)) {
-      return null;
-    }
-    throw error;
-  }
-}
 
 export async function agentsDeleteCommand(
   opts: AgentsDeleteOptions,
@@ -65,9 +29,7 @@ export async function agentsDeleteCommand(
 
   const input = opts.id?.trim();
   if (!input) {
-    runtime.error(
-      `Agent id is required. Run ${formatCliCommand("openclaw agents list")} to choose one.`,
-    );
+    runtime.error("Agent id is required.");
     runtime.exit(1);
     return;
   }
@@ -83,9 +45,7 @@ export async function agentsDeleteCommand(
   }
 
   if (findAgentEntryIndex(listAgentEntries(cfg), agentId) < 0) {
-    runtime.error(
-      `Agent "${agentId}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
-    );
+    runtime.error(`Agent "${agentId}" not found.`);
     runtime.exit(1);
     return;
   }
@@ -110,57 +70,18 @@ export async function agentsDeleteCommand(
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const agentDir = resolveAgentDir(cfg, agentId);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+
   const result = pruneAgentConfig(cfg, agentId);
-
-  const gatewayResult = await maybeDeleteAgentThroughGateway({
-    agentId,
-    deleteFiles: true,
-  });
-  if (gatewayResult) {
-    const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
-    const workspaceRetained = workspaceSharedWith.length > 0;
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        agentId,
-        workspace: workspaceDir,
-        workspaceRetained: workspaceRetained || undefined,
-        workspaceRetainedReason: workspaceRetained ? "shared" : undefined,
-        workspaceSharedWith: workspaceRetained ? workspaceSharedWith : undefined,
-        agentDir,
-        sessionsDir,
-        removedBindings: gatewayResult.removedBindings,
-        removedAllow: result.removedAllow,
-        transport: "gateway",
-      });
-    } else {
-      runtime.log(`Deleted agent: ${agentId}`);
-    }
-    return;
-  }
-
   await replaceConfigFile({
     nextConfig: result.config,
     ...(baseHash !== undefined ? { baseHash } : {}),
-    writeOptions: opts.json ? { skipOutputLogs: true } : undefined,
   });
   if (!opts.json) {
     logConfigUpdated(runtime);
   }
 
-  // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
-  await purgeAgentSessionStoreEntries(cfg, agentId);
-
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
-  // Only trash the workspace if no other agent can depend on that path (#70890).
-  const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
-  const workspaceRetained = workspaceSharedWith.length > 0;
-  if (workspaceRetained) {
-    quietRuntime.log(
-      `Skipped workspace removal (shared with other agents: ${workspaceSharedWith.join(", ")}): ${workspaceDir}`,
-    );
-  } else {
-    await moveToTrash(workspaceDir, quietRuntime);
-  }
+  await moveToTrash(workspaceDir, quietRuntime);
   await moveToTrash(agentDir, quietRuntime);
   await moveToTrash(sessionsDir, quietRuntime);
 
@@ -168,9 +89,6 @@ export async function agentsDeleteCommand(
     writeRuntimeJson(runtime, {
       agentId,
       workspace: workspaceDir,
-      workspaceRetained: workspaceRetained || undefined,
-      workspaceRetainedReason: workspaceRetained ? "shared" : undefined,
-      workspaceSharedWith: workspaceRetained ? workspaceSharedWith : undefined,
       agentDir,
       sessionsDir,
       removedBindings: result.removedBindings,

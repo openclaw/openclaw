@@ -1,14 +1,23 @@
-import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-export type {
-  AuditTelegramGroupMembershipParams,
-  TelegramGroupMembershipAudit,
-  TelegramGroupMembershipAuditEntry,
-} from "./audit.types.js";
-import type {
-  AuditTelegramGroupMembershipParams,
-  TelegramGroupMembershipAudit,
-} from "./audit.types.js";
+import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+
+export type TelegramGroupMembershipAuditEntry = {
+  chatId: string;
+  ok: boolean;
+  status?: string | null;
+  error?: string | null;
+  matchKey?: string;
+  matchSource?: "id";
+};
+
+export type TelegramGroupMembershipAudit = {
+  ok: boolean;
+  checkedGroups: number;
+  unresolvedGroups: number;
+  hasWildcardUnmentionedGroups: boolean;
+  groups: TelegramGroupMembershipAuditEntry[];
+  elapsedMs: number;
+};
 
 export function collectTelegramUnmentionedGroupIds(
   groups: Record<string, TelegramGroupConfig> | undefined,
@@ -21,7 +30,7 @@ export function collectTelegramUnmentionedGroupIds(
     };
   }
   const hasWildcardUnmentionedGroups =
-    groups["*"]?.requireMention === false && groups["*"]?.enabled !== false;
+    Boolean(groups["*"]?.requireMention === false) && groups["*"]?.enabled !== false;
   const groupIds: string[] = [];
   let unresolvedGroups = 0;
   for (const [key, value] of Object.entries(groups)) {
@@ -37,7 +46,7 @@ export function collectTelegramUnmentionedGroupIds(
     if (value.requireMention !== false) {
       continue;
     }
-    const id = normalizeOptionalString(key) ?? "";
+    const id = String(key).trim();
     if (!id) {
       continue;
     }
@@ -51,6 +60,16 @@ export function collectTelegramUnmentionedGroupIds(
   return { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups };
 }
 
+export type AuditTelegramGroupMembershipParams = {
+  token: string;
+  botId: number;
+  groupIds: string[];
+  proxyUrl?: string;
+  network?: TelegramNetworkConfig;
+  apiRoot?: string;
+  timeoutMs: number;
+};
+
 let auditMembershipRuntimePromise: Promise<typeof import("./audit-membership-runtime.js")> | null =
   null;
 
@@ -63,7 +82,7 @@ export async function auditTelegramGroupMembership(
   params: AuditTelegramGroupMembershipParams,
 ): Promise<TelegramGroupMembershipAudit> {
   const started = Date.now();
-  const token = normalizeOptionalString(params.token) ?? "";
+  const token = params.token?.trim() ?? "";
   if (!token || params.groupIds.length === 0) {
     return {
       ok: true,

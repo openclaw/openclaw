@@ -16,20 +16,10 @@ describe("resolveWindowsCommandShim", () => {
     expect(
       resolveWindowsCommandShim({
         command: "pnpm",
-        cmdCommands: ["corepack", "pnpm", "yarn"],
+        cmdCommands: ["pnpm", "yarn"],
         platform: "win32",
       }),
     ).toBe("pnpm.cmd");
-  });
-
-  it("appends .cmd for corepack on Windows", () => {
-    expect(
-      resolveWindowsCommandShim({
-        command: "corepack",
-        cmdCommands: ["corepack", "pnpm", "yarn"],
-        platform: "win32",
-      }),
-    ).toBe("corepack.cmd");
   });
 
   it("keeps explicit extensions on Windows", () => {

@@ -8,6 +8,8 @@ read_when:
 title: "Firecrawl"
 ---
 
+# Firecrawl
+
 OpenClaw can use **Firecrawl** in three ways:
 
 - as the `web_search` provider
@@ -54,8 +56,6 @@ Notes:
 - Choosing Firecrawl in onboarding or `openclaw configure --section web` enables the bundled Firecrawl plugin automatically.
 - `web_search` with Firecrawl supports `query` and `count`.
 - For Firecrawl-specific controls like `sources`, `categories`, or result scraping, use `firecrawl_search`.
-- `baseUrl` defaults to hosted Firecrawl at `https://api.firecrawl.dev`. Self-hosted overrides are allowed only for private/internal endpoints; HTTP is accepted only for those private targets.
-- `FIRECRAWL_BASE_URL` is the shared env fallback for Firecrawl search and scrape base URLs.
 
 ## Configure Firecrawl scrape + web_fetch fallback
 
@@ -65,14 +65,18 @@ Notes:
     entries: {
       firecrawl: {
         enabled: true,
-        config: {
-          webFetch: {
-            apiKey: "FIRECRAWL_API_KEY_HERE",
-            baseUrl: "https://api.firecrawl.dev",
-            onlyMainContent: true,
-            maxAgeMs: 172800000,
-            timeoutSeconds: 60,
-          },
+      },
+    },
+  },
+  tools: {
+    web: {
+      fetch: {
+        firecrawl: {
+          apiKey: "FIRECRAWL_API_KEY_HERE",
+          baseUrl: "https://api.firecrawl.dev",
+          onlyMainContent: true,
+          maxAgeMs: 172800000,
+          timeoutSeconds: 60,
         },
       },
     },
@@ -82,22 +86,11 @@ Notes:
 
 Notes:
 
-- Firecrawl fallback attempts run only when an API key is available (`plugins.entries.firecrawl.config.webFetch.apiKey` or `FIRECRAWL_API_KEY`).
+- `firecrawl.enabled` defaults to `true` unless explicitly set to `false`.
+- Firecrawl fallback attempts run only when an API key is available (`tools.web.fetch.firecrawl.apiKey` or `FIRECRAWL_API_KEY`).
 - `maxAgeMs` controls how old cached results can be (ms). Default is 2 days.
-- Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
-- Firecrawl scrape/base URL overrides follow the same hosted/private rule as search: public hosted traffic uses `https://api.firecrawl.dev`; self-hosted overrides must resolve to private/internal endpoints.
-- `firecrawl_scrape` rejects obvious private, loopback, metadata, and non-HTTP(S) target URLs before forwarding them to Firecrawl, matching the `web_fetch` target-safety contract for explicit Firecrawl scrape calls.
 
-`firecrawl_scrape` reuses the same `plugins.entries.firecrawl.config.webFetch.*` settings and env vars.
-
-### Self-hosted Firecrawl
-
-Set `plugins.entries.firecrawl.config.webSearch.baseUrl`,
-`plugins.entries.firecrawl.config.webFetch.baseUrl`, or `FIRECRAWL_BASE_URL`
-when you run Firecrawl yourself. OpenClaw accepts `http://` only for loopback,
-private-network, `.local`, `.internal`, or `.localhost` targets. Public custom
-hosts are rejected so Firecrawl API keys are not sent to arbitrary endpoints by
-accident.
+`firecrawl_scrape` reuses the same `tools.web.fetch.firecrawl.*` settings and env vars.
 
 ## Firecrawl plugin tools
 
@@ -141,12 +134,8 @@ than basic-only scraping.
 `web_fetch` extraction order:
 
 1. Readability (local)
-2. Firecrawl (if selected or auto-detected as the active web-fetch fallback)
+2. Firecrawl (if configured)
 3. Basic HTML cleanup (last fallback)
-
-The selection knob is `tools.web.fetch.provider`. If you omit it, OpenClaw
-auto-detects the first ready web-fetch provider from available credentials.
-Today the bundled provider is Firecrawl.
 
 ## Related
 

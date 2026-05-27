@@ -1,5 +1,12 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  buildHuggingfaceModelDefinition,
+  discoverHuggingfaceModels,
+  HUGGINGFACE_BASE_URL,
+  HUGGINGFACE_MODEL_CATALOG,
+} from "./models.js";
+
+export {
   buildHuggingfaceModelDefinition,
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,

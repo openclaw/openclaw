@@ -1,8 +1,5 @@
 import { html, nothing } from "lit";
-import { formatApprovalDisplayPath } from "../../../../src/infra/approval-display-paths.ts";
-import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
-import "../components/modal-dialog.ts";
 import type {
   ExecApprovalRequest,
   ExecApprovalRequestPayload,
@@ -22,71 +19,21 @@ function formatRemaining(ms: number): string {
   return `${hours}h`;
 }
 
-function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {
+function renderMetaRow(label: string, value?: string | null) {
   if (!value) {
     return nothing;
   }
-  const displayValue = opts?.path ? formatApprovalDisplayPath(value) : value;
-  return html`<div class="exec-approval-meta-row">
-    <span>${label}</span><span>${displayValue}</span>
-  </div>`;
-}
-
-function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
-  const commandSpans = [...(request.commandSpans ?? [])]
-    .filter(
-      (span) =>
-        Number.isSafeInteger(span.startIndex) &&
-        Number.isSafeInteger(span.endIndex) &&
-        span.startIndex >= 0 &&
-        span.endIndex > span.startIndex &&
-        span.endIndex <= request.command.length,
-    )
-    .toSorted((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
-  const accepted: typeof commandSpans = [];
-  let cursor = 0;
-  for (const span of commandSpans) {
-    if (span.startIndex < cursor) {
-      continue;
-    }
-    accepted.push(span);
-    cursor = span.endIndex;
-  }
-  if (accepted.length === 0) {
-    return html`<div class="exec-approval-command mono">${request.command}</div>`;
-  }
-  const parts = [];
-  cursor = 0;
-  for (const span of accepted) {
-    if (span.startIndex > cursor) {
-      parts.push(request.command.slice(cursor, span.startIndex));
-    }
-    parts.push(
-      html`<mark class="exec-approval-command-span"
-        >${request.command.slice(span.startIndex, span.endIndex)}</mark
-      >`,
-    );
-    cursor = span.endIndex;
-  }
-  if (cursor < request.command.length) {
-    parts.push(request.command.slice(cursor));
-  }
-  return html`<div class="exec-approval-command mono">${parts}</div>`;
+  return html`<div class="exec-approval-meta-row"><span>${label}</span><span>${value}</span></div>`;
 }
 
 function renderExecBody(request: ExecApprovalRequestPayload) {
   return html`
-    ${renderCommandWithSpans(request)}
+    <div class="exec-approval-command mono">${request.command}</div>
     <div class="exec-approval-meta">
-      ${renderMetaRow(t("execApproval.labels.host"), request.host)}
-      ${renderMetaRow(t("execApproval.labels.agent"), request.agentId)}
-      ${renderMetaRow(t("execApproval.labels.session"), request.sessionKey)}
-      ${renderMetaRow(t("execApproval.labels.cwd"), request.cwd, {
-        path: true,
-      })}
-      ${renderMetaRow(t("execApproval.labels.resolved"), request.resolvedPath, { path: true })}
-      ${renderMetaRow(t("execApproval.labels.security"), request.security)}
-      ${renderMetaRow(t("execApproval.labels.ask"), request.ask)}
+      ${renderMetaRow("Host", request.host)} ${renderMetaRow("Agent", request.agentId)}
+      ${renderMetaRow("Session", request.sessionKey)} ${renderMetaRow("CWD", request.cwd)}
+      ${renderMetaRow("Resolved", request.resolvedPath)}
+      ${renderMetaRow("Security", request.security)} ${renderMetaRow("Ask", request.ask)}
     </div>
   `;
 }
@@ -99,10 +46,9 @@ ${active.pluginDescription}</pre
         >`
       : nothing}
     <div class="exec-approval-meta">
-      ${renderMetaRow(t("execApproval.labels.severity"), active.pluginSeverity)}
-      ${renderMetaRow(t("execApproval.labels.plugin"), active.pluginId)}
-      ${renderMetaRow(t("execApproval.labels.agent"), active.request.agentId)}
-      ${renderMetaRow(t("execApproval.labels.session"), active.request.sessionKey)}
+      ${renderMetaRow("Severity", active.pluginSeverity)}
+      ${renderMetaRow("Plugin", active.pluginId)} ${renderMetaRow("Agent", active.request.agentId)}
+      ${renderMetaRow("Session", active.request.sessionKey)}
     </div>
   `;
 }
@@ -114,34 +60,22 @@ export function renderExecApprovalPrompt(state: AppViewState) {
   }
   const request = active.request;
   const remainingMs = active.expiresAtMs - Date.now();
-  const remaining =
-    remainingMs > 0
-      ? t("execApproval.expiresIn", { time: formatRemaining(remainingMs) })
-      : t("execApproval.expired");
+  const remaining = remainingMs > 0 ? `expires in ${formatRemaining(remainingMs)}` : "expired";
   const queueCount = state.execApprovalQueue.length;
   const isPlugin = active.kind === "plugin";
   const title = isPlugin
-    ? (active.pluginTitle ?? t("execApproval.pluginApprovalNeeded"))
-    : t("execApproval.execApprovalNeeded");
-  const titleId = "exec-approval-title";
-  const descriptionId = "exec-approval-description";
-  const handleCancel = () => {
-    if (!state.execApprovalBusy) {
-      void state.handleExecApprovalDecision("deny");
-    }
-  };
+    ? (active.pluginTitle ?? "Plugin approval needed")
+    : "Exec approval needed";
   return html`
-    <openclaw-modal-dialog label=${title} description=${remaining} @modal-cancel=${handleCancel}>
+    <div class="exec-approval-overlay" role="dialog" aria-live="polite">
       <div class="exec-approval-card">
         <div class="exec-approval-header">
           <div>
-            <div id=${titleId} class="exec-approval-title">${title}</div>
-            <div id=${descriptionId} class="exec-approval-sub">${remaining}</div>
+            <div class="exec-approval-title">${title}</div>
+            <div class="exec-approval-sub">${remaining}</div>
           </div>
           ${queueCount > 1
-            ? html`<div class="exec-approval-queue">
-                ${t("execApproval.pending", { count: String(queueCount) })}
-              </div>`
+            ? html`<div class="exec-approval-queue">${queueCount} pending</div>`
             : nothing}
         </div>
         ${isPlugin ? renderPluginBody(active) : renderExecBody(request)}
@@ -154,24 +88,24 @@ export function renderExecApprovalPrompt(state: AppViewState) {
             ?disabled=${state.execApprovalBusy}
             @click=${() => state.handleExecApprovalDecision("allow-once")}
           >
-            ${t("execApproval.allowOnce")}
+            Allow once
           </button>
           <button
             class="btn"
             ?disabled=${state.execApprovalBusy}
             @click=${() => state.handleExecApprovalDecision("allow-always")}
           >
-            ${t("execApproval.alwaysAllow")}
+            Always allow
           </button>
           <button
             class="btn danger"
             ?disabled=${state.execApprovalBusy}
             @click=${() => state.handleExecApprovalDecision("deny")}
           >
-            ${t("execApproval.deny")}
+            Deny
           </button>
         </div>
       </div>
-    </openclaw-modal-dialog>
+    </div>
   `;
 }

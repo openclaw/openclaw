@@ -72,11 +72,13 @@ describe("@openclaw/plugin-package-contract", () => {
     expect(validateExternalCodePluginPackageJson(packageJson).issues).toEqual([
       {
         fieldPath: "openclaw.compat.pluginApi",
-        message: "openclaw.compat.pluginApi is required for external code plugin packages.",
+        message:
+          "openclaw.compat.pluginApi is required for external code plugins published to ClawHub.",
       },
       {
         fieldPath: "openclaw.build.openclawVersion",
-        message: "openclaw.build.openclawVersion is required for external code plugin packages.",
+        message:
+          "openclaw.build.openclawVersion is required for external code plugins published to ClawHub.",
       },
     ]);
   });

@@ -1,4 +1,3 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EndReason } from "../../types.js";
 
 const TERMINAL_PROVIDER_STATUS_TO_END_REASON: Record<string, EndReason> = {
@@ -10,7 +9,7 @@ const TERMINAL_PROVIDER_STATUS_TO_END_REASON: Record<string, EndReason> = {
 };
 
 export function normalizeProviderStatus(status: string | null | undefined): string {
-  const normalized = normalizeOptionalLowercaseString(status);
+  const normalized = status?.trim().toLowerCase();
   return normalized && normalized.length > 0 ? normalized : "unknown";
 }
 

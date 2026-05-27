@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { unwrapRemoteConfigSnapshot } from "../../test/helpers/gateway/android-node-capabilities-policy-config.js";
-import { shouldFetchRemotePolicyConfig } from "../../test/helpers/gateway/android-node-capabilities-policy-source.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseNodeList, parsePairingList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { unwrapRemoteConfigSnapshot } from "./android-node.capabilities.policy-config.js";
+import { shouldFetchRemotePolicyConfig } from "./android-node.capabilities.policy-source.js";
 import { buildGatewayConnectionDetails } from "./call.js";
 import { GatewayClient } from "./client.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
@@ -46,24 +46,8 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
-function expectRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  expect(Array.isArray(value), label).toBe(false);
-  return value as Record<string, unknown>;
-}
-
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function expectNonEmptyString(value: unknown, label: string): string {
-  const text = readString(value);
-  if (text === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return text;
 }
 
 function readStringArray(value: unknown): string[] {
@@ -121,7 +105,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("canvas.eval", payload);
-      expect(obj).toHaveProperty("result");
+      expect(obj.result).toBeDefined();
     },
   },
   "canvas.snapshot": {
@@ -130,8 +114,8 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("canvas.snapshot", payload);
-      expectNonEmptyString(obj.format, "canvas.snapshot format");
-      expectNonEmptyString(obj.base64, "canvas.snapshot base64");
+      expect(readString(obj.format)).not.toBeNull();
+      expect(readString(obj.base64)).not.toBeNull();
     },
   },
   "canvas.a2ui.push": {
@@ -164,7 +148,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("camera.snap", payload);
-      expectNonEmptyString(obj.base64, "camera.snap base64");
+      expect(readString(obj.base64)).not.toBeNull();
     },
   },
   "camera.clip": {
@@ -173,7 +157,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("camera.clip", payload);
-      expectNonEmptyString(obj.base64, "camera.clip base64");
+      expect(readString(obj.base64)).not.toBeNull();
     },
   },
   "location.get": {
@@ -198,8 +182,8 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.info", payload);
-      expectNonEmptyString(obj.systemName, "device.info systemName");
-      expectNonEmptyString(obj.systemVersion, "device.info systemVersion");
+      expect(readString(obj.systemName)).not.toBeNull();
+      expect(readString(obj.systemVersion)).not.toBeNull();
     },
   },
   "device.permissions": {
@@ -208,7 +192,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.permissions", payload);
-      expectRecord(obj.permissions, "device.permissions payload");
+      expect(asRecord(obj.permissions)).toBeTruthy();
     },
   },
   "device.health": {
@@ -217,7 +201,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.health", payload);
-      expectRecord(obj.memory, "device.health memory payload");
+      expect(asRecord(obj.memory)).toBeTruthy();
     },
   },
   "notifications.list": {
@@ -248,7 +232,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("sms.search", payload);
-      expect(["number", "string"]).toContain(typeof obj.count);
+      expect(typeof obj.count === "number" || typeof obj.count === "string").toBe(true);
       expect(Array.isArray(obj.messages)).toBe(true);
     },
   },
@@ -258,7 +242,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("debug.logs", payload);
-      expectNonEmptyString(obj.logs, "debug.logs logs");
+      expect(readString(obj.logs)).not.toBeNull();
     },
   },
   "debug.ed25519": {
@@ -267,13 +251,13 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("debug.ed25519", payload);
-      expectNonEmptyString(obj.diagnostics, "debug.ed25519 diagnostics");
+      expect(readString(obj.diagnostics)).not.toBeNull();
     },
   },
 };
 
 function resolveGatewayConnection() {
-  const cfg = getRuntimeConfig();
+  const cfg = loadConfig();
   const urlOverride = readString(process.env.OPENCLAW_ANDROID_GATEWAY_URL);
   const details = buildGatewayConnectionDetails({
     config: cfg,
@@ -306,7 +290,7 @@ async function resolvePolicyConfigForRun(params: {
     return unwrapRemoteConfigSnapshot(raw);
   }
 
-  const loadLocalConfig = params.loadLocalConfig ?? getRuntimeConfig;
+  const loadLocalConfig = params.loadLocalConfig ?? loadConfig;
   return loadLocalConfig();
 }
 
@@ -329,7 +313,7 @@ describe("resolvePolicyConfigForRun", () => {
 
     expect(loadLocalConfig).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledWith("config.get", {});
-    expectRecord(result.gateway, "remote gateway config");
+    expect(asRecord(result.gateway)).toBeTruthy();
   });
 
   it("still uses local config loading for local loopback runs", async () => {
@@ -550,7 +534,6 @@ describeLive("android node capability integration (preconditioned)", () => {
     const allowlist = resolveNodeCommandAllowlist(cfg, {
       platform: target.platform,
       deviceFamily: target.deviceFamily,
-      commands,
     });
 
     commandsToRun = commands.filter(
@@ -586,8 +569,6 @@ describeLive("android node capability integration (preconditioned)", () => {
         return;
       }
       const result = await invokeNodeCommand({ client, nodeId, command, profile, ctx });
-      expect(result.command).toBe(command);
-      expect(result.durationMs).toBeGreaterThanOrEqual(0);
       results.set(command, result);
       const issue = evaluateCommandResult({ result, profile, ctx });
       if (!issue) {
@@ -606,20 +587,22 @@ describeLive("android node capability integration (preconditioned)", () => {
 
   it("covers every advertised non-interactive command", () => {
     const missingRuns = commandsToRun.filter((command) => !results.has(command));
+    if (missingRuns.length === 0) {
+      return;
+    }
     const summary = [...results.values()]
       .map((entry) => {
         const status = entry.ok ? "ok" : `err:${entry.errorCode ?? "UNKNOWN"}`;
         return `${entry.command} -> ${status} (${entry.durationMs}ms)`;
       })
       .join("\n");
-    expect(
-      missingRuns,
+    throw new Error(
       [
         `advertised commands missing execution (${missingRuns.length}/${commandsToRun.length})`,
         ...missingRuns,
         "summary:",
         summary,
       ].join("\n"),
-    ).toStrictEqual([]);
+    );
   });
 });

@@ -30,13 +30,12 @@ final class WebChatManager {
     private var windowSessionKey: String?
     private var panelController: WebChatSwiftUIWindowController?
     private var panelSessionKey: String?
-    private var currentChatSessionKey: String?
     private var cachedPreferredSessionKey: String?
 
     var onPanelVisibilityChanged: ((Bool) -> Void)?
 
     var activeSessionKey: String? {
-        self.currentChatSessionKey ?? self.panelSessionKey ?? self.windowSessionKey
+        self.panelSessionKey ?? self.windowSessionKey
     }
 
     func show(sessionKey: String) {
@@ -57,7 +56,6 @@ final class WebChatManager {
         }
         self.windowController = controller
         self.windowSessionKey = sessionKey
-        self.currentChatSessionKey = sessionKey
         controller.show()
     }
 
@@ -88,14 +86,7 @@ final class WebChatManager {
         }
         self.panelController = controller
         self.panelSessionKey = sessionKey
-        self.currentChatSessionKey = sessionKey
         controller.presentAnchored(anchorProvider: anchorProvider)
-    }
-
-    func recordActiveSessionKey(_ sessionKey: String) {
-        let trimmed = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        self.currentChatSessionKey = trimmed
     }
 
     func closePanel() {
@@ -116,7 +107,6 @@ final class WebChatManager {
         self.panelController?.close()
         self.panelController = nil
         self.panelSessionKey = nil
-        self.currentChatSessionKey = nil
         self.cachedPreferredSessionKey = nil
     }
 

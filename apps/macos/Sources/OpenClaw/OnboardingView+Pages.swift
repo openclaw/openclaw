@@ -321,7 +321,7 @@ extension OnboardingView {
                 return "Select a nearby gateway or open Advanced to enter a gateway URL."
             }
             if GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) == nil {
-                return "Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, LAN, or Tailnet hosts."
+                return "Gateway URL must use wss:// for remote hosts (ws:// only for localhost)."
             }
             return nil
         case .ssh:
@@ -398,9 +398,7 @@ extension OnboardingView {
                 .foregroundStyle(.secondary)
             if self.state.remoteTokenUnsupported {
                 Text(
-                    "The current gateway.remote.token value is not plain text. "
-                        + "OpenClaw for macOS cannot use it directly; "
-                        + "enter a plaintext token here to replace it.")
+                    "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -679,7 +677,7 @@ extension OnboardingView {
                 } else if !self.cliInstalled, self.cliInstallLocation == nil {
                     Text(
                         """
-                        Installs a user-space Node 22.19+ runtime and the CLI (no Homebrew).
+                        Installs a user-space Node 22+ runtime and the CLI (no Homebrew).
                         Rerun anytime to reinstall or update.
                         """)
                         .font(.footnote)

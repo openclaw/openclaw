@@ -68,7 +68,7 @@ export const HookMappingSchema = z
   .strict()
   .optional();
 
-const InternalHookHandlerSchema = z
+export const InternalHookHandlerSchema = z
   .object({
     event: z.string(),
     module: SafeRelativeModulePathSchema,

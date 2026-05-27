@@ -1,7 +1,3 @@
-import { isAllowedParsedChatSender as isAllowedParsedChatSenderShared } from "../channels/plugins/chat-target-prefixes.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-
 export type {
   AllowlistMatch,
   AllowlistMatchSource,
@@ -36,10 +32,11 @@ export function formatAllowFromLowercase(params: {
   allowFrom: Array<string | number>;
   stripPrefixRe?: RegExp;
 }): string[] {
-  return normalizeStringEntries(params.allowFrom)
+  return params.allowFrom
+    .map((entry) => String(entry).trim())
+    .filter(Boolean)
     .map((entry) => (params.stripPrefixRe ? entry.replace(params.stripPrefixRe, "") : entry))
-    .map((entry) => normalizeOptionalLowercaseString(entry))
-    .filter((entry): entry is string => Boolean(entry));
+    .map((entry) => entry.toLowerCase());
 }
 
 /** Normalize allowlist entries through a channel-provided parser or canonicalizer. */
@@ -47,7 +44,9 @@ export function formatNormalizedAllowFromEntries(params: {
   allowFrom: Array<string | number>;
   normalizeEntry: (entry: string) => string | undefined | null;
 }): string[] {
-  return normalizeStringEntries(params.allowFrom)
+  return params.allowFrom
+    .map((entry) => String(entry).trim())
+    .filter(Boolean)
     .map((entry) => params.normalizeEntry(entry))
     .filter((entry): entry is string => Boolean(entry));
 }
@@ -68,8 +67,8 @@ export function isNormalizedSenderAllowed(params: {
   if (normalizedAllow.includes("*")) {
     return true;
   }
-  const sender = normalizeOptionalLowercaseString(String(params.senderId));
-  return sender ? normalizedAllow.includes(sender) : false;
+  const sender = String(params.senderId).trim().toLowerCase();
+  return normalizedAllow.includes(sender);
 }
 
 type ParsedChatAllowTarget =
@@ -78,18 +77,53 @@ type ParsedChatAllowTarget =
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; handle: string };
 
-/** Match allowlist entries against senders, with conversation targets requiring explicit opt-in. */
-export function isAllowedParsedChatSender(params: {
+/** Match chat-aware allowlist entries against sender, chat id, guid, or identifier fields. */
+export function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>(params: {
   allowFrom: Array<string | number>;
   sender: string;
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
-  allowConversationTargets?: boolean | null;
   normalizeSender: (sender: string) => string;
-  parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
+  parseAllowTarget: (entry: string) => TParsed;
 }): boolean {
-  return isAllowedParsedChatSenderShared(params);
+  const allowFrom = params.allowFrom.map((entry) => String(entry).trim());
+  if (allowFrom.length === 0) {
+    return false;
+  }
+  if (allowFrom.includes("*")) {
+    return true;
+  }
+
+  const senderNormalized = params.normalizeSender(params.sender);
+  const chatId = params.chatId ?? undefined;
+  const chatGuid = params.chatGuid?.trim();
+  const chatIdentifier = params.chatIdentifier?.trim();
+
+  for (const entry of allowFrom) {
+    if (!entry) {
+      continue;
+    }
+    const parsed = params.parseAllowTarget(entry);
+    if (parsed.kind === "chat_id" && chatId !== undefined) {
+      if (parsed.chatId === chatId) {
+        return true;
+      }
+    } else if (parsed.kind === "chat_guid" && chatGuid) {
+      if (parsed.chatGuid === chatGuid) {
+        return true;
+      }
+    } else if (parsed.kind === "chat_identifier" && chatIdentifier) {
+      if (parsed.chatIdentifier === chatIdentifier) {
+        return true;
+      }
+    } else if (parsed.kind === "handle" && senderNormalized) {
+      if (parsed.handle === senderNormalized) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 export type BasicAllowlistResolutionEntry = {

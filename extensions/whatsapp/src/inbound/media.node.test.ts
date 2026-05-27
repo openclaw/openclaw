@@ -1,26 +1,30 @@
-import { Readable } from "node:stream";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mockNormalizeMessageContent } from "../../../../test/mocks/baileys.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  mockExtractMessageContent,
+  mockGetContentType,
+  mockIsJidGroup,
+  mockNormalizeMessageContent,
+} from "../../../../test/mocks/baileys.js";
 
 type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
 
-const { normalizeMessageContent, downloadMediaMessage, saveMediaStream } = vi.hoisted(() => ({
+const { normalizeMessageContent, downloadMediaMessage } = vi.hoisted(() => ({
   normalizeMessageContent: vi.fn((msg: MockMessageInput) => mockNormalizeMessageContent(msg)),
   downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
-  saveMediaStream: vi.fn(),
 }));
 
-vi.mock("baileys", async () => {
+vi.mock("@whiskeysockets/baileys", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@whiskeysockets/baileys")>();
   return {
-    DisconnectReason: { loggedOut: 401 },
+    ...actual,
+    DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
+    extractMessageContent: vi.fn((message: MockMessageInput) => mockExtractMessageContent(message)),
+    getContentType: vi.fn((message: MockMessageInput) => mockGetContentType(message)),
+    isJidGroup: vi.fn((jid: string | undefined | null) => mockIsJidGroup(jid)),
     normalizeMessageContent,
     downloadMediaMessage,
   };
 });
-
-vi.mock("openclaw/plugin-sdk/media-store", () => ({
-  saveMediaStream,
-}));
 
 let downloadInboundMedia: typeof import("./media.js").downloadInboundMedia;
 
@@ -31,45 +35,16 @@ const mockSock = {
 
 async function expectMimetype(message: Record<string, unknown>, expected: string) {
   const result = await downloadInboundMedia({ message } as never, mockSock as never);
-  expect(result).toEqual({
-    saved: {
-      id: "saved-media",
-      path: "/tmp/saved-media",
-      size: Buffer.byteLength("fake-media-data"),
-      contentType: expected,
-    },
-    mimetype: expected,
-    fileName: undefined,
-  });
+  expect(result).toBeDefined();
+  expect(result?.mimetype).toBe(expected);
 }
 
 describe("downloadInboundMedia", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ downloadInboundMedia } = await import("./media.js"));
-  });
-
-  beforeEach(() => {
     normalizeMessageContent.mockClear();
     downloadMediaMessage.mockClear();
-    downloadMediaMessage.mockImplementation(() => Readable.from([Buffer.from("fake-media-data")]));
-    saveMediaStream.mockClear();
-    saveMediaStream.mockImplementation(
-      async (
-        stream: AsyncIterable<Buffer>,
-        contentType: string | undefined,
-        _subdir: string,
-        maxBytes: number,
-      ) => {
-        let total = 0;
-        for await (const chunk of stream) {
-          total += chunk.byteLength;
-          if (total > maxBytes) {
-            throw new Error("Media exceeds limit");
-          }
-        }
-        return { id: "saved-media", path: "/tmp/saved-media", size: total, contentType };
-      },
-    );
     mockSock.updateMediaMessage.mockClear();
   });
 
@@ -109,30 +84,8 @@ describe("downloadInboundMedia", () => {
       },
     } as never;
     const result = await downloadInboundMedia(msg, mockSock as never);
-    expect(result).toEqual({
-      saved: {
-        id: "saved-media",
-        path: "/tmp/saved-media",
-        size: Buffer.byteLength("fake-media-data"),
-        contentType: "application/pdf",
-      },
-      mimetype: "application/pdf",
-      fileName: "report.pdf",
-    });
-  });
-
-  it("downloads in stream mode and rejects over the configured cap", async () => {
-    downloadMediaMessage.mockImplementationOnce(() =>
-      Readable.from([Buffer.alloc(4), Buffer.alloc(4)]),
-    );
-
-    await expect(
-      downloadInboundMedia(
-        { message: { imageMessage: { mimetype: "image/jpeg" } } } as never,
-        mockSock as never,
-        7,
-      ),
-    ).rejects.toThrow(/Media exceeds/i);
-    expect(downloadMediaMessage.mock.calls[0]?.[1]).toBe("stream");
+    expect(result).toBeDefined();
+    expect(result?.mimetype).toBe("application/pdf");
+    expect(result?.fileName).toBe("report.pdf");
   });
 });

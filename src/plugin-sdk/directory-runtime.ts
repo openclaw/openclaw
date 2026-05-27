@@ -3,7 +3,7 @@ export type { DirectoryConfigParams } from "../channels/plugins/directory-types.
 export type {
   ChannelDirectoryEntry,
   ChannelDirectoryEntryKind,
-} from "../channels/plugins/types.public.js";
+} from "../channels/plugins/types.js";
 export type { ReadOnlyInspectedAccount } from "../channels/read-only-account-inspect.js";
 export {
   createChannelDirectoryAdapter,

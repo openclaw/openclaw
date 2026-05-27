@@ -1,10 +1,5 @@
-import {
-  createMessageReceiptFromOutboundResults,
-  type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-message";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIrcAccount } from "./accounts.js";
 import type { IrcClient } from "./client.js";
 import { connectIrcClient } from "./client.js";
@@ -15,17 +10,16 @@ import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 type SendIrcOptions = {
-  cfg: CoreConfig;
+  cfg?: CoreConfig;
   accountId?: string;
   replyTo?: string;
   target?: string;
   client?: IrcClient;
 };
 
-type SendIrcResult = {
+export type SendIrcResult = {
   messageId: string;
   target: string;
-  receipt: MessageReceipt;
 };
 
 function recordIrcOutboundActivity(accountId: string): void {
@@ -57,9 +51,10 @@ function resolveTarget(to: string, opts?: SendIrcOptions): string {
 export async function sendMessageIrc(
   to: string,
   text: string,
-  opts: SendIrcOptions,
+  opts: SendIrcOptions = {},
 ): Promise<SendIrcResult> {
-  const cfg = requireRuntimeConfig(opts.cfg, "IRC send") as CoreConfig;
+  const runtime = getIrcRuntime();
+  const cfg = (opts.cfg ?? runtime.config.loadConfig()) as CoreConfig;
   const account = resolveIrcAccount({
     cfg,
     accountId: opts.accountId,
@@ -93,29 +88,14 @@ export async function sendMessageIrc(
         connectTimeoutMs: 12000,
       }),
     );
-    if (target.startsWith("#") || target.startsWith("&")) {
-      transient.join(target);
-    }
     transient.sendPrivmsg(target, payload);
     transient.quit("sent");
   }
 
   recordIrcOutboundActivity(account.accountId);
 
-  const messageId = makeIrcMessageId();
   return {
-    messageId,
+    messageId: makeIrcMessageId(),
     target,
-    receipt: createMessageReceiptFromOutboundResults({
-      results: [
-        {
-          channel: "irc",
-          messageId,
-          conversationId: target,
-        },
-      ],
-      kind: "text",
-      ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
-    }),
   };
 }

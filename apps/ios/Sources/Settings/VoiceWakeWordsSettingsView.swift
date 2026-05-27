@@ -1,5 +1,5 @@
-import Combine
 import SwiftUI
+import Combine
 
 struct VoiceWakeWordsSettingsView: View {
     @Environment(NodeAppModel.self) private var appModel

@@ -1,9 +1,3 @@
-import {
-  resolveDiscordChannelIdSafe,
-  resolveDiscordChannelInfoSafe,
-  resolveDiscordChannelNameSafe,
-  resolveDiscordChannelParentSafe,
-} from "./channel-access.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 
 type DiscordInboundJobRuntimeField =
@@ -14,15 +8,20 @@ type DiscordInboundJobRuntimeField =
   | "threadBindings"
   | "discordRestFetch";
 
-type DiscordInboundJobRuntime = Pick<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
+export type DiscordInboundJobRuntime = Pick<
+  DiscordMessagePreflightContext,
+  DiscordInboundJobRuntimeField
+>;
 
-type DiscordInboundJobPayload = Omit<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
+export type DiscordInboundJobPayload = Omit<
+  DiscordMessagePreflightContext,
+  DiscordInboundJobRuntimeField
+>;
 
 export type DiscordInboundJob = {
   queueKey: string;
   payload: DiscordInboundJobPayload;
   runtime: DiscordInboundJobRuntime;
-  replayKeys?: string[];
 };
 
 export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
@@ -37,10 +36,7 @@ export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightCon
   return ctx.messageChannelId;
 }
 
-export function buildDiscordInboundJob(
-  ctx: DiscordMessagePreflightContext,
-  options?: { replayKeys?: readonly string[] },
-): DiscordInboundJob {
+export function buildDiscordInboundJob(ctx: DiscordMessagePreflightContext): DiscordInboundJob {
   const {
     runtime,
     abortSignal,
@@ -74,7 +70,6 @@ export function buildDiscordInboundJob(
       threadBindings,
       discordRestFetch,
     },
-    replayKeys: options?.replayKeys ? [...options.replayKeys] : undefined,
   };
 }
 
@@ -101,18 +96,16 @@ function normalizeDiscordThreadChannel(
   if (!threadChannel) {
     return null;
   }
-  const channelInfo = resolveDiscordChannelInfoSafe(threadChannel);
-  const parent = resolveDiscordChannelParentSafe(threadChannel);
   return {
     id: threadChannel.id,
-    name: channelInfo.name,
-    parentId: channelInfo.parentId,
-    parent: parent
+    name: threadChannel.name,
+    parentId: threadChannel.parentId,
+    parent: threadChannel.parent
       ? {
-          id: resolveDiscordChannelIdSafe(parent),
-          name: resolveDiscordChannelNameSafe(parent),
+          id: threadChannel.parent.id,
+          name: threadChannel.parent.name,
         }
       : undefined,
-    ownerId: channelInfo.ownerId,
+    ownerId: threadChannel.ownerId,
   };
 }

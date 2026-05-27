@@ -86,9 +86,7 @@ export async function issueOperatorToken(params: {
     });
     expect(rotated.ok).toBe(true);
     const token = rotated.ok ? rotated.entry.token : "";
-    if (!token) {
-      throw new Error(`expected rotated operator token for device ${paired.identity.deviceId}`);
-    }
+    expect(token).toBeTruthy();
     return {
       deviceId: paired.identity.deviceId,
       identityPath: paired.identityPath,
@@ -98,9 +96,7 @@ export async function issueOperatorToken(params: {
 
   const device = await getPairedDevice(paired.identity.deviceId);
   const token = device?.tokens?.operator?.token ?? "";
-  if (!token) {
-    throw new Error(`expected operator token for paired device ${paired.identity.deviceId}`);
-  }
+  expect(token).toBeTruthy();
   expect(device?.approvedScopes).toEqual(params.approvedScopes);
   return {
     deviceId: paired.identity.deviceId,

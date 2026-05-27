@@ -32,10 +32,9 @@ describe("appcast.xml", () => {
     expect(items.length).toBeGreaterThan(0);
 
     for (const item of items) {
-      if (item.shortVersion === null || item.sparkleVersion === null) {
-        throw new Error(`Appcast entry missing version fields: ${item.raw}`);
-      }
-      expect(item.sparkleVersion).toBe(canonicalSparkleBuildFromVersion(item.shortVersion));
+      expect(item.shortVersion, item.raw).not.toBeNull();
+      expect(item.sparkleVersion, item.raw).not.toBeNull();
+      expect(item.sparkleVersion).toBe(canonicalSparkleBuildFromVersion(item.shortVersion!));
     }
   });
 

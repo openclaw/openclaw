@@ -1,7 +1,7 @@
+import { normalizeAccountId } from "../../routing/session-key.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
-import { uniqueValues } from "../../shared/string-normalization.js";
 import {
-  testing as genericCurrentConversationBindingTesting,
+  __testing as genericCurrentConversationBindingTesting,
   bindGenericCurrentConversation,
   getGenericCurrentConversationBindingCapabilities,
   listGenericCurrentConversationBindingsBySession,
@@ -9,31 +9,54 @@ import {
   touchGenericCurrentConversationBinding,
   unbindGenericCurrentConversationBindings,
 } from "./current-conversation-bindings.js";
-import {
-  buildChannelAccountKey,
-  normalizeConversationRef,
-} from "./session-binding-normalization.js";
-import type {
-  ConversationRef,
-  SessionBindingBindInput,
-  SessionBindingCapabilities,
-  SessionBindingErrorCode,
-  SessionBindingPlacement,
-  SessionBindingRecord,
-  SessionBindingUnbindInput,
-} from "./session-binding.types.js";
 
-export type {
-  BindingStatus,
-  BindingTargetKind,
-  ConversationRef,
-  SessionBindingBindInput,
-  SessionBindingCapabilities,
-  SessionBindingErrorCode,
-  SessionBindingPlacement,
-  SessionBindingRecord,
-  SessionBindingUnbindInput,
-} from "./session-binding.types.js";
+export type BindingTargetKind = "subagent" | "session";
+export type BindingStatus = "active" | "ending" | "ended";
+export type SessionBindingPlacement = "current" | "child";
+export type SessionBindingErrorCode =
+  | "BINDING_ADAPTER_UNAVAILABLE"
+  | "BINDING_CAPABILITY_UNSUPPORTED"
+  | "BINDING_CREATE_FAILED";
+
+export type ConversationRef = {
+  channel: string;
+  accountId: string;
+  conversationId: string;
+  parentConversationId?: string;
+};
+
+export type SessionBindingRecord = {
+  bindingId: string;
+  targetSessionKey: string;
+  targetKind: BindingTargetKind;
+  conversation: ConversationRef;
+  status: BindingStatus;
+  boundAt: number;
+  expiresAt?: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type SessionBindingBindInput = {
+  targetSessionKey: string;
+  targetKind: BindingTargetKind;
+  conversation: ConversationRef;
+  placement?: SessionBindingPlacement;
+  metadata?: Record<string, unknown>;
+  ttlMs?: number;
+};
+
+export type SessionBindingUnbindInput = {
+  bindingId?: string;
+  targetSessionKey?: string;
+  reason: string;
+};
+
+export type SessionBindingCapabilities = {
+  adapterAvailable: boolean;
+  bindSupported: boolean;
+  unbindSupported: boolean;
+  placements: SessionBindingPlacement[];
+};
 
 export class SessionBindingError extends Error {
   constructor(
@@ -80,8 +103,17 @@ export type SessionBindingAdapter = {
   unbind?: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
 };
 
+function normalizeConversationRef(ref: ConversationRef): ConversationRef {
+  return {
+    channel: ref.channel.trim().toLowerCase(),
+    accountId: normalizeAccountId(ref.accountId),
+    conversationId: ref.conversationId.trim(),
+    parentConversationId: ref.parentConversationId?.trim() || undefined,
+  };
+}
+
 function toAdapterKey(params: { channel: string; accountId: string }): string {
-  return buildChannelAccountKey(params);
+  return `${params.channel.trim().toLowerCase()}:${normalizeAccountId(params.accountId)}`;
 }
 
 function normalizePlacement(raw: unknown): SessionBindingPlacement | undefined {
@@ -98,7 +130,7 @@ function resolveAdapterPlacements(adapter: SessionBindingAdapter): SessionBindin
     Boolean(value),
   );
   if (placements && placements.length > 0) {
-    return uniqueValues(placements);
+    return [...new Set(placements)];
   }
   return ["current", "child"];
 }
@@ -136,17 +168,14 @@ const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveGlobalMap<string, SessionBindingAdapt
 
 function getActiveAdapterForKey(key: string): SessionBindingAdapter | null {
   const registrations = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key);
-  return registrations?.at(-1)?.normalizedAdapter ?? null;
+  return registrations?.[0]?.normalizedAdapter ?? null;
 }
 
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
   const normalizedAdapter = {
     ...adapter,
-    ...normalizeConversationRef({
-      channel: adapter.channel,
-      accountId: adapter.accountId,
-      conversationId: "unused",
-    }),
+    channel: adapter.channel.trim().toLowerCase(),
+    accountId: normalizeAccountId(adapter.accountId),
   };
   const key = toAdapterKey({
     channel: normalizedAdapter.channel,
@@ -211,7 +240,7 @@ function resolveAdapterForChannelAccount(params: {
 
 function getActiveRegisteredAdapters(): SessionBindingAdapter[] {
   return [...ADAPTERS_BY_CHANNEL_ACCOUNT.values()]
-    .map((registrations) => registrations.at(-1)?.normalizedAdapter ?? null)
+    .map((registrations) => registrations[0]?.normalizedAdapter ?? null)
     .filter((adapter): adapter is SessionBindingAdapter => Boolean(adapter));
 }
 
@@ -395,7 +424,7 @@ export function getSessionBindingService(): SessionBindingService {
   return DEFAULT_SESSION_BINDING_SERVICE;
 }
 
-export const testing = {
+export const __testing = {
   resetSessionBindingAdaptersForTests() {
     ADAPTERS_BY_CHANNEL_ACCOUNT.clear();
     genericCurrentConversationBindingTesting.resetCurrentConversationBindingsForTests({
@@ -406,4 +435,3 @@ export const testing = {
     return [...ADAPTERS_BY_CHANNEL_ACCOUNT.keys()];
   },
 };
-export { testing as __testing };

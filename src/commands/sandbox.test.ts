@@ -79,13 +79,11 @@ function setupDefaultMocks() {
 }
 
 function expectLogContains(runtime: ReturnType<typeof createMockRuntime>, text: string) {
-  const loggedOutput = runtime.log.mock.calls.map(([message]) => String(message)).join("\n");
-  expect(loggedOutput).toContain(text);
+  expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(text));
 }
 
 function expectErrorContains(runtime: ReturnType<typeof createMockRuntime>, text: string) {
-  const errorOutput = runtime.error.mock.calls.map(([message]) => String(message)).join("\n");
-  expect(errorOutput).toContain(text);
+  expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(text));
 }
 
 // --- Tests ---
@@ -152,13 +150,12 @@ describe("sandboxListCommand", () => {
 
       await sandboxListCommand({ browser: false, json: true }, runtime as never);
 
-      const loggedJson = runtime.log.mock.calls[0]?.[0];
+      const loggedJson = runtime.log.mock.calls[0][0];
       const parsed = JSON.parse(loggedJson);
 
-      expect(parsed).toStrictEqual({
-        containers: [container],
-        browsers: [],
-      });
+      expect(parsed.containers).toHaveLength(1);
+      expect(parsed.containers[0].containerName).toBe(container.containerName);
+      expect(parsed.browsers).toHaveLength(0);
     });
   });
 
@@ -186,11 +183,7 @@ describe("sandboxRecreateCommand", () => {
     it("should error if no filter is specified", async () => {
       await sandboxRecreateCommand({ all: false, browser: false, force: false }, runtime as never);
 
-      expectErrorContains(
-        runtime,
-        "Choose the sandbox scope: --all, --session <key>, or --agent <id>",
-      );
-      expectErrorContains(runtime, "sandbox list");
+      expectErrorContains(runtime, "Please specify --all, --session <key>, or --agent <id>");
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(mocks.listSandboxContainers).not.toHaveBeenCalled();
       expect(mocks.listSandboxBrowsers).not.toHaveBeenCalled();
@@ -202,7 +195,7 @@ describe("sandboxRecreateCommand", () => {
         runtime as never,
       );
 
-      expectErrorContains(runtime, "Choose only one sandbox scope: --all, --session, or --agent.");
+      expectErrorContains(runtime, "Please specify only one of: --all, --session, --agent");
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(mocks.listSandboxContainers).not.toHaveBeenCalled();
       expect(mocks.listSandboxBrowsers).not.toHaveBeenCalled();
@@ -306,8 +299,7 @@ describe("sandboxRecreateCommand", () => {
     it("should show message when no containers match", async () => {
       await sandboxRecreateCommand({ all: true, browser: false, force: true }, runtime as never);
 
-      expectLogContains(runtime, "No sandbox runtimes found matching the criteria.");
-      expectLogContains(runtime, "sandbox list");
+      expect(runtime.log).toHaveBeenCalledWith("No sandbox runtimes found matching the criteria.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
     });
 

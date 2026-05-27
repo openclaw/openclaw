@@ -1,32 +1,27 @@
+import { Type } from "@sinclair/typebox";
 import {
-  createWebSearchProviderContractFields,
+  enablePluginInConfig,
+  getScopedCredentialValue,
+  resolveProviderWebSearchPluginConfig,
+  setScopedCredentialValue,
+  setProviderWebSearchPluginConfigValue,
   type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search-contract";
+} from "openclaw/plugin-sdk/provider-web-search";
+import { runTavilySearch } from "./tavily-client.js";
 
-const TAVILY_CREDENTIAL_PATH = "plugins.entries.tavily.config.webSearch.apiKey";
-
-type TavilyClientModule = typeof import("./tavily-client.js");
-
-let tavilyClientModulePromise: Promise<TavilyClientModule> | undefined;
-
-function loadTavilyClientModule(): Promise<TavilyClientModule> {
-  tavilyClientModulePromise ??= import("./tavily-client.js");
-  return tavilyClientModulePromise;
-}
-
-const GenericTavilySearchSchema = {
-  type: "object",
-  properties: {
-    query: { type: "string", description: "Search query string." },
-    count: {
-      type: "number",
-      description: "Number of results to return (1-20).",
-      minimum: 1,
-      maximum: 20,
-    },
+const GenericTavilySearchSchema = Type.Object(
+  {
+    query: Type.String({ description: "Search query string." }),
+    count: Type.Optional(
+      Type.Number({
+        description: "Number of results to return (1-20).",
+        minimum: 1,
+        maximum: 20,
+      }),
+    ),
   },
-  additionalProperties: false,
-} satisfies Record<string, unknown>;
+  { additionalProperties: false },
+);
 
 export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
   return {
@@ -40,25 +35,27 @@ export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://tavily.com/",
     docsUrl: "https://docs.openclaw.ai/tools/tavily",
     autoDetectOrder: 70,
-    credentialPath: TAVILY_CREDENTIAL_PATH,
-    ...createWebSearchProviderContractFields({
-      credentialPath: TAVILY_CREDENTIAL_PATH,
-      searchCredential: { type: "scoped", scopeId: "tavily" },
-      configuredCredential: { pluginId: "tavily" },
-      selectionPluginId: "tavily",
-    }),
+    credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
+    inactiveSecretPaths: ["plugins.entries.tavily.config.webSearch.apiKey"],
+    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "tavily"),
+    setCredentialValue: (searchConfigTarget, value) =>
+      setScopedCredentialValue(searchConfigTarget, "tavily", value),
+    getConfiguredCredentialValue: (config) =>
+      resolveProviderWebSearchPluginConfig(config, "tavily")?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setProviderWebSearchPluginConfigValue(configTarget, "tavily", "apiKey", value);
+    },
+    applySelectionConfig: (config) => enablePluginInConfig(config, "tavily").config,
     createTool: (ctx) => ({
       description:
         "Search the web using Tavily. Returns structured results with snippets. Use tavily_search for Tavily-specific options like search depth, topic filtering, or AI answers.",
       parameters: GenericTavilySearchSchema,
-      execute: async (args) => {
-        const { runTavilySearch } = await loadTavilyClientModule();
-        return await runTavilySearch({
+      execute: async (args) =>
+        await runTavilySearch({
           cfg: ctx.config,
           query: typeof args.query === "string" ? args.query : "",
           maxResults: typeof args.count === "number" ? args.count : undefined,
-        });
-      },
+        }),
     }),
   };
 }

@@ -8,8 +8,8 @@ import {
   createRawChannelSendResultAdapter,
 } from "./channel-send-result.js";
 
-describe("attachChannelToResult(s)", () => {
-  it("stamps channel metadata on single and batch results", () => {
+describe("attachChannelToResult", () => {
+  it("preserves the existing result shape and stamps the channel", () => {
     expect(
       attachChannelToResult("discord", {
         messageId: "m1",
@@ -22,7 +22,11 @@ describe("attachChannelToResult(s)", () => {
       ok: true,
       extra: "value",
     });
+  });
+});
 
+describe("attachChannelToResults", () => {
+  it("stamps each result in a list with the shared channel id", () => {
     expect(
       attachChannelToResults("signal", [
         { messageId: "m1", timestamp: 1 },
@@ -36,7 +40,7 @@ describe("attachChannelToResult(s)", () => {
 });
 
 describe("buildChannelSendResult", () => {
-  it("normalizes raw send results directly", () => {
+  it("normalizes raw send results", () => {
     const result = buildChannelSendResult("zalo", {
       ok: false,
       messageId: null,
@@ -110,7 +114,7 @@ describe("createAttachedChannelResultAdapter", () => {
 });
 
 describe("createRawChannelSendResultAdapter", () => {
-  it("normalizes raw send results through adapter methods", async () => {
+  it("normalizes raw send results", async () => {
     const adapter = createRawChannelSendResultAdapter({
       channel: "zalo",
       sendText: async () => ({ ok: true, messageId: "m1" }),

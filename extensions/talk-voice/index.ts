@@ -1,11 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 
 function mask(s: string, keep: number = 6): string {
@@ -79,16 +73,16 @@ function findVoice(voices: SpeechVoiceOption[], query: string): SpeechVoiceOptio
   if (!q) {
     return null;
   }
-  const lower = normalizeLowercaseStringOrEmpty(q);
+  const lower = q.toLowerCase();
   const byId = voices.find((v) => v.id === q);
   if (byId) {
     return byId;
   }
-  const exactName = voices.find((v) => normalizeOptionalLowercaseString(v.name) === lower);
+  const exactName = voices.find((v) => (v.name ?? "").trim().toLowerCase() === lower);
   if (exactName) {
     return exactName;
   }
-  const partial = voices.find((v) => normalizeLowercaseStringOrEmpty(v.name).includes(lower));
+  const partial = voices.find((v) => (v.name ?? "").trim().toLowerCase().includes(lower));
   return partial ?? null;
 }
 
@@ -103,18 +97,6 @@ function resolveCommandLabel(channel: string): string {
 function asProviderBaseUrl(value: unknown): string | undefined {
   const trimmed = asTrimmedString(value);
   return trimmed || undefined;
-}
-
-const TALK_ADMIN_SCOPE = "operator.admin";
-
-function requiresAdminToSetVoice(
-  channel: string,
-  gatewayClientScopes?: readonly string[],
-): boolean {
-  if (Array.isArray(gatewayClientScopes)) {
-    return !gatewayClientScopes.includes(TALK_ADMIN_SCOPE);
-  }
-  return channel === "webchat";
 }
 
 export default definePluginEntry({
@@ -133,9 +115,9 @@ export default definePluginEntry({
         const commandLabel = resolveCommandLabel(ctx.channel);
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
-        const action = normalizeLowercaseStringOrEmpty(tokens[0] ?? "status");
+        const action = (tokens[0] ?? "status").toLowerCase();
 
-        const cfg = api.runtime.config.current() as OpenClawConfig;
+        const cfg = api.runtime.config.loadConfig();
         const active = resolveActiveTalkProviderConfig(cfg.talk);
         if (!active) {
           return {
@@ -150,14 +132,15 @@ export default definePluginEntry({
         const apiKey = asTrimmedString(active.config.apiKey);
         const baseUrl = asProviderBaseUrl(active.config.baseUrl);
 
-        const currentVoiceId = asTrimmedString(active.config.voiceId);
+        const currentVoiceId =
+          asTrimmedString(active.config.voiceId) || asTrimmedString(cfg.talk?.voiceId);
 
         if (action === "status") {
           return {
             text:
               "Talk voice status:\n" +
               `- provider: ${providerId}\n` +
-              `- talk.providers.${providerId}.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
+              `- talk.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
               `- ${providerId}.apiKey: ${apiKey ? mask(apiKey) : "(unset)"}`,
           };
         }
@@ -175,15 +158,16 @@ export default definePluginEntry({
               text: formatVoiceList(voices, Number.isFinite(limit) ? limit : 12, providerId),
             };
           } catch (error) {
-            const message = formatErrorMessage(error);
+            const message = error instanceof Error ? error.message : String(error);
             return { text: `${providerLabel} voice list failed: ${message}` };
           }
         }
 
         if (action === "set") {
-          // Gateway callers can override messageChannel, so scope presence is
-          // the reliable signal for internal admin-only mutations.
-          if (requiresAdminToSetVoice(ctx.channel, ctx.gatewayClientScopes)) {
+          // Internal gateway callers already expose operator scopes and should
+          // match the admin-only config.patch RPC. External channels rely on
+          // the plugin command's authorized-sender gate instead.
+          if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
             return { text: `⚠️ ${commandLabel} set requires operator.admin.` };
           }
 
@@ -200,7 +184,7 @@ export default definePluginEntry({
               baseUrl,
             });
           } catch (error) {
-            const message = formatErrorMessage(error);
+            const message = error instanceof Error ? error.message : String(error);
             return { text: `${providerLabel} voice lookup failed: ${message}` };
           }
           const chosen = findVoice(voices, query);
@@ -209,27 +193,22 @@ export default definePluginEntry({
             return { text: `No voice found for ${hint}. Try: ${commandLabel} list` };
           }
 
-          await api.runtime.config.mutateConfigFile({
-            afterWrite: { mode: "auto" },
-            mutate: (draft) => {
-              const nextConfig = {
-                ...draft,
-                talk: {
-                  ...draft.talk,
-                  provider: providerId,
-                  providers: {
-                    ...draft.talk?.providers,
-                    [providerId]: {
-                      ...draft.talk?.providers?.[providerId],
-                      voiceId: chosen.id,
-                    },
-                  },
-                  ...(providerId === "elevenlabs" ? { voiceId: chosen.id } : {}),
+          const nextConfig = {
+            ...cfg,
+            talk: {
+              ...cfg.talk,
+              provider: providerId,
+              providers: {
+                ...(cfg.talk?.providers ?? {}),
+                [providerId]: {
+                  ...(cfg.talk?.providers?.[providerId] ?? {}),
+                  voiceId: chosen.id,
                 },
-              };
-              Object.assign(draft, nextConfig);
+              },
+              ...(providerId === "elevenlabs" ? { voiceId: chosen.id } : {}),
             },
-          });
+          };
+          await api.runtime.config.writeConfigFile(nextConfig);
 
           const name = (chosen.name ?? "").trim() || "(unnamed)";
           return { text: `✅ ${providerLabel} Talk voice set to ${name}\n${chosen.id}` };

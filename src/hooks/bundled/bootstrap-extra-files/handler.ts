@@ -3,23 +3,29 @@ import {
   loadExtraBootstrapFilesWithDiagnostics,
 } from "../../../agents/workspace.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { normalizeTrimmedStringList } from "../../../shared/string-normalization.js";
 import { resolveHookConfig } from "../../config.js";
 import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";
 
 const HOOK_KEY = "bootstrap-extra-files";
 const log = createSubsystemLogger("bootstrap-extra-files");
 
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
+}
+
 function resolveExtraBootstrapPatterns(hookConfig: Record<string, unknown>): string[] {
-  const fromPaths = normalizeTrimmedStringList(hookConfig.paths);
+  const fromPaths = normalizeStringArray(hookConfig.paths);
   if (fromPaths.length > 0) {
     return fromPaths;
   }
-  const fromPatterns = normalizeTrimmedStringList(hookConfig.patterns);
+  const fromPatterns = normalizeStringArray(hookConfig.patterns);
   if (fromPatterns.length > 0) {
     return fromPatterns;
   }
-  return normalizeTrimmedStringList(hookConfig.files);
+  return normalizeStringArray(hookConfig.files);
 }
 
 const bootstrapExtraFilesHook: HookHandler = async (event) => {

@@ -1,12 +1,10 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-
 export function normalizePluginHttpPath(
   path?: string | null,
   fallback?: string | null,
 ): string | null {
-  const trimmed = normalizeOptionalString(path);
+  const trimmed = path?.trim();
   if (!trimmed) {
-    const fallbackTrimmed = normalizeOptionalString(fallback);
+    const fallbackTrimmed = fallback?.trim();
     if (!fallbackTrimmed) {
       return null;
     }

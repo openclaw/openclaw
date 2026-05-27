@@ -16,27 +16,24 @@ describe("mergeDmAllowFromSources", () => {
     ).toEqual(["line:user:abc", "123", "telegram:456"]);
   });
 
-  it.each([
-    {
-      name: "excludes pairing-store entries when dmPolicy is allowlist",
-      input: {
+  it("excludes pairing-store entries when dmPolicy is allowlist", () => {
+    expect(
+      mergeDmAllowFromSources({
         allowFrom: ["+1111"],
         storeAllowFrom: ["+2222", "+3333"],
-        dmPolicy: "allowlist" as const,
-      },
-      expected: ["+1111"],
-    },
-    {
-      name: "keeps pairing-store entries for non-allowlist policies",
-      input: {
+        dmPolicy: "allowlist",
+      }),
+    ).toEqual(["+1111"]);
+  });
+
+  it("keeps pairing-store entries for non-allowlist policies", () => {
+    expect(
+      mergeDmAllowFromSources({
         allowFrom: ["+1111"],
         storeAllowFrom: ["+2222"],
-        dmPolicy: "pairing" as const,
-      },
-      expected: ["+1111", "+2222"],
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(mergeDmAllowFromSources(input)).toEqual(expected);
+        dmPolicy: "pairing",
+      }),
+    ).toEqual(["+1111", "+2222"]);
   });
 });
 
@@ -66,7 +63,7 @@ describe("resolveGroupAllowFromSources", () => {
         groupAllowFrom: [],
         fallbackToAllowFrom: false,
       }),
-    ).toStrictEqual([]);
+    ).toEqual([]);
   });
 });
 

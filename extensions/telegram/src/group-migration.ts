@@ -1,13 +1,12 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type TelegramGroups = Record<string, TelegramGroupConfig>;
 
 type MigrationScope = "account" | "global";
 
-type TelegramGroupMigrationResult = {
+export type TelegramGroupMigrationResult = {
   migrated: boolean;
   skippedExisting: boolean;
   scopes: MigrationScope[];
@@ -30,7 +29,7 @@ function resolveAccountGroups(
     return { groups: exact.groups };
   }
   const matchKey = Object.keys(accounts).find(
-    (key) => normalizeLowercaseStringOrEmpty(key) === normalizeLowercaseStringOrEmpty(normalized),
+    (key) => key.toLowerCase() === normalized.toLowerCase(),
   );
   return { groups: matchKey ? accounts[matchKey]?.groups : undefined };
 }

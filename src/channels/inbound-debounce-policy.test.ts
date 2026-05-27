@@ -11,9 +11,6 @@ describe("shouldDebounceTextInbound", () => {
     expect(shouldDebounceTextInbound({ text: "   ", cfg })).toBe(false);
     expect(shouldDebounceTextInbound({ text: "hello", cfg, hasMedia: true })).toBe(false);
     expect(shouldDebounceTextInbound({ text: "/status", cfg })).toBe(false);
-    expect(shouldDebounceTextInbound({ text: "stop", cfg })).toBe(false);
-    expect(shouldDebounceTextInbound({ text: "abort", cfg })).toBe(false);
-    expect(shouldDebounceTextInbound({ text: "wait", cfg })).toBe(false);
   });
 
   it("accepts normal text when debounce is allowed", () => {

@@ -1,14 +1,13 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { buildWorkspaceHookStatus } from "../hooks/hooks-status.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 export async function setupInternalHooks(
   cfg: OpenClawConfig,
-  _runtime: RuntimeEnv,
+  runtime: RuntimeEnv,
   prompter: WizardPrompter,
 ): Promise<OpenClawConfig> {
   await prompter.note(
@@ -18,7 +17,7 @@ export async function setupInternalHooks(
       "",
       "Learn more: https://docs.openclaw.ai/automation/hooks",
     ].join("\n"),
-    t("wizard.hooks.introTitle"),
+    "Hooks",
   );
 
   // Discover available hooks using the hook discovery system
@@ -29,14 +28,17 @@ export async function setupInternalHooks(
   const eligibleHooks = report.hooks.filter((h) => h.loadable);
 
   if (eligibleHooks.length === 0) {
-    await prompter.note(t("wizard.hooks.noHooksMessage"), t("wizard.hooks.noHooksTitle"));
+    await prompter.note(
+      "No eligible hooks found. You can configure hooks later in your config.",
+      "No Hooks Available",
+    );
     return cfg;
   }
 
   const toEnable = await prompter.multiselect({
-    message: t("wizard.hooks.enable"),
+    message: "Enable hooks?",
     options: [
-      { value: "__skip__", label: t("common.skipForNow") },
+      { value: "__skip__", label: "Skip for now" },
       ...eligibleHooks.map((hook) => ({
         value: hook.name,
         label: `${hook.emoji ?? "🔗"} ${hook.name}`,
@@ -76,7 +78,7 @@ export async function setupInternalHooks(
       `  ${formatCliCommand("openclaw hooks enable <name>")}`,
       `  ${formatCliCommand("openclaw hooks disable <name>")}`,
     ].join("\n"),
-    t("wizard.hooks.configuredTitle"),
+    "Hooks Configured",
   );
 
   return next;

@@ -99,7 +99,7 @@ export function* iterateAuthProfileCredentials(
     if (!isRecord(value) || !isNonEmptyString(value.provider)) {
       continue;
     }
-    const provider = value.provider;
+    const provider = String(value.provider);
     if (value.type === "api_key" || value.type === "token") {
       yield toSecretCredentialVisit({
         kind: value.type,

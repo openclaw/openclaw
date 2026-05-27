@@ -1,8 +1,8 @@
+import type { OpenClawConfig } from "../config/config.js";
 import type { SessionMaintenanceWarning } from "../config/sessions/store-maintenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { enqueueSystemEvent } from "./system-events.js";
@@ -16,24 +16,24 @@ type WarningParams = {
 
 const warnedContexts = new Map<string, string>();
 const log = createSubsystemLogger("session-maintenance-warning");
-let messageRuntimePromise: Promise<typeof import("../channels/message/runtime.js")> | null = null;
+let deliverRuntimePromise: Promise<typeof import("./outbound/deliver-runtime.js")> | null = null;
 
 function resetSessionMaintenanceWarningForTests() {
   warnedContexts.clear();
-  messageRuntimePromise = null;
+  deliverRuntimePromise = null;
 }
 
-export const testing = {
+export const __testing = {
   resetSessionMaintenanceWarningForTests,
 } as const;
 
 function loadDeliverRuntime() {
-  messageRuntimePromise ??= import("../channels/message/runtime.js");
-  return messageRuntimePromise;
+  deliverRuntimePromise ??= import("./outbound/deliver-runtime.js");
+  return deliverRuntimePromise;
 }
 
 function shouldSendWarning(): boolean {
-  return process.env.NODE_ENV !== "test";
+  return !process.env.VITEST && process.env.NODE_ENV !== "test";
 }
 
 function buildWarningContext(params: WarningParams): string {
@@ -126,12 +126,12 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   }
 
   try {
-    const { sendDurableMessageBatch } = await loadDeliverRuntime();
+    const { deliverOutboundPayloads } = await loadDeliverRuntime();
     const outboundSession = buildOutboundSessionContext({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
     });
-    const send = await sendDurableMessageBatch({
+    await deliverOutboundPayloads({
       cfg: params.cfg,
       channel,
       to: target.to,
@@ -140,12 +140,8 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
       payloads: [{ text }],
       session: outboundSession,
     });
-    if (send.status === "failed" || send.status === "partial_failed") {
-      throw send.error;
-    }
   } catch (err) {
     log.warn(`Failed to deliver session maintenance warning: ${String(err)}`);
     enqueueSystemEvent(text, { sessionKey: params.sessionKey });
   }
 }
-export { testing as __testing };

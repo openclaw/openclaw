@@ -1,36 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
-import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
+import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
 describe("tool display details", () => {
-  it("summarizes tool-search code targets from described tool ids", () => {
-    expect(
-      resolveToolSearchCodeDisplayTarget({
-        code: "const tool = await openclaw.tools.describe('openclaw:core:exec'); return await openclaw.tools.call(tool.id, { command: 'echo hi' });",
-      }),
-    ).toEqual({
-      toolName: "openclaw:core:exec",
-      displayToolName: "exec",
-      displayArgs: { command: "echo hi" },
-      detail: "echo hi",
-      bridgeVerb: "call",
-    });
-  });
-
-  it("normalizes direct tool-search catalog ids to native display names and args", () => {
-    expect(
-      resolveToolSearchCodeDisplayTarget({
-        code: 'return await openclaw.tools.call("openclaw:core:exec", { command: "echo hi" });',
-      }),
-    ).toEqual({
-      toolName: "openclaw:core:exec",
-      displayToolName: "exec",
-      displayArgs: { command: "echo hi" },
-      detail: "echo hi",
-      bridgeVerb: "call",
-    });
-  });
-
   it("skips zero/false values for optional detail fields", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
@@ -117,33 +88,6 @@ describe("tool display details", () => {
     expect(detail).toBe('for "OpenClaw docs" (top 3)');
   });
 
-  it("formats web_search provider query shapes", () => {
-    expect(
-      formatToolDetail(
-        resolveToolDisplay({
-          name: "web_search",
-          args: { q: "Codex OAuth API key", max_results: 5 },
-        }),
-      ),
-    ).toBe('for "Codex OAuth API key" (top 5)');
-
-    expect(
-      formatToolDetail(
-        resolveToolDisplay({
-          name: "web_search",
-          args: {
-            search_query: [
-              { q: "latest Kimi model" },
-              { q: "latest Gemini model" },
-              { q: "latest Claude model" },
-              { q: "latest OpenAI model" },
-            ],
-          },
-        }),
-      ),
-    ).toBe('for "latest Kimi model", "latest Gemini model", "latest Claude model"…');
-  });
-
   it("summarizes exec commands with context", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
@@ -157,19 +101,7 @@ describe("tool display details", () => {
     );
 
     expect(detail).toContain("check git status -> show first 3 lines");
-    expect(detail).toContain("(agent)");
-  });
-
-  it("summarizes bash commands with the same command explainer", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "bash",
-        args: { command: "sed -n '1,80p' extensions/discord/src/draft-stream.ts" },
-        detailMode: "explain",
-      }),
-    );
-
-    expect(detail).toBe("print lines 1-80 from extensions/discord/src/draft-stream.ts");
+    expect(detail).toContain(".openclaw/workspace)");
   });
 
   it("moves cd path to context suffix and appends raw command", () => {
@@ -181,74 +113,6 @@ describe("tool display details", () => {
     );
 
     expect(detail).toBe("install dependencies (in ~/my-project), `cd ~/my-project && npm install`");
-  });
-
-  it("omits raw command details in explain mode", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command: "cd ~/my-project && npm install" },
-        detailMode: "explain",
-      }),
-    );
-
-    expect(detail).toBe("install dependencies (in ~/my-project)");
-  });
-
-  it("uses compact workspace markers for common workspace paths", () => {
-    expect(
-      formatToolDetail(
-        resolveToolDisplay({
-          name: "bash",
-          args: { command: "git fetch", workdir: "/Users/peter/mantis-workspace/openclaw" },
-          detailMode: "explain",
-        }),
-      ),
-    ).toBe("fetch git changes (agent)");
-
-    expect(
-      formatToolDetail(
-        resolveToolDisplay({
-          name: "bash",
-          args: { command: "git status", workdir: "/Users/peter/Projects/openclaw" },
-          detailMode: "explain",
-        }),
-      ),
-    ).toBe("check git status (repo)");
-
-    expect(
-      formatToolDetail(
-        resolveToolDisplay({
-          name: "bash",
-          args: {
-            command: "command -v discrawl",
-            workdir: "/root/.openclaw/sandboxes/agent-clawsweeper-sandbox-discor-766423d0",
-          },
-          detailMode: "explain",
-        }),
-      ),
-    ).toBe("command -v discrawl");
-  });
-
-  it("omits bash and exec names from compact tool summaries", () => {
-    expect(
-      formatToolSummary(
-        resolveToolDisplay({
-          name: "bash",
-          args: { command: "git fetch", workdir: "/Users/peter/mantis-workspace/openclaw" },
-          detailMode: "explain",
-        }),
-      ),
-    ).toBe("🛠️ fetch git changes (agent)");
-
-    expect(
-      formatToolSummary(
-        resolveToolDisplay({
-          name: "web_search",
-          args: { query: "OpenClaw docs" },
-        }),
-      ),
-    ).toBe('🔎 Web Search: for "OpenClaw docs"');
   });
 
   it("moves cd path to context suffix with multiple stages and raw command", () => {

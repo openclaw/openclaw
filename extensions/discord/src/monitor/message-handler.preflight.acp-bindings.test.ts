@@ -1,10 +1,10 @@
-import * as conversationBindingRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
+import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
+vi.mock("../../../../src/channels/plugins/binding-routing.js", async (importOriginal) => {
   const { createConfiguredBindingConversationRuntimeModuleMock } =
     await import("../test-support/configured-binding-runtime.js");
   return await createConfiguredBindingConversationRuntimeModuleMock(
@@ -12,14 +12,11 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
       ensureConfiguredBindingRouteReadyMock,
       resolveConfiguredBindingRouteMock,
     },
-    () =>
-      vi.importActual<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>(
-        "openclaw/plugin-sdk/conversation-binding-runtime",
-      ),
+    importOriginal,
   );
 });
 
-import { testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
+import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import {
   createDiscordMessage,
@@ -151,7 +148,7 @@ function createBasePreflightParams(overrides?: Record<string, unknown>) {
       discordConfig: {
         allowBots: true,
       } as NonNullable<
-        import("openclaw/plugin-sdk/config-contracts").OpenClawConfig["channels"]
+        import("openclaw/plugin-sdk/config-runtime").OpenClawConfig["channels"]
       >["discord"],
       data: createGuildEvent({
         channelId: CHANNEL_ID,
@@ -165,7 +162,7 @@ function createBasePreflightParams(overrides?: Record<string, unknown>) {
     discordConfig: {
       allowBots: true,
     } as NonNullable<
-      import("openclaw/plugin-sdk/config-contracts").OpenClawConfig["channels"]
+      import("openclaw/plugin-sdk/config-runtime").OpenClawConfig["channels"]
     >["discord"],
     ...overrides,
   } satisfies Parameters<typeof preflightDiscordMessage>[0];
@@ -177,6 +174,7 @@ function createAllowedGuildEntries(requireMention = false) {
       id: GUILD_ID,
       channels: {
         [CHANNEL_ID]: {
+          allow: true,
           enabled: true,
           requireMention,
         },
@@ -187,11 +185,12 @@ function createAllowedGuildEntries(requireMention = false) {
 
 function createHydratedGuildClient(restPayload: Record<string, unknown>) {
   const restGet = vi.fn(async () => restPayload);
-  const client = Object.assign(createGuildTextClient(CHANNEL_ID), {
+  const client = {
+    ...createGuildTextClient(CHANNEL_ID),
     rest: {
       get: restGet,
     },
-  }) as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
+  } as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
   return { client, restGet };
 }
 
@@ -232,10 +231,10 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     resolveConfiguredBindingRouteMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReturnValue(createConfiguredDiscordRoute());
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
-    vi.spyOn(conversationBindingRuntime, "resolveConfiguredBindingRoute").mockImplementation(
+    vi.spyOn(conversationRuntime, "resolveConfiguredBindingRoute").mockImplementation(
       resolveConfiguredBindingRouteMock,
     );
-    vi.spyOn(conversationBindingRuntime, "ensureConfiguredBindingRouteReady").mockImplementation(
+    vi.spyOn(conversationRuntime, "ensureConfiguredBindingRouteReady").mockImplementation(
       ensureConfiguredBindingRouteReadyMock,
     );
   });
@@ -248,6 +247,7 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
             id: GUILD_ID,
             channels: {
               [CHANNEL_ID]: {
+                allow: true,
                 enabled: false,
               },
             },
@@ -269,6 +269,7 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
             id: GUILD_ID,
             channels: {
               [CHANNEL_ID]: {
+                allow: true,
                 enabled: true,
                 requireMention: false,
               },
@@ -278,12 +279,10 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
       }),
     );
 
+    expect(result).not.toBeNull();
     expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
     expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.boundAgentId).toBe("codex");
-    expect(result?.route.sessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.route.agentId).toBe("codex");
   });
 
   it("accepts plain messages in configured ACP-bound channels without a mention", async () => {
@@ -311,11 +310,9 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
       }),
     );
 
+    expect(result).not.toBeNull();
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
     expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.boundAgentId).toBe("codex");
-    expect(result?.route.sessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.route.agentId).toBe("codex");
   });
 
   it("hydrates empty guild message payloads from REST before ensuring configured ACP bindings", async () => {

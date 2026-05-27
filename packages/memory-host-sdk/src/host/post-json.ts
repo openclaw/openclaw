@@ -1,12 +1,10 @@
+import type { SsrFPolicy } from "../../../../src/infra/net/ssrf.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
-import type { SsrFPolicy } from "./ssrf-policy.js";
 
 export async function postJson<T>(params: {
   url: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
-  fetchImpl?: typeof fetch;
-  signal?: AbortSignal;
   body: unknown;
   errorPrefix: string;
   attachStatus?: boolean;
@@ -15,8 +13,6 @@ export async function postJson<T>(params: {
   return await withRemoteHttpResponse({
     url: params.url,
     ssrfPolicy: params.ssrfPolicy,
-    fetchImpl: params.fetchImpl,
-    signal: params.signal,
     init: {
       method: "POST",
       headers: params.headers,
@@ -33,15 +29,7 @@ export async function postJson<T>(params: {
         }
         throw err;
       }
-      return await params.parse(await readJsonResponse(res, params.errorPrefix));
+      return await params.parse(await res.json());
     },
   });
-}
-
-async function readJsonResponse(res: Response, errorPrefix: string): Promise<unknown> {
-  try {
-    return await res.json();
-  } catch (cause) {
-    throw new Error(`${errorPrefix}: malformed JSON response`, { cause });
-  }
 }

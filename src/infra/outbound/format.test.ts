@@ -5,71 +5,58 @@ import {
   formatOutboundDeliverySummary,
 } from "./format.js";
 
-const getChannelPluginMock = vi.hoisted(() =>
-  vi.fn((channel: string) => {
-    const labels: Record<string, string> = {
-      alpha: "Alpha",
-      localchat: "Local Chat",
-      richchat: "Rich Chat",
-      workspace: "Workspace",
-      teamchat: "Team Chat",
-    };
-    const label = labels[channel];
-    return label ? { meta: { label } } : undefined;
-  }),
-);
+const getChannelPluginMock = vi.hoisted(() => vi.fn((_channel: unknown) => undefined));
 
 vi.mock("../../channels/plugins/index.js", () => ({
-  getLoadedChannelPlugin: getChannelPluginMock,
   getChannelPlugin: getChannelPluginMock,
 }));
 describe("formatOutboundDeliverySummary", () => {
   it.each([
     {
-      channel: "alpha" as const,
+      channel: "telegram" as const,
       result: undefined,
-      expected: "✅ Sent via Alpha. Message ID: unknown",
+      expected: "✅ Sent via Telegram. Message ID: unknown",
     },
     {
-      channel: "localchat" as const,
+      channel: "imessage" as const,
       result: undefined,
-      expected: "✅ Sent via Local Chat. Message ID: unknown",
+      expected: "✅ Sent via iMessage. Message ID: unknown",
     },
     {
-      channel: "alpha" as const,
+      channel: "telegram" as const,
       result: {
-        channel: "alpha" as const,
+        channel: "telegram" as const,
         messageId: "m1",
         chatId: "c1",
       },
-      expected: "✅ Sent via Alpha. Message ID: m1 (chat c1)",
+      expected: "✅ Sent via Telegram. Message ID: m1 (chat c1)",
     },
     {
-      channel: "richchat" as const,
+      channel: "discord" as const,
       result: {
-        channel: "richchat" as const,
+        channel: "discord" as const,
         messageId: "d1",
         channelId: "chan",
       },
-      expected: "✅ Sent via Rich Chat. Message ID: d1 (channel chan)",
+      expected: "✅ Sent via Discord. Message ID: d1 (channel chan)",
     },
     {
-      channel: "workspace" as const,
+      channel: "slack" as const,
       result: {
-        channel: "workspace" as const,
+        channel: "slack" as const,
         messageId: "s1",
         roomId: "room-1",
       },
-      expected: "✅ Sent via Workspace. Message ID: s1 (room room-1)",
+      expected: "✅ Sent via Slack. Message ID: s1 (room room-1)",
     },
     {
-      channel: "teamchat" as const,
+      channel: "msteams" as const,
       result: {
-        channel: "teamchat" as const,
+        channel: "msteams" as const,
         messageId: "t1",
         conversationId: "conv-1",
       },
-      expected: "✅ Sent via Team Chat. Message ID: t1 (conversation conv-1)",
+      expected: "✅ Sent via msteams. Message ID: t1 (conversation conv-1)",
     },
   ])("formats delivery summary for %j", ({ channel, result, expected }) => {
     expect(formatOutboundDeliverySummary(channel, result)).toBe(expected);
@@ -80,13 +67,13 @@ describe("buildOutboundDeliveryJson", () => {
   it.each([
     {
       input: {
-        channel: "alpha" as const,
+        channel: "telegram" as const,
         to: "123",
-        result: { channel: "alpha" as const, messageId: "m1", chatId: "c1" },
+        result: { channel: "telegram" as const, messageId: "m1", chatId: "c1" },
         mediaUrl: "https://example.com/a.png",
       },
       expected: {
-        channel: "alpha",
+        channel: "telegram",
         via: "direct",
         to: "123",
         messageId: "m1",
@@ -96,12 +83,12 @@ describe("buildOutboundDeliveryJson", () => {
     },
     {
       input: {
-        channel: "directchat" as const,
+        channel: "whatsapp" as const,
         to: "+1",
-        result: { channel: "directchat" as const, messageId: "w1", toJid: "jid" },
+        result: { channel: "whatsapp" as const, messageId: "w1", toJid: "jid" },
       },
       expected: {
-        channel: "directchat",
+        channel: "whatsapp",
         via: "direct",
         to: "+1",
         messageId: "w1",
@@ -111,12 +98,12 @@ describe("buildOutboundDeliveryJson", () => {
     },
     {
       input: {
-        channel: "pager" as const,
+        channel: "signal" as const,
         to: "+1",
-        result: { channel: "pager" as const, messageId: "s1", timestamp: 123 },
+        result: { channel: "signal" as const, messageId: "s1", timestamp: 123 },
       },
       expected: {
-        channel: "pager",
+        channel: "signal",
         via: "direct",
         to: "+1",
         messageId: "s1",
@@ -126,7 +113,7 @@ describe("buildOutboundDeliveryJson", () => {
     },
     {
       input: {
-        channel: "richchat" as const,
+        channel: "discord" as const,
         to: "channel:1",
         via: "gateway" as const,
         result: {
@@ -136,7 +123,7 @@ describe("buildOutboundDeliveryJson", () => {
         },
       },
       expected: {
-        channel: "richchat",
+        channel: "discord",
         via: "gateway",
         to: "channel:1",
         messageId: "g1",
@@ -153,12 +140,12 @@ describe("buildOutboundDeliveryJson", () => {
 describe("formatGatewaySummary", () => {
   it.each([
     {
-      input: { channel: "directchat", messageId: "m1" },
-      expected: "✅ Sent via gateway (directchat). Message ID: m1",
+      input: { channel: "whatsapp", messageId: "m1" },
+      expected: "✅ Sent via gateway (whatsapp). Message ID: m1",
     },
     {
-      input: { action: "Poll sent", channel: "richchat", messageId: "p1" },
-      expected: "✅ Poll sent via gateway (richchat). Message ID: p1",
+      input: { action: "Poll sent", channel: "discord", messageId: "p1" },
+      expected: "✅ Poll sent via gateway (discord). Message ID: p1",
     },
     {
       input: {},

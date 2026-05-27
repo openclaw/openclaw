@@ -27,8 +27,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
-import { appendRegularFile } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { HookHandler } from "../../hooks.js";
 
@@ -60,13 +58,9 @@ const logCommand: HookHandler = async (event) => {
         source: event.context.commandSource ?? "unknown",
       }) + "\n";
 
-    await appendRegularFile({
-      filePath: logFile,
-      content: logLine,
-      rejectSymlinkParents: true,
-    });
+    await fs.appendFile(logFile, logLine, "utf-8");
   } catch (err) {
-    const message = formatErrorMessage(err);
+    const message = err instanceof Error ? err.message : String(err);
     log.error(`Failed to log command: ${message}`);
   }
 };

@@ -3,20 +3,15 @@ import type {
   ChannelDirectoryEntry,
   ChannelDirectoryEntryKind,
   ChannelId,
-} from "../../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+} from "../../channels/plugins/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
 import { ambiguousTargetError, unknownTargetError } from "./target-errors.js";
-import { maybeResolveIdLikeTarget, type ResolvedIdLikeTarget } from "./target-id-resolution.js";
 import {
   buildTargetResolverSignature,
-  looksLikeTargetId,
-  maybeResolvePluginMessagingTarget,
   normalizeChannelTargetInput,
   normalizeTargetForProvider,
-  resolveNormalizedTargetInput,
 } from "./target-normalization.js";
 
 export type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
@@ -34,14 +29,6 @@ export type ResolveMessagingTargetResult =
   | { ok: true; target: ResolvedMessagingTarget }
   | { ok: false; error: Error; candidates?: ChannelDirectoryEntry[] };
 
-function asResolvedMessagingTarget(
-  target: Awaited<ReturnType<typeof maybeResolvePluginMessagingTarget>> | ResolvedIdLikeTarget,
-): ResolvedMessagingTarget | undefined {
-  return target;
-}
-
-export { maybeResolveIdLikeTarget } from "./target-id-resolution.js";
-
 export async function resolveChannelTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -49,10 +36,63 @@ export async function resolveChannelTarget(params: {
   accountId?: string | null;
   preferredKind?: TargetResolveKind;
   runtime?: RuntimeEnv;
-  resolveAmbiguous?: ResolveAmbiguousMode;
-  unknownTargetMode?: "error" | "normalized";
 }): Promise<ResolveMessagingTargetResult> {
   return resolveMessagingTarget(params);
+}
+
+export async function maybeResolveIdLikeTarget(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  input: string;
+  accountId?: string | null;
+  preferredKind?: TargetResolveKind;
+}): Promise<ResolvedMessagingTarget | undefined> {
+  const raw = normalizeChannelTargetInput(params.input);
+  if (!raw) {
+    return undefined;
+  }
+  return await maybeResolvePluginTarget(params, { requireIdLike: true });
+}
+
+async function maybeResolvePluginTarget(
+  params: {
+    cfg: OpenClawConfig;
+    channel: ChannelId;
+    input: string;
+    accountId?: string | null;
+    preferredKind?: TargetResolveKind;
+  },
+  options?: { requireIdLike?: boolean },
+): Promise<ResolvedMessagingTarget | undefined> {
+  const raw = normalizeChannelTargetInput(params.input);
+  if (!raw) {
+    return undefined;
+  }
+  const plugin = getChannelPlugin(params.channel);
+  const resolver = plugin?.messaging?.targetResolver;
+  if (!resolver?.resolveTarget) {
+    return undefined;
+  }
+  const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
+  if (options?.requireIdLike && resolver.looksLikeId && !resolver.looksLikeId(raw, normalized)) {
+    return undefined;
+  }
+  const resolved = await resolver.resolveTarget({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    input: raw,
+    normalized,
+    preferredKind: params.preferredKind,
+  });
+  if (!resolved) {
+    return undefined;
+  }
+  return {
+    to: resolved.to,
+    kind: resolved.kind,
+    display: resolved.display,
+    source: resolved.source ?? "normalized",
+  };
 }
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
@@ -77,7 +117,7 @@ export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: 
 }
 
 function normalizeQuery(value: string): string {
-  return normalizeLowercaseStringOrEmpty(value);
+  return value.trim().toLowerCase();
 }
 
 function stripTargetPrefixes(value: string): string {
@@ -103,7 +143,7 @@ export function formatTargetDisplay(params: {
   }
 
   const trimmedTarget = params.target.trim();
-  const lowered = normalizeLowercaseStringOrEmpty(trimmedTarget);
+  const lowered = trimmedTarget.toLowerCase();
   const display = params.display?.trim();
   const kind =
     params.kind ??
@@ -130,7 +170,7 @@ export function formatTargetDisplay(params: {
   }
 
   const channelPrefix = `${params.channel}:`;
-  const withoutProvider = lowered.startsWith(channelPrefix)
+  const withoutProvider = trimmedTarget.toLowerCase().startsWith(channelPrefix)
     ? trimmedTarget.slice(channelPrefix.length)
     : trimmedTarget;
 
@@ -345,7 +385,6 @@ export async function resolveMessagingTarget(params: {
   preferredKind?: TargetResolveKind;
   runtime?: RuntimeEnv;
   resolveAmbiguous?: ResolveAmbiguousMode;
-  unknownTargetMode?: "error" | "normalized";
 }): Promise<ResolveMessagingTargetResult> {
   const raw = normalizeChannelTargetInput(params.input);
   if (!raw) {
@@ -355,16 +394,34 @@ export async function resolveMessagingTarget(params: {
   const providerLabel = plugin?.meta?.label ?? params.channel;
   const hint = plugin?.messaging?.targetResolver?.hint;
   const kind = detectTargetKind(params.channel, raw, params.preferredKind);
-  const normalizedInput = resolveNormalizedTargetInput(params.channel, raw);
-  const normalized = normalizedInput?.normalized ?? raw;
-  if (
-    normalizedInput &&
-    looksLikeTargetId({
-      channel: params.channel,
-      raw: normalizedInput.raw,
-      normalized,
-    })
-  ) {
+  const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
+  const looksLikeTargetId = (): boolean => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return false;
+    }
+    const lookup = plugin?.messaging?.targetResolver?.looksLikeId;
+    if (lookup) {
+      return lookup(trimmed, normalized);
+    }
+    if (/^(channel|group|user):/i.test(trimmed)) {
+      return true;
+    }
+    if (/^[@#]/.test(trimmed)) {
+      return true;
+    }
+    if (/^\+?\d{6,}$/.test(trimmed)) {
+      return true;
+    }
+    if (trimmed.includes("@thread")) {
+      return true;
+    }
+    if (/^(conversation|user):/i.test(trimmed)) {
+      return true;
+    }
+    return false;
+  };
+  if (looksLikeTargetId()) {
     const resolvedIdLikeTarget = await maybeResolveIdLikeTarget({
       cfg: params.cfg,
       channel: params.channel,
@@ -428,27 +485,18 @@ export async function resolveMessagingTarget(params: {
       candidates: match.entries,
     };
   }
-  const resolvedFallbackTarget = asResolvedMessagingTarget(
-    await maybeResolvePluginMessagingTarget({
-      cfg: params.cfg,
-      channel: params.channel,
-      input: raw,
-      accountId: params.accountId,
-      preferredKind: params.preferredKind,
-    }),
-  );
+  const resolvedFallbackTarget = await maybeResolvePluginTarget({
+    cfg: params.cfg,
+    channel: params.channel,
+    input: raw,
+    accountId: params.accountId,
+    preferredKind: params.preferredKind,
+  });
   if (resolvedFallbackTarget) {
     return {
       ok: true,
       target: resolvedFallbackTarget,
     };
-  }
-
-  if (params.unknownTargetMode === "normalized") {
-    return buildNormalizedResolveResult({
-      normalized,
-      kind,
-    });
   }
 
   return {

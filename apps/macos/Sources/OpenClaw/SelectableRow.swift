@@ -25,7 +25,6 @@ extension View {
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(self.openClawRowBackground(selected: selected, hovered: hovered)))
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(

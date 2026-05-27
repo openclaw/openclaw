@@ -1,6 +1,5 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { isRecord } from "../utils.js";
 import { projectSafeChannelAccountSnapshotFields } from "./account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
@@ -39,6 +38,13 @@ export function formatChannelAllowFrom(params: {
   return normalizeStringEntries(params.allowFrom);
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
 export function resolveChannelAccountEnabled(params: {
   plugin: ChannelPlugin;
   account: unknown;
@@ -47,7 +53,7 @@ export function resolveChannelAccountEnabled(params: {
   if (params.plugin.config.isEnabled) {
     return params.plugin.config.isEnabled(params.account, params.cfg);
   }
-  const enabled = isRecord(params.account) ? params.account.enabled : undefined;
+  const enabled = asRecord(params.account)?.enabled;
   return enabled !== false;
 }
 
@@ -61,7 +67,7 @@ export async function resolveChannelAccountConfigured(params: {
     return await params.plugin.config.isConfigured(params.account, params.cfg);
   }
   if (params.readAccountConfiguredField) {
-    const configured = isRecord(params.account) ? params.account.configured : undefined;
+    const configured = asRecord(params.account)?.configured;
     return configured !== false;
   }
   return true;

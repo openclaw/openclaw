@@ -1,1 +1,1 @@
-export { testing, testing as __testing } from "./src/perplexity-web-search-provider.runtime.js";
+export { __testing } from "./src/perplexity-web-search-provider.js";

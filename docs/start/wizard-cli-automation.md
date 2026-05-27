@@ -3,9 +3,11 @@ summary: "Scripted onboarding and agent setup for the OpenClaw CLI"
 read_when:
   - You are automating onboarding in scripts or CI
   - You need non-interactive examples for specific providers
-title: "CLI automation"
+title: "CLI Automation"
 sidebarTitle: "CLI automation"
 ---
+
+# CLI Automation
 
 Use `--non-interactive` to automate `openclaw onboard`.
 
@@ -25,13 +27,10 @@ openclaw onboard --non-interactive \
   --gateway-bind loopback \
   --install-daemon \
   --daemon-runtime node \
-  --skip-bootstrap \
   --skip-skills
 ```
 
 Add `--json` for a machine-readable summary.
-
-Use `--skip-bootstrap` when your automation pre-seeds workspace files and does not want onboarding to create the default bootstrap files.
 
 Use `--secret-input-mode ref` to store env-backed refs in auth profiles instead of plaintext values.
 Interactive selection between env refs and configured provider refs (`file` or `exec`) is available in the onboarding flow.
@@ -52,16 +51,6 @@ openclaw onboard --non-interactive \
 ## Provider-specific examples
 
 <AccordionGroup>
-  <Accordion title="Anthropic API key example">
-    ```bash
-    openclaw onboard --non-interactive \
-      --mode local \
-      --auth-choice apiKey \
-      --anthropic-api-key "$ANTHROPIC_API_KEY" \
-      --gateway-port 18789 \
-      --gateway-bind loopback
-    ```
-  </Accordion>
   <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
@@ -166,13 +155,11 @@ openclaw onboard --non-interactive \
       --custom-api-key "$CUSTOM_API_KEY" \
       --custom-provider-id "my-custom" \
       --custom-compatibility anthropic \
-      --custom-image-input \
       --gateway-port 18789 \
       --gateway-bind loopback
     ```
 
     `--custom-api-key` is optional. If omitted, onboarding checks `CUSTOM_API_KEY`.
-    OpenClaw marks common vision model IDs as image-capable automatically. Add `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata.
 
     Ref-mode variant:
 
@@ -186,7 +173,6 @@ openclaw onboard --non-interactive \
       --secret-input-mode ref \
       --custom-provider-id "my-custom" \
       --custom-compatibility anthropic \
-      --custom-image-input \
       --gateway-port 18789 \
       --gateway-bind loopback
     ```
@@ -196,9 +182,6 @@ openclaw onboard --non-interactive \
   </Accordion>
 </AccordionGroup>
 
-Anthropic setup-token remains available as a supported onboarding token path, but OpenClaw now prefers Claude CLI reuse when available.
-For production, prefer an Anthropic API key.
-
 ## Add another agent
 
 Use `openclaw agents add <name>` to create a separate agent with its own workspace,
@@ -207,7 +190,7 @@ sessions, and auth profiles. Running without `--workspace` launches the wizard.
 ```bash
 openclaw agents add work \
   --workspace ~/.openclaw/workspace-work \
-  --model openai/gpt-5.5 \
+  --model openai/gpt-5.2 \
   --bind whatsapp:biz \
   --non-interactive \
   --json

@@ -1,19 +1,7 @@
 {
   "id": "brave",
-  "activation": {
-    "onStartup": false
-  },
   "providerAuthEnvVars": {
     "brave": ["BRAVE_API_KEY"]
-  },
-  "setup": {
-    "providers": [
-      {
-        "id": "brave",
-        "authMethods": ["api-key"],
-        "envVars": ["BRAVE_API_KEY"]
-      }
-    ]
   },
   "uiHints": {
     "webSearch.apiKey": {
@@ -25,17 +13,10 @@
     "webSearch.mode": {
       "label": "Brave Search Mode",
       "help": "Brave Search mode: web or llm-context."
-    },
-    "webSearch.baseUrl": {
-      "label": "Brave Search Base URL",
-      "help": "Optional Brave-compatible API base URL for trusted proxies. Defaults to https://api.search.brave.com."
     }
   },
   "contracts": {
     "webSearchProviders": ["brave"]
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",
@@ -51,9 +32,6 @@
           "mode": {
             "type": "string",
             "enum": ["web", "llm-context"]
-          },
-          "baseUrl": {
-            "type": ["string", "object"]
           }
         }
       }

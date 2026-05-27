@@ -17,8 +17,6 @@ const MINIMAX_OAUTH_CONFIG = {
 
 const MINIMAX_OAUTH_SCOPE = "group_id profile model.completion";
 const MINIMAX_OAUTH_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:user_code";
-const MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD = 1_000_000_000;
-const MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD = 1_000_000_000_000;
 
 function getOAuthEndpoints(region: MiniMaxRegion) {
   const config = MINIMAX_OAUTH_CONFIG[region];
@@ -30,7 +28,7 @@ function getOAuthEndpoints(region: MiniMaxRegion) {
   };
 }
 
-type MiniMaxOAuthAuthorization = {
+export type MiniMaxOAuthAuthorization = {
   user_code: string;
   verification_uri: string;
   expired_in: number;
@@ -38,7 +36,7 @@ type MiniMaxOAuthAuthorization = {
   state: string;
 };
 
-type MiniMaxOAuthToken = {
+export type MiniMaxOAuthToken = {
   access: string;
   refresh: string;
   expires: number;
@@ -52,20 +50,6 @@ type TokenResult =
   | { status: "success"; token: MiniMaxOAuthToken }
   | TokenPending
   | { status: "error"; message: string };
-
-/**
- * Normalize MiniMax token endpoint `expired_in` values to the auth-profile
- * contract: absolute Unix milliseconds.
- */
-export function normalizeOAuthExpires(expiredIn: number, now = Date.now()): number {
-  if (expiredIn < MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD) {
-    return now + expiredIn * 1000;
-  }
-  if (expiredIn < MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD) {
-    return expiredIn * 1000;
-  }
-  return expiredIn;
-}
 
 function generatePkce(): { verifier: string; challenge: string; state: string } {
   const { verifier, challenge } = generatePkceVerifierChallenge();
@@ -188,7 +172,7 @@ async function pollOAuthToken(params: {
     token: {
       access: tokenPayload.access_token,
       refresh: tokenPayload.refresh_token,
-      expires: normalizeOAuthExpires(tokenPayload.expired_in),
+      expires: tokenPayload.expired_in,
       resourceUrl: tokenPayload.resource_url,
       notification_message: tokenPayload.notification_message,
     },
@@ -212,7 +196,7 @@ export async function loginMiniMaxPortalOAuth(params: {
   const noteLines = [
     `Open ${verificationUrl} to approve access.`,
     `If prompted, enter the code ${oauth.user_code}.`,
-    `Interval: ${oauth.interval ?? "default (2000ms)"}, Expires at: ${new Date(oauth.expired_in).toISOString()}`,
+    `Interval: ${oauth.interval ?? "default (2000ms)"}, Expires at: ${oauth.expired_in} unix timestamp`,
   ];
   await params.note(noteLines.join("\n"), "MiniMax OAuth");
 
@@ -223,7 +207,6 @@ export async function loginMiniMaxPortalOAuth(params: {
   }
 
   let pollIntervalMs = oauth.interval ? oauth.interval : 2000;
-  // The authorization endpoint returns an absolute millisecond deadline.
   const expireTimeMs = oauth.expired_in;
 
   while (Date.now() < expireTimeMs) {

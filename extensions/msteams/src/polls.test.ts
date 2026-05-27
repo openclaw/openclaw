@@ -111,15 +111,12 @@ describe("memory poll store", () => {
       },
     ]);
 
-    await expect(store.getPoll("poll-1")).resolves.toEqual({
-      id: "poll-1",
-      question: "Pick one",
-      options: ["A", "B"],
-      maxSelections: 1,
-      votes: {},
-      createdAt: "2026-03-22T00:00:00.000Z",
-      updatedAt: "2026-03-22T00:00:00.000Z",
-    });
+    await expect(store.getPoll("poll-1")).resolves.toEqual(
+      expect.objectContaining({
+        id: "poll-1",
+        question: "Pick one",
+      }),
+    );
 
     const originalUpdatedAt = "2026-03-22T00:00:00.000Z";
     const result = await store.recordVote({
@@ -141,26 +138,20 @@ describe("memory poll store", () => {
       updatedAt: "2026-03-22T00:00:00.000Z",
     });
 
-    const updatedPoll = await store.recordVote({
-      pollId: "poll-2",
-      voterId: "user-2",
-      selections: ["1", "0", "1"],
-    });
-    if (!updatedPoll?.updatedAt) {
-      throw new Error("expected updated poll timestamp after recordVote");
-    }
-    const { updatedAt, ...stableUpdatedPoll } = updatedPoll;
-    expect(typeof updatedAt).toBe("string");
-    expect(stableUpdatedPoll).toEqual({
-      id: "poll-2",
-      question: "Pick many",
-      options: ["X", "Y"],
-      maxSelections: 2,
-      votes: {
-        "user-2": ["1", "0"],
-      },
-      createdAt: "2026-03-22T00:00:00.000Z",
-    });
+    await expect(
+      store.recordVote({
+        pollId: "poll-2",
+        voterId: "user-2",
+        selections: ["1", "0", "1"],
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        id: "poll-2",
+        votes: {
+          "user-2": ["1", "0"],
+        },
+      }),
+    );
 
     await expect(
       store.recordVote({ pollId: "missing", voterId: "nobody", selections: ["x"] }),

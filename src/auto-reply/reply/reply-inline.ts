@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { collapseInlineHorizontalWhitespace } from "./reply-inline-whitespace.js";
 
 const INLINE_SIMPLE_COMMAND_ALIASES = new Map<string, string>([
@@ -22,7 +21,7 @@ export function extractInlineSimpleCommand(body?: string): {
   if (!match || match.index === undefined) {
     return null;
   }
-  const alias = `/${normalizeLowercaseStringOrEmpty(match[1])}`;
+  const alias = `/${match[1].toLowerCase()}`;
   const command = INLINE_SIMPLE_COMMAND_ALIASES.get(alias);
   if (!command) {
     return null;

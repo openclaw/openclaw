@@ -87,16 +87,12 @@ struct GatewayDiscoveryModelTests {
             "tailnetDns": "  peters-mac-studio-1.ts.net  ",
             "sshPort": " 2222 ",
             "gatewayPort": " 18799 ",
-            "gatewayTls": " yes ",
-            "gatewayDirectReachable": " true ",
             "cliPath": " /opt/openclaw ",
         ])
         #expect(parsed.lanHost == "studio.local")
         #expect(parsed.tailnetDns == "peters-mac-studio-1.ts.net")
         #expect(parsed.sshPort == 2222)
         #expect(parsed.gatewayPort == 18799)
-        #expect(parsed.gatewayTls)
-        #expect(parsed.gatewayDirectReachable)
         #expect(parsed.cliPath == "/opt/openclaw")
     }
 
@@ -111,8 +107,6 @@ struct GatewayDiscoveryModelTests {
         #expect(parsed.tailnetDns == nil)
         #expect(parsed.sshPort == 22)
         #expect(parsed.gatewayPort == nil)
-        #expect(!parsed.gatewayTls)
-        #expect(!parsed.gatewayDirectReachable)
         #expect(parsed.cliPath == nil)
     }
 

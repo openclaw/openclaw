@@ -1,9 +1,5 @@
-import {
-  buildChannelConfigSchema,
-  requireOpenAllowFrom,
-} from "openclaw/plugin-sdk/channel-config-schema";
-import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
-import { z } from "zod";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { z } from "openclaw/plugin-sdk/zod";
 
 const DmPolicySchema = z.enum(["open", "allowlist", "pairing", "disabled"]);
 const GroupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
@@ -12,14 +8,12 @@ const ThreadBindingsSchema = z
     enabled: z.boolean().optional(),
     idleHours: z.number().optional(),
     maxAgeHours: z.number().optional(),
-    spawnSessions: z.boolean().optional(),
-    defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
     spawnSubagentSessions: z.boolean().optional(),
     spawnAcpSessions: z.boolean().optional(),
   })
   .strict();
 
-const LineCommonConfigSchemaBase = z.object({
+const LineCommonConfigSchema = z.object({
   enabled: z.boolean().optional(),
   channelAccessToken: z.string().optional(),
   channelSecret: z.string().optional(),
@@ -46,35 +40,15 @@ const LineGroupConfigSchema = z
   })
   .strict();
 
-const LineAccountConfigSchema = LineCommonConfigSchemaBase.extend({
+const LineAccountConfigSchema = LineCommonConfigSchema.extend({
   groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
-})
-  .strict()
-  .superRefine((value, ctx) => {
-    requireChannelOpenAllowFrom({
-      channel: "line",
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      requireOpenAllowFrom,
-    });
-  });
+}).strict();
 
-export const LineConfigSchema = LineCommonConfigSchemaBase.extend({
+export const LineConfigSchema = LineCommonConfigSchema.extend({
   accounts: z.record(z.string(), LineAccountConfigSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
   groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
-})
-  .strict()
-  .superRefine((value, ctx) => {
-    requireChannelOpenAllowFrom({
-      channel: "line",
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      requireOpenAllowFrom,
-    });
-  });
+}).strict();
 
 export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema);
 

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   normalizeApnsEnvironment,
   resolveApnsAuthConfigFromEnv,
@@ -9,14 +9,21 @@ import {
   shouldInvalidateApnsRegistration,
 } from "./push-apns.js";
 
-const tempDirs = createTrackedTempDirs();
+const tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
-  return await tempDirs.make("openclaw-push-apns-auth-test-");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-push-apns-auth-test-"));
+  tempDirs.push(dir);
+  return dir;
 }
 
 afterEach(async () => {
-  await tempDirs.cleanup();
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir) {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  }
 });
 
 describe("push APNs auth and helper coverage", () => {
@@ -36,10 +43,14 @@ describe("push APNs auth and helper coverage", () => {
       OPENCLAW_APNS_PRIVATE_KEY: "ignored",
     } as NodeJS.ProcessEnv);
 
-    expect(resolved.ok).toBe(true);
+    expect(resolved).toMatchObject({
+      ok: true,
+      value: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+      },
+    });
     if (resolved.ok) {
-      expect(resolved.value.teamId).toBe("TEAM123");
-      expect(resolved.value.keyId).toBe("KEY123");
       expect(resolved.value.privateKey).toContain("\nline-a\n");
       expect(resolved.value.privateKey).not.toBe("ignored");
     }
@@ -54,14 +65,14 @@ describe("push APNs auth and helper coverage", () => {
         "-----BEGIN PRIVATE KEY-----\\nline-c\\nline-d\\n-----END PRIVATE KEY-----", // pragma: allowlist secret
     } as NodeJS.ProcessEnv);
 
-    expect(resolved.ok).toBe(true);
-    if (resolved.ok) {
-      expect(resolved.value.teamId).toBe("TEAM123");
-      expect(resolved.value.keyId).toBe("KEY123");
-      expect(resolved.value.privateKey).toBe(
-        "-----BEGIN PRIVATE KEY-----\nline-c\nline-d\n-----END PRIVATE KEY-----",
-      );
-    }
+    expect(resolved).toMatchObject({
+      ok: true,
+      value: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: "-----BEGIN PRIVATE KEY-----\nline-c\nline-d\n-----END PRIVATE KEY-----",
+      },
+    });
   });
 
   it("reads APNs private keys from OPENCLAW_APNS_PRIVATE_KEY_PATH", async () => {
@@ -79,14 +90,14 @@ describe("push APNs auth and helper coverage", () => {
       OPENCLAW_APNS_PRIVATE_KEY_PATH: keyPath,
     } as NodeJS.ProcessEnv);
 
-    expect(resolved.ok).toBe(true);
-    if (resolved.ok) {
-      expect(resolved.value.teamId).toBe("TEAM123");
-      expect(resolved.value.keyId).toBe("KEY123");
-      expect(resolved.value.privateKey).toBe(
-        "-----BEGIN PRIVATE KEY-----\nline-e\nline-f\n-----END PRIVATE KEY-----",
-      );
-    }
+    expect(resolved).toMatchObject({
+      ok: true,
+      value: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: "-----BEGIN PRIVATE KEY-----\nline-e\nline-f\n-----END PRIVATE KEY-----",
+      },
+    });
   });
 
   it("reports missing auth fields and path read failures", async () => {

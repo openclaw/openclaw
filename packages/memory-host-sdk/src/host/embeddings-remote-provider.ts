@@ -1,16 +1,15 @@
+import type { SsrFPolicy } from "../../../../src/infra/net/ssrf.js";
 import {
   resolveRemoteEmbeddingBearerClient,
   type RemoteEmbeddingProviderId,
 } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
-import type { SsrFPolicy } from "./ssrf-policy.js";
+import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 
 export type RemoteEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
-  fetchImpl?: typeof fetch;
   model: string;
 };
 
@@ -23,7 +22,7 @@ export function createRemoteEmbeddingProvider(params: {
   const { client } = params;
   const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
 
-  const embed = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
+  const embed = async (input: string[]): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -31,8 +30,6 @@ export function createRemoteEmbeddingProvider(params: {
       url,
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
-      fetchImpl: client.fetchImpl,
-      signal,
       body: { model: client.model, input },
       errorPrefix: params.errorPrefix,
     });
@@ -42,11 +39,11 @@ export function createRemoteEmbeddingProvider(params: {
     id: params.id,
     model: client.model,
     ...(typeof params.maxInputTokens === "number" ? { maxInputTokens: params.maxInputTokens } : {}),
-    embedQuery: async (text, options) => {
-      const [vec] = await embed([text], options?.signal);
+    embedQuery: async (text) => {
+      const [vec] = await embed([text]);
       return vec ?? [];
     },
-    embedBatch: async (texts, options) => await embed(texts, options?.signal),
+    embedBatch: embed,
   };
 }
 

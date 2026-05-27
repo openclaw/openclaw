@@ -1,10 +1,4 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import { toBrowserErrorResponse } from "../errors.js";
-import {
-  assertBrowserNavigationResultAllowed,
-  withBrowserNavigationPolicy,
-} from "../navigation-guard.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
@@ -30,12 +24,12 @@ export function readBody(req: BrowserRequest): Record<string, unknown> {
 }
 
 export function resolveTargetIdFromBody(body: Record<string, unknown>): string | undefined {
-  const targetId = normalizeOptionalString(body.targetId) ?? "";
+  const targetId = typeof body.targetId === "string" ? body.targetId.trim() : "";
   return targetId || undefined;
 }
 
 export function resolveTargetIdFromQuery(query: Record<string, unknown>): string | undefined {
-  const targetId = normalizeOptionalString(query.targetId) ?? "";
+  const targetId = typeof query.targetId === "string" ? query.targetId.trim() : "";
   return targetId || undefined;
 }
 
@@ -81,7 +75,7 @@ export async function requirePwAi(
     501,
     [
       `Playwright is not available in this gateway build; '${feature}' is unsupported.`,
-      "Reinstall or update OpenClaw so the core browser runtime dependency is present, then restart the gateway. In Docker, also install Chromium with the bundled playwright-core CLI.",
+      "Install the full Playwright package (not playwright-core) and restart the gateway, or reinstall with browser support.",
       "Docs: /tools/browser#playwright-requirement",
     ].join("\n"),
   );
@@ -92,7 +86,6 @@ type RouteTabContext = {
   profileCtx: ProfileContext;
   tab: Awaited<ReturnType<ProfileContext["ensureTabAvailable"]>>;
   cdpUrl: string;
-  resolveTabUrl: (fallbackUrl?: string) => Promise<string | undefined>;
 };
 
 type RouteTabPwContext = RouteTabContext & {
@@ -104,11 +97,6 @@ type RouteWithTabParams<T> = {
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   targetId?: string;
-  /**
-   * Set for routes that read from or return data scoped to the selected tab.
-   * Leave false only for routes that navigate, activate, close, or otherwise manage the tab.
-   */
-  enforceCurrentUrlAllowed?: boolean;
   run: (ctx: RouteTabContext) => Promise<T>;
 };
 
@@ -121,63 +109,13 @@ export async function withRouteTabContext<T>(
   }
   try {
     const tab = await profileCtx.ensureTabAvailable(params.targetId);
-    if (params.enforceCurrentUrlAllowed) {
-      await assertBrowserNavigationResultAllowed({
-        url: tab.url,
-        ...withBrowserNavigationPolicy(params.ctx.state().resolved.ssrfPolicy, {
-          browserProxyMode: resolveBrowserNavigationProxyMode({
-            resolved: params.ctx.state().resolved,
-            profile: profileCtx.profile,
-          }),
-        }),
-      });
-    }
     return await params.run({
       profileCtx,
       tab,
       cdpUrl: profileCtx.profile.cdpUrl,
-      resolveTabUrl: (fallbackUrl?: string) =>
-        resolveSafeRouteTabUrl({
-          ctx: params.ctx,
-          profileCtx,
-          targetId: tab.targetId,
-          fallbackUrl,
-        }),
     });
   } catch (err) {
     handleRouteError(params.ctx, params.res, err);
-    return undefined;
-  }
-}
-
-/**
- * Response-only URL redaction. This swallows policy failures and must not be used as
- * an execution gate; use enforceCurrentUrlAllowed on the route helper instead.
- */
-export async function resolveSafeRouteTabUrl(params: {
-  ctx: BrowserRouteContext;
-  profileCtx: ProfileContext;
-  targetId: string;
-  fallbackUrl?: string;
-}): Promise<string | undefined> {
-  const tabs = await params.profileCtx.listTabs().catch(() => []);
-  const candidateUrl =
-    tabs.find((tab) => tab.targetId === params.targetId)?.url ?? params.fallbackUrl;
-  if (!candidateUrl) {
-    return undefined;
-  }
-  try {
-    await assertBrowserNavigationResultAllowed({
-      url: candidateUrl,
-      ...withBrowserNavigationPolicy(params.ctx.state().resolved.ssrfPolicy, {
-        browserProxyMode: resolveBrowserNavigationProxyMode({
-          resolved: params.ctx.state().resolved,
-          profile: params.profileCtx.profile,
-        }),
-      }),
-    });
-    return candidateUrl;
-  } catch {
     return undefined;
   }
 }
@@ -188,11 +126,6 @@ type RouteWithPwParams<T> = {
   ctx: BrowserRouteContext;
   targetId?: string;
   feature: string;
-  /**
-   * Set for routes that read from or return data scoped to the selected tab.
-   * Leave false only for routes that navigate, activate, close, or otherwise manage the tab.
-   */
-  enforceCurrentUrlAllowed?: boolean;
   run: (ctx: RouteTabPwContext) => Promise<T>;
 };
 
@@ -204,13 +137,12 @@ export async function withPlaywrightRouteContext<T>(
     res: params.res,
     ctx: params.ctx,
     targetId: params.targetId,
-    enforceCurrentUrlAllowed: params.enforceCurrentUrlAllowed,
-    run: async ({ profileCtx, tab, cdpUrl, resolveTabUrl }) => {
+    run: async ({ profileCtx, tab, cdpUrl }) => {
       const pw = await requirePwAi(params.res, params.feature);
       if (!pw) {
         return undefined as T | undefined;
       }
-      return await params.run({ profileCtx, tab, cdpUrl, resolveTabUrl, pw });
+      return await params.run({ profileCtx, tab, cdpUrl, pw });
     },
   });
 }

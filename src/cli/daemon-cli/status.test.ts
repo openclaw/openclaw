@@ -103,8 +103,6 @@ describe("runDaemonStatus", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(gatherDaemonStatus).not.toHaveBeenCalled();
-    expect(runtimeErrors[0]).toBe(
-      "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
-    );
+    expect(runtimeErrors.join("\n")).toContain("--require-rpc cannot be used with --no-probe");
   });
 });

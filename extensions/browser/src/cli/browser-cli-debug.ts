@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runCommandWithRuntime } from "../core-api.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 import { danger, defaultRuntime, shortenHomePath } from "./core-api.js";
@@ -15,7 +14,7 @@ type DebugContext = {
 
 function runBrowserDebug(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(String(err)));
+    defaultRuntime.error(danger(String(err as unknown)));
     defaultRuntime.exit(1);
   });
 }
@@ -60,8 +59,8 @@ function resolveDebugQuery(params: {
   filter?: unknown;
 }) {
   return {
-    targetId: normalizeOptionalString(params.targetId),
-    filter: normalizeOptionalString(params.filter),
+    targetId: typeof params.targetId === "string" ? params.targetId.trim() || undefined : undefined,
+    filter: typeof params.filter === "string" ? params.filter.trim() || undefined : undefined,
     clear: Boolean(params.clear),
     profile: params.profile,
   };
@@ -84,7 +83,7 @@ export function registerBrowserDebugCommands(
           query: resolveProfileQuery(profile),
           body: {
             ref: ref.trim(),
-            targetId: normalizeOptionalString(opts.targetId),
+            targetId: opts.targetId?.trim() || undefined,
           },
         });
         if (printJsonResult(parent, result)) {
@@ -190,7 +189,7 @@ export function registerBrowserDebugCommands(
           path: "/trace/start",
           query: resolveProfileQuery(profile),
           body: {
-            targetId: normalizeOptionalString(opts.targetId),
+            targetId: opts.targetId?.trim() || undefined,
             screenshots: Boolean(opts.screenshots),
             snapshots: Boolean(opts.snapshots),
             sources: Boolean(opts.sources),
@@ -218,8 +217,8 @@ export function registerBrowserDebugCommands(
           path: "/trace/stop",
           query: resolveProfileQuery(profile),
           body: {
-            targetId: normalizeOptionalString(opts.targetId),
-            path: normalizeOptionalString(opts.out),
+            targetId: opts.targetId?.trim() || undefined,
+            path: opts.out?.trim() || undefined,
           },
         });
         if (printJsonResult(parent, result)) {

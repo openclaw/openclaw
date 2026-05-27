@@ -1,5 +1,4 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { MsgContext } from "../templating.js";
 
 export type AbortCutoff = {
@@ -11,7 +10,9 @@ type SessionAbortCutoffEntry = Pick<SessionEntry, "abortCutoffMessageSid" | "abo
 
 export function resolveAbortCutoffFromContext(ctx: MsgContext): AbortCutoff | undefined {
   const messageSid =
-    normalizeOptionalString(ctx.MessageSidFull) ?? normalizeOptionalString(ctx.MessageSid);
+    (typeof ctx.MessageSidFull === "string" && ctx.MessageSidFull.trim()) ||
+    (typeof ctx.MessageSid === "string" && ctx.MessageSid.trim()) ||
+    undefined;
   const timestamp =
     typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
   if (!messageSid && timestamp === undefined) {
@@ -26,7 +27,7 @@ export function readAbortCutoffFromSessionEntry(
   if (!entry) {
     return undefined;
   }
-  const messageSid = normalizeOptionalString(entry.abortCutoffMessageSid);
+  const messageSid = entry.abortCutoffMessageSid?.trim() || undefined;
   const timestamp =
     typeof entry.abortCutoffTimestamp === "number" && Number.isFinite(entry.abortCutoffTimestamp)
       ? entry.abortCutoffTimestamp
@@ -50,7 +51,7 @@ export function applyAbortCutoffToSessionEntry(
 }
 
 function toNumericMessageSid(value: string | undefined): bigint | undefined {
-  const trimmed = normalizeOptionalString(value);
+  const trimmed = value?.trim();
   if (!trimmed || !/^\d+$/.test(trimmed)) {
     return undefined;
   }
@@ -67,8 +68,8 @@ export function shouldSkipMessageByAbortCutoff(params: {
   messageSid?: string;
   timestamp?: number;
 }): boolean {
-  const cutoffSid = normalizeOptionalString(params.cutoffMessageSid);
-  const currentSid = normalizeOptionalString(params.messageSid);
+  const cutoffSid = params.cutoffMessageSid?.trim();
+  const currentSid = params.messageSid?.trim();
   if (cutoffSid && currentSid) {
     const cutoffNumeric = toNumericMessageSid(cutoffSid);
     const currentNumeric = toNumericMessageSid(currentSid);
@@ -94,8 +95,8 @@ export function shouldPersistAbortCutoff(params: {
   commandSessionKey?: string;
   targetSessionKey?: string;
 }): boolean {
-  const commandSessionKey = normalizeOptionalString(params.commandSessionKey);
-  const targetSessionKey = normalizeOptionalString(params.targetSessionKey);
+  const commandSessionKey = params.commandSessionKey?.trim();
+  const targetSessionKey = params.targetSessionKey?.trim();
   if (!commandSessionKey || !targetSessionKey) {
     return true;
   }

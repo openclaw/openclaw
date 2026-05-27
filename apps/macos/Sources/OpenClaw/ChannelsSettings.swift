@@ -11,11 +11,9 @@ struct ChannelsSettings: View {
     }
 
     @Bindable var store: ChannelsStore
-    let isActive: Bool
     @State var selectedChannel: ChannelItem?
 
-    init(store: ChannelsStore = .shared, isActive: Bool = true) {
+    init(store: ChannelsStore = .shared) {
         self.store = store
-        self.isActive = isActive
     }
 }

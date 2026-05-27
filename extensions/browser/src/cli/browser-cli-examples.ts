@@ -1,7 +1,6 @@
 export const browserCoreExamples = [
   "openclaw browser status",
   "openclaw browser start",
-  "openclaw browser start --headless",
   "openclaw browser stop",
   "openclaw browser tabs",
   "openclaw browser open https://example.com",
@@ -20,7 +19,6 @@ export const browserActionExamples = [
   "openclaw browser navigate https://example.com",
   "openclaw browser resize 1280 720",
   "openclaw browser click 12 --double",
-  "openclaw browser click-coords 120 340",
   'openclaw browser type 23 "hello" --submit',
   "openclaw browser press Enter",
   "openclaw browser hover 44",

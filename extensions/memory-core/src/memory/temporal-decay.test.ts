@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { createMemoryCoreTestHarness } from "../test-helpers.js";
+import { afterEach, describe, expect, it } from "vitest";
 import { mergeHybridResults } from "./hybrid.js";
 import {
   applyTemporalDecayToHybridResults,
@@ -11,7 +11,14 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW_MS = Date.UTC(2026, 1, 10, 0, 0, 0);
-const { createTempWorkspace } = createMemoryCoreTestHarness();
+
+const tempDirs: string[] = [];
+
+async function makeTempDir(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-temporal-decay-"));
+  tempDirs.push(dir);
+  return dir;
+}
 
 function createVectorMemoryEntry(params: {
   id: string;
@@ -44,6 +51,14 @@ async function mergeVectorResultsWithTemporalDecay(
   });
 }
 
+afterEach(async () => {
+  await Promise.all(
+    tempDirs.splice(0).map(async (dir) => {
+      await fs.rm(dir, { recursive: true, force: true });
+    }),
+  );
+});
+
 describe("temporal decay", () => {
   it("matches exponential decay formula", () => {
     const halfLifeDays = 30;
@@ -64,7 +79,7 @@ describe("temporal decay", () => {
   });
 
   it("does not decay evergreen memory files", async () => {
-    const dir = await createTempWorkspace("openclaw-temporal-decay-");
+    const dir = await makeTempDir();
 
     const rootMemoryPath = path.join(dir, "MEMORY.md");
     const topicPath = path.join(dir, "memory", "projects.md");
@@ -139,7 +154,7 @@ describe("temporal decay", () => {
   });
 
   it("uses file mtime fallback for non-memory sources", async () => {
-    const dir = await createTempWorkspace("openclaw-temporal-decay-");
+    const dir = await makeTempDir();
     const sessionPath = path.join(dir, "sessions", "thread.jsonl");
     await fs.mkdir(path.dirname(sessionPath), { recursive: true });
     await fs.writeFile(sessionPath, "{}\n");

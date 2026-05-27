@@ -46,12 +46,10 @@ function expectAllowFromDecision(params: {
     return;
   }
 
-  expect(result.failures).toEqual([
-    {
-      gate: "allowFrom",
-      key: "tools.elevated.allowFrom.whatsapp",
-    },
-  ]);
+  expect(result.failures).toContainEqual({
+    gate: "allowFrom",
+    key: "tools.elevated.allowFrom.whatsapp",
+  });
 }
 
 describe("resolveElevatedPermissions", () => {

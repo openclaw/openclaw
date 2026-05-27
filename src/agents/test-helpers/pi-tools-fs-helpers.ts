@@ -7,32 +7,27 @@ export function getTextContent(result?: { content?: TextResultBlock[] }) {
   return textBlock?.text ?? "";
 }
 
-function expectTool<T extends { name: string }>(tools: T[], name: string): T {
-  const tool = tools.find((entry) => entry.name === name);
-  if (!tool) {
-    throw new Error(`expected tool "${name}" in [${tools.map((entry) => entry.name).join(", ")}]`);
-  }
-  return tool;
-}
-
 export function expectReadWriteEditTools<T extends { name: string }>(tools: T[]) {
-  const names = tools.map((tool) => tool.name);
-  expect(names).toContain("read");
-  expect(names).toContain("write");
-  expect(names).toContain("edit");
+  const readTool = tools.find((tool) => tool.name === "read");
+  const writeTool = tools.find((tool) => tool.name === "write");
+  const editTool = tools.find((tool) => tool.name === "edit");
+  expect(readTool).toBeDefined();
+  expect(writeTool).toBeDefined();
+  expect(editTool).toBeDefined();
   return {
-    readTool: expectTool(tools, "read"),
-    writeTool: expectTool(tools, "write"),
-    editTool: expectTool(tools, "edit"),
+    readTool: readTool as T,
+    writeTool: writeTool as T,
+    editTool: editTool as T,
   };
 }
 
 export function expectReadWriteTools<T extends { name: string }>(tools: T[]) {
-  const names = tools.map((tool) => tool.name);
-  expect(names).toContain("read");
-  expect(names).toContain("write");
+  const readTool = tools.find((tool) => tool.name === "read");
+  const writeTool = tools.find((tool) => tool.name === "write");
+  expect(readTool).toBeDefined();
+  expect(writeTool).toBeDefined();
   return {
-    readTool: expectTool(tools, "read"),
-    writeTool: expectTool(tools, "write"),
+    readTool: readTool as T,
+    writeTool: writeTool as T,
   };
 }

@@ -25,7 +25,6 @@ export async function importFileModule(params: {
   return (await import(specifier)) as ModuleNamespace;
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic module exports are typed by the caller.
 export function resolveFunctionModuleExport<T extends GenericFunction>(params: {
   mod: ModuleNamespace;
   exportName?: string;

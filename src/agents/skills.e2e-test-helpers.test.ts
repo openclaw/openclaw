@@ -17,7 +17,9 @@ async function withTempSkillDir(
 }
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+  );
 });
 
 describe("writeSkill", () => {

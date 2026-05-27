@@ -110,9 +110,5 @@ const reportModules: Record<ReportModule["name"], ReportModule> = {
 };
 
 export function renderTextReport(envelope: TopologyEnvelope, limit: number): string {
-  const reportModule = reportModules[envelope.report];
-  if (!reportModule) {
-    throw new Error(`Unsupported topology report: ${envelope.report}`);
-  }
-  return reportModule.describe(envelope, limit);
+  return reportModules[envelope.report].describe(envelope, limit);
 }

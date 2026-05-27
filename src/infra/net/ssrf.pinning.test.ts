@@ -49,52 +49,6 @@ describe("ssrf pinning", () => {
     );
   });
 
-  it("keeps automatic pinned lookups on IPv4 when both address families are available", async () => {
-    const lookup = createPinnedLookup({
-      hostname: "api.anthropic.com",
-      addresses: ["160.79.104.10", "2607:6bc0::10"],
-    });
-    const lookupDefault = () =>
-      new Promise<{ address: string; family?: number }>((resolve, reject) => {
-        lookup("api.anthropic.com", (err, address, family) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve({ address: address, family });
-          }
-        });
-      });
-    const lookupWithOptions = (options: { family?: number }) =>
-      new Promise<{ address: string; family?: number }>((resolve, reject) => {
-        lookup("api.anthropic.com", options, (err, address, family) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve({ address: address, family });
-          }
-        });
-      });
-
-    await expect(lookupDefault()).resolves.toEqual({ address: "160.79.104.10", family: 4 });
-    await expect(lookupDefault()).resolves.toEqual({ address: "160.79.104.10", family: 4 });
-
-    const all = await new Promise<unknown>((resolve, reject) => {
-      lookup("api.anthropic.com", { all: true }, (err, addresses) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(addresses);
-        }
-      });
-    });
-    expect(all).toEqual([{ address: "160.79.104.10", family: 4 }]);
-
-    await expect(lookupWithOptions({ family: 6 })).resolves.toEqual({
-      address: "2607:6bc0::10",
-      family: 6,
-    });
-  });
-
   it.each([
     { name: "RFC1918 private address", address: "10.0.0.8" },
     { name: "RFC2544 benchmarking range", address: "198.18.0.1" },
@@ -173,11 +127,12 @@ describe("ssrf pinning", () => {
       { address: "93.184.216.34", family: 4 },
     ]) as unknown as LookupFn;
 
-    const allowed = await resolvePinnedHostnameWithPolicy("assets.example.com", {
-      lookupFn: lookup,
-      policy: { hostnameAllowlist: ["*.example.com"] },
-    });
-    expect(allowed.hostname).toBe("assets.example.com");
+    await expect(
+      resolvePinnedHostnameWithPolicy("assets.example.com", {
+        lookupFn: lookup,
+        policy: { hostnameAllowlist: ["*.example.com"] },
+      }),
+    ).resolves.toMatchObject({ hostname: "assets.example.com" });
 
     await expect(
       resolvePinnedHostnameWithPolicy("example.com", {
@@ -241,24 +196,30 @@ describe("ssrf pinning", () => {
       { address: "2001:db8:1234::5efe:127.0.0.1", family: 6 },
     ]) as unknown as LookupFn;
 
-    const pinned = await resolvePinnedHostnameWithPolicy("2001:db8:1234::5efe:127.0.0.1", {
-      lookupFn: lookup,
-      policy: { allowPrivateNetwork: true },
+    await expect(
+      resolvePinnedHostnameWithPolicy("2001:db8:1234::5efe:127.0.0.1", {
+        lookupFn: lookup,
+        policy: { allowPrivateNetwork: true },
+      }),
+    ).resolves.toMatchObject({
+      hostname: "2001:db8:1234::5efe:127.0.0.1",
+      addresses: ["2001:db8:1234::5efe:127.0.0.1"],
     });
-    expect(pinned.hostname).toBe("2001:db8:1234::5efe:127.0.0.1");
-    expect(pinned.addresses).toEqual(["2001:db8:1234::5efe:127.0.0.1"]);
     expect(lookup).toHaveBeenCalledTimes(1);
   });
 
   it("accepts dangerouslyAllowPrivateNetwork as an allowPrivateNetwork alias", async () => {
     const lookup = vi.fn(async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
 
-    const pinned = await resolvePinnedHostnameWithPolicy("localhost", {
-      lookupFn: lookup,
-      policy: { dangerouslyAllowPrivateNetwork: true },
+    await expect(
+      resolvePinnedHostnameWithPolicy("localhost", {
+        lookupFn: lookup,
+        policy: { dangerouslyAllowPrivateNetwork: true },
+      }),
+    ).resolves.toMatchObject({
+      hostname: "localhost",
+      addresses: ["127.0.0.1"],
     });
-    expect(pinned.hostname).toBe("localhost");
-    expect(pinned.addresses).toEqual(["127.0.0.1"]);
     expect(lookup).toHaveBeenCalledTimes(1);
   });
 });

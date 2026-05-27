@@ -1,8 +1,3 @@
-import {
-  normalizeHeadersInitForFetch,
-  normalizeRequestInitHeadersForFetch,
-} from "../infra/fetch-headers.js";
-
 export type ScopeTokenProvider = {
   getAccessToken: (scope: string) => Promise<string>;
 };
@@ -33,10 +28,9 @@ export async function fetchWithBearerAuthScopeFallback(params: {
     throw new Error(`URL must use HTTPS: ${params.url}`);
   }
 
-  const requestInit = normalizeRequestInitHeadersForFetch(params.requestInit);
   const fetchOnce = (headers?: Headers): Promise<Response> =>
     fetchFn(params.url, {
-      ...requestInit,
+      ...params.requestInit,
       ...(headers ? { headers } : {}),
     });
 
@@ -60,7 +54,7 @@ export async function fetchWithBearerAuthScopeFallback(params: {
   for (const scope of params.scopes) {
     try {
       const token = await params.tokenProvider.getAccessToken(scope);
-      const authHeaders = new Headers(normalizeHeadersInitForFetch(requestInit?.headers));
+      const authHeaders = new Headers(params.requestInit?.headers);
       authHeaders.set("Authorization", `Bearer ${token}`);
       const authAttempt = await fetchOnce(authHeaders);
       if (authAttempt.ok) {

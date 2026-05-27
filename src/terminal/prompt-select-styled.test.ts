@@ -1,48 +1,50 @@
-import { describe, expect, it } from "vitest";
-import { styleSelectParams } from "./prompt-select-styled-params.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-describe("styleSelectParams", () => {
-  it("styles message and option hints before select receives params", () => {
-    expect(
-      styleSelectParams(
-        {
-          message: "Pick channel",
-          options: [
-            { value: "stable", label: "Stable", hint: "Tagged releases" },
-            { value: "dev", label: "Dev" },
-          ],
-        },
-        {
-          message: (value) => `msg:${value}`,
-          hint: (value) => `hint:${value}`,
-        },
-      ),
-    ).toEqual({
+const { selectMock, stylePromptMessageMock, stylePromptHintMock } = vi.hoisted(() => ({
+  selectMock: vi.fn(),
+  stylePromptMessageMock: vi.fn((value: string) => `msg:${value}`),
+  stylePromptHintMock: vi.fn((value: string) => `hint:${value}`),
+}));
+
+vi.mock("@clack/prompts", () => ({
+  select: selectMock,
+}));
+
+vi.mock("./prompt-style.js", () => ({
+  stylePromptMessage: stylePromptMessageMock,
+  stylePromptHint: stylePromptHintMock,
+}));
+
+import { selectStyled } from "./prompt-select-styled.js";
+
+describe("selectStyled", () => {
+  beforeEach(() => {
+    selectMock.mockClear();
+    stylePromptMessageMock.mockClear();
+    stylePromptHintMock.mockClear();
+  });
+
+  it("styles message and option hints before delegating to clack select", () => {
+    const expected = Symbol("selected");
+    selectMock.mockReturnValue(expected);
+
+    const result = selectStyled({
+      message: "Pick channel",
+      options: [
+        { value: "stable", label: "Stable", hint: "Tagged releases" },
+        { value: "dev", label: "Dev" },
+      ],
+    });
+
+    expect(result).toBe(expected);
+    expect(stylePromptMessageMock).toHaveBeenCalledWith("Pick channel");
+    expect(stylePromptHintMock).toHaveBeenCalledWith("Tagged releases");
+    expect(selectMock).toHaveBeenCalledWith({
       message: "msg:Pick channel",
       options: [
         { value: "stable", label: "Stable", hint: "hint:Tagged releases" },
         { value: "dev", label: "Dev" },
       ],
     });
-  });
-
-  it("keeps unhinted options unchanged", () => {
-    const option = { value: "dev", label: "Dev" };
-    const params = styleSelectParams(
-      {
-        message: "Pick channel",
-        options: [option],
-      },
-      {
-        message: (value) => `msg:${value}`,
-        hint: (value) => `hint:${value}`,
-      },
-    );
-
-    expect(params).toEqual({
-      message: "msg:Pick channel",
-      options: [{ value: "dev", label: "Dev" }],
-    });
-    expect(params.options[0]).toBe(option);
   });
 });

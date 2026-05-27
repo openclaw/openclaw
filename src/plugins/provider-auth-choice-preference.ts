@@ -1,5 +1,5 @@
 import { normalizeLegacyOnboardAuthChoice } from "../commands/auth-choice-legacy.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 
 function normalizeLegacyAuthChoice(choice: string, env?: NodeJS.ProcessEnv): string {
@@ -11,7 +11,6 @@ export async function resolvePreferredProviderForAuthChoice(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  includeUntrustedWorkspacePlugins?: boolean;
 }): Promise<string | undefined> {
   const choice = normalizeLegacyAuthChoice(params.choice, params.env) ?? params.choice;
   const manifestResolved = resolveManifestProviderAuthChoice(choice, params);
@@ -25,8 +24,8 @@ export async function resolvePreferredProviderForAuthChoice(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    mode: "setup",
-    includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
   });
   const pluginResolved = resolveProviderPluginChoice({
     providers,

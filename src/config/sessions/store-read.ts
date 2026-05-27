@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { z } from "zod";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
-import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 const SessionStoreSchema = z.record(z.string(), z.unknown()) as z.ZodType<
@@ -16,13 +15,7 @@ export function readSessionStoreReadOnly(
     if (!raw.trim()) {
       return {};
     }
-    const parsed = safeParseJsonWithSchema(SessionStoreSchema, raw) ?? {};
-    return Object.fromEntries(
-      Object.entries(parsed).flatMap(([key, entry]) => {
-        const normalized = normalizePersistedSessionEntryShape(entry);
-        return normalized ? [[key, normalized]] : [];
-      }),
-    );
+    return safeParseJsonWithSchema(SessionStoreSchema, raw) ?? {};
   } catch {
     return {};
   }

@@ -4,11 +4,7 @@ import {
   normalizeAccountId,
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  hasLegacyFlatAllowPrivateNetworkAlias,
-  isPrivateNetworkOptInEnabled,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 
 type TlonAccountConfig = {
   name?: string;
@@ -16,9 +12,7 @@ type TlonAccountConfig = {
   ship?: string;
   url?: string;
   code?: string;
-  network?: {
-    dangerouslyAllowPrivateNetwork?: boolean;
-  };
+  allowPrivateNetwork?: boolean;
   groupChannels?: string[];
   dmAllowlist?: string[];
   groupInviteAllowlist?: string[];
@@ -39,7 +33,7 @@ export type TlonResolvedAccount = {
   ship: string | null;
   url: string | null;
   code: string | null;
-  dangerouslyAllowPrivateNetwork: boolean | null;
+  allowPrivateNetwork: boolean | null;
   groupChannels: string[];
   dmAllowlist: string[];
   /** Ships allowed to invite us to groups (security: prevent malicious group invites) */
@@ -91,7 +85,7 @@ export function resolveTlonAccount(
       ship: null,
       url: null,
       code: null,
-      dangerouslyAllowPrivateNetwork: null,
+      allowPrivateNetwork: null,
       groupChannels: [],
       dmAllowlist: [],
       groupInviteAllowlist: [],
@@ -105,37 +99,30 @@ export function resolveTlonAccount(
   }
 
   const merged = resolveMergedTlonAccountConfig(cfg, resolvedAccountId);
-  const ship = merged.ship ?? null;
-  const url = merged.url ?? null;
-  const code = merged.code ?? null;
-  const dangerouslyAllowPrivateNetwork = isPrivateNetworkOptInEnabled(merged)
-    ? true
-    : typeof merged.network?.dangerouslyAllowPrivateNetwork === "boolean"
-      ? merged.network.dangerouslyAllowPrivateNetwork
-      : hasLegacyFlatAllowPrivateNetworkAlias(merged) &&
-          typeof merged.allowPrivateNetwork === "boolean"
-        ? merged.allowPrivateNetwork
-        : null;
-  const groupChannels = merged.groupChannels ?? [];
-  const dmAllowlist = merged.dmAllowlist ?? [];
-  const groupInviteAllowlist = merged.groupInviteAllowlist ?? [];
-  const autoDiscoverChannels = merged.autoDiscoverChannels ?? null;
-  const showModelSignature = merged.showModelSignature ?? null;
-  const autoAcceptDmInvites = merged.autoAcceptDmInvites ?? null;
-  const autoAcceptGroupInvites = merged.autoAcceptGroupInvites ?? null;
-  const ownerShip = merged.ownerShip ?? null;
-  const defaultAuthorizedShips = merged.defaultAuthorizedShips ?? [];
+  const ship = (merged.ship ?? null) as string | null;
+  const url = (merged.url ?? null) as string | null;
+  const code = (merged.code ?? null) as string | null;
+  const allowPrivateNetwork = (merged.allowPrivateNetwork ?? null) as boolean | null;
+  const groupChannels = (merged.groupChannels ?? []) as string[];
+  const dmAllowlist = (merged.dmAllowlist ?? []) as string[];
+  const groupInviteAllowlist = (merged.groupInviteAllowlist ?? []) as string[];
+  const autoDiscoverChannels = (merged.autoDiscoverChannels ?? null) as boolean | null;
+  const showModelSignature = (merged.showModelSignature ?? null) as boolean | null;
+  const autoAcceptDmInvites = (merged.autoAcceptDmInvites ?? null) as boolean | null;
+  const autoAcceptGroupInvites = (merged.autoAcceptGroupInvites ?? null) as boolean | null;
+  const ownerShip = (merged.ownerShip ?? null) as string | null;
+  const defaultAuthorizedShips = (merged.defaultAuthorizedShips ?? []) as string[];
   const configured = Boolean(ship && url && code);
 
   return {
     accountId: resolvedAccountId,
-    name: merged.name ?? null,
+    name: (merged.name ?? null) as string | null,
     enabled: merged.enabled !== false,
     configured,
     ship,
     url,
     code,
-    dangerouslyAllowPrivateNetwork,
+    allowPrivateNetwork,
     groupChannels,
     dmAllowlist,
     groupInviteAllowlist,

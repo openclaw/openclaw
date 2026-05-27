@@ -1,4 +1,3 @@
-import { isMatrixNotFoundError } from "../errors.js";
 import { resolveMatrixMessageAttachment, resolveMatrixMessageBody } from "../media-text.js";
 import { fetchMatrixPollMessageSummary } from "../poll-summary.js";
 import type { MatrixClient } from "../sdk.js";
@@ -59,7 +58,10 @@ export async function readPinnedEvents(client: MatrixClient, roomId: string): Pr
     const pinned = content.pinned;
     return pinned.filter((id) => id.trim().length > 0);
   } catch (err: unknown) {
-    if (isMatrixNotFoundError(err)) {
+    const errObj = err as { statusCode?: number; body?: { errcode?: string } };
+    const httpStatus = errObj.statusCode;
+    const errcode = errObj.body?.errcode;
+    if (httpStatus === 404 || errcode === "M_NOT_FOUND") {
       return [];
     }
     throw err;

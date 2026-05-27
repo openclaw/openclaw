@@ -1,7 +1,7 @@
 import {
   resolveProviderModelPickerFlowContributions,
   resolveProviderModelPickerFlowEntries,
-} from "../flows/provider-flow.runtime.js";
+} from "../flows/provider-flow.js";
 import { runProviderPluginAuthMethod } from "../plugins/provider-auth-choice.js";
 import {
   resolveProviderPluginChoice,

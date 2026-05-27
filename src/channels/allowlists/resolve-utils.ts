@@ -1,9 +1,5 @@
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { RuntimeEnv } from "../../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
 
 export type AllowlistUserResolutionLike = {
@@ -20,7 +16,7 @@ function dedupeAllowlistEntries(entries: string[]): string[] {
     if (!normalized) {
       continue;
     }
-    const key = normalizeLowercaseStringOrEmpty(normalized);
+    const key = normalized.toLowerCase();
     if (seen.has(key)) {
       continue;
     }
@@ -59,13 +55,13 @@ export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutio
   return { resolvedMap, mapping, unresolved, additions };
 }
 
-function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLike>(params: {
+export function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLike>(params: {
   existing: Array<string | number>;
   resolvedMap: Map<string, T>;
 }): string[] {
   const additions: string[] = [];
   for (const entry of params.existing) {
-    const trimmed = normalizeOptionalString(entry) ?? "";
+    const trimmed = String(entry).trim();
     const resolved = params.resolvedMap.get(trimmed);
     if (resolved?.resolved && resolved.id) {
       additions.push(resolved.id);
@@ -79,7 +75,7 @@ export function canonicalizeAllowlistWithResolvedIds<
 >(params: { existing?: Array<string | number>; resolvedMap: Map<string, T> }): string[] {
   const canonicalized: string[] = [];
   for (const entry of params.existing ?? []) {
-    const trimmed = normalizeOptionalString(entry) ?? "";
+    const trimmed = String(entry).trim();
     if (!trimmed) {
       continue;
     }
@@ -140,7 +136,7 @@ export function addAllowlistUserEntriesFromConfigEntry(target: Set<string>, entr
     return;
   }
   for (const value of users) {
-    const trimmed = normalizeOptionalString(value) ?? "";
+    const trimmed = String(value).trim();
     if (trimmed && trimmed !== "*") {
       target.add(trimmed);
     }

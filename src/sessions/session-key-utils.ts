@@ -1,76 +1,18 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-
 export type ParsedAgentSessionKey = {
   agentId: string;
   rest: string;
 };
 
-export type ParsedThreadSessionSuffix = {
-  baseSessionKey: string | undefined;
-  threadId: string | undefined;
-};
-
-export type RawSessionConversationRef = {
-  channel: string;
-  kind: "group" | "channel";
-  rawId: string;
-  prefix: string;
-};
-
-export function normalizeSessionPeerId(params: {
-  channel: string | undefined | null;
-  peerKind?: string | null;
-  peerId?: string | null;
-}): string {
-  const peerId = (params.peerId ?? "").trim();
-  if (!peerId) {
-    return "";
-  }
-  const channel = normalizeLowercaseStringOrEmpty(params.channel);
-  const peerKind = normalizeLowercaseStringOrEmpty(params.peerKind);
-  return channel === "signal" && peerKind === "group"
-    ? peerId
-    : normalizeLowercaseStringOrEmpty(peerId);
-}
-
-const SIGNAL_GROUP_SESSION_SEGMENT_RE = /(^|:)signal:group:([^:]+)/gi;
-
-export function normalizeSessionKeyPreservingOpaquePeerIds(
-  sessionKey: string | undefined | null,
-): string {
-  const raw = normalizeOptionalString(sessionKey);
-  if (!raw) {
-    return "";
-  }
-
-  let normalized = "";
-  let cursor = 0;
-  for (const match of raw.matchAll(SIGNAL_GROUP_SESSION_SEGMENT_RE)) {
-    const matchIndex = match.index ?? 0;
-    const matched = match[0] ?? "";
-    const peerId = match[2] ?? "";
-    const peerStart = matchIndex + matched.length - peerId.length;
-    normalized += normalizeLowercaseStringOrEmpty(raw.slice(cursor, peerStart));
-    normalized += peerId.trim();
-    cursor = matchIndex + matched.length;
-  }
-  normalized += normalizeLowercaseStringOrEmpty(raw.slice(cursor));
-  return normalized;
-}
+export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
 
 /**
  * Parse agent-scoped session keys in a canonical, case-insensitive way.
- * Returned values are canonicalized for stable comparisons/routing while
- * preserving provider-owned opaque peer IDs.
+ * Returned values are normalized to lowercase for stable comparisons/routing.
  */
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {
-  const raw = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
+  const raw = (sessionKey ?? "").trim().toLowerCase();
   if (!raw) {
     return null;
   }
@@ -81,7 +23,7 @@ export function parseAgentSessionKey(
   if (parts[0] !== "agent") {
     return null;
   }
-  const agentId = normalizeOptionalString(parts[1]);
+  const agentId = parts[1]?.trim();
   const rest = parts.slice(2).join(":");
   if (!agentId || !rest) {
     return null;
@@ -89,12 +31,39 @@ export function parseAgentSessionKey(
   return { agentId, rest };
 }
 
+/**
+ * Best-effort chat-type extraction from session keys across canonical and legacy formats.
+ */
+export function deriveSessionChatType(sessionKey: string | undefined | null): SessionKeyChatType {
+  const raw = (sessionKey ?? "").trim().toLowerCase();
+  if (!raw) {
+    return "unknown";
+  }
+  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
+  const tokens = new Set(scoped.split(":").filter(Boolean));
+  if (tokens.has("group")) {
+    return "group";
+  }
+  if (tokens.has("channel")) {
+    return "channel";
+  }
+  if (tokens.has("direct") || tokens.has("dm")) {
+    return "direct";
+  }
+  // Legacy Discord keys can be shaped like:
+  // discord:<accountId>:guild-<guildId>:channel-<channelId>
+  if (/^discord:(?:[^:]+:)?guild-[^:]+:channel-[^:]+$/.test(scoped)) {
+    return "channel";
+  }
+  return "unknown";
+}
+
 export function isCronRunSessionKey(sessionKey: string | undefined | null): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
     return false;
   }
-  return /^cron:[^:]+:run:[^:]+(?::|$)/.test(parsed.rest);
+  return /^cron:[^:]+:run:[^:]+$/.test(parsed.rest);
 }
 
 export function isCronSessionKey(sessionKey: string | undefined | null): boolean {
@@ -102,23 +71,23 @@ export function isCronSessionKey(sessionKey: string | undefined | null): boolean
   if (!parsed) {
     return false;
   }
-  return normalizeOptionalLowercaseString(parsed.rest)?.startsWith("cron:") === true;
+  return parsed.rest.toLowerCase().startsWith("cron:");
 }
 
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
-  const raw = normalizeOptionalString(sessionKey);
+  const raw = (sessionKey ?? "").trim();
   if (!raw) {
     return false;
   }
-  if (normalizeOptionalLowercaseString(raw)?.startsWith("subagent:")) {
+  if (raw.toLowerCase().startsWith("subagent:")) {
     return true;
   }
   const parsed = parseAgentSessionKey(raw);
-  return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("subagent:") === true;
+  return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("subagent:"));
 }
 
 export function getSubagentDepth(sessionKey: string | undefined | null): number {
-  const raw = normalizeOptionalLowercaseString(sessionKey);
+  const raw = (sessionKey ?? "").trim().toLowerCase();
   if (!raw) {
     return 0;
   }
@@ -126,80 +95,38 @@ export function getSubagentDepth(sessionKey: string | undefined | null): number 
 }
 
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
-  const raw = normalizeOptionalString(sessionKey);
+  const raw = (sessionKey ?? "").trim();
   if (!raw) {
     return false;
   }
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  const normalized = raw.toLowerCase();
   if (normalized.startsWith("acp:")) {
     return true;
   }
   const parsed = parseAgentSessionKey(raw);
-  return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("acp:") === true;
+  return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("acp:"));
 }
 
-export function parseThreadSessionSuffix(
-  sessionKey: string | undefined | null,
-): ParsedThreadSessionSuffix {
-  const raw = normalizeOptionalString(sessionKey);
-  if (!raw) {
-    return { baseSessionKey: undefined, threadId: undefined };
-  }
-
-  const lowerRaw = normalizeLowercaseStringOrEmpty(raw);
-  const threadMarker = ":thread:";
-  const threadIndex = lowerRaw.lastIndexOf(threadMarker);
-  const markerIndex = threadIndex;
-  const marker = threadMarker;
-
-  const baseSessionKey = markerIndex === -1 ? raw : raw.slice(0, markerIndex);
-  const threadIdRaw = markerIndex === -1 ? undefined : raw.slice(markerIndex + marker.length);
-  const threadId = normalizeOptionalString(threadIdRaw);
-
-  return { baseSessionKey, threadId };
-}
-
-export function parseRawSessionConversationRef(
-  sessionKey: string | undefined | null,
-): RawSessionConversationRef | null {
-  const raw = normalizeOptionalString(sessionKey);
-  if (!raw) {
-    return null;
-  }
-
-  const rawParts = raw.split(":").filter(Boolean);
-  const bodyStartIndex =
-    rawParts.length >= 3 && normalizeOptionalLowercaseString(rawParts[0]) === "agent" ? 2 : 0;
-  const parts = rawParts.slice(bodyStartIndex);
-  if (parts.length < 3) {
-    return null;
-  }
-
-  const channel = normalizeOptionalLowercaseString(parts[0]);
-  const kind = normalizeOptionalLowercaseString(parts[1]);
-  if (!channel || (kind !== "group" && kind !== "channel")) {
-    return null;
-  }
-
-  const rawId = normalizeOptionalString(parts.slice(2).join(":"));
-  const prefix = normalizeOptionalString(rawParts.slice(0, bodyStartIndex + 2).join(":"));
-  if (!rawId || !prefix) {
-    return null;
-  }
-
-  return { channel, kind, rawId, prefix };
-}
+const THREAD_SESSION_MARKERS = [":thread:", ":topic:"];
 
 export function resolveThreadParentSessionKey(
   sessionKey: string | undefined | null,
 ): string | null {
-  const { baseSessionKey, threadId } = parseThreadSessionSuffix(sessionKey);
-  if (!threadId) {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) {
     return null;
   }
-  const parent = normalizeOptionalString(baseSessionKey);
-  if (!parent) {
+  const normalized = raw.toLowerCase();
+  let idx = -1;
+  for (const marker of THREAD_SESSION_MARKERS) {
+    const candidate = normalized.lastIndexOf(marker);
+    if (candidate > idx) {
+      idx = candidate;
+    }
+  }
+  if (idx <= 0) {
     return null;
   }
-  return parent;
+  const parent = raw.slice(0, idx).trim();
+  return parent ? parent : null;
 }

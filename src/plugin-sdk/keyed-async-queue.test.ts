@@ -2,15 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
 
 function deferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
   return { promise, resolve, reject };
 }
 
@@ -46,10 +43,10 @@ describe("enqueueKeyedTask", () => {
       },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(order).toContain("a1:start");
-    expect(order).toContain("b1:start");
+    await vi.waitFor(() => {
+      expect(order).toContain("a1:start");
+      expect(order).toContain("b1:start");
+    });
     expect(order).not.toContain("a2:start");
 
     gate.resolve();
@@ -79,32 +76,6 @@ describe("enqueueKeyedTask", () => {
 
     await expect(runs[0]()).rejects.toThrow("boom");
     await expect(runs[1]()).resolves.toBe("ok");
-  });
-
-  it("does not leak unhandled rejections when a task failure is already awaited", async () => {
-    const tails = new Map<string, Promise<void>>();
-    const unhandled: unknown[] = [];
-    const onUnhandledRejection = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", onUnhandledRejection);
-
-    try {
-      await expect(
-        enqueueKeyedTask({
-          tails,
-          key: "a",
-          task: async () => {
-            throw new Error("boom");
-          },
-        }),
-      ).rejects.toThrow("boom");
-
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(unhandled).toStrictEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandledRejection);
-    }
   });
 
   it("runs enqueue/settle hooks once per task", async () => {

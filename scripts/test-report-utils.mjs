@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const normalizeRepoPath = (value) => value.split(path.sep).join("/");
+export const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 const repoRoot = path.resolve(process.cwd());
 
 export function normalizeTrackedRepoPath(value) {
@@ -29,6 +29,10 @@ export function tryReadJsonFile(filePath, fallback) {
   }
 }
 
+export function writeJsonFile(filePath, value) {
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
 export function runVitestJsonReport({
   config,
   reportPath = "",
@@ -39,16 +43,7 @@ export function runVitestJsonReport({
   if (!(reportPath && fs.existsSync(resolvedReportPath))) {
     const run = spawnSync(
       "pnpm",
-      [
-        "exec",
-        "vitest",
-        "run",
-        "--config",
-        config,
-        "--reporter=json",
-        "--outputFile",
-        resolvedReportPath,
-      ],
+      ["vitest", "run", "--config", config, "--reporter=json", "--outputFile", resolvedReportPath],
       {
         stdio: "inherit",
         env: process.env,
@@ -77,27 +72,4 @@ export function collectVitestFileDurations(report, normalizeFile = (value) => va
       };
     })
     .filter((entry) => entry.file.length > 0 && entry.durationMs > 0);
-}
-
-export function collectVitestAssertionDurations(report, normalizeFile = (value) => value) {
-  return (report.testResults ?? []).flatMap((result) => {
-    const file = typeof result.name === "string" ? normalizeFile(result.name) : "";
-    if (!file) {
-      return [];
-    }
-    return (result.assertionResults ?? [])
-      .map((assertion) => {
-        const durationMs =
-          typeof assertion?.duration === "number" && Number.isFinite(assertion.duration)
-            ? assertion.duration
-            : 0;
-        return {
-          file,
-          durationMs,
-          fullName: typeof assertion?.fullName === "string" ? assertion.fullName : "",
-          status: typeof assertion?.status === "string" ? assertion.status : "unknown",
-        };
-      })
-      .filter((entry) => entry.durationMs > 0);
-  });
 }

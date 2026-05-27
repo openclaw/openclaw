@@ -1,11 +1,11 @@
 ---
 name: openclaw-ghsa-maintainer
-description: Inspect, patch, validate, publish, or confirm OpenClaw GHSA security advisories and private-fork state.
+description: Maintainer workflow for OpenClaw GitHub Security Advisories (GHSA). Use when Codex needs to inspect, patch, validate, or publish a repo advisory, verify private-fork state, prepare advisory Markdown or JSON payloads safely, handle GHSA API-specific publish constraints, or confirm advisory publish success.
 ---
 
 # OpenClaw GHSA Maintainer
 
-Use this skill for repo security advisory workflow only. Keep general release work in `release-openclaw-maintainer`.
+Use this skill for repo security advisory workflow only. Keep general release work in `openclaw-release-maintainer`.
 
 ## Respect advisory guardrails
 

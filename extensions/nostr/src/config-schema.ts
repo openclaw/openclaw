@@ -1,10 +1,10 @@
 import {
   AllowFromListSchema,
+  buildChannelConfigSchema,
   DmPolicySchema,
   MarkdownConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-primitives";
-import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 
 /**
  * Validates https:// URLs only (no javascript:, data:, file:, etc.)
@@ -54,16 +54,7 @@ export const NostrProfileSchema = z.object({
   lud16: z.string().optional(),
 });
 
-export interface NostrProfile {
-  name?: string;
-  displayName?: string;
-  about?: string;
-  picture?: string;
-  banner?: string;
-  website?: string;
-  nip05?: string;
-  lud16?: string;
-}
+export type NostrProfile = z.infer<typeof NostrProfileSchema>;
 
 /**
  * Zod schema for channels.nostr.* configuration
@@ -82,7 +73,7 @@ export const NostrConfigSchema = z.object({
   markdown: MarkdownConfigSchema,
 
   /** Private key in hex or nsec bech32 format */
-  privateKey: buildSecretInputSchema().optional(),
+  privateKey: z.string().optional(),
 
   /** WebSocket relay URLs to connect to */
   relays: z.array(z.string()).optional(),
@@ -96,3 +87,10 @@ export const NostrConfigSchema = z.object({
   /** Profile metadata (NIP-01 kind:0 content) */
   profile: NostrProfileSchema.optional(),
 });
+
+export type NostrConfig = z.infer<typeof NostrConfigSchema>;
+
+/**
+ * JSON Schema for Control UI (converted from Zod)
+ */
+export const nostrChannelConfigSchema = buildChannelConfigSchema(NostrConfigSchema);

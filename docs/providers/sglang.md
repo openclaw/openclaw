@@ -6,60 +6,45 @@ read_when:
 title: "SGLang"
 ---
 
-SGLang serves open-weight models via an OpenAI-compatible HTTP API. OpenClaw connects to SGLang using the `openai-completions` provider family with auto-discovery of available models.
+# SGLang
 
-| Property                  | Value                                                        |
-| ------------------------- | ------------------------------------------------------------ |
-| Provider id               | `sglang`                                                     |
-| Plugin                    | bundled, `enabledByDefault: true`                            |
-| Auth env var              | `SGLANG_API_KEY` (any non-empty value if server has no auth) |
-| Onboarding flag           | `--auth-choice sglang`                                       |
-| API                       | OpenAI-compatible (`openai-completions`)                     |
-| Default base URL          | `http://127.0.0.1:30000/v1`                                  |
-| Default model placeholder | `sglang/Qwen/Qwen3-8B`                                       |
-| Streaming usage           | Yes (`supportsStreamingUsage: true`)                         |
-| Pricing                   | Marked external-free (`modelPricing.external: false`)        |
+SGLang can serve open-source models via an **OpenAI-compatible** HTTP API.
+OpenClaw can connect to SGLang using the `openai-completions` API.
 
-OpenClaw also **auto-discovers** available models from SGLang when you opt in with `SGLANG_API_KEY`. Use `sglang/*` in `agents.defaults.models` to keep discovery dynamic when you also configure a custom SGLang base URL. See [Model discovery (implicit provider)](#model-discovery-implicit-provider) below.
+OpenClaw can also **auto-discover** available models from SGLang when you opt
+in with `SGLANG_API_KEY` (any value works if your server does not enforce auth)
+and you do not define an explicit `models.providers.sglang` entry.
 
-## Getting started
+## Quick start
 
-<Steps>
-  <Step title="Start SGLang">
-    Launch SGLang with an OpenAI-compatible server. Your base URL should expose
-    `/v1` endpoints (for example `/v1/models`, `/v1/chat/completions`). SGLang
-    commonly runs on:
+1. Start SGLang with an OpenAI-compatible server.
 
-    - `http://127.0.0.1:30000/v1`
+Your base URL should expose `/v1` endpoints (for example `/v1/models`,
+`/v1/chat/completions`). SGLang commonly runs on:
 
-  </Step>
-  <Step title="Set an API key">
-    Any value works if no auth is configured on your server:
+- `http://127.0.0.1:30000/v1`
 
-    ```bash
-    export SGLANG_API_KEY="sglang-local"
-    ```
+2. Opt in (any value works if no auth is configured):
 
-  </Step>
-  <Step title="Run onboarding or set a model directly">
-    ```bash
-    openclaw onboard
-    ```
+```bash
+export SGLANG_API_KEY="sglang-local"
+```
 
-    Or configure the model manually:
+3. Run onboarding and choose `SGLang`, or set a model directly:
 
-    ```json5
-    {
-      agents: {
-        defaults: {
-          model: { primary: "sglang/your-model-id" },
-        },
-      },
-    }
-    ```
+```bash
+openclaw onboard
+```
 
-  </Step>
-</Steps>
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "sglang/your-model-id" },
+    },
+  },
+}
+```
 
 ## Model discovery (implicit provider)
 
@@ -70,12 +55,8 @@ define `models.providers.sglang`, OpenClaw will query:
 
 and convert the returned IDs into model entries.
 
-<Note>
-If you set `models.providers.sglang` explicitly, OpenClaw uses your declared
-models by default. Add `"sglang/*": {}` to `agents.defaults.models` when you
-want OpenClaw to query that configured provider's `/models` endpoint and include
-all advertised SGLang models.
-</Note>
+If you set `models.providers.sglang` explicitly, auto-discovery is skipped and
+you must define models manually.
 
 ## Explicit configuration (manual models)
 
@@ -110,52 +91,14 @@ Use explicit config when:
 }
 ```
 
-## Advanced configuration
+## Troubleshooting
 
-<AccordionGroup>
-  <Accordion title="Proxy-style behavior">
-    SGLang is treated as a proxy-style OpenAI-compatible `/v1` backend, not a
-    native OpenAI endpoint.
+- Check the server is reachable:
 
-    | Behavior | SGLang |
-    |----------|--------|
-    | OpenAI-only request shaping | Not applied |
-    | `service_tier`, Responses `store`, prompt-cache hints | Not sent |
-    | Reasoning-compat payload shaping | Not applied |
-    | Hidden attribution headers (`originator`, `version`, `User-Agent`) | Not injected on custom SGLang base URLs |
+```bash
+curl http://127.0.0.1:30000/v1/models
+```
 
-  </Accordion>
-
-  <Accordion title="Troubleshooting">
-    **Server not reachable**
-
-    Verify the server is running and responding:
-
-    ```bash
-    curl http://127.0.0.1:30000/v1/models
-    ```
-
-    **Auth errors**
-
-    If requests fail with auth errors, set a real `SGLANG_API_KEY` that matches
-    your server configuration, or configure the provider explicitly under
-    `models.providers.sglang`.
-
-    <Tip>
-    If you run SGLang without authentication, any non-empty value for
-    `SGLANG_API_KEY` is sufficient to opt in to model discovery.
-    </Tip>
-
-  </Accordion>
-</AccordionGroup>
-
-## Related
-
-<CardGroup cols={2}>
-  <Card title="Model selection" href="/concepts/model-providers" icon="layers">
-    Choosing providers, model refs, and failover behavior.
-  </Card>
-  <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
-    Full config schema including provider entries.
-  </Card>
-</CardGroup>
+- If requests fail with auth errors, set a real `SGLANG_API_KEY` that matches
+  your server configuration, or configure the provider explicitly under
+  `models.providers.sglang`.

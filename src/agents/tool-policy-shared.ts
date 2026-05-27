@@ -1,5 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   CORE_TOOL_GROUPS,
   resolveCoreToolProfilePolicy,
@@ -19,7 +17,7 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
 export const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
 
 export function normalizeToolName(name: string) {
-  const normalized = normalizeLowercaseStringOrEmpty(name);
+  const normalized = name.trim().toLowerCase();
   return TOOL_NAME_ALIASES[normalized] ?? normalized;
 }
 
@@ -41,7 +39,7 @@ export function expandToolGroups(list?: string[]) {
     }
     expanded.push(value);
   }
-  return uniqueStrings(expanded);
+  return Array.from(new Set(expanded));
 }
 
 export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {

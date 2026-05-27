@@ -9,11 +9,13 @@ import {
   PROVIDER_ID,
   applyFoundryProfileBinding,
   applyFoundryProviderConfig,
+  buildFoundryModelCompat,
   buildFoundryProviderBaseUrl,
   extractFoundryEndpoint,
   isFoundryProviderApi,
   normalizeFoundryEndpoint,
-  resolveFoundryModelCapabilities,
+  resolveConfiguredModelNameHint,
+  resolveFoundryApi,
   resolveFoundryTargetProfileId,
 } from "./shared.js";
 
@@ -24,26 +26,21 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
     docsPath: "/providers/models",
     envVars: ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"],
     auth: [entraIdAuthMethod, apiKeyAuthMethod],
+    capabilities: {
+      providerFamily: "openai" as const,
+    },
     onModelSelected: async (ctx) => {
       const providerConfig = ctx.config.models?.providers?.[PROVIDER_ID];
-      if (
-        !providerConfig ||
-        !providerConfig.baseUrl?.trim() ||
-        !Array.isArray(providerConfig.models) ||
-        !ctx.model.startsWith(`${PROVIDER_ID}/`)
-      ) {
+      if (!providerConfig || !ctx.model.startsWith(`${PROVIDER_ID}/`)) {
         return;
       }
       const selectedModelId = ctx.model.slice(`${PROVIDER_ID}/`.length);
-      const configuredModels = providerConfig.models ?? [];
-      const existingModel = configuredModels.find(
+      const existingModel = providerConfig.models.find(
         (model: { id: string }) => model.id === selectedModelId,
       );
-      const selectedModelCapabilities = resolveFoundryModelCapabilities(
+      const selectedModelNameHint = resolveConfiguredModelNameHint(
         selectedModelId,
         existingModel?.name,
-        isFoundryProviderApi(existingModel?.api) ? existingModel.api : providerConfig.api,
-        existingModel?.input,
       );
       const providerEndpoint = normalizeFoundryEndpoint(providerConfig.baseUrl ?? "");
       // Prefer the persisted per-model API choice from onboarding/discovery so arbitrary
@@ -51,31 +48,31 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
       const selectedModelApi = isFoundryProviderApi(existingModel?.api)
         ? existingModel.api
         : providerConfig.api;
-      const nextModels = configuredModels.map((model) => {
-        if (model.id !== selectedModelId) {
-          return model;
-        }
-        const nextModel = Object.assign({}, model, {
-          name: selectedModelCapabilities.modelName,
-          api: selectedModelCapabilities.api,
-          input: selectedModelCapabilities.input,
-        });
-        if (selectedModelCapabilities.compat) {
-          nextModel.compat = selectedModelCapabilities.compat;
-        }
-        return nextModel;
-      });
+      const selectedModelCompat = buildFoundryModelCompat(
+        selectedModelId,
+        selectedModelNameHint,
+        selectedModelApi,
+      );
+      const nextModels = providerConfig.models.map((model) =>
+        model.id === selectedModelId
+          ? {
+              ...model,
+              api: resolveFoundryApi(selectedModelId, selectedModelNameHint, selectedModelApi),
+              ...(selectedModelCompat ? { compat: selectedModelCompat } : {}),
+            }
+          : model,
+      );
       if (!nextModels.some((model) => model.id === selectedModelId)) {
         nextModels.push({
           id: selectedModelId,
-          name: selectedModelCapabilities.modelName,
-          api: selectedModelCapabilities.api,
+          name: selectedModelNameHint ?? selectedModelId,
+          api: resolveFoundryApi(selectedModelId, selectedModelNameHint, selectedModelApi),
           reasoning: false,
-          input: selectedModelCapabilities.input,
+          input: ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 128_000,
           maxTokens: 16_384,
-          ...(selectedModelCapabilities.compat ? { compat: selectedModelCapabilities.compat } : {}),
+          ...(selectedModelCompat ? { compat: selectedModelCompat } : {}),
         });
       }
       const nextProviderConfig: ModelProviderConfig = {
@@ -83,10 +80,10 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         baseUrl: buildFoundryProviderBaseUrl(
           providerEndpoint,
           selectedModelId,
-          selectedModelCapabilities.modelName,
+          selectedModelNameHint,
           selectedModelApi,
         ),
-        api: selectedModelCapabilities.api,
+        api: resolveFoundryApi(selectedModelId, selectedModelNameHint, selectedModelApi),
         models: nextModels,
       };
       const targetProfileId = resolveFoundryTargetProfileId(ctx.config);
@@ -96,28 +93,18 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
       applyFoundryProviderConfig(ctx.config, nextProviderConfig);
     },
     normalizeResolvedModel: ({ modelId, model }: ProviderNormalizeResolvedModelContext) => {
-      const endpoint = extractFoundryEndpoint(model.baseUrl ?? "");
+      const endpoint = extractFoundryEndpoint(String(model.baseUrl ?? ""));
       if (!endpoint) {
         return model;
       }
-      const capabilities = resolveFoundryModelCapabilities(
-        modelId,
-        model.name,
-        isFoundryProviderApi(model.api) ? model.api : undefined,
-        model.input,
-      );
+      const modelNameHint = resolveConfiguredModelNameHint(modelId, model.name);
+      const configuredApi = isFoundryProviderApi(model.api) ? model.api : undefined;
+      const compat = buildFoundryModelCompat(modelId, modelNameHint, configuredApi);
       return {
         ...model,
-        name: capabilities.modelName,
-        api: capabilities.api,
-        input: capabilities.input,
-        baseUrl: buildFoundryProviderBaseUrl(
-          endpoint,
-          modelId,
-          capabilities.modelName,
-          capabilities.api,
-        ),
-        ...(capabilities.compat ? { compat: capabilities.compat } : {}),
+        api: resolveFoundryApi(modelId, modelNameHint, configuredApi),
+        baseUrl: buildFoundryProviderBaseUrl(endpoint, modelId, modelNameHint, configuredApi),
+        ...(compat ? { compat } : {}),
       };
     },
     prepareRuntimeAuth: prepareFoundryRuntimeAuth,

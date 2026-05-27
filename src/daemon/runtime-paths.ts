@@ -5,16 +5,12 @@ import { promisify } from "node:util";
 import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
   "/.fnm/",
-  "/.local/share/fnm/",
-  "/library/application support/fnm/",
   "/.volta/",
   "/.asdf/",
-  "/.local/share/mise/",
   "/.n/",
   "/.nodenv/",
   "/.nodebrew/",
@@ -27,7 +23,7 @@ function getPathModule(platform: NodeJS.Platform) {
 
 function isNodeExecPath(execPath: string, platform: NodeJS.Platform): boolean {
   const pathModule = getPathModule(platform);
-  const base = normalizeLowercaseStringOrEmpty(pathModule.basename(execPath));
+  const base = pathModule.basename(execPath).toLowerCase();
   return base === "node" || base === "node.exe";
 }
 
@@ -35,7 +31,7 @@ function normalizeForCompare(input: string, platform: NodeJS.Platform): string {
   const pathModule = getPathModule(platform);
   const normalized = pathModule.normalize(input).replaceAll("\\", "/");
   if (platform === "win32") {
-    return normalizeLowercaseStringOrEmpty(normalized);
+    return normalized.toLowerCase();
   }
   return normalized;
 }
@@ -45,17 +41,7 @@ function buildSystemNodeCandidates(
   platform: NodeJS.Platform,
 ): string[] {
   if (platform === "darwin") {
-    return [
-      "/opt/homebrew/bin/node",
-      "/opt/homebrew/opt/node/bin/node",
-      "/opt/homebrew/opt/node@24/bin/node",
-      "/opt/homebrew/opt/node@22/bin/node",
-      "/usr/local/bin/node",
-      "/usr/local/opt/node/bin/node",
-      "/usr/local/opt/node@24/bin/node",
-      "/usr/local/opt/node@22/bin/node",
-      "/usr/bin/node",
-    ];
+    return ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"];
   }
   if (platform === "linux") {
     return ["/usr/local/bin/node", "/usr/bin/node"];
@@ -92,29 +78,17 @@ async function resolveNodeVersion(
   }
 }
 
-type SystemNodeInfo = {
+export type SystemNodeInfo = {
   path: string;
   version: string | null;
   supported: boolean;
 };
 
-async function isVersionManagedRealNodePath(
-  nodePath: string,
-  platform: NodeJS.Platform,
-): Promise<boolean> {
-  try {
-    const realPath = await fs.realpath(nodePath);
-    return isVersionManagedNodePath(realPath, platform);
-  } catch {
-    return false;
-  }
-}
-
 export function isVersionManagedNodePath(
   nodePath: string,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(normalizeForCompare(nodePath, platform));
+  const normalized = normalizeForCompare(nodePath, platform);
   return VERSION_MANAGER_MARKERS.some((marker) => normalized.includes(marker));
 }
 
@@ -153,29 +127,17 @@ export async function resolveSystemNodeInfo(params: {
 }): Promise<SystemNodeInfo | null> {
   const env = params.env ?? process.env;
   const platform = params.platform ?? process.platform;
-  const execFileImpl = params.execFile ?? execFileAsync;
-  let firstAvailable: SystemNodeInfo | null = null;
-  for (const systemNode of buildSystemNodeCandidates(env, platform)) {
-    try {
-      await fs.access(systemNode);
-    } catch {
-      continue;
-    }
-    if (await isVersionManagedRealNodePath(systemNode, platform)) {
-      continue;
-    }
-    const version = await resolveNodeVersion(systemNode, execFileImpl);
-    const info = {
-      path: systemNode,
-      version,
-      supported: isSupportedNodeVersion(version),
-    };
-    if (info.supported) {
-      return info;
-    }
-    firstAvailable ??= info;
+  const systemNode = await resolveSystemNodePath(env, platform);
+  if (!systemNode) {
+    return null;
   }
-  return firstAvailable;
+
+  const version = await resolveNodeVersion(systemNode, params.execFile ?? execFileAsync);
+  return {
+    path: systemNode,
+    version,
+    supported: isSupportedNodeVersion(version),
+  };
 }
 
 export function renderSystemNodeWarning(
@@ -187,7 +149,7 @@ export function renderSystemNodeWarning(
   }
   const versionLabel = systemNode.version ?? "unknown";
   const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
-  return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22.19+.${selectedLabel} Install Node 24 (recommended) or Node 22 LTS from nodejs.org or Homebrew.`;
+  return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22.14+.${selectedLabel} Install Node 24 (recommended) or Node 22 LTS from nodejs.org or Homebrew.`;
 }
 export { resolveStableNodePath };
 
@@ -202,25 +164,15 @@ export async function resolvePreferredNodePath(params: {
     return undefined;
   }
 
+  // Prefer the node that is currently running `openclaw gateway install`.
+  // This respects the user's active version manager (fnm/nvm/volta/etc.).
   const platform = params.platform ?? process.platform;
   const currentExecPath = params.execPath ?? process.execPath;
-  const execFileImpl = params.execFile ?? execFileAsync;
   if (currentExecPath && isNodeExecPath(currentExecPath, platform)) {
+    const execFileImpl = params.execFile ?? execFileAsync;
     const version = await resolveNodeVersion(currentExecPath, execFileImpl);
     if (isSupportedNodeVersion(version)) {
-      const stableCurrentPath = await resolveStableNodePath(currentExecPath);
-      if (!isVersionManagedNodePath(currentExecPath, platform)) {
-        return stableCurrentPath;
-      }
-      const systemNode = await resolveSystemNodeInfo({
-        env: params.env,
-        platform,
-        execFile: execFileImpl,
-      });
-      if (systemNode?.supported) {
-        return systemNode.path;
-      }
-      return stableCurrentPath;
+      return resolveStableNodePath(currentExecPath);
     }
   }
 

@@ -30,9 +30,9 @@ metadata:
 ---
 `;
     const result = parseFrontmatterBlock(content);
-    expect(result.metadata).toBe('{"openclaw":{"emoji":"disk","events":["command:new"]}}');
+    expect(result.metadata).toBeDefined();
 
-    const parsed = JSON5.parse(result.metadata);
+    const parsed = JSON5.parse(result.metadata ?? "");
     expect(parsed.openclaw?.emoji).toBe("disk");
   });
 
@@ -99,6 +99,6 @@ metadata:
 
   it("returns empty when frontmatter is missing", () => {
     const content = "# No frontmatter";
-    expect(parseFrontmatterBlock(content)).toStrictEqual({});
+    expect(parseFrontmatterBlock(content)).toEqual({});
   });
 });

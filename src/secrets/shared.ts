@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { privateFileStoreSync } from "../infra/private-file-store.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
-export { isRecord } from "../utils.js";
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 export function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -42,9 +43,9 @@ export function ensureDirForFile(filePath: string): void {
 }
 
 export function writeJsonFileSecure(pathname: string, value: unknown): void {
-  privateFileStoreSync(path.dirname(pathname)).writeJson(path.basename(pathname), value, {
-    trailingNewline: true,
-  });
+  ensureDirForFile(pathname);
+  fs.writeFileSync(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  fs.chmodSync(pathname, 0o600);
 }
 
 export function readTextFileIfExists(pathname: string): string | null {
@@ -55,14 +56,30 @@ export function readTextFileIfExists(pathname: string): string | null {
 }
 
 export function writeTextFileAtomic(pathname: string, value: string, mode = 0o600): void {
-  if (mode !== 0o600) {
-    replaceFileAtomicSync({
-      filePath: pathname,
-      content: value,
-      mode,
-      tempPrefix: ".openclaw-secrets",
-    });
-    return;
+  ensureDirForFile(pathname);
+  const tempPath = `${pathname}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tempPath, value, "utf8");
+  fs.chmodSync(tempPath, mode);
+  fs.renameSync(tempPath, pathname);
+}
+
+export function describeUnknownError(err: unknown): string {
+  if (err instanceof Error && err.message.trim().length > 0) {
+    return err.message;
   }
-  privateFileStoreSync(path.dirname(pathname)).writeText(path.basename(pathname), value);
+  if (typeof err === "string" && err.trim().length > 0) {
+    return err;
+  }
+  if (typeof err === "number" || typeof err === "bigint") {
+    return err.toString();
+  }
+  if (typeof err === "boolean") {
+    return err ? "true" : "false";
+  }
+  try {
+    const serialized = JSON.stringify(err);
+    return serialized ?? "unknown error";
+  } catch {
+    return "unknown error";
+  }
 }

@@ -1,15 +1,13 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission
-        android:name="android.permission.READ_MEDIA_IMAGES"
+        android:name="android.permission.SEND_SMS"
         tools:node="remove" />
     <uses-permission
-        android:name="android.permission.READ_MEDIA_VIDEO"
+        android:name="android.permission.READ_SMS"
         tools:node="remove" />
     <uses-permission
-        android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
-        tools:node="remove" />
-    <uses-permission
-        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:name="android.permission.READ_CALL_LOG"
         tools:node="remove" />
 </manifest>

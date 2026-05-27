@@ -1,17 +1,17 @@
 import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-auth-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+} from "openclaw/plugin-sdk/approval-runtime";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
 function normalizeNextcloudTalkApproverId(value: string | number): string | undefined {
-  return normalizeOptionalLowercaseString(
-    String(value)
-      .trim()
-      .replace(/^(nextcloud-talk|nc-talk|nc):/i, ""),
-  );
+  const normalized = String(value)
+    .trim()
+    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
+    .trim()
+    .toLowerCase();
+  return normalized || undefined;
 }
 
 export const nextcloudTalkApprovalAuth = createResolvedApproverActionAuthAdapter({

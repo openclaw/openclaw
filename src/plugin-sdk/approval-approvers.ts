@@ -1,9 +1,14 @@
-import { uniqueStrings } from "../shared/string-normalization.js";
-
 type ApproverInput = string | number;
 
 function dedupeDefined(values: Array<string | undefined>): string[] {
-  return uniqueStrings(values.filter((value): value is string => Boolean(value)));
+  const resolved = new Set<string>();
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+    resolved.add(value);
+  }
+  return [...resolved];
 }
 
 export function resolveApprovalApprovers(params: {

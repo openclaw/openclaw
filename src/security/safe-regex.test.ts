@@ -6,22 +6,12 @@ import {
   testRegexWithBoundedInput,
 } from "./safe-regex.js";
 
-function expectCompiledRegex(pattern: string, flags?: string): RegExp {
-  const re = compileSafeRegex(pattern, flags);
-  expect(re).toBeInstanceOf(RegExp);
-  if (!re) {
-    throw new Error(`Expected ${pattern} to compile safely`);
-  }
-  return re;
-}
-
 describe("safe regex", () => {
   it.each([
     ["(a+)+$", true],
     ["(a|aa)+$", true],
     ["^(?:foo|bar)$", false],
     ["^(ab|cd)+$", false],
-    [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`, false],
   ] as const)("classifies nested repetition for %s", (pattern, expected) => {
     expect(hasNestedRepetition(pattern)).toBe(expected);
   });
@@ -39,14 +29,16 @@ describe("safe regex", () => {
   });
 
   it("compiles common safe filter regex", () => {
-    const re = expectCompiledRegex("^agent:.*:discord:");
-    expect(re.test("agent:main:discord:channel:123")).toBe(true);
-    expect(re.test("agent:main:telegram:channel:123")).toBe(false);
+    const re = compileSafeRegex("^agent:.*:discord:");
+    expect(re).toBeInstanceOf(RegExp);
+    expect(re?.test("agent:main:discord:channel:123")).toBe(true);
+    expect(re?.test("agent:main:telegram:channel:123")).toBe(false);
   });
 
   it("supports explicit flags", () => {
-    const re = expectCompiledRegex("token=([A-Za-z0-9]+)", "gi");
-    expect("TOKEN=abcd1234".replace(re, "***")).toBe("***");
+    const re = compileSafeRegex("token=([A-Za-z0-9]+)", "gi");
+    expect(re).toBeInstanceOf(RegExp);
+    expect("TOKEN=abcd1234".replace(re as RegExp, "***")).toBe("***");
   });
 
   it.each([

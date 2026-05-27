@@ -1,40 +1,10 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 
 type ApprovalKind = "exec" | "plugin";
-type ApprovalAuthorizationResult = {
-  authorized: boolean;
-  reason?: string;
-};
-const IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION = Symbol(
-  "openclaw.implicitSameChatApprovalAuthorization",
-);
 
-function markImplicitSameChatApprovalAuthorization(
-  result: ApprovalAuthorizationResult,
-): ApprovalAuthorizationResult {
-  // Keep this non-enumerable to avoid changing auth payload shape.
-  // Consumers must pass the same object reference to
-  // `isImplicitSameChatApprovalAuthorization`; spread/Object.assign/JSON clones
-  // drop this marker.
-  Object.defineProperty(result, IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION, {
-    value: true,
-    enumerable: false,
-  });
-  return result;
-}
-
-export function isImplicitSameChatApprovalAuthorization(
-  result: ApprovalAuthorizationResult | null | undefined,
-): boolean {
-  return Boolean(
-    result &&
-    (
-      result as ApprovalAuthorizationResult & {
-        [IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION]?: true;
-      }
-    )[IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION],
-  );
+function defaultNormalizeSenderId(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed || undefined;
 }
 
 export function createResolvedApproverActionAuthAdapter(params: {
@@ -42,7 +12,7 @@ export function createResolvedApproverActionAuthAdapter(params: {
   resolveApprovers: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
   normalizeSenderId?: (value: string) => string | undefined;
 }) {
-  const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
+  const normalizeSenderId = params.normalizeSenderId ?? defaultNormalizeSenderId;
 
   return {
     authorizeActorAction({
@@ -59,8 +29,7 @@ export function createResolvedApproverActionAuthAdapter(params: {
     }) {
       const approvers = params.resolveApprovers({ cfg, accountId });
       if (approvers.length === 0) {
-        // Empty approver sets are implicit same-chat fallback, not explicit approver bypass.
-        return markImplicitSameChatApprovalAuthorization({ authorized: true });
+        return { authorized: true } as const;
       }
       const normalizedSenderId = senderId ? normalizeSenderId(senderId) : undefined;
       if (normalizedSenderId && approvers.includes(normalizedSenderId)) {

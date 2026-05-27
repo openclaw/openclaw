@@ -6,7 +6,7 @@ import {
   type BackoffPolicy,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
-import { type SignalApiMode, type SignalSseEvent, streamSignalEvents } from "./client-adapter.js";
+import { type SignalSseEvent, streamSignalEvents } from "./client.js";
 
 const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
   initialMs: 1_000,
@@ -21,8 +21,6 @@ type RunSignalSseLoopParams = {
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
   onEvent: (event: SignalSseEvent) => void;
-  timeoutMs?: number;
-  apiMode?: SignalApiMode;
   policy?: Partial<BackoffPolicy>;
 };
 
@@ -32,8 +30,6 @@ export async function runSignalSseLoop({
   abortSignal,
   runtime,
   onEvent,
-  timeoutMs,
-  apiMode,
   policy,
 }: RunSignalSseLoopParams) {
   const reconnectPolicy = {
@@ -49,24 +45,15 @@ export async function runSignalSseLoop({
     logVerbose(message);
   };
 
-  for (;;) {
-    if (abortSignal?.aborted) {
-      break;
-    }
+  while (!abortSignal?.aborted) {
     try {
       await streamSignalEvents({
         baseUrl,
         account,
         abortSignal,
-        timeoutMs,
-        apiMode,
-        onEvent: (event: SignalSseEvent) => {
+        onEvent: (event) => {
           reconnectAttempts = 0;
           onEvent(event);
-        },
-        logger: {
-          log: runtime.log,
-          error: runtime.error,
         },
       });
       if (abortSignal?.aborted) {
@@ -74,16 +61,16 @@ export async function runSignalSseLoop({
       }
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
-      logReconnectVerbose(`Signal stream ended, reconnecting in ${delayMs / 1000}s...`);
+      logReconnectVerbose(`Signal SSE stream ended, reconnecting in ${delayMs / 1000}s...`);
       await sleepWithAbort(delayMs, abortSignal);
     } catch (err) {
       if (abortSignal?.aborted) {
         return;
       }
-      runtime.error?.(`Signal stream error: ${String(err)}`);
+      runtime.error?.(`Signal SSE stream error: ${String(err)}`);
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
-      runtime.log?.(`Signal connection lost, reconnecting in ${delayMs / 1000}s...`);
+      runtime.log?.(`Signal SSE connection lost, reconnecting in ${delayMs / 1000}s...`);
       try {
         await sleepWithAbort(delayMs, abortSignal);
       } catch (sleepErr) {

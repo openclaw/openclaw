@@ -1,6 +1,5 @@
-import { normalizeLowercaseStringOrEmpty, uniqueStrings } from "../string-coerce.ts";
 import { extractQueryTerms } from "../usage-helpers.ts";
-import type { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./usageTypes.ts";
+import { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./usageTypes.ts";
 
 function downloadTextFile(filename: string, content: string, type = "text/plain") {
   const blob = new Blob([content], { type: `${type};charset=utf-8` });
@@ -139,11 +138,17 @@ const buildQuerySuggestions = (
     ? [lastToken.slice(0, lastToken.indexOf(":")), lastToken.slice(lastToken.indexOf(":") + 1)]
     : ["", ""];
 
-  const key = normalizeLowercaseStringOrEmpty(rawKey);
-  const value = normalizeLowercaseStringOrEmpty(rawValue);
+  const key = rawKey.toLowerCase();
+  const value = rawValue.toLowerCase();
 
   const unique = (items: Array<string | undefined>): string[] => {
-    return uniqueStrings(items.filter((item): item is string => Boolean(item)));
+    const set = new Set<string>();
+    for (const item of items) {
+      if (item) {
+        set.add(item);
+      }
+    }
+    return Array.from(set);
   };
 
   const agents = unique(sessions.map((s) => s.agentId)).slice(0, 6);
@@ -176,7 +181,7 @@ const buildQuerySuggestions = (
   const suggestions: QuerySuggestion[] = [];
   const addValues = (prefix: string, values: string[]) => {
     for (const val of values) {
-      if (!value || normalizeLowercaseStringOrEmpty(val).includes(value)) {
+      if (!value || val.toLowerCase().includes(value)) {
         suggestions.push({ label: `${prefix}:${val}`, value: `${prefix}:${val}` });
       }
     }
@@ -222,7 +227,7 @@ const applySuggestionToQuery = (query: string, suggestion: string): string => {
   return `${tokens.join(" ")} `;
 };
 
-const normalizeQueryText = (value: string): string => normalizeLowercaseStringOrEmpty(value);
+const normalizeQueryText = (value: string): string => value.trim().toLowerCase();
 
 const addQueryToken = (query: string, token: string): string => {
   const trimmed = query.trim();

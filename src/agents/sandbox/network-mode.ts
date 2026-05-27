@@ -1,9 +1,7 @@
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-
 export type NetworkModeBlockReason = "host" | "container_namespace_join";
 
 export function normalizeNetworkMode(network: string | undefined): string | undefined {
-  const normalized = normalizeOptionalLowercaseString(network);
+  const normalized = network?.trim().toLowerCase();
   return normalized || undefined;
 }
 

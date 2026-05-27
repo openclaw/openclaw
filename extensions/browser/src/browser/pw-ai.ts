@@ -10,16 +10,10 @@ export {
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   focusPageByTargetIdViaPlaywright,
-  createObservedDialogAbortSignalForPage,
-  getObservedBrowserStateForPage,
-  getObservedBrowserStateViaPlaywright,
   getPageForTargetId,
-  isBrowserObservedDialogBlockedError,
   listPagesViaPlaywright,
-  markObservedDialogsHandledRemotelyForPage,
   refLocator,
-  respondToObservedDialogOnPage,
-  respondToObservedDialogViaPlaywright,
+  type WithSnapshotForAI,
 } from "./pw-session.js";
 
 export {
@@ -35,7 +29,6 @@ export {
   dragViaPlaywright,
   emulateMediaViaPlaywright,
   evaluateViaPlaywright,
-  executeActViaPlaywright,
   fillFormViaPlaywright,
   getConsoleMessagesViaPlaywright,
   getNetworkRequestsViaPlaywright,
@@ -60,7 +53,6 @@ export {
   snapshotAiViaPlaywright,
   snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
-  storeAriaSnapshotRefsViaPlaywright,
   screenshotWithLabelsViaPlaywright,
   storageClearViaPlaywright,
   storageGetViaPlaywright,

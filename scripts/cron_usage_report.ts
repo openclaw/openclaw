@@ -215,11 +215,10 @@ export async function main() {
   }
 
   const rows = Object.values(totalsByJob)
-    .map((r) =>
-      Object.assign({}, r, {
-        models: Object.values(r.models).toSorted((a, b) => b.total_tokens - a.total_tokens),
-      }),
-    )
+    .map((r) => ({
+      ...r,
+      models: Object.values(r.models).toSorted((a, b) => b.total_tokens - a.total_tokens),
+    }))
     .toSorted((a, b) => b.total_tokens - a.total_tokens);
 
   if (asJson) {

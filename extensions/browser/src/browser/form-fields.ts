@@ -1,16 +1,15 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { BrowserFormField } from "./client-actions.types.js";
+import type { BrowserFormField } from "./client-actions-core.js";
 
 export const DEFAULT_FILL_FIELD_TYPE = "text";
 
 type BrowserFormFieldValue = NonNullable<BrowserFormField["value"]>;
 
-function normalizeBrowserFormFieldRef(value: unknown): string {
-  return normalizeOptionalString(value) ?? "";
+export function normalizeBrowserFormFieldRef(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
-function normalizeBrowserFormFieldType(value: unknown): string {
-  const type = normalizeOptionalString(value) ?? "";
+export function normalizeBrowserFormFieldType(value: unknown): string {
+  const type = typeof value === "string" ? value.trim() : "";
   return type || DEFAULT_FILL_FIELD_TYPE;
 }
 

@@ -27,7 +27,7 @@ describe("requirements helpers", () => {
         required: [],
         hasLocalBin: () => false,
       }),
-    ).toStrictEqual([]);
+    ).toEqual([]);
     expect(
       resolveMissingAnyBins({
         required: ["a", "b"],
@@ -40,20 +40,19 @@ describe("requirements helpers", () => {
         required: ["a", "b"],
         hasLocalBin: (bin) => bin === "b",
       }),
-    ).toStrictEqual([]);
+    ).toEqual([]);
   });
 
   it("resolveMissingOs allows remote platform", () => {
-    expect(resolveMissingOs({ required: [], localPlatform: "linux" })).toStrictEqual([]);
-    expect(resolveMissingOs({ required: ["linux"], localPlatform: "linux" })).toStrictEqual([]);
-    expect(resolveMissingOs({ required: ["macos"], localPlatform: "darwin" })).toStrictEqual([]);
+    expect(resolveMissingOs({ required: [], localPlatform: "linux" })).toEqual([]);
+    expect(resolveMissingOs({ required: ["linux"], localPlatform: "linux" })).toEqual([]);
     expect(
       resolveMissingOs({
-        required: ["macos"],
+        required: ["darwin"],
         localPlatform: "linux",
         remotePlatforms: ["darwin"],
       }),
-    ).toStrictEqual([]);
+    ).toEqual([]);
     expect(resolveMissingOs({ required: ["darwin"], localPlatform: "linux" })).toEqual(["darwin"]);
   });
 
@@ -197,7 +196,7 @@ describe("requirements helpers", () => {
       config: [],
       os: [],
     });
-    expect(res.configChecks).toStrictEqual([]);
+    expect(res.configChecks).toEqual([]);
     expect(res.eligible).toBe(true);
   });
 });

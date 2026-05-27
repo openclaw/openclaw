@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
-
 /** Default cooldown between reflections per session (5 minutes). */
 export const DEFAULT_COOLDOWN_MS = 300_000;
 
@@ -10,32 +7,8 @@ const lastReflectionBySession = new Map<string, number>();
 /** Maximum cooldown entries before pruning expired ones. */
 const MAX_COOLDOWN_ENTRIES = 500;
 
-function legacySanitizeSessionKey(sessionKey: string): string {
+function sanitizeSessionKey(sessionKey: string): string {
   return sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
-}
-
-function encodeSessionKey(sessionKey: string): string {
-  return Buffer.from(sessionKey, "utf8").toString("base64url");
-}
-
-function resolveLearningsFilePath(storePath: string, sessionKey: string): string {
-  return `${storePath}/${encodeSessionKey(sessionKey)}.learnings.json`;
-}
-
-function resolveLegacyLearningsFilePath(storePath: string, sessionKey: string): string {
-  return `${storePath}/${legacySanitizeSessionKey(sessionKey)}.learnings.json`;
-}
-
-async function readLearningsFile(
-  filePath: string,
-): Promise<{ exists: boolean; learnings: string[] }> {
-  try {
-    const content = await fs.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(content);
-    return { exists: true, learnings: Array.isArray(parsed) ? parsed : [] };
-  } catch {
-    return { exists: false, learnings: [] };
-  }
 }
 
 /** Prune expired cooldown entries to prevent unbounded memory growth. */
@@ -78,25 +51,32 @@ export async function storeSessionLearning(params: {
   sessionKey: string;
   learning: string;
 }): Promise<void> {
-  const learningsFile = resolveLearningsFilePath(params.storePath, params.sessionKey);
-  const legacyLearningsFile = resolveLegacyLearningsFilePath(params.storePath, params.sessionKey);
-  const { exists, learnings: existingLearnings } = await readLearningsFile(learningsFile);
-  const { learnings: legacyLearnings } =
-    exists || legacyLearningsFile === learningsFile
-      ? { learnings: [] as string[] }
-      : await readLearningsFile(legacyLearningsFile);
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
 
-  let learnings = exists ? existingLearnings : legacyLearnings;
+  const learningsFile = path.join(
+    params.storePath,
+    `${sanitizeSessionKey(params.sessionKey)}.learnings.json`,
+  );
+
+  let learnings: string[] = [];
+  try {
+    const existing = await fs.readFile(learningsFile, "utf-8");
+    const parsed = JSON.parse(existing);
+    if (Array.isArray(parsed)) {
+      learnings = parsed;
+    }
+  } catch {
+    // File doesn't exist yet — start fresh.
+  }
 
   learnings.push(params.learning);
   if (learnings.length > 10) {
     learnings = learnings.slice(-10);
   }
 
-  await writeJsonFileAtomically(learningsFile, learnings);
-  if (!exists && legacyLearningsFile !== learningsFile) {
-    await fs.rm(legacyLearningsFile, { force: true }).catch(() => undefined);
-  }
+  await fs.mkdir(path.dirname(learningsFile), { recursive: true });
+  await fs.writeFile(learningsFile, JSON.stringify(learnings, null, 2), "utf-8");
 }
 
 /** Load session learnings for injection into extraSystemPrompt. */
@@ -104,10 +84,16 @@ export async function loadSessionLearnings(
   storePath: string,
   sessionKey: string,
 ): Promise<string[]> {
-  const learningsFile = resolveLearningsFilePath(storePath, sessionKey);
-  const { exists, learnings } = await readLearningsFile(learningsFile);
-  if (exists) {
-    return learnings;
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+
+  const learningsFile = path.join(storePath, `${sanitizeSessionKey(sessionKey)}.learnings.json`);
+
+  try {
+    const content = await fs.readFile(learningsFile, "utf-8");
+    const parsed = JSON.parse(content);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
-  return (await readLearningsFile(resolveLegacyLearningsFilePath(storePath, sessionKey))).learnings;
 }

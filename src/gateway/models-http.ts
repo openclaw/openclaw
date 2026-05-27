@@ -1,21 +1,17 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { getRuntimeConfig } from "../config/io.js";
+import { loadConfig } from "../config/config.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
-  sendInvalidRequest,
-  sendJson,
-  sendMethodNotAllowed,
-  sendMissingScopeForbidden,
-} from "./http-common.js";
+  authorizeGatewayBearerRequestOrReply,
+  resolveGatewayRequestedOperatorScopes,
+} from "./http-auth-helpers.js";
+import { sendInvalidRequest, sendJson, sendMethodNotAllowed } from "./http-common.js";
 import {
   OPENCLAW_DEFAULT_MODEL_ID,
   OPENCLAW_MODEL_ID,
-  authorizeGatewayHttpRequestOrReply,
-  type AuthorizedGatewayHttpRequest,
   resolveAgentIdFromModel,
-  resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
@@ -48,8 +44,8 @@ async function authorizeRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts: OpenAiModelsHttpOptions,
-): Promise<AuthorizedGatewayHttpRequest | null> {
-  return await authorizeGatewayHttpRequestOrReply({
+): Promise<boolean> {
+  return await authorizeGatewayBearerRequestOrReply({
     req,
     res,
     auth: opts.auth,
@@ -60,7 +56,7 @@ async function authorizeRequest(
 }
 
 function loadAgentModelIds(): string[] {
-  const cfg = getRuntimeConfig();
+  const cfg = loadConfig();
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const ids = new Set<string>([OPENCLAW_MODEL_ID, OPENCLAW_DEFAULT_MODEL_ID]);
   ids.add(`openclaw/${defaultAgentId}`);
@@ -71,7 +67,7 @@ function loadAgentModelIds(): string[] {
 }
 
 function resolveRequestPath(req: IncomingMessage): string {
-  return new URL(req.url ?? "/", "http://localhost").pathname;
+  return new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`).pathname;
 }
 
 export async function handleOpenAiModelsHttpRequest(
@@ -89,15 +85,20 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
-  const requestAuth = await authorizeRequest(req, res, opts);
-  if (!requestAuth) {
+  if (!(await authorizeRequest(req, res, opts))) {
     return true;
   }
 
-  const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
+  const requestedScopes = resolveGatewayRequestedOperatorScopes(req);
   const scopeAuth = authorizeOperatorScopesForMethod("models.list", requestedScopes);
   if (!scopeAuth.allowed) {
-    sendMissingScopeForbidden(res, scopeAuth.missingScope);
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: `missing scope: ${scopeAuth.missingScope}`,
+      },
+    });
     return true;
   }
 

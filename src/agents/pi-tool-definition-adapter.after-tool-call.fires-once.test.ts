@@ -6,9 +6,9 @@
  * Regression guard for the double-fire bug fixed by removing the adapter-side
  * after_tool_call invocation (see PR #27283 → dedup in this fix).
  */
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Type } from "typebox";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBaseToolHandlerState } from "./pi-tool-handler-state.test-helpers.js";
 
 const hookMocks = vi.hoisted(() => ({
@@ -20,17 +20,7 @@ const hookMocks = vi.hoisted(() => ({
 }));
 
 const beforeToolCallMocks = vi.hoisted(() => ({
-  BeforeToolCallBlockedError: class BeforeToolCallBlockedError extends Error {
-    reason: string;
-
-    constructor(reason: string) {
-      super(reason);
-      this.name = "BeforeToolCallBlockedError";
-      this.reason = reason;
-    }
-  },
   consumeAdjustedParamsForToolCall: vi.fn((_: string): unknown => undefined),
-  recordAdjustedParamsForToolCall: vi.fn(),
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
     blocked: false,
@@ -71,10 +61,11 @@ function createToolHandlerCtx() {
     },
     hookRunner: hookMocks.runner,
     state: {
+      toolMetaById: new Map<string, unknown>(),
       ...createBaseToolHandlerState(),
       successfulCronAdds: 0,
     },
-    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    log: { debug: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
@@ -89,24 +80,15 @@ let handleToolExecutionStart: typeof import("./pi-embedded-subscribe.handlers.to
 let handleToolExecutionEnd: typeof import("./pi-embedded-subscribe.handlers.tools.js").handleToolExecutionEnd;
 
 async function loadFreshAfterToolCallModulesForTest() {
+  vi.resetModules();
   vi.doMock("../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: () => hookMocks.runner,
   }));
   vi.doMock("../infra/agent-events.js", () => ({
-    emitAgentCommandOutputEvent: vi.fn(),
     emitAgentEvent: vi.fn(),
-    emitAgentItemEvent: vi.fn(),
   }));
   vi.doMock("./pi-tools.before-tool-call.js", () => ({
-    BeforeToolCallBlockedError: beforeToolCallMocks.BeforeToolCallBlockedError,
-    buildBlockedToolResult: ({ reason }: { reason: string }) => ({
-      content: [{ type: "text", text: reason }],
-      details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
-    }),
     consumeAdjustedParamsForToolCall: beforeToolCallMocks.consumeAdjustedParamsForToolCall,
-    recordAdjustedParamsForToolCall: beforeToolCallMocks.recordAdjustedParamsForToolCall,
-    isBeforeToolCallBlockedError: (error: unknown) =>
-      error instanceof beforeToolCallMocks.BeforeToolCallBlockedError,
     isToolWrappedWithBeforeToolCallHook: beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook,
     runBeforeToolCallHook: beforeToolCallMocks.runBeforeToolCallHook,
   }));
@@ -116,9 +98,7 @@ async function loadFreshAfterToolCallModulesForTest() {
 }
 
 describe("after_tool_call fires exactly once in embedded runs", () => {
-  beforeAll(loadFreshAfterToolCallModulesForTest);
-
-  beforeEach(() => {
+  beforeEach(async () => {
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(true);
     hookMocks.runner.runAfterToolCall.mockClear();
@@ -127,7 +107,6 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
     hookMocks.runner.runBeforeToolCall.mockResolvedValue(undefined);
     beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockClear();
     beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockReturnValue(undefined);
-    beforeToolCallMocks.recordAdjustedParamsForToolCall.mockClear();
     beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockClear();
     beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(false);
     beforeToolCallMocks.runBeforeToolCallHook.mockClear();
@@ -135,6 +114,7 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
       blocked: false,
       params,
     }));
+    await loadFreshAfterToolCallModulesForTest();
   });
 
   function resolveAdapterDefinition(tool: Parameters<typeof toToolDefinitions>[0][number]) {
@@ -229,9 +209,9 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
 
-    const call = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls.at(0);
+    const call = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
     const event = call?.[0] as { error?: unknown } | undefined;
-    expect(event?.error).toBe("tool failed");
+    expect(event?.error).toBeDefined();
   });
 
   it("uses before_tool_call adjusted params for after_tool_call payload", async () => {

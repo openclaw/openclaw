@@ -9,8 +9,9 @@ describe("skills/summarize frontmatter", () => {
     const raw = fs.readFileSync(skillPath, "utf-8");
     const frontmatter = parseFrontmatter(raw);
     const description = frontmatter.description ?? "";
-    expect(description).toBe(
-      "Summarize or transcribe URLs, YouTube/videos, podcasts, articles, transcripts, PDFs, and local files.",
-    );
+    expect(description.toLowerCase()).toContain("transcrib");
+    expect(description.toLowerCase()).toContain("podcast");
+    expect(description.toLowerCase()).toContain("local files");
+    expect(description).not.toContain("summarize.sh");
   });
 });

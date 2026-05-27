@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
   getPwToolsCoreSessionMocks,
@@ -12,7 +12,7 @@ import {
 
 installPwToolsCoreTestHooks();
 const sessionMocks = getPwToolsCoreSessionMocks();
-const mod = await import("./pw-tools-core.js");
+let mod: typeof import("./pw-tools-core.js");
 
 function createFileChooserPageMocks() {
   const fileChooser = { setFiles: vi.fn(async () => {}) };
@@ -26,6 +26,11 @@ function createFileChooserPageMocks() {
 }
 
 describe("pw-tools-core", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    mod = await import("./pw-tools-core.js");
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -45,13 +50,12 @@ describe("pw-tools-core", () => {
       targetId: "T1",
       element: "#main",
       type: "png",
-      timeoutMs: 1234,
     });
 
     expect(res.buffer.toString()).toBe("E");
     expect(sessionMocks.getPageForTargetId).toHaveBeenCalled();
     expect(page.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
-    expect(elementScreenshot).toHaveBeenCalledWith({ type: "png", timeout: 1234 });
+    expect(elementScreenshot).toHaveBeenCalledWith({ type: "png" });
   });
   it("screenshots a ref locator", async () => {
     const refScreenshot = vi.fn(async () => Buffer.from("R"));
@@ -67,12 +71,11 @@ describe("pw-tools-core", () => {
       targetId: "T1",
       ref: "76",
       type: "jpeg",
-      timeoutMs: 2345,
     });
 
     expect(res.buffer.toString()).toBe("R");
     expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "76");
-    expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg", timeout: 2345 });
+    expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg" });
   });
   it("rejects fullPage for element or ref screenshots", async () => {
     setPwToolsCoreCurrentRefLocator({ screenshot: vi.fn(async () => Buffer.from("R")) });
@@ -107,7 +110,7 @@ describe("pw-tools-core", () => {
     await fs.writeFile(uploadPath, "fixture", "utf8");
     const canonicalUploadPath = await fs.realpath(uploadPath);
     const fileChooser = { setFiles: vi.fn(async () => {}) };
-    const waitForEvent = vi.fn(async (eventValue: string, _opts: unknown) => fileChooser);
+    const waitForEvent = vi.fn(async (_event: string, _opts: unknown) => fileChooser);
     setPwToolsCoreCurrentPage({
       waitForEvent,
       keyboard: { press: vi.fn(async () => {}) },

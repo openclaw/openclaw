@@ -1,5 +1,4 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import {
   bootstrapMatrixVerification,
@@ -81,9 +80,10 @@ function readRoomId(params: Record<string, unknown>, required = true): string {
 }
 
 function toSnakeCaseKey(key: string): string {
-  return normalizeOptionalLowercaseString(
-    key.replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z0-9])([A-Z])/g, "$1_$2"),
-  )!;
+  return key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
 }
 
 function readRawParam(params: Record<string, unknown>, key: string): unknown {
@@ -433,7 +433,7 @@ export async function handleMatrixAction(
     }
     if (action === "verificationStart") {
       const methodRaw = readStringParam(params, "method");
-      const method = normalizeOptionalLowercaseString(methodRaw);
+      const method = methodRaw?.trim().toLowerCase();
       if (method && method !== "sas") {
         throw new Error(
           "Matrix verificationStart only supports method=sas; use verificationGenerateQr/verificationScanQr for QR flows.",

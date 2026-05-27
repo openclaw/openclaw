@@ -1,10 +1,6 @@
-import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
-
-function createSuccessfulMediaDecision(
-  capability: "audio" | "image" | "video",
-): MediaUnderstandingDecision {
+export function createSuccessfulImageMediaDecision() {
   return {
-    capability,
+    capability: "image",
     outcome: "success",
     attachments: [
       {
@@ -14,24 +10,16 @@ function createSuccessfulMediaDecision(
             type: "provider",
             outcome: "success",
             provider: "openai",
-            model: "gpt-5.4",
+            model: "gpt-5.2",
           },
         ],
         chosen: {
           type: "provider",
           outcome: "success",
           provider: "openai",
-          model: "gpt-5.4",
+          model: "gpt-5.2",
         },
       },
     ],
-  };
-}
-
-export function createSuccessfulAudioMediaDecision() {
-  return createSuccessfulMediaDecision("audio");
-}
-
-export function createSuccessfulImageMediaDecision() {
-  return createSuccessfulMediaDecision("image");
+  } as const;
 }

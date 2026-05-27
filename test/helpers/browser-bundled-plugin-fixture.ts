@@ -22,7 +22,7 @@ const BROWSER_FIXTURE_ENTRY = `module.exports = {
     properties: {},
   },
   register(api) {
-    api.registerTool((ctx) => ({
+    api.registerTool(() => ({
       name: "browser",
       label: "browser",
       description: "browser fixture tool",
@@ -33,9 +33,7 @@ const BROWSER_FIXTURE_ENTRY = `module.exports = {
       async execute() {
         return {
           content: [{ type: "text", text: "ok" }],
-          details: {
-            workspaceOnly: ctx.fsPolicy?.workspaceOnly ?? null,
-          },
+          details: {},
         };
       },
     }));
@@ -43,7 +41,7 @@ const BROWSER_FIXTURE_ENTRY = `module.exports = {
       program.command("browser");
     }, { commands: ["browser"] });
     api.registerGatewayMethod("browser.request", async () => ({ ok: true }), {
-      scope: "operator.admin",
+      scope: "operator.write",
     });
     api.registerService({
       id: "browser-control",

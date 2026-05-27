@@ -36,3 +36,4 @@ public enum GatewayDiscoveryStatusText {
         return "Searching…"
     }
 }
+

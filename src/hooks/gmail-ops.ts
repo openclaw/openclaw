@@ -1,13 +1,13 @@
 import { spawn } from "node:child_process";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
-  getRuntimeConfig,
   type OpenClawConfig,
   CONFIG_PATH,
+  loadConfig,
   readConfigFileSnapshot,
-  replaceConfigFile,
   resolveGatewayPort,
   validateConfigObjectWithPlugins,
+  writeConfigFile,
 } from "../config/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
@@ -23,7 +23,6 @@ import {
 } from "./gmail-setup-utils.js";
 import {
   buildDefaultHookUrl,
-  buildGogWatchServeLogArgs,
   buildGogWatchServeArgs,
   buildGogWatchStartArgs,
   buildTopicPath,
@@ -42,8 +41,6 @@ import {
   normalizeHooksPath,
   normalizeServePath,
   parseTopicPath,
-  resolveGogExecutable,
-  resolveGogServeInvocation,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
 
@@ -239,10 +236,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   if (!validated.ok) {
     throw new Error(`Config validation failed: ${validated.issues[0]?.message ?? "invalid"}`);
   }
-  await replaceConfigFile({
-    nextConfig: validated.config,
-    afterWrite: { mode: "auto" },
-  });
+  await writeConfigFile(validated.config);
 
   const summary = {
     projectId,
@@ -276,7 +270,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
 export async function runGmailService(opts: GmailRunOptions) {
   await ensureDependency("gog", ["gogcli"]);
-  const config = getRuntimeConfig();
+  const config = loadConfig();
 
   const overrides: GmailHookOverrides = {
     account: opts.account,
@@ -359,20 +353,15 @@ export async function runGmailService(opts: GmailRunOptions) {
 
 function spawnGogServe(cfg: GmailHookRuntimeConfig) {
   const args = buildGogWatchServeArgs(cfg);
-  defaultRuntime.log(`Starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
-  const invocation = resolveGogServeInvocation(args);
-  return spawn(invocation.command, invocation.args, {
-    stdio: "inherit",
-    windowsHide: invocation.windowsHide,
-    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  });
+  defaultRuntime.log(`Starting gog ${args.join(" ")}`);
+  return spawn("gog", args, { stdio: "inherit" });
 }
 
 async function startGmailWatch(
   cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">,
   fatal = false,
 ) {
-  const args = [resolveGogExecutable(), ...buildGogWatchStartArgs(cfg)];
+  const args = ["gog", ...buildGogWatchStartArgs(cfg)];
   const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
   if (result.code !== 0) {
     const message = result.stderr || result.stdout || "gog watch start failed";

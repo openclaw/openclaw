@@ -12,11 +12,7 @@ export default definePluginEntry({
         if (ctx.sandboxed) {
           return null;
         }
-        const taskFlow =
-          api.runtime?.tasks.managedFlows && ctx.sessionKey
-            ? api.runtime.tasks.managedFlows.fromToolContext(ctx)
-            : undefined;
-        return createLobsterTool(api, { taskFlow }) as AnyAgentTool;
+        return createLobsterTool(api) as AnyAgentTool;
       }) as OpenClawPluginToolFactory,
       { optional: true },
     );

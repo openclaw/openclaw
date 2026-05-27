@@ -1,8 +1,4 @@
 import type { WebClient } from "@slack/web-api";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackWebClient } from "./client.js";
 import {
   collectSlackCursorItems,
@@ -62,7 +58,7 @@ function parseSlackUserInput(raw: string): { id?: string; name?: string; email?:
     return { id: prefixed.toUpperCase() };
   }
   if (trimmed.includes("@") && !trimmed.startsWith("@")) {
-    return { email: normalizeLowercaseStringOrEmpty(trimmed) };
+    return { email: trimmed.toLowerCase() };
   }
   const name = trimmed.replace(/^@/, "").trim();
   return name ? { name } : {};
@@ -78,8 +74,8 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
     collectPageItems: (res) =>
       (res.members ?? [])
         .map((member) => {
-          const id = normalizeOptionalString(member.id);
-          const name = normalizeOptionalString(member.name);
+          const id = member.id?.trim();
+          const name = member.name?.trim();
           if (!id || !name) {
             return null;
           }
@@ -87,14 +83,9 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
           return {
             id,
             name,
-            displayName: normalizeOptionalString(profile.display_name),
-            realName:
-              normalizeOptionalString(profile.real_name) ??
-              normalizeOptionalString(member.real_name),
-            email:
-              normalizeOptionalString(profile.email) == null
-                ? undefined
-                : normalizeLowercaseStringOrEmpty(profile.email),
+            displayName: profile.display_name?.trim() || undefined,
+            realName: profile.real_name?.trim() || member.real_name?.trim() || undefined,
+            email: profile.email?.trim()?.toLowerCase() || undefined,
             deleted: Boolean(member.deleted),
             isBot: Boolean(member.is_bot),
             isAppUser: Boolean(member.is_app_user),
@@ -116,10 +107,10 @@ function scoreSlackUser(user: SlackUserLookup, match: { name?: string; email?: s
     score += 5;
   }
   if (match.name) {
-    const target = normalizeLowercaseStringOrEmpty(match.name);
+    const target = match.name.toLowerCase();
     const candidates = [user.name, user.displayName, user.realName]
-      .map((value) => normalizeLowercaseStringOrEmpty(value))
-      .filter(Boolean);
+      .map((value) => value?.toLowerCase())
+      .filter(Boolean) as string[];
     if (candidates.some((value) => value === target)) {
       score += 2;
     }
@@ -181,11 +172,11 @@ export async function resolveSlackUserAllowlist(params: {
         }
       }
       if (parsed.name) {
-        const target = normalizeLowercaseStringOrEmpty(parsed.name);
+        const target = parsed.name.toLowerCase();
         const matches = lookup.filter((user) => {
           const candidates = [user.name, user.displayName, user.realName]
-            .map((value) => normalizeLowercaseStringOrEmpty(value))
-            .filter(Boolean);
+            .map((value) => value?.toLowerCase())
+            .filter(Boolean) as string[];
           return candidates.includes(target);
         });
         if (matches.length > 0) {

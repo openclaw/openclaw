@@ -1,12 +1,8 @@
 import type { MsgContext } from "../auto-reply/templating.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { normalizeChatType } from "./chat-type.js";
 
 function extractConversationId(from?: string): string | undefined {
-  const trimmed = normalizeOptionalString(from);
+  const trimmed = from?.trim();
   if (!trimmed) {
     return undefined;
   }
@@ -18,33 +14,33 @@ function shouldAppendId(id: string): boolean {
   if (/^[0-9]+$/.test(id)) {
     return true;
   }
-  if (/^[^\s:@]+@[^\s:@]+$/.test(id)) {
+  if (id.includes("@g.us")) {
     return true;
   }
   return false;
 }
 
 export function resolveConversationLabel(ctx: MsgContext): string | undefined {
-  const explicit = normalizeOptionalString(ctx.ConversationLabel);
+  const explicit = ctx.ConversationLabel?.trim();
   if (explicit) {
     return explicit;
   }
 
-  const threadLabel = normalizeOptionalString(ctx.ThreadLabel);
+  const threadLabel = ctx.ThreadLabel?.trim();
   if (threadLabel) {
     return threadLabel;
   }
 
   const chatType = normalizeChatType(ctx.ChatType);
   if (chatType === "direct") {
-    return normalizeOptionalString(ctx.SenderName) ?? normalizeOptionalString(ctx.From);
+    return ctx.SenderName?.trim() || ctx.From?.trim() || undefined;
   }
 
   const base =
-    normalizeOptionalString(ctx.GroupChannel) ||
-    normalizeOptionalString(ctx.GroupSubject) ||
-    normalizeOptionalString(ctx.GroupSpace) ||
-    normalizeOptionalString(ctx.From) ||
+    ctx.GroupChannel?.trim() ||
+    ctx.GroupSubject?.trim() ||
+    ctx.GroupSpace?.trim() ||
+    ctx.From?.trim() ||
     "";
   if (!base) {
     return undefined;
@@ -63,7 +59,7 @@ export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   if (base.includes(id)) {
     return base;
   }
-  if (normalizeLowercaseStringOrEmpty(base).includes(" id:")) {
+  if (base.toLowerCase().includes(" id:")) {
     return base;
   }
   if (base.startsWith("#") || base.startsWith("@")) {

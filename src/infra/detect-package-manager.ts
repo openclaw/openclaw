@@ -1,12 +1,18 @@
 import fs from "node:fs/promises";
-import { readPackageManagerSpec } from "./package-json.js";
+import path from "node:path";
 
-type DetectedPackageManager = "pnpm" | "bun" | "npm";
+export type DetectedPackageManager = "pnpm" | "bun" | "npm";
 
 export async function detectPackageManager(root: string): Promise<DetectedPackageManager | null> {
-  const pm = (await readPackageManagerSpec(root))?.split("@")[0]?.trim();
-  if (pm === "pnpm" || pm === "bun" || pm === "npm") {
-    return pm;
+  try {
+    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { packageManager?: string };
+    const pm = parsed?.packageManager?.split("@")[0]?.trim();
+    if (pm === "pnpm" || pm === "bun" || pm === "npm") {
+      return pm;
+    }
+  } catch {
+    // ignore
   }
 
   const files = await fs.readdir(root).catch((): string[] => []);

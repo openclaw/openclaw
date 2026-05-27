@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { writeJson } from "../infra/json-files.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
 
 export type NodeHostGatewayConfig = {
   host?: string;
@@ -11,7 +11,7 @@ export type NodeHostGatewayConfig = {
   tlsFingerprint?: string;
 };
 
-type NodeHostConfig = {
+export type NodeHostConfig = {
   version: 1;
   nodeId: string;
   token?: string;
@@ -21,7 +21,7 @@ type NodeHostConfig = {
 
 const NODE_HOST_FILE = "node.json";
 
-function resolveNodeHostConfigPath(): string {
+export function resolveNodeHostConfigPath(): string {
   return path.join(resolveStateDir(), NODE_HOST_FILE);
 }
 
@@ -55,7 +55,7 @@ export async function loadNodeHostConfig(): Promise<NodeHostConfig | null> {
 
 export async function saveNodeHostConfig(config: NodeHostConfig): Promise<void> {
   const filePath = resolveNodeHostConfigPath();
-  await writeJson(filePath, config, { mode: 0o600 });
+  await writeJsonAtomic(filePath, config, { mode: 0o600 });
 }
 
 export async function ensureNodeHostConfig(): Promise<NodeHostConfig> {

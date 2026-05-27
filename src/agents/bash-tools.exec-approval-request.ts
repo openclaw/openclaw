@@ -1,37 +1,9 @@
-import type {
-  ExecApprovalCommandSpan,
-  ExecAsk,
-  ExecSecurity,
-  SystemRunApprovalPlan,
-} from "../infra/exec-approvals.js";
-import { normalizeExecutableToken } from "../infra/exec-wrapper-tokens.js";
-import {
-  isShellWrapperExecutable,
-  POSIX_SHELL_WRAPPERS,
-  resolveShellWrapperTransportArgv,
-} from "../infra/shell-wrapper-resolution.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString as parseString,
-} from "../shared/string-coerce.js";
+import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
 import { callGatewayTool } from "./tools/gateway.js";
-
-type ExecApprovalCommandSpansRuntime =
-  typeof import("./bash-tools.exec-approval-request.runtime.js");
-
-let execApprovalCommandSpansRuntimePromise: Promise<ExecApprovalCommandSpansRuntime> | null = null;
-const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
-
-function loadExecApprovalCommandSpansRuntime(): Promise<ExecApprovalCommandSpansRuntime> {
-  execApprovalCommandSpansRuntimePromise ??=
-    import("./bash-tools.exec-approval-request.runtime.js");
-  return execApprovalCommandSpansRuntimePromise;
-}
 
 export type RequestExecApprovalDecisionParams = {
   id: string;
@@ -39,13 +11,11 @@ export type RequestExecApprovalDecisionParams = {
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
-  cwd: string | undefined;
+  cwd: string;
   nodeId?: string;
   host: "gateway" | "node";
   security: ExecSecurity;
   ask: ExecAsk;
-  warningText?: string;
-  commandSpans?: ExecApprovalCommandSpan[];
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -74,8 +44,6 @@ function buildExecApprovalRequestToolParams(
     host: params.host,
     security: params.security,
     ask: params.ask,
-    warningText: params.warningText,
-    commandSpans: params.commandSpans,
     agentId: params.agentId,
     resolvedPath: params.resolvedPath,
     sessionKey: params.sessionKey,
@@ -103,8 +71,12 @@ function parseDecision(value: unknown): ParsedDecision {
   return { present: true, value: typeof decision === "string" ? decision : null };
 }
 
+function parseString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
 function parseExpiresAtMs(value: unknown): number | undefined {
-  return asFiniteNumber(value);
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 export type ExecApprovalRegistration = {
@@ -118,7 +90,11 @@ export async function registerExecApprovalRequest(
 ): Promise<ExecApprovalRegistration> {
   // Two-phase registration is critical: the ID must be registered server-side
   // before exec returns `approval-pending`, otherwise `/approve` can race and orphan.
-  const registrationResult = await callGatewayTool(
+  const registrationResult = await callGatewayTool<{
+    id?: string;
+    expiresAtMs?: number;
+    decision?: string;
+  }>(
     "exec.approval.request",
     { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
     buildExecApprovalRequestToolParams(params),
@@ -144,7 +120,7 @@ export async function waitForExecApprovalDecision(id: string): Promise<string | 
     return parseDecision(decisionResult).value;
   } catch (err) {
     // Timeout/cleanup path: treat missing/expired as no decision so askFallback applies.
-    const message = normalizeLowercaseStringOrEmpty(String(err));
+    const message = String(err).toLowerCase();
     if (message.includes("approval expired or not found")) {
       return null;
     }
@@ -178,14 +154,11 @@ type HostExecApprovalParams = {
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
-  workdir: string | undefined;
+  workdir: string;
   host: "gateway" | "node";
   nodeId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
-  warningText?: string;
-  commandSpans?: ExecApprovalCommandSpan[];
-  commandHighlighting?: boolean;
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -228,54 +201,9 @@ export function buildExecApprovalTurnSourceContext(
   };
 }
 
-async function resolveCommandSpans(
-  command: string | undefined,
-): Promise<ExecApprovalCommandSpan[] | undefined> {
-  if (!command) {
-    return undefined;
-  }
-  try {
-    const { resolveExecApprovalCommandSpans } = await loadExecApprovalCommandSpansRuntime();
-    return await resolveExecApprovalCommandSpans(command);
-  } catch {
-    return undefined;
-  }
-}
-
-function hasUnsupportedShellArgv(argv: readonly string[] | undefined): boolean {
-  if (!argv?.length) {
-    return false;
-  }
-  const shellWrapperArgv = resolveShellWrapperTransportArgv([...argv]) ?? argv;
-  const executable = shellWrapperArgv[0];
-  if (!executable) {
-    return false;
-  }
-  const normalizedExecutable = normalizeExecutableToken(executable);
-  return (
-    isShellWrapperExecutable(normalizedExecutable) &&
-    !POSIX_COMMAND_HIGHLIGHT_SHELLS.has(normalizedExecutable)
-  );
-}
-
-function shouldSkipGeneratedCommandSpans(params: HostExecApprovalParams): boolean {
-  if (params.host === "gateway" && process.platform === "win32") {
-    return true;
-  }
-  const argv = params.commandArgv?.length ? params.commandArgv : params.systemRunPlan?.argv;
-  return hasUnsupportedShellArgv(argv);
-}
-
-async function buildHostApprovalDecisionParams(
+function buildHostApprovalDecisionParams(
   params: HostExecApprovalParams,
-): Promise<RequestExecApprovalDecisionParams> {
-  const commandSpans =
-    params.commandHighlighting === true
-      ? (params.commandSpans ??
-        (shouldSkipGeneratedCommandSpans(params)
-          ? undefined
-          : await resolveCommandSpans(params.command ?? params.systemRunPlan?.commandText)))
-      : undefined;
+): RequestExecApprovalDecisionParams {
   return {
     id: params.approvalId,
     command: params.command,
@@ -287,8 +215,6 @@ async function buildHostApprovalDecisionParams(
     host: params.host,
     security: params.security,
     ask: params.ask,
-    warningText: params.warningText,
-    commandSpans,
     ...buildExecApprovalRequesterContext({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -301,13 +227,13 @@ async function buildHostApprovalDecisionParams(
 export async function requestExecApprovalDecisionForHost(
   params: HostExecApprovalParams,
 ): Promise<string | null> {
-  return await requestExecApprovalDecision(await buildHostApprovalDecisionParams(params));
+  return await requestExecApprovalDecision(buildHostApprovalDecisionParams(params));
 }
 
 export async function registerExecApprovalRequestForHost(
   params: HostExecApprovalParams,
 ): Promise<ExecApprovalRegistration> {
-  return await registerExecApprovalRequest(await buildHostApprovalDecisionParams(params));
+  return await registerExecApprovalRequest(buildHostApprovalDecisionParams(params));
 }
 
 export async function registerExecApprovalRequestForHostOrThrow(

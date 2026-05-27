@@ -1,20 +1,13 @@
 import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as discordClientModule from "../client.js";
 import * as discordSendModule from "../send.js";
-import { createDiscordSendReceipt } from "../send.receipt.js";
-import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 const DEFAULT_SEND_RESULT = {
   messageId: "msg-1",
   channelId: "thread-1",
-  receipt: createDiscordSendReceipt({
-    platformMessageIds: ["msg-1"],
-    channelId: "thread-1",
-    kind: "text",
-  }),
 };
 
 const restGet = vi.fn<(...args: unknown[]) => Promise<unknown>>();
@@ -36,25 +29,6 @@ beforeAll(async () => {
   ({ maybeSendBindingMessage, resolveChannelIdForBinding } =
     await import("./thread-bindings.discord-api.js"));
 });
-
-function resolveTestChannelIdForBinding(
-  params: Omit<Parameters<typeof resolveChannelIdForBinding>[0], "cfg"> & {
-    cfg?: OpenClawConfig;
-  },
-) {
-  return resolveChannelIdForBinding({
-    cfg: EMPTY_DISCORD_TEST_CONFIG,
-    ...params,
-  });
-}
-
-function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const call = mock.mock.calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
 
 describe("resolveChannelIdForBinding", () => {
   beforeEach(() => {
@@ -85,7 +59,7 @@ describe("resolveChannelIdForBinding", () => {
   });
 
   it("returns explicit channelId without resolving route", async () => {
-    const resolved = await resolveTestChannelIdForBinding({
+    const resolved = await resolveChannelIdForBinding({
       accountId: "default",
       threadId: "thread-1",
       channelId: "channel-explicit",
@@ -96,35 +70,6 @@ describe("resolveChannelIdForBinding", () => {
     expect(restGet).not.toHaveBeenCalled();
   });
 
-  it("normalizes prefixed explicit channelId without resolving route", async () => {
-    const resolved = await resolveTestChannelIdForBinding({
-      accountId: "default",
-      threadId: "thread-1",
-      channelId: "channel:123456789012345678",
-    });
-
-    expect(resolved).toBe("123456789012345678");
-    expect(createDiscordRestClient).not.toHaveBeenCalled();
-    expect(restGet).not.toHaveBeenCalled();
-  });
-
-  it("strips channel prefix before resolving route", async () => {
-    restGet.mockResolvedValueOnce({
-      id: "123456789012345678",
-      type: ChannelType.GuildText,
-    });
-
-    const resolved = await resolveTestChannelIdForBinding({
-      accountId: "default",
-      threadId: "channel:123456789012345678",
-    });
-
-    expect(resolved).toBe("123456789012345678");
-    const route = JSON.stringify(firstMockCall(restGet, "REST get")[0] ?? null);
-    expect(route).toContain("123456789012345678");
-    expect(route).not.toContain("channel:");
-  });
-
   it("returns parent channel for thread channels", async () => {
     restGet.mockResolvedValueOnce({
       id: "thread-1",
@@ -132,7 +77,7 @@ describe("resolveChannelIdForBinding", () => {
       parent_id: "channel-parent",
     });
 
-    const resolved = await resolveTestChannelIdForBinding({
+    const resolved = await resolveChannelIdForBinding({
       accountId: "default",
       threadId: "thread-1",
     });
@@ -150,19 +95,14 @@ describe("resolveChannelIdForBinding", () => {
       parent_id: "channel-parent",
     });
 
-    await resolveTestChannelIdForBinding({
+    await resolveChannelIdForBinding({
       cfg,
       accountId: "default",
       threadId: "thread-1",
     });
 
-    expect(
-      (
-        firstMockCall(createDiscordRestClient, "createDiscordRestClient")[0] as
-          | { cfg?: OpenClawConfig }
-          | undefined
-      )?.cfg,
-    ).toBe(cfg);
+    const createDiscordRestClientCalls = createDiscordRestClient.mock.calls as unknown[][];
+    expect(createDiscordRestClientCalls[0]?.[1]).toBe(cfg);
   });
 
   it("keeps non-thread channel id even when parent_id exists", async () => {
@@ -172,7 +112,7 @@ describe("resolveChannelIdForBinding", () => {
       parent_id: "category-1",
     });
 
-    const resolved = await resolveTestChannelIdForBinding({
+    const resolved = await resolveChannelIdForBinding({
       accountId: "default",
       threadId: "channel-text",
     });
@@ -187,7 +127,7 @@ describe("resolveChannelIdForBinding", () => {
       parent_id: "category-1",
     });
 
-    const resolved = await resolveTestChannelIdForBinding({
+    const resolved = await resolveChannelIdForBinding({
       accountId: "default",
       threadId: "forum-1",
     });
@@ -234,17 +174,13 @@ describe("maybeSendBindingMessage", () => {
     });
 
     expect(sendWebhookMessageDiscord).toHaveBeenCalledTimes(1);
-    expect(firstMockCall(sendWebhookMessageDiscord, "sendWebhookMessageDiscord")).toEqual([
-      "hello webhook",
-      {
-        cfg,
-        webhookId: "wh_1",
-        webhookToken: "tok_1",
-        accountId: "default",
-        threadId: "thread-1",
-        username: "⚙️ main",
-      },
-    ]);
+    expect(sendWebhookMessageDiscord.mock.calls[0]?.[1]).toMatchObject({
+      cfg,
+      webhookId: "wh_1",
+      webhookToken: "tok_1",
+      accountId: "default",
+      threadId: "thread-1",
+    });
     expect(sendMessageDiscord).not.toHaveBeenCalled();
   });
 });

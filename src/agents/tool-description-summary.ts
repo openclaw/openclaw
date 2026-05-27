@@ -1,6 +1,3 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-
 function normalizeSummaryWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -15,7 +12,7 @@ function truncateSummary(value: string, maxLen = 120): string {
   return `${trimmed}...`;
 }
 
-function isToolDocBlockStart(line: string): boolean {
+export function isToolDocBlockStart(line: string): boolean {
   const normalized = line.trim().toUpperCase();
   if (!normalized) {
     return false;
@@ -44,19 +41,25 @@ export function summarizeToolDescriptionText(params: {
   displaySummary?: string | null;
   maxLen?: number;
 }): string {
-  const explicit = normalizeOptionalString(params.displaySummary) ?? "";
+  const explicit = typeof params.displaySummary === "string" ? params.displaySummary.trim() : "";
   if (explicit) {
     return truncateSummary(normalizeSummaryWhitespace(explicit), params.maxLen);
   }
 
-  const raw = normalizeOptionalString(params.rawDescription) ?? "";
+  const raw = typeof params.rawDescription === "string" ? params.rawDescription.trim() : "";
   if (!raw) {
     return "Tool";
   }
 
-  const paragraphs = normalizeStringEntries(raw.split(/\n\s*\n/g));
+  const paragraphs = raw
+    .split(/\n\s*\n/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
   for (const paragraph of paragraphs) {
-    const lines = normalizeStringEntries(paragraph.split("\n"));
+    const lines = paragraph
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
     if (lines.length === 0) {
       continue;
     }
@@ -89,7 +92,7 @@ export function describeToolForVerbose(params: {
   fallback: string;
   maxLen?: number;
 }): string {
-  const raw = normalizeOptionalString(params.rawDescription) ?? "";
+  const raw = typeof params.rawDescription === "string" ? params.rawDescription.trim() : "";
   if (!raw) {
     return params.fallback;
   }

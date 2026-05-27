@@ -34,7 +34,7 @@ describe("cron backup timing for edit", () => {
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -54,7 +54,7 @@ describe("cron backup timing for edit", () => {
       ...diskAfterEdit.jobs[0],
       payload: {
         ...diskAfterEdit.jobs[0].payload,
-        channel: "forum",
+        channel: "telegram",
       },
     };
 
@@ -66,7 +66,7 @@ describe("cron backup timing for edit", () => {
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 

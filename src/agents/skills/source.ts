@@ -1,6 +1,4 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import type { Skill } from "./skill-contract.js";
-import type { SkillTelemetrySource } from "./types.js";
+import type { Skill } from "@mariozechner/pi-coding-agent";
 
 type SkillSourceCompat = Skill & {
   sourceInfo?: {
@@ -10,32 +8,11 @@ type SkillSourceCompat = Skill & {
 
 export function resolveSkillSource(skill: Skill): string {
   const compatSkill = skill as SkillSourceCompat;
-  const canonical = normalizeOptionalString(compatSkill.source) ?? "";
+  const canonical = typeof compatSkill.source === "string" ? compatSkill.source.trim() : "";
   if (canonical) {
     return canonical;
   }
-  const legacy = normalizeOptionalString(compatSkill.sourceInfo?.source) ?? "";
+  const legacy =
+    typeof compatSkill.sourceInfo?.source === "string" ? compatSkill.sourceInfo.source.trim() : "";
   return legacy || "unknown";
-}
-
-export function resolveSkillTelemetrySourceValue(value: unknown): SkillTelemetrySource {
-  const source = normalizeOptionalString(value) ?? "";
-  if (source === "bundled" || source === "openclaw-bundled") {
-    return "bundled";
-  }
-  if (
-    source === "workspace" ||
-    source === "openclaw-workspace" ||
-    source === "openclaw-managed" ||
-    source === "openclaw-extra" ||
-    source === "agents-skills-personal" ||
-    source === "agents-skills-project"
-  ) {
-    return "workspace";
-  }
-  return "unknown";
-}
-
-export function resolveSkillTelemetrySource(skill: Skill): SkillTelemetrySource {
-  return resolveSkillTelemetrySourceValue(resolveSkillSource(skill));
 }

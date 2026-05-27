@@ -1,61 +1,54 @@
-import { describe, expect, it } from "vitest";
-import { resolveGatewayStartupMaintenanceConfig } from "./server-startup-plugins.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-describe("gateway startup channel maintenance wiring", () => {
-  it("uses channels from the resolved startup config when startup config repaired them", () => {
-    const resolved = resolveGatewayStartupMaintenanceConfig({
-      cfgAtStart: {
-        plugins: { enabled: true },
-      },
-      startupRuntimeConfig: {
-        plugins: { enabled: true },
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            userId: "@bot:example.org",
-            accessToken: "tok-123",
-          },
-        },
-      },
-    });
+const runStartupMatrixMigrationMock = vi.fn().mockResolvedValue(undefined);
 
-    expect(resolved.channels).toEqual({
+vi.mock("./server-startup-matrix-migration.js", () => ({
+  runStartupMatrixMigration: runStartupMatrixMigrationMock,
+}));
+
+import {
+  getFreePort,
+  installGatewayTestHooks,
+  startGatewayServer,
+  testState,
+} from "./test-helpers.js";
+
+installGatewayTestHooks({ scope: "suite" });
+
+describe("gateway startup Matrix migration wiring", () => {
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+
+  beforeAll(async () => {
+    testState.channelsConfig = {
       matrix: {
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
         accessToken: "tok-123",
       },
-    });
+    };
+    server = await startGatewayServer(await getFreePort());
   });
 
-  it("preserves explicit startup channel config", () => {
-    const resolved = resolveGatewayStartupMaintenanceConfig({
-      cfgAtStart: {
-        plugins: { enabled: true },
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.original.example",
-            userId: "@original:example.org",
-            accessToken: "original-token",
-          },
-        },
-      },
-      startupRuntimeConfig: {
-        plugins: { enabled: true },
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.repaired.example",
-            userId: "@repaired:example.org",
-            accessToken: "repaired-token",
-          },
-        },
-      },
-    });
+  afterAll(async () => {
+    await server?.close();
+  });
 
-    expect(resolved.channels?.matrix).toEqual({
-      homeserver: "https://matrix.original.example",
-      userId: "@original:example.org",
-      accessToken: "original-token",
-    });
+  it("runs startup Matrix migration with the resolved startup config", () => {
+    expect(runStartupMatrixMigrationMock).toHaveBeenCalledTimes(1);
+    expect(runStartupMatrixMigrationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            matrix: expect.objectContaining({
+              homeserver: "https://matrix.example.org",
+              userId: "@bot:example.org",
+              accessToken: "tok-123",
+            }),
+          }),
+        }),
+        env: process.env,
+        log: expect.anything(),
+      }),
+    );
   });
 });

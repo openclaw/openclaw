@@ -1,13 +1,12 @@
 import {
-  compareTaskAuditFindingSortKeys,
   createEmptyTaskAuditSummary,
   type TaskAuditCode,
   type TaskAuditFinding,
   type TaskAuditSeverity,
   type TaskAuditSummary,
 } from "./task-registry.audit.shared.js";
+import { reconcileInspectableTasks } from "./task-registry.reconcile.js";
 import type { TaskRecord } from "./task-registry.types.js";
-import { resolveEffectiveTaskCleanupAfter } from "./task-retention.js";
 
 export type TaskAuditOptions = {
   now?: number;
@@ -16,21 +15,10 @@ export type TaskAuditOptions = {
   staleRunningMs?: number;
 };
 
-export type RetainedLostTaskAuditSummary = {
-  count: number;
-  nextCleanupAfter?: number;
-};
-
 const DEFAULT_STALE_QUEUED_MS = 10 * 60_000;
 const DEFAULT_STALE_RUNNING_MS = 30 * 60_000;
 export { createEmptyTaskAuditSummary };
 export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSummary };
-
-let taskAuditTaskProvider: () => TaskRecord[] = () => [];
-
-export function configureTaskAuditTaskProvider(provider: () => TaskRecord[]): void {
-  taskAuditTaskProvider = provider;
-}
 
 function createFinding(params: {
   severity: TaskAuditSeverity;
@@ -81,22 +69,21 @@ function findTimestampInconsistency(task: TaskRecord): TaskAuditFinding | null {
 }
 
 function compareFindings(left: TaskAuditFinding, right: TaskAuditFinding): number {
-  return compareTaskAuditFindingSortKeys(
-    {
-      severity: left.severity,
-      ageMs: left.ageMs,
-      createdAt: left.task.createdAt,
-    },
-    {
-      severity: right.severity,
-      ageMs: right.ageMs,
-      createdAt: right.task.createdAt,
-    },
-  );
+  const severityRank = (severity: TaskAuditSeverity) => (severity === "error" ? 0 : 1);
+  const severityDiff = severityRank(left.severity) - severityRank(right.severity);
+  if (severityDiff !== 0) {
+    return severityDiff;
+  }
+  const leftAge = left.ageMs ?? -1;
+  const rightAge = right.ageMs ?? -1;
+  if (leftAge !== rightAge) {
+    return rightAge - leftAge;
+  }
+  return left.task.createdAt - right.task.createdAt;
 }
 
 export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAuditFinding[] {
-  const tasks = options.tasks ?? taskAuditTaskProvider();
+  const tasks = options.tasks ?? reconcileInspectableTasks();
   const now = options.now ?? Date.now();
   const staleQueuedMs = options.staleQueuedMs ?? DEFAULT_STALE_QUEUED_MS;
   const staleRunningMs = options.staleRunningMs ?? DEFAULT_STALE_RUNNING_MS;
@@ -131,18 +118,13 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
     }
 
     if (task.status === "lost") {
-      const retainedUntilCleanup =
-        typeof task.cleanupAfter === "number" && resolveEffectiveTaskCleanupAfter(task) > now;
       findings.push(
         createFinding({
-          severity: retainedUntilCleanup ? "warn" : "error",
+          severity: "error",
           code: "lost",
           task,
           ageMs,
-          detail: retainedUntilCleanup
-            ? task.error?.trim() ||
-              "task lost its backing session and is retained until cleanupAfter"
-            : task.error?.trim() || "task lost its backing session",
+          detail: task.error?.trim() || "task lost its backing session",
         }),
       );
     }
@@ -185,19 +167,6 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
   return findings.toSorted(compareFindings);
 }
 
-export function isRetainedLostTaskAuditFinding(
-  finding: TaskAuditFinding,
-  now = Date.now(),
-): boolean {
-  const cleanupAfter = resolveEffectiveTaskCleanupAfter(finding.task);
-  return (
-    finding.code === "lost" &&
-    finding.task.status === "lost" &&
-    typeof finding.task.cleanupAfter === "number" &&
-    cleanupAfter > now
-  );
-}
-
 export function summarizeTaskAuditFindings(findings: Iterable<TaskAuditFinding>): TaskAuditSummary {
   const summary = createEmptyTaskAuditSummary();
   for (const finding of findings) {
@@ -210,40 +179,4 @@ export function summarizeTaskAuditFindings(findings: Iterable<TaskAuditFinding>)
     }
   }
   return summary;
-}
-
-export function summarizeActionableTaskAuditFindings(
-  findings: Iterable<TaskAuditFinding>,
-  options: { now?: number } = {},
-): TaskAuditSummary {
-  const now = options.now ?? Date.now();
-  return summarizeTaskAuditFindings(
-    Array.from(findings).filter((finding) => !isRetainedLostTaskAuditFinding(finding, now)),
-  );
-}
-
-export function summarizeRetainedLostTaskAuditFindings(
-  findings: Iterable<TaskAuditFinding>,
-  options: { now?: number } = {},
-): RetainedLostTaskAuditSummary {
-  const now = options.now ?? Date.now();
-  let count = 0;
-  let nextCleanupAfter: number | undefined;
-  for (const finding of findings) {
-    if (!isRetainedLostTaskAuditFinding(finding, now)) {
-      continue;
-    }
-    count += 1;
-    const cleanupAfter = resolveEffectiveTaskCleanupAfter(finding.task);
-    if (
-      typeof cleanupAfter === "number" &&
-      (nextCleanupAfter === undefined || cleanupAfter < nextCleanupAfter)
-    ) {
-      nextCleanupAfter = cleanupAfter;
-    }
-  }
-  return {
-    count,
-    ...(nextCleanupAfter !== undefined ? { nextCleanupAfter } : {}),
-  };
 }

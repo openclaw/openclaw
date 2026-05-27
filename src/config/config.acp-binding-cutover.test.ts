@@ -25,40 +25,19 @@ describe("ACP binding cutover schema", () => {
         {
           type: "route",
           agentId: "main",
-          match: { channel: "chat-a", accountId: "default" },
+          match: { channel: "discord", accountId: "default" },
         },
         {
           type: "acp",
           agentId: "coding",
           match: {
-            channel: "chat-a",
+            channel: "discord",
             accountId: "default",
             peer: { kind: "channel", id: "1478836151241412759" },
           },
           acp: {
             label: "codex-main",
             backend: "acpx",
-          },
-        },
-      ],
-    });
-
-    expect(parsed.success).toBe(true);
-  });
-
-  it("accepts route binding session dmScope overrides", () => {
-    const parsed = OpenClawSchema.safeParse({
-      bindings: [
-        {
-          type: "route",
-          agentId: "main",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            peer: { kind: "direct", id: "1497598990336790559" },
-          },
-          session: {
-            dmScope: "per-account-channel-peer",
           },
         },
       ],
@@ -122,7 +101,7 @@ describe("ACP binding cutover schema", () => {
         {
           type: "acp",
           agentId: "codex",
-          match: { channel: "chat-a", accountId: "default" },
+          match: { channel: "discord", accountId: "default" },
         },
       ],
     });
@@ -130,14 +109,14 @@ describe("ACP binding cutover schema", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it("accepts ACP bindings for arbitrary channel ids when the peer target is explicit", () => {
+  it("rejects ACP bindings on unsupported channels", () => {
     const parsed = OpenClawSchema.safeParse({
       bindings: [
         {
           type: "acp",
           agentId: "codex",
           match: {
-            channel: "plugin-chat",
+            channel: "slack",
             accountId: "default",
             peer: { kind: "channel", id: "C123456" },
           },
@@ -145,28 +124,55 @@ describe("ACP binding cutover schema", () => {
       ],
     });
 
-    expect(parsed.success).toBe(true);
+    expect(parsed.success).toBe(false);
   });
 
-  it("accepts ACP bindings for generic direct and group peer kinds", () => {
+  it("rejects non-canonical Telegram ACP topic peer IDs", () => {
     const parsed = OpenClawSchema.safeParse({
       bindings: [
         {
           type: "acp",
           agentId: "codex",
           match: {
-            channel: "plugin-chat",
+            channel: "telegram",
             accountId: "default",
-            peer: { kind: "direct", id: "peer-42" },
+            peer: { kind: "group", id: "42" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts canonical Feishu ACP DM and topic peer IDs", () => {
+    const parsed = OpenClawSchema.safeParse({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            peer: { kind: "direct", id: "ou_user_123" },
           },
         },
         {
           type: "acp",
           agentId: "codex",
           match: {
-            channel: "plugin-chat",
+            channel: "feishu",
             accountId: "default",
-            peer: { kind: "group", id: "group-42" },
+            peer: { kind: "direct", id: "user_123" },
+          },
+        },
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            peer: { kind: "group", id: "oc_group_chat:topic:om_topic_root:sender:ou_user_123" },
           },
         },
       ],
@@ -175,21 +181,75 @@ describe("ACP binding cutover schema", () => {
     expect(parsed.success).toBe(true);
   });
 
-  it("accepts deprecated dm peer kind for backward compatibility", () => {
+  it("rejects non-canonical Feishu ACP peer IDs", () => {
     const parsed = OpenClawSchema.safeParse({
       bindings: [
         {
           type: "acp",
           agentId: "codex",
           match: {
-            channel: "plugin-chat",
+            channel: "feishu",
             accountId: "default",
-            peer: { kind: "dm", id: "legacy-peer" },
+            peer: { kind: "group", id: "oc_group_chat:sender:ou_user_123" },
           },
         },
       ],
     });
 
-    expect(parsed.success).toBe(true);
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects Feishu ACP DM peer IDs keyed by union id", () => {
+    const parsed = OpenClawSchema.safeParse({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            peer: { kind: "direct", id: "on_union_user_123" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects Feishu ACP topic peer IDs with non-canonical sender ids", () => {
+    const parsed = OpenClawSchema.safeParse({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            peer: { kind: "group", id: "oc_group_chat:topic:om_topic_root:sender:user_123" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects bare Feishu group chat ACP peer IDs", () => {
+    const parsed = OpenClawSchema.safeParse({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            peer: { kind: "group", id: "oc_group_chat" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
   });
 });

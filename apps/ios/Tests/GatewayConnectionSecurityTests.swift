@@ -5,7 +5,6 @@ import Testing
 @testable import OpenClaw
 
 @Suite(.serialized) struct GatewayConnectionSecurityTests {
-    @MainActor
     private func makeController() -> GatewayConnectionController {
         GatewayConnectionController(appModel: NodeAppModel(), startDiscovery: false)
     }
@@ -33,7 +32,8 @@ import Testing
     }
 
     private func clearTLSFingerprint(stableID: String) {
-        GatewayTLSStore.clearFingerprint(stableID: stableID)
+        let suite = UserDefaults(suiteName: "ai.openclaw.shared") ?? .standard
+        suite.removeObject(forKey: "gateway.tls.\(stableID)")
     }
 
     @Test @MainActor func discoveredTLSParams_prefersStoredPinOverAdvertisedTXT() async {
@@ -107,9 +107,8 @@ import Testing
         let controller = makeController()
 
         #expect(controller._test_resolveManualUseTLS(host: "gateway.example.com", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false) == true)
         #expect(controller._test_resolveManualUseTLS(host: "127.attacker.example", useTLS: false) == true)
-        #expect(controller._test_resolveManualUseTLS(host: "gateway.ts.net", useTLS: false) == true)
-        #expect(controller._test_resolveManualUseTLS(host: "100.64.0.9", useTLS: false) == true)
 
         #expect(controller._test_resolveManualUseTLS(host: "localhost", useTLS: false) == false)
         #expect(controller._test_resolveManualUseTLS(host: "127.0.0.1", useTLS: false) == false)
@@ -119,17 +118,6 @@ import Testing
         #expect(controller._test_resolveManualUseTLS(host: "0.0.0.0", useTLS: false) == false)
     }
 
-    @Test @MainActor func manualConnectionsAllowPrivateLanPlaintext() async {
-        let controller = makeController()
-
-        #expect(controller._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false) == false)
-        #expect(controller._test_resolveManualUseTLS(host: "192.168.1.20", useTLS: false) == false)
-        #expect(controller._test_resolveManualUseTLS(host: "10.0.0.5", useTLS: false) == false)
-        #expect(controller._test_resolveManualUseTLS(host: "172.16.1.5", useTLS: false) == false)
-        #expect(controller._test_resolveManualUseTLS(host: "169.254.1.5", useTLS: false) == false)
-        #expect(controller._test_resolveManualUseTLS(host: "fd00::1", useTLS: false) == false)
-    }
-
     @Test @MainActor func manualDefaultPortUses443OnlyForTailnetTLSHosts() async {
         let controller = makeController()
 
@@ -137,66 +125,5 @@ import Testing
         #expect(controller._test_resolveManualPort(host: "device.sample.ts.net", port: 0, useTLS: true) == 443)
         #expect(controller._test_resolveManualPort(host: "device.sample.ts.net.", port: 0, useTLS: true) == 443)
         #expect(controller._test_resolveManualPort(host: "device.sample.ts.net", port: 18789, useTLS: true) == 18789)
-    }
-
-    @Test @MainActor func clearAllTLSFingerprints_removesStoredPins() async {
-        let stableID1 = "test|\(UUID().uuidString)"
-        let stableID2 = "test|\(UUID().uuidString)"
-        defer { GatewayTLSStore.clearAllFingerprints() }
-
-        GatewayTLSStore.saveFingerprint("11", stableID: stableID1)
-        GatewayTLSStore.saveFingerprint("22", stableID: stableID2)
-
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID1) == "11")
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID2) == "22")
-
-        GatewayTLSStore.clearAllFingerprints()
-
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID1) == nil)
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID2) == nil)
-    }
-
-    @Test func trustedPinMismatchCanBeRecoveredByReplacingStoredPin() {
-        let stableID = "test|\(UUID().uuidString)"
-        defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
-        GatewayTLSStore.saveFingerprint("old", stableID: stableID)
-
-        let error = GatewayTLSValidationError(
-            failure: GatewayTLSValidationFailure(
-                kind: .pinMismatch,
-                host: "gateway.tailnet.ts.net",
-                storeKey: stableID,
-                expectedFingerprint: "old",
-                observedFingerprint: "new",
-                systemTrustOk: true),
-            context: "connect to gateway")
-
-        let problem = GatewayConnectionProblemMapper.map(error: error)
-
-        #expect(problem?.kind == .tlsPinMismatch)
-        #expect(problem?.canTrustRotatedCertificate == true)
-        #expect(problem?.tlsStoreKey == stableID)
-        #expect(problem?.tlsExpectedFingerprint == "old")
-        #expect(problem?.tlsObservedFingerprint == "new")
-
-        #expect(GatewayTLSStore.replaceFingerprint(problem?.tlsObservedFingerprint ?? "", stableID: stableID))
-        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == "new")
-    }
-
-    @Test func untrustedPinMismatchCannotBeRecoveredInApp() {
-        let error = GatewayTLSValidationError(
-            failure: GatewayTLSValidationFailure(
-                kind: .pinMismatch,
-                host: "gateway.tailnet.ts.net",
-                storeKey: "gateway",
-                expectedFingerprint: "old",
-                observedFingerprint: "new",
-                systemTrustOk: false),
-            context: "connect to gateway")
-
-        let problem = GatewayConnectionProblemMapper.map(error: error)
-
-        #expect(problem?.kind == .tlsPinMismatch)
-        #expect(problem?.canTrustRotatedCertificate == false)
     }
 }

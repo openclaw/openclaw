@@ -1,28 +1,18 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.5.26",
+  "version": "2026.3.30",
   "description": "OpenClaw Microsoft Teams channel plugin",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/openclaw/openclaw"
-  },
   "type": "module",
   "dependencies": {
-    "@azure/identity": "4.13.1",
-    "@microsoft/teams.api": "2.0.11",
-    "@microsoft/teams.apps": "2.0.11",
-    "express": "5.2.1",
-    "jsonwebtoken": "9.0.3",
-    "jwks-rsa": "4.0.1",
-    "typebox": "1.1.38"
+    "@microsoft/teams.api": "2.0.6",
+    "@microsoft/teams.apps": "2.0.6",
+    "express": "^5.2.1"
   },
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*",
-    "@types/jsonwebtoken": "9.0.10",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.26"
+    "openclaw": ">=2026.3.30"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -44,27 +34,14 @@
       "aliases": [
         "teams"
       ],
-      "order": 60,
-      "doctorCapabilities": {
-        "dmAllowFromMode": "topOnly",
-        "groupModel": "hybrid",
-        "groupAllowFromFallbackToAllowFrom": true,
-        "warnOnEmptyGroupSenderAllowlist": true
-      }
+      "order": 60
     },
     "install": {
       "npmSpec": "@openclaw/msteams",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10"
-    },
-    "compat": {
-      "pluginApi": ">=2026.5.26"
-    },
-    "build": {
-      "openclawVersion": "2026.5.26"
+      "minHostVersion": ">=2026.3.30"
     },
     "release": {
-      "publishToClawHub": true,
       "publishToNpm": true
     }
   }

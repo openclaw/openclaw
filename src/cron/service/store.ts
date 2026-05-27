@@ -1,67 +1,9 @@
 import fs from "node:fs";
-import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
-import { normalizeCronJobInput } from "../normalize.js";
-import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
-import { cronSchedulingInputsEqual } from "../schedule-identity.js";
-import { isInvalidCronSessionTargetIdError } from "../session-target.js";
-import {
-  loadCronStoreWithConfigJobs,
-  saveCronStore,
-  type PreservedCronConfigJob,
-} from "../store.js";
+import { normalizeStoredCronJobs } from "../store-migration.js";
+import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
-
-function invalidateStaleNextRunOnScheduleChange(params: {
-  previousJobsById: ReadonlyMap<string, CronJob>;
-  hydrated: CronJob;
-}) {
-  const previousJob = params.previousJobsById.get(params.hydrated.id);
-  if (!previousJob || cronSchedulingInputsEqual(previousJob, params.hydrated)) {
-    return;
-  }
-  params.hydrated.state ??= {};
-  params.hydrated.state.nextRunAtMs = undefined;
-}
-
-function warnInvalidPersistedCronJob(params: {
-  state: CronServiceState;
-  raw: Record<string, unknown>;
-  index: number;
-  reason: string;
-}) {
-  const jobId = typeof params.raw.id === "string" ? params.raw.id : undefined;
-  const dedupeKey = jobId ?? `index:${params.index}`;
-  if (params.state.warnedInvalidPersistedJobKeys.has(dedupeKey)) {
-    return;
-  }
-  params.state.warnedInvalidPersistedJobKeys.add(dedupeKey);
-  params.state.deps.log.warn(
-    {
-      storePath: params.state.deps.storePath,
-      jobId,
-      jobIndex: params.index,
-      reason: params.reason,
-    },
-    "cron: skipped invalid persisted job; run openclaw doctor --fix to repair",
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasUnsupportedStringPayloadKind(candidate: Record<string, unknown>): boolean {
-  const payload = candidate.payload;
-  if (!isRecord(payload)) {
-    return false;
-  }
-  const kind = payload.kind;
-  return (
-    typeof kind === "string" && kind.trim() !== "" && kind !== "systemEvent" && kind !== "agentTurn"
-  );
-}
 
 async function getFileMtimeMs(path: string): Promise<number | null> {
   try {
@@ -86,109 +28,23 @@ export async function ensureLoaded(
   if (state.store && !opts?.forceReload) {
     return;
   }
-  const previousJobsById = new Map<string, CronJob>();
-  for (const job of state.store?.jobs ?? []) {
-    previousJobsById.set(job.id, job);
-  }
   // Force reload always re-reads the file to avoid missing cross-service
   // edits on filesystems with coarse mtime resolution.
 
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
-  const loaded = await loadCronStoreWithConfigJobs(state.deps.storePath);
-  const loadedJobs = (loaded.store.jobs ?? []) as unknown as CronJob[];
-  const jobs: CronJob[] = [];
-  const preservedInvalidPersistedJobs: PreservedCronConfigJob[] = [];
-  for (const [index, job] of loadedJobs.entries()) {
-    const raw = job as unknown as Record<string, unknown>;
-    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(raw);
-    const { legacyJobIdIssue } = normalizeCronJobIdentityFields(raw);
-    let normalized: Record<string, unknown> | null;
-    try {
-      normalized = normalizeCronJobInput(raw);
-    } catch (error) {
-      if (!isInvalidCronSessionTargetIdError(error)) {
-        throw error;
-      }
-      normalized = null;
-      state.deps.log.warn(
-        { storePath: state.deps.storePath, jobId: typeof raw.id === "string" ? raw.id : undefined },
-        "cron: job has invalid persisted sessionTarget; run openclaw doctor --fix to repair",
-      );
-    }
-    const hydrated =
-      normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
-    const invalidReason = getInvalidPersistedCronJobReason(
-      hydrated as unknown as Record<string, unknown>,
-    );
-    if (invalidReason) {
-      if (invalidReason === "invalid-payload" && hasUnsupportedStringPayloadKind(rawConfigJob)) {
-        preservedInvalidPersistedJobs.push({ index, job: rawConfigJob });
-      }
-      warnInvalidPersistedCronJob({ state, raw, index, reason: invalidReason });
-      continue;
-    }
-    jobs.push(hydrated);
-    if (legacyJobIdIssue) {
-      const resolvedId = typeof hydrated.id === "string" ? hydrated.id : undefined;
-      state.deps.log.warn(
-        { storePath: state.deps.storePath, jobId: resolvedId },
-        "cron: job used legacy jobId field; normalized id in memory (run openclaw doctor --fix to persist canonical shape)",
-      );
-    }
-    // Persisted legacy jobs may predate the required `enabled` field.
-    // Keep runtime behavior backward-compatible without rewriting the store.
-    if (typeof hydrated.enabled !== "boolean") {
-      hydrated.enabled = true;
-    }
-    invalidateStaleNextRunOnScheduleChange({ previousJobsById, hydrated });
-    // Same shape: persisted jobs missing `sessionTarget` crash downstream
-    // on any code path that dereferences `.startsWith` (e.g.
-    // `runIsolatedAgentJob` in `src/gateway/server-cron.ts`). Mirror the
-    // defaulter applied at create time: systemEvent payloads -> "main",
-    // agentTurn -> "isolated". Use `Object.hasOwn` rather than `in` so a
-    // poisoned prototype cannot feed a crafted `kind` into the defaulter.
-    if (typeof hydrated.sessionTarget !== "string") {
-      const payload = hydrated.payload as unknown;
-      const payloadKind =
-        payload &&
-        typeof payload === "object" &&
-        !Array.isArray(payload) &&
-        Object.hasOwn(payload, "kind")
-          ? (payload as { kind?: unknown }).kind
-          : undefined;
-      let defaulted: "main" | "isolated" | undefined;
-      if (payloadKind === "systemEvent") {
-        defaulted = "main";
-      } else if (payloadKind === "agentTurn") {
-        defaulted = "isolated";
-      }
-      if (defaulted) {
-        hydrated.sessionTarget = defaulted;
-        // `ensureLoaded` is called with `forceReload: true` on every tick;
-        // warn once per jobId per process to avoid log spam on repeated
-        // loads of the same still-broken store file.
-        const jobId = typeof hydrated.id === "string" ? hydrated.id : undefined;
-        const dedupeKey = jobId ?? "<unknown>";
-        if (!state.warnedMissingSessionTargetJobIds.has(dedupeKey)) {
-          state.warnedMissingSessionTargetJobIds.add(dedupeKey);
-          state.deps.log.warn(
-            { storePath: state.deps.storePath, jobId, defaulted },
-            "cron: job missing sessionTarget; defaulted in memory (edit jobs.json to persist canonical shape)",
-          );
-        }
-      }
-    }
-  }
-  state.store = {
-    version: 1,
-    jobs,
-  };
-  state.preservedInvalidPersistedJobs = preservedInvalidPersistedJobs;
+  const loaded = await loadCronStore(state.deps.storePath);
+  const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
+  const { mutated } = normalizeStoredCronJobs(jobs);
+  state.store = { version: 1, jobs: jobs as unknown as CronJob[] };
   state.storeLoadedAtMs = state.deps.nowMs();
   state.storeFileMtimeMs = fileMtimeMs;
 
   if (!opts?.skipRecompute) {
     recomputeNextRuns(state);
+  }
+
+  if (mutated) {
+    await persist(state, { skipBackup: true });
   }
 }
 
@@ -206,17 +62,11 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-export async function persist(
-  state: CronServiceState,
-  opts?: { skipBackup?: boolean; stateOnly?: boolean },
-) {
+export async function persist(state: CronServiceState, opts?: { skipBackup?: boolean }) {
   if (!state.store) {
     return;
   }
-  await saveCronStore(state.deps.storePath, state.store, {
-    ...opts,
-    preservedConfigJobs: state.preservedInvalidPersistedJobs,
-  });
+  await saveCronStore(state.deps.storePath, state.store, opts);
   // Update file mtime after save to prevent immediate reload
   state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }

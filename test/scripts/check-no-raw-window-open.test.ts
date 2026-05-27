@@ -25,7 +25,7 @@ describe("check-no-raw-window-open", () => {
       // window.open("https://example.com")
       const text = "window.open('https://example.com')";
     `;
-    expect(findRawWindowOpenLines(source)).toStrictEqual([]);
+    expect(findRawWindowOpenLines(source)).toEqual([]);
   });
 
   it("handles parenthesized and asserted window references", () => {

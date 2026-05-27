@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { SignalStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
@@ -23,28 +22,28 @@ export function renderSignalCard(params: {
     subtitle: "signal-cli status and channel configuration.",
     accountCountLabel,
     statusRows: [
-      { label: t("common.configured"), value: formatNullableBoolean(configured) },
-      { label: t("common.running"), value: signal?.running ? t("common.yes") : t("common.no") },
-      { label: t("common.baseUrl"), value: signal?.baseUrl ?? t("common.na") },
+      { label: "Configured", value: formatNullableBoolean(configured) },
+      { label: "Running", value: signal?.running ? "Yes" : "No" },
+      { label: "Base URL", value: signal?.baseUrl ?? "n/a" },
       {
-        label: t("common.lastStart"),
-        value: signal?.lastStartAt ? formatRelativeTimestamp(signal.lastStartAt) : t("common.na"),
+        label: "Last start",
+        value: signal?.lastStartAt ? formatRelativeTimestamp(signal.lastStartAt) : "n/a",
       },
       {
-        label: t("common.lastProbe"),
-        value: signal?.lastProbeAt ? formatRelativeTimestamp(signal.lastProbeAt) : t("common.na"),
+        label: "Last probe",
+        value: signal?.lastProbeAt ? formatRelativeTimestamp(signal.lastProbeAt) : "n/a",
       },
     ],
     lastError: signal?.lastError,
     secondaryCallout: signal?.probe
       ? html`<div class="callout" style="margin-top: 12px;">
-          ${signal.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
-          ${signal.probe.status ?? ""} ${signal.probe.error ?? ""}
+          Probe ${signal.probe.ok ? "ok" : "failed"} · ${signal.probe.status ?? ""}
+          ${signal.probe.error ?? ""}
         </div>`
       : nothing,
     configSection: renderChannelConfigSection({ channelId: "signal", props }),
     footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.probe")}</button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
     </div>`,
   });
 }

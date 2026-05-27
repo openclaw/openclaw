@@ -35,6 +35,9 @@ describe("cron stagger helpers", () => {
   });
 
   it("handles missing runtime expr values without throwing", () => {
+    expect(() =>
+      resolveCronStaggerMs({ kind: "cron" } as unknown as { kind: "cron"; expr: string }),
+    ).not.toThrow();
     expect(
       resolveCronStaggerMs({ kind: "cron" } as unknown as { kind: "cron"; expr: string }),
     ).toBe(0);

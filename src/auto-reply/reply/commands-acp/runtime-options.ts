@@ -8,9 +8,7 @@ import {
   validateRuntimePermissionProfileInput,
 } from "../../../acp/control-plane/runtime-options.js";
 import { resolveAcpSessionIdentifierLinesFromIdentity } from "../../../acp/runtime/session-identifiers.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
-import { findLatestTaskForRelatedSessionKeyForOwner } from "../../../tasks/task-owner-access.js";
-import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
+import { findLatestTaskForSessionKey } from "../../../tasks/task-registry.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
   ACP_CWD_USAGE,
@@ -125,25 +123,10 @@ export async function handleAcpStatusAction(
     fallbackCode: "ACP_TURN_FAILED",
     fallbackMessage: "Could not read ACP session status.",
     onSuccess: (status) => {
-      const linkedTask = findLatestTaskForRelatedSessionKeyForOwner({
-        relatedSessionKey: status.sessionKey,
-        callerOwnerKey: params.sessionKey,
-      });
+      const linkedTask = findLatestTaskForSessionKey(status.sessionKey);
       const sessionIdentifierLines = resolveAcpSessionIdentifierLinesFromIdentity({
         backend: status.backend,
         identity: status.identity,
-      });
-      const taskProgress = sanitizeTaskStatusText(linkedTask?.progressSummary);
-      const taskSummary = sanitizeTaskStatusText(linkedTask?.terminalSummary, {
-        errorContext: true,
-      });
-      const taskError = sanitizeTaskStatusText(linkedTask?.error, { errorContext: true });
-      const lastError = sanitizeTaskStatusText(status.lastError, { errorContext: true });
-      const runtimeSummary = sanitizeTaskStatusText(status.runtimeStatus?.summary, {
-        errorContext: true,
-      });
-      const runtimeDetails = sanitizeTaskStatusText(status.runtimeStatus?.details, {
-        errorContext: true,
       });
       const lines = [
         "ACP status:",
@@ -159,9 +142,11 @@ export async function handleAcpStatusAction(
               `taskId: ${linkedTask.taskId}`,
               `taskStatus: ${linkedTask.status}`,
               `delivery: ${linkedTask.deliveryStatus}`,
-              ...(taskProgress ? [`taskProgress: ${taskProgress}`] : []),
-              ...(taskSummary ? [`taskSummary: ${taskSummary}`] : []),
-              ...(taskError ? [`taskError: ${taskError}`] : []),
+              ...(linkedTask.progressSummary
+                ? [`taskProgress: ${linkedTask.progressSummary}`]
+                : []),
+              ...(linkedTask.terminalSummary ? [`taskSummary: ${linkedTask.terminalSummary}`] : []),
+              ...(linkedTask.error ? [`taskError: ${linkedTask.error}`] : []),
               ...(typeof linkedTask.lastEventAt === "number"
                 ? [`taskUpdatedAt: ${new Date(linkedTask.lastEventAt).toISOString()}`]
                 : []),
@@ -170,9 +155,11 @@ export async function handleAcpStatusAction(
         `runtimeOptions: ${formatRuntimeOptionsText(status.runtimeOptions)}`,
         `capabilities: ${formatAcpCapabilitiesText(status.capabilities.controls)}`,
         `lastActivityAt: ${new Date(status.lastActivityAt).toISOString()}`,
-        ...(lastError ? [`lastError: ${lastError}`] : []),
-        ...(runtimeSummary ? [`runtime: ${runtimeSummary}`] : []),
-        ...(runtimeDetails ? [`runtimeDetails: ${runtimeDetails}`] : []),
+        ...(status.lastError ? [`lastError: ${status.lastError}`] : []),
+        ...(status.runtimeStatus?.summary ? [`runtime: ${status.runtimeStatus.summary}`] : []),
+        ...(status.runtimeStatus?.details
+          ? [`runtimeDetails: ${JSON.stringify(status.runtimeStatus.details)}`]
+          : []),
       ];
       return stopWithText(lines.join("\n"));
     },
@@ -231,7 +218,7 @@ export async function handleAcpSetAction(
 
   return await withAcpCommandErrorBoundary({
     run: async () => {
-      const lowerKey = normalizeLowercaseStringOrEmpty(key);
+      const lowerKey = key.toLowerCase();
       if (lowerKey === "cwd") {
         const cwd = validateRuntimeCwdInput(value);
         const options = await getAcpSessionManager().updateSessionRuntimeOptions({

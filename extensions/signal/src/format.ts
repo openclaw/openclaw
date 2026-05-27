@@ -1,11 +1,10 @@
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   markdownToIR,
   type MarkdownIR,
   type MarkdownStyle,
   renderMarkdownIRChunksWithinLimit,
-} from "openclaw/plugin-sdk/text-chunking";
+} from "openclaw/plugin-sdk/text-runtime";
 
 type SignalTextStyle = "BOLD" | "ITALIC" | "STRIKETHROUGH" | "MONOSPACE" | "SPOILER";
 
@@ -36,7 +35,7 @@ type Insertion = {
 };
 
 function normalizeUrlForComparison(url: string): string {
-  let normalized = normalizeLowercaseStringOrEmpty(url);
+  let normalized = url.toLowerCase();
   // Strip protocol
   normalized = normalized.replace(/^https?:\/\//, "");
   // Strip www. prefix

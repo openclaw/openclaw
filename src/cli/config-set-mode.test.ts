@@ -59,10 +59,9 @@ describe("resolveConfigSetMode", () => {
       hasProviderBuilderOptions: true,
       strictJson: false,
     });
-    expect(result).toEqual({
-      ok: false,
-      error:
-        "choose exactly one mode: ref builder (--ref-provider/--ref-source/--ref-id) or provider builder (--provider-*), not both.",
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({
+      error: expect.stringContaining("choose exactly one mode"),
     });
   });
 
@@ -73,10 +72,9 @@ describe("resolveConfigSetMode", () => {
       hasProviderBuilderOptions: false,
       strictJson: false,
     });
-    expect(result).toEqual({
-      ok: false,
-      error:
-        "batch mode (--batch-json/--batch-file) cannot be combined with ref builder (--ref-*) or provider builder (--provider-*) flags.",
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({
+      error: expect.stringContaining("batch mode (--batch-json/--batch-file) cannot be combined"),
     });
   });
 });

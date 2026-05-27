@@ -1,17 +1,16 @@
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+  OpenClawConfig,
+} from "../runtime-api.js";
 import {
   createActionGate,
+  extractToolSend,
   jsonResult,
   readNumberParam,
   readReactionParams,
   readStringParam,
-} from "openclaw/plugin-sdk/channel-actions";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageActionName,
-} from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+} from "../runtime-api.js";
 import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accounts.js";
 import {
   createGoogleChatReaction,
@@ -31,9 +30,15 @@ function listEnabledAccounts(cfg: OpenClawConfig) {
   );
 }
 
-function isReactionsEnabled(accounts: Array<{ config: { actions?: unknown } }>) {
+function isReactionsEnabled(accounts: ReturnType<typeof listEnabledAccounts>, cfg: OpenClawConfig) {
   for (const account of accounts) {
-    const gate = createActionGate(account.config.actions as Record<string, boolean | undefined>);
+    const gate = createActionGate(
+      (account.config.actions ??
+        (cfg.channels?.["googlechat"] as { actions?: unknown })?.actions) as Record<
+        string,
+        boolean | undefined
+      >,
+    );
     if (gate("reactions")) {
       return true;
     }
@@ -48,41 +53,30 @@ function resolveAppUserNames(account: { config: { botUser?: string | null } }) {
 async function loadGoogleChatActionMedia(params: {
   mediaUrl: string;
   maxBytes: number;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
   mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 }) {
   const runtime = getGoogleChatRuntime();
   return /^https?:\/\//i.test(params.mediaUrl)
-    ? await runtime.channel.media.readRemoteMediaBuffer({
+    ? await runtime.channel.media.fetchRemoteMedia({
         url: params.mediaUrl,
         maxBytes: params.maxBytes,
       })
-    : await loadOutboundMediaFromUrl(params.mediaUrl, {
+    : await runtime.media.loadWebMedia(params.mediaUrl, {
         maxBytes: params.maxBytes,
-        mediaAccess: params.mediaAccess,
-        mediaLocalRoots: params.mediaLocalRoots,
-        mediaReadFile: params.mediaReadFile,
+        localRoots: params.mediaLocalRoots?.length ? params.mediaLocalRoots : undefined,
       });
 }
 
 export const googlechatMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg, accountId }) => {
-    const accounts = accountId
-      ? [resolveGoogleChatAccount({ cfg, accountId })].filter(
-          (account) => account.enabled && account.credentialSource !== "none",
-        )
-      : listEnabledAccounts(cfg);
+  describeMessageTool: ({ cfg }) => {
+    const accounts = listEnabledAccounts(cfg);
     if (accounts.length === 0) {
       return null;
     }
     const actions = new Set<ChannelMessageActionName>([]);
     actions.add("send");
     actions.add("upload-file");
-    if (isReactionsEnabled(accounts)) {
+    if (isReactionsEnabled(accounts, cfg)) {
       actions.add("react");
       actions.add("reactions");
     }
@@ -91,15 +85,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
-  handleAction: async ({
-    action,
-    params,
-    cfg,
-    accountId,
-    mediaAccess,
-    mediaLocalRoots,
-    mediaReadFile,
-  }) => {
+  handleAction: async ({ action, params, cfg, accountId, mediaLocalRoots }) => {
     const account = resolveGoogleChatAccount({
       cfg: cfg,
       accountId,
@@ -131,9 +117,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
         const loaded = await loadGoogleChatActionMedia({
           mediaUrl,
           maxBytes,
-          mediaAccess,
           mediaLocalRoots,
-          mediaReadFile,
         });
         const uploadFileName =
           readStringParam(params, "filename") ??

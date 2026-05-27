@@ -16,8 +16,7 @@ function createMockSpawnChild() {
   return { child, stdout };
 }
 
-vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+vi.mock("node:child_process", () => {
   const spawn = vi.fn(() => {
     const { child, stdout } = createMockSpawnChild();
     process.nextTick(() => {
@@ -36,23 +35,10 @@ vi.mock("node:child_process", async () => {
     });
     return child;
   });
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
-    {
-      spawn: spawn as unknown as typeof import("node:child_process").spawn,
-    },
-  );
+  return { spawn };
 });
 
 const spawnMock = vi.mocked(spawn);
-
-function requireSpawnArgs(index: number): string[] {
-  const args = spawnMock.mock.calls[index]?.[1] as string[] | undefined;
-  if (!args) {
-    throw new Error("expected ssh spawn args");
-  }
-  return args;
-}
 
 let parseSshConfigOutput: typeof import("./ssh-config.js").parseSshConfigOutput;
 let resolveSshConfig: typeof import("./ssh-config.js").resolveSshConfig;
@@ -80,7 +66,7 @@ describe("ssh-config", () => {
     expect(parsed.user).toBe("bob");
     expect(parsed.host).toBe("example.com");
     expect(parsed.port).toBeUndefined();
-    expect(parsed.identityFiles).toStrictEqual([]);
+    expect(parsed.identityFiles).toEqual([]);
   });
 
   it("resolves ssh config via ssh -G", async () => {
@@ -89,7 +75,8 @@ describe("ssh-config", () => {
     expect(config?.host).toBe("peters-mac-studio-1.sheep-coho.ts.net");
     expect(config?.port).toBe(2222);
     expect(config?.identityFiles).toEqual(["/tmp/id_ed25519"]);
-    expect(requireSpawnArgs(0).slice(-2)).toEqual(["--", "me@alias"]);
+    const args = spawnMock.mock.calls[0]?.[1] as string[] | undefined;
+    expect(args?.slice(-2)).toEqual(["--", "me@alias"]);
   });
 
   it("adds non-default port and trimmed identity arguments", async () => {
@@ -98,7 +85,7 @@ describe("ssh-config", () => {
       { identity: "  /tmp/custom_id  " },
     );
 
-    const args = requireSpawnArgs(spawnMock.mock.calls.length - 1);
+    const args = spawnMock.mock.calls.at(-1)?.[1] as string[] | undefined;
     expect(args).toEqual(["-G", "-p", "2022", "-i", "/tmp/custom_id", "--", "me@alias"]);
   });
 

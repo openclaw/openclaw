@@ -1,6 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-
-type SafeBinSemanticValidationParams = {
+export type SafeBinSemanticValidationParams = {
   binName?: string;
   positional: readonly string[];
 };
@@ -12,13 +10,6 @@ type SafeBinSemanticRule = {
 
 const JQ_ENV_FILTER_PATTERN = /(^|[^.$A-Za-z0-9_])env([^A-Za-z0-9_]|$)/;
 const JQ_ENV_VARIABLE_PATTERN = /\$ENV\b/;
-const ALWAYS_DENY_SAFE_BIN_SEMANTICS = () => false;
-
-const UNSAFE_SAFE_BIN_WARNINGS = {
-  awk: "awk-family interpreters can execute commands, access ENVIRON, and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-  jq: "jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-  sed: "sed scripts can execute commands and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-} as const;
 
 const SAFE_BIN_SEMANTIC_RULES: Readonly<Record<string, SafeBinSemanticRule>> = {
   jq: {
@@ -26,36 +17,13 @@ const SAFE_BIN_SEMANTIC_RULES: Readonly<Record<string, SafeBinSemanticRule>> = {
       !positional.some(
         (token) => JQ_ENV_FILTER_PATTERN.test(token) || JQ_ENV_VARIABLE_PATTERN.test(token),
       ),
-    configWarning: UNSAFE_SAFE_BIN_WARNINGS.jq,
-  },
-  awk: {
-    validate: ALWAYS_DENY_SAFE_BIN_SEMANTICS,
-    configWarning: UNSAFE_SAFE_BIN_WARNINGS.awk,
-  },
-  gawk: {
-    validate: ALWAYS_DENY_SAFE_BIN_SEMANTICS,
-    configWarning: UNSAFE_SAFE_BIN_WARNINGS.awk,
-  },
-  mawk: {
-    validate: ALWAYS_DENY_SAFE_BIN_SEMANTICS,
-    configWarning: UNSAFE_SAFE_BIN_WARNINGS.awk,
-  },
-  nawk: {
-    validate: ALWAYS_DENY_SAFE_BIN_SEMANTICS,
-    configWarning: UNSAFE_SAFE_BIN_WARNINGS.awk,
-  },
-  sed: {
-    validate: ALWAYS_DENY_SAFE_BIN_SEMANTICS,
-    configWarning: UNSAFE_SAFE_BIN_WARNINGS.sed,
-  },
-  gsed: {
-    validate: ALWAYS_DENY_SAFE_BIN_SEMANTICS,
-    configWarning: UNSAFE_SAFE_BIN_WARNINGS.sed,
+    configWarning:
+      "jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
   },
 };
 
 export function normalizeSafeBinName(raw: string): string {
-  const trimmed = normalizeLowercaseStringOrEmpty(raw);
+  const trimmed = raw.trim().toLowerCase();
   if (!trimmed) {
     return "";
   }
@@ -64,7 +32,7 @@ export function normalizeSafeBinName(raw: string): string {
   return normalized.replace(/\.(?:exe|cmd|bat|com)$/i, "");
 }
 
-function getSafeBinSemanticRule(binName?: string): SafeBinSemanticRule | undefined {
+export function getSafeBinSemanticRule(binName?: string): SafeBinSemanticRule | undefined {
   const normalized = typeof binName === "string" ? normalizeSafeBinName(binName) : "";
   return normalized ? SAFE_BIN_SEMANTIC_RULES[normalized] : undefined;
 }

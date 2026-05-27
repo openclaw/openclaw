@@ -3,57 +3,13 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 describe("OpenClawSchema talk validation", () => {
   it("accepts a positive integer talk.silenceTimeoutMs", () => {
-    const result = OpenClawSchema.safeParse({
-      talk: {
-        consultThinkingLevel: "low",
-        consultFastMode: true,
-        silenceTimeoutMs: 1500,
-      },
-    });
-
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects invalid talk.consultThinkingLevel", () => {
     expect(() =>
       OpenClawSchema.parse({
         talk: {
-          consultThinkingLevel: "turbo",
-        },
-      }),
-    ).toThrow(/consultThinkingLevel/i);
-  });
-
-  it("accepts additional realtime Talk instructions", () => {
-    expect(() =>
-      OpenClawSchema.parse({
-        talk: {
-          realtime: {
-            provider: "openai",
-            providers: {
-              openai: {
-                model: "gpt-realtime",
-                voice: "alloy",
-              },
-            },
-            instructions: "Speak with crisp diction.",
-            consultRouting: "force-agent-consult",
-          },
+          silenceTimeoutMs: 1500,
         },
       }),
     ).not.toThrow();
-  });
-
-  it("rejects invalid realtime Talk consult routing", () => {
-    expect(() =>
-      OpenClawSchema.parse({
-        talk: {
-          realtime: {
-            consultRouting: "always",
-          },
-        },
-      }),
-    ).toThrow(/consultRouting/i);
   });
 
   it.each([

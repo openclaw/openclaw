@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 
 const recordSessionMetaFromInboundMock = vi.fn((_args?: unknown) => Promise.resolve(undefined));
@@ -13,26 +13,6 @@ type SessionModule = typeof import("./session.js");
 
 let recordInboundSession: SessionModule["recordInboundSession"];
 
-function requireFirstCallArg(mock: ReturnType<typeof vi.fn>): {
-  sessionKey?: string;
-  ctx?: MsgContext;
-  createIfMissing?: boolean;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-  };
-} {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("Expected mock call argument");
-  }
-  const [arg] = call;
-  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
-    throw new Error("Expected mock call argument to be an object");
-  }
-  return arg;
-}
-
 describe("recordInboundSession", () => {
   const ctx: MsgContext = {
     Provider: "demo-channel",
@@ -41,11 +21,9 @@ describe("recordInboundSession", () => {
     OriginatingTo: "demo-channel:1234",
   };
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ recordInboundSession } = await import("./session.js"));
-  });
-
-  beforeEach(() => {
     recordSessionMetaFromInboundMock.mockClear();
     updateLastRouteMock.mockClear();
   });
@@ -63,11 +41,16 @@ describe("recordInboundSession", () => {
       onRecordError: vi.fn(),
     });
 
-    const route = requireFirstCallArg(updateLastRouteMock);
-    expect(route.sessionKey).toBe("agent:main:main");
-    expect(route.ctx).toBeUndefined();
-    expect(route.deliveryContext?.channel).toBe("demo-channel");
-    expect(route.deliveryContext?.to).toBe("demo-channel:1234");
+    expect(updateLastRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        ctx: undefined,
+        deliveryContext: expect.objectContaining({
+          channel: "demo-channel",
+          to: "demo-channel:1234",
+        }),
+      }),
+    );
   });
 
   it("passes ctx when updating the same session key", async () => {
@@ -83,11 +66,16 @@ describe("recordInboundSession", () => {
       onRecordError: vi.fn(),
     });
 
-    const route = requireFirstCallArg(updateLastRouteMock);
-    expect(route.sessionKey).toBe("agent:main:demo-channel:1234:thread:42");
-    expect(route.ctx).toBe(ctx);
-    expect(route.deliveryContext?.channel).toBe("demo-channel");
-    expect(route.deliveryContext?.to).toBe("demo-channel:1234");
+    expect(updateLastRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:demo-channel:1234:thread:42",
+        ctx,
+        deliveryContext: expect.objectContaining({
+          channel: "demo-channel",
+          to: "demo-channel:1234",
+        }),
+      }),
+    );
   });
 
   it("normalizes mixed-case session keys before recording and route updates", async () => {
@@ -103,43 +91,17 @@ describe("recordInboundSession", () => {
       onRecordError: vi.fn(),
     });
 
-    expect(requireFirstCallArg(recordSessionMetaFromInboundMock).sessionKey).toBe(
-      "agent:main:demo-channel:1234:thread:42",
+    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:demo-channel:1234:thread:42",
+      }),
     );
-    const route = requireFirstCallArg(updateLastRouteMock);
-    expect(route.sessionKey).toBe("agent:main:demo-channel:1234:thread:42");
-    expect(route.ctx).toBe(ctx);
-  });
-
-  it("preserves Signal group ids before recording and route updates", async () => {
-    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
-    const signalCtx: MsgContext = {
-      Provider: "signal",
-      ChatType: "group",
-      From: `signal:group:${mixedGroupId}`,
-      To: `signal:group:${mixedGroupId}`,
-      SessionKey: `agent:main:signal:group:${mixedGroupId}`,
-      OriginatingTo: `signal:group:${mixedGroupId}`,
-    };
-
-    await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: `Agent:Main:Signal:Group:${mixedGroupId}`,
-      ctx: signalCtx,
-      updateLastRoute: {
-        sessionKey: `Agent:Main:Signal:Group:${mixedGroupId}`,
-        channel: "signal",
-        to: `signal:group:${mixedGroupId}`,
-      },
-      onRecordError: vi.fn(),
-    });
-
-    expect(requireFirstCallArg(recordSessionMetaFromInboundMock).sessionKey).toBe(
-      `agent:main:signal:group:${mixedGroupId}`,
+    expect(updateLastRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:demo-channel:1234:thread:42",
+        ctx,
+      }),
     );
-    const route = requireFirstCallArg(updateLastRouteMock);
-    expect(route.sessionKey).toBe(`agent:main:signal:group:${mixedGroupId}`);
-    expect(route.ctx).toBe(signalCtx);
   });
 
   it("skips last-route updates when main DM owner pin mismatches sender", async () => {
@@ -167,25 +129,5 @@ describe("recordInboundSession", () => {
       ownerRecipient: "1234",
       senderRecipient: "9999",
     });
-  });
-
-  it("forwards session creation policy to last-route updates", async () => {
-    await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "agent:main:demo-channel:1234:thread:42",
-      ctx,
-      createIfMissing: false,
-      updateLastRoute: {
-        sessionKey: "agent:main:main",
-        channel: "demo-channel",
-        to: "demo-channel:1234",
-      },
-      onRecordError: vi.fn(),
-    });
-
-    expect(requireFirstCallArg(recordSessionMetaFromInboundMock).createIfMissing).toBe(false);
-    const route = requireFirstCallArg(updateLastRouteMock);
-    expect(route.sessionKey).toBe("agent:main:main");
-    expect(route.createIfMissing).toBe(false);
   });
 });

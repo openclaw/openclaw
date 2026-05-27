@@ -21,7 +21,6 @@ export function createMockTypingController(
 export function createMockFollowupRun(
   overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
 ): FollowupRun {
-  const skipProviderRuntimeHints = process.env.OPENCLAW_TEST_FAST === "1";
   const base: FollowupRun = {
     prompt: "hello",
     summaryLine: "hello",
@@ -53,7 +52,6 @@ export function createMockFollowupRun(
       },
       timeoutMs: 1_000,
       blockReplyBreak: "message_end",
-      skipProviderRuntimeHints,
     },
   };
   return {

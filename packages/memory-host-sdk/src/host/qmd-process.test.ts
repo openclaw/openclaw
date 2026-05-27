@@ -2,24 +2,19 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
     spawn: spawnMock,
   };
 });
 
-import {
-  checkQmdBinaryAvailability,
-  resolveCliSpawnInvocation,
-  resolveQmdBinaryUnavailableReason,
-  type QmdBinaryAvailability,
-} from "./qmd-process.js";
+import { checkQmdBinaryAvailability, resolveCliSpawnInvocation } from "./qmd-process.js";
 
 function createMockChild() {
   const child = new EventEmitter() as EventEmitter & {
@@ -29,36 +24,25 @@ function createMockChild() {
   return child;
 }
 
-let fixtureRoot = "";
 let tempDir = "";
 let platformSpy: { mockRestore(): void } | null = null;
-let fixtureId = 0;
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
 
-beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-win-spawn-"));
+beforeEach(async () => {
+  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-win-spawn-"));
   platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 });
 
-afterAll(async () => {
+afterEach(async () => {
   platformSpy?.mockRestore();
-  platformSpy = null;
-  if (fixtureRoot) {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  }
-});
-
-beforeEach(async () => {
-  tempDir = path.join(fixtureRoot, `case-${fixtureId++}`);
-  await fs.mkdir(tempDir, { recursive: true });
-});
-
-afterEach(() => {
   process.env.PATH = originalPath;
   process.env.PATHEXT = originalPathExt;
   spawnMock.mockReset();
-  tempDir = "";
+  if (tempDir) {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    tempDir = "";
+  }
 });
 
 describe("resolveCliSpawnInvocation", () => {
@@ -128,15 +112,6 @@ describe("resolveCliSpawnInvocation", () => {
 });
 
 describe("checkQmdBinaryAvailability", () => {
-  it("keeps legacy unavailable probe results source-compatible", () => {
-    const legacyUnavailable: QmdBinaryAvailability = {
-      available: false,
-      error: "spawn qmd ENOENT",
-    };
-
-    expect(resolveQmdBinaryUnavailableReason(legacyUnavailable)).toBe("binary");
-  });
-
   it("returns available when the qmd process spawns successfully", async () => {
     const child = createMockChild();
     spawnMock.mockImplementationOnce(() => {
@@ -147,8 +122,7 @@ describe("checkQmdBinaryAvailability", () => {
     await expect(
       checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
     ).resolves.toEqual({ available: true });
-    expect(child.kill).toHaveBeenCalledTimes(1);
-    expect(child.kill).toHaveBeenCalledWith();
+    expect(child.kill).toHaveBeenCalled();
   });
 
   it("returns unavailable when the qmd process cannot be spawned", async () => {
@@ -161,20 +135,7 @@ describe("checkQmdBinaryAvailability", () => {
 
     await expect(
       checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
-    ).resolves.toEqual({ available: false, reason: "binary", error: "spawn qmd ENOENT" });
-  });
-
-  it("returns an explicit workspace error when cwd is missing", async () => {
-    const missingDir = path.join(tempDir, "missing-workspace");
-
-    await expect(
-      checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: missingDir }),
-    ).resolves.toEqual({
-      available: false,
-      reason: "workspace-cwd",
-      error: `workspace directory missing: ${missingDir}`,
-    });
-    expect(spawnMock).not.toHaveBeenCalled();
+    ).resolves.toEqual({ available: false, error: "spawn qmd ENOENT" });
   });
 
   it("does not treat close-before-spawn as a successful availability probe", async () => {
@@ -188,6 +149,6 @@ describe("checkQmdBinaryAvailability", () => {
 
     await expect(
       checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
-    ).resolves.toEqual({ available: false, reason: "binary", error: "spawn qmd ENOENT" });
+    ).resolves.toEqual({ available: false, error: "spawn qmd ENOENT" });
   });
 });

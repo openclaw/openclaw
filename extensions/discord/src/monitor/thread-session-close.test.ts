@@ -6,10 +6,8 @@ const hoisted = vi.hoisted(() => {
   return { updateSessionStore, resolveStorePath };
 });
 
-vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
-    "openclaw/plugin-sdk/session-store-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     updateSessionStore: hoisted.updateSessionStore,
@@ -32,11 +30,9 @@ const MATCHED_KEY = `agent:main:discord:channel:${THREAD_ID}`;
 const UNMATCHED_KEY = `agent:main:discord:channel:${OTHER_ID}`;
 
 describe("closeDiscordThreadSessions", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ closeDiscordThreadSessions } = await import("./thread-session-close.js"));
-  });
-
-  beforeEach(() => {
     hoisted.updateSessionStore.mockClear();
     hoisted.resolveStorePath.mockClear();
     hoisted.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions.json");

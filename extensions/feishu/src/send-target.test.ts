@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
@@ -19,17 +19,9 @@ describe("resolveFeishuSendTarget", () => {
   const cfg = {} as ClawdbotConfig;
   const client = { id: "client" };
 
-  beforeAll(async () => {
-    ({ resolveFeishuSendTarget } = await import("./send-target.js"));
-  });
-
-  afterAll(() => {
-    vi.doUnmock("./accounts.js");
-    vi.doUnmock("./client.js");
+  beforeEach(async () => {
     vi.resetModules();
-  });
-
-  beforeEach(() => {
+    ({ resolveFeishuSendTarget } = await import("./send-target.js"));
     resolveFeishuAccountMock.mockReset().mockReturnValue({
       accountId: "default",
       enabled: true,

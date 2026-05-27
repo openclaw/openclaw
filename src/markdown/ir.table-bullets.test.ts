@@ -53,7 +53,7 @@ describe("markdownToIR tableMode bullets", () => {
     expect(ir.text).toContain("| A | B |");
     expect(ir.text).toContain("| 1 | 2 |");
     expect(ir.text).not.toContain("•");
-    expect(ir.styles.map((style) => style.style)).not.toContain("code_block");
+    expect(ir.styles.some((style) => style.style === "code_block")).toBe(false);
   });
 
   it("handles empty cells gracefully", () => {
@@ -81,11 +81,10 @@ describe("markdownToIR tableMode bullets", () => {
     const ir = markdownToIR(md, { tableMode: "bullets" });
 
     // Should have bold style for row label
-    expect(
-      ir.styles
-        .filter((style) => style.style === "bold")
-        .map((style) => ir.text.slice(style.start, style.end)),
-    ).toContain("Row1");
+    const hasRowLabelBold = ir.styles.some(
+      (s) => s.style === "bold" && ir.text.slice(s.start, s.end) === "Row1",
+    );
+    expect(hasRowLabelBold).toBe(true);
   });
 
   it("renders tables as code blocks in code mode", () => {
@@ -99,7 +98,7 @@ describe("markdownToIR tableMode bullets", () => {
 
     expect(ir.text).toContain("| A | B |");
     expect(ir.text).toContain("| 1 | 2 |");
-    expect(ir.styles.map((style) => style.style)).toContain("code_block");
+    expect(ir.styles.some((style) => style.style === "code_block")).toBe(true);
   });
 
   it("preserves inline styles and links in bullets mode", () => {
@@ -111,11 +110,10 @@ describe("markdownToIR tableMode bullets", () => {
 
     const ir = markdownToIR(md, { tableMode: "bullets" });
 
-    expect(
-      ir.styles
-        .filter((style) => style.style === "italic")
-        .map((style) => ir.text.slice(style.start, style.end)),
-    ).toContain("Row");
-    expect(ir.links.map((link) => link.href)).toContain("https://example.com");
+    const hasItalic = ir.styles.some(
+      (s) => s.style === "italic" && ir.text.slice(s.start, s.end) === "Row",
+    );
+    expect(hasItalic).toBe(true);
+    expect(ir.links.some((link) => link.href === "https://example.com")).toBe(true);
   });
 });

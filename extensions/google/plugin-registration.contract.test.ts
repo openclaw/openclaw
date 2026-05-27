@@ -1,12 +1,12 @@
-import { pluginRegistrationContractCases } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { describePluginRegistrationContract } from "openclaw/plugin-sdk/plugin-test-contracts";
+import { describePluginRegistrationContract } from "../../test/helpers/plugins/plugin-registration-contract.js";
 
 describePluginRegistrationContract({
-  ...pluginRegistrationContractCases.google,
-  speechProviderIds: ["google"],
-  videoGenerationProviderIds: ["google"],
+  pluginId: "google",
+  providerIds: ["google", "google-gemini-cli"],
   webSearchProviderIds: ["gemini"],
+  mediaUnderstandingProviderIds: ["google"],
+  imageGenerationProviderIds: ["google"],
+  cliBackendIds: ["google-gemini-cli"],
   requireDescribeImages: true,
   requireGenerateImage: true,
-  requireGenerateVideo: true,
 });

@@ -2,38 +2,21 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../config/home-env.test-harness.js";
-import { registerMcpCli } from "./mcp-cli.js";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
-const mocks = vi.hoisted(() => {
-  const runtime = {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-    }),
-  };
-  return {
-    runtime,
-    serveOpenClawChannelMcp: vi.fn(),
-  };
-});
-
-const defaultRuntime = mocks.runtime;
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 const mockLog = defaultRuntime.log;
 const mockError = defaultRuntime.error;
-const serveOpenClawChannelMcp = mocks.serveOpenClawChannelMcp;
+const serveOpenClawChannelMcp = vi.fn();
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime: mocks.runtime,
+  defaultRuntime,
 }));
 
 vi.mock("../mcp/channel-server.js", () => ({
-  serveOpenClawChannelMcp: mocks.serveOpenClawChannelMcp,
+  serveOpenClawChannelMcp,
 }));
 
 const tempDirs: string[] = [];
@@ -44,34 +27,24 @@ async function createWorkspace(): Promise<string> {
   return dir;
 }
 
+let registerMcpCli: typeof import("./mcp-cli.js").registerMcpCli;
 let sharedProgram: Command;
 
 async function runMcpCommand(args: string[]) {
   await sharedProgram.parseAsync(args, { from: "user" });
 }
 
-function lastLogLine(): string {
-  return lastRuntimeLine(mockLog);
-}
-
-function lastErrorLine(): string {
-  return lastRuntimeLine(mockError);
-}
-
-function lastRuntimeLine(mock: typeof mockLog): string {
-  const call = mock.mock.calls[mock.mock.calls.length - 1];
-  return String(call?.[0] ?? "");
-}
-
 describe("mcp cli", () => {
-  if (!sharedProgram) {
+  beforeAll(async () => {
+    ({ registerMcpCli } = await import("./mcp-cli.js"));
     sharedProgram = new Command();
     sharedProgram.exitOverride();
     registerMcpCli(sharedProgram);
-  }
+  }, 300_000);
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuntimeCapture();
   });
 
   afterEach(async () => {
@@ -82,29 +55,27 @@ describe("mcp cli", () => {
   });
 
   it("sets and shows a configured MCP server", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
       await runMcpCommand(["mcp", "set", "context7", '{"command":"uvx","args":["context7-mcp"]}']);
-      expect(lastLogLine()).toBe(`Saved MCP server "context7" to ${configPath}.`);
+      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining('Saved MCP server "context7"'));
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "show", "context7", "--json"]);
-      expect(JSON.parse(lastLogLine())).toEqual({ command: "uvx", args: ["context7-mcp"] });
+      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining('"command": "uvx"'));
     });
   });
 
   it("fails when removing an unknown MCP server", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
       await expect(runMcpCommand(["mcp", "unset", "missing"])).rejects.toThrow("__exit__:1");
-      expect(lastErrorLine()).toBe(
-        `No MCP server named "missing" in ${configPath}. Run openclaw mcp list to see configured servers.`,
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining('No MCP server named "missing"'),
       );
     });
   });

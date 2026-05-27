@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../../runtime-api.js";
 import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
-import { resolveMatrixMonitorConfig, resolveMatrixMonitorLiveUserAllowlist } from "./config.js";
+import { resolveMatrixMonitorConfig } from "./config.js";
 
 type MatrixRoomsConfig = Record<string, MatrixRoomConfig>;
 
@@ -12,38 +12,6 @@ function createRuntime() {
     exit: vi.fn(),
   };
   return runtime;
-}
-
-function createConfig(params?: { dangerouslyAllowNameMatching?: boolean }): CoreConfig {
-  return {
-    channels: {
-      matrix: {
-        dangerouslyAllowNameMatching: params?.dangerouslyAllowNameMatching,
-      },
-    },
-  } as CoreConfig;
-}
-
-function resolveTargetCall(
-  resolveTargets: { mock: { calls: unknown[][] } },
-  index: number,
-): { accountId?: string; kind?: string; inputs?: string[] } {
-  const [arg] = resolveTargets.mock.calls[index] ?? [];
-  if (!arg || typeof arg !== "object") {
-    throw new Error(`expected resolveTargets call ${index + 1}`);
-  }
-  return arg as { accountId?: string; kind?: string; inputs?: string[] };
-}
-
-function expectResolveTargetCall(
-  resolveTargets: { mock: { calls: unknown[][] } },
-  index: number,
-  expected: { accountId: string; kind: string; inputs: string[] },
-): void {
-  const call = resolveTargetCall(resolveTargets, index);
-  expect(call.accountId).toBe(expected.accountId);
-  expect(call.kind).toBe(expected.kind);
-  expect(call.inputs).toEqual(expected.inputs);
 }
 
 describe("resolveMatrixMonitorConfig", () => {
@@ -71,18 +39,18 @@ describe("resolveMatrixMonitorConfig", () => {
     );
 
     const roomsConfig: MatrixRoomsConfig = {
-      "*": { enabled: true },
+      "*": { allow: true },
       "room:!ops:example.org": {
-        enabled: true,
+        allow: true,
         users: ["Dana", "user:@Erin:Example.org"],
       },
       General: {
-        enabled: true,
+        allow: true,
       },
     };
 
     const result = await resolveMatrixMonitorConfig({
-      cfg: createConfig({ dangerouslyAllowNameMatching: true }),
+      cfg: {} as CoreConfig,
       accountId: "ops",
       allowFrom: ["matrix:@Alice:Example.org", "Bob"],
       groupAllowFrom: ["user:@Carol:Example.org"],
@@ -94,31 +62,40 @@ describe("resolveMatrixMonitorConfig", () => {
     expect(result.allowFrom).toEqual(["@alice:example.org", "@bob:example.org"]);
     expect(result.groupAllowFrom).toEqual(["@carol:example.org"]);
     expect(result.roomsConfig).toEqual({
-      "*": { enabled: true },
+      "*": { allow: true },
       "!ops:example.org": {
-        enabled: true,
+        allow: true,
         users: ["@dana:example.org", "@erin:example.org"],
       },
       "!general:example.org": {
-        enabled: true,
+        allow: true,
       },
     });
     expect(resolveTargets).toHaveBeenCalledTimes(3);
-    expectResolveTargetCall(resolveTargets, 0, {
-      accountId: "ops",
-      kind: "user",
-      inputs: ["Bob"],
-    });
-    expectResolveTargetCall(resolveTargets, 1, {
-      accountId: "ops",
-      kind: "group",
-      inputs: ["General"],
-    });
-    expectResolveTargetCall(resolveTargets, 2, {
-      accountId: "ops",
-      kind: "user",
-      inputs: ["Dana"],
-    });
+    expect(resolveTargets).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        accountId: "ops",
+        kind: "user",
+        inputs: ["Bob"],
+      }),
+    );
+    expect(resolveTargets).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        accountId: "ops",
+        kind: "group",
+        inputs: ["General"],
+      }),
+    );
+    expect(resolveTargets).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        accountId: "ops",
+        kind: "user",
+        inputs: ["Dana"],
+      }),
+    );
   });
 
   it("strips config prefixes before lookups and logs unresolved guidance once per section", async () => {
@@ -133,13 +110,13 @@ describe("resolveMatrixMonitorConfig", () => {
     );
 
     const result = await resolveMatrixMonitorConfig({
-      cfg: createConfig({ dangerouslyAllowNameMatching: true }),
+      cfg: {} as CoreConfig,
       accountId: "ops",
       allowFrom: ["user:Ghost"],
       groupAllowFrom: ["matrix:@known:example.org"],
       roomsConfig: {
         "channel:Project X": {
-          enabled: true,
+          allow: true,
           users: ["matrix:Ghost"],
         },
       },
@@ -147,23 +124,29 @@ describe("resolveMatrixMonitorConfig", () => {
       resolveTargets,
     });
 
-    expect(result.allowFrom).toStrictEqual([]);
+    expect(result.allowFrom).toEqual([]);
     expect(result.groupAllowFrom).toEqual(["@known:example.org"]);
-    expect(result.roomsConfig).toStrictEqual({});
-    expectResolveTargetCall(resolveTargets, 0, {
-      accountId: "ops",
-      kind: "user",
-      inputs: ["Ghost"],
-    });
-    expectResolveTargetCall(resolveTargets, 1, {
-      accountId: "ops",
-      kind: "group",
-      inputs: ["Project X"],
-    });
+    expect(result.roomsConfig).toEqual({});
+    expect(resolveTargets).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        accountId: "ops",
+        kind: "user",
+        inputs: ["Ghost"],
+      }),
+    );
+    expect(resolveTargets).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        accountId: "ops",
+        kind: "group",
+        inputs: ["Project X"],
+      }),
+    );
     expect(resolveTargets).toHaveBeenCalledTimes(2);
     expect(runtime.log).toHaveBeenCalledWith("matrix dm allowlist unresolved: user:Ghost");
     expect(runtime.log).toHaveBeenCalledWith(
-      "matrix dm allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries will not match any sender.",
+      "matrix dm allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries are ignored.",
     );
     expect(runtime.log).toHaveBeenCalledWith("matrix rooms unresolved: channel:Project X");
     expect(runtime.log).toHaveBeenCalledWith(
@@ -187,11 +170,11 @@ describe("resolveMatrixMonitorConfig", () => {
     );
 
     const result = await resolveMatrixMonitorConfig({
-      cfg: createConfig({ dangerouslyAllowNameMatching: true }),
+      cfg: {} as CoreConfig,
       accountId: "ops",
       roomsConfig: {
         "#allowed:example.org": {
-          enabled: true,
+          allow: true,
         },
       },
       runtime,
@@ -200,139 +183,15 @@ describe("resolveMatrixMonitorConfig", () => {
 
     expect(result.roomsConfig).toEqual({
       "!allowed-room:example.org": {
-        enabled: true,
+        allow: true,
       },
     });
-    expectResolveTargetCall(resolveTargets, 0, {
-      accountId: "ops",
-      kind: "group",
-      inputs: ["#allowed:example.org"],
-    });
-  });
-
-  it("does not resolve mutable allowlist entries or room names by default", async () => {
-    const runtime = createRuntime();
-    const resolveTargets = vi.fn(
-      async ({ kind, inputs }: { inputs: string[]; kind: "user" | "group" }) => {
-        if (kind === "group") {
-          return inputs.map((input) =>
-            input === "#ops:example.org"
-              ? { input, resolved: true, id: "!ops:example.org" }
-              : { input, resolved: false },
-          );
-        }
-        return inputs.map((input) => ({ input, resolved: true, id: `@${input}:example.org` }));
-      },
+    expect(resolveTargets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "ops",
+        kind: "group",
+        inputs: ["#allowed:example.org"],
+      }),
     );
-
-    const result = await resolveMatrixMonitorConfig({
-      cfg: createConfig(),
-      accountId: "ops",
-      allowFrom: ["Alice", "matrix:@Bob:Example.org"],
-      groupAllowFrom: ["Carol"],
-      roomsConfig: {
-        General: {
-          enabled: true,
-          users: ["Dana"],
-        },
-        "#ops:example.org": {
-          enabled: true,
-          users: ["user:@Erin:Example.org", "Frank"],
-        },
-      },
-      runtime,
-      resolveTargets,
-    });
-
-    expect(result.allowFrom).toEqual(["@bob:example.org"]);
-    expect(result.allowFromResolvedEntries).toEqual([
-      { input: "matrix:@Bob:Example.org", id: "@bob:example.org" },
-    ]);
-    expect(result.groupAllowFrom).toEqual(["Carol"]);
-    expect(result.roomsConfig).toEqual({
-      "!ops:example.org": {
-        enabled: true,
-        users: ["@erin:example.org", "Frank"],
-      },
-    });
-    expect(resolveTargets).toHaveBeenCalledTimes(1);
-    expectResolveTargetCall(resolveTargets, 0, {
-      accountId: "ops",
-      kind: "group",
-      inputs: ["#ops:example.org"],
-    });
-    expect(runtime.log).toHaveBeenCalledWith("matrix dm allowlist unresolved: Alice");
-    expect(runtime.log).toHaveBeenCalledWith(
-      "matrix dm allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries will not match any sender. To match Matrix display names, set channels.matrix.dangerouslyAllowNameMatching=true.",
-    );
-    expect(runtime.log).toHaveBeenCalledWith("matrix group allowlist unresolved: Carol");
-    expect(runtime.log).toHaveBeenCalledWith(
-      "matrix group allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries will not match any sender. To match Matrix display names, set channels.matrix.dangerouslyAllowNameMatching=true.",
-    );
-    expect(runtime.log).toHaveBeenCalledWith("matrix room users unresolved: Frank");
-    expect(runtime.log).toHaveBeenCalledWith(
-      "matrix room users entries must be full Matrix IDs (example: @user:server). Unresolved entries will not match any sender. To match Matrix display names, set channels.matrix.dangerouslyAllowNameMatching=true.",
-    );
-  });
-
-  it("does not resolve mutable live allowlist entries by default", async () => {
-    const runtime = createRuntime();
-    const resolveTargets = vi.fn(async () => [
-      { input: "Alice", resolved: true, id: "@alice:example.org" },
-    ]);
-
-    const result = await resolveMatrixMonitorLiveUserAllowlist({
-      cfg: createConfig(),
-      accountId: "ops",
-      entries: ["Alice", "matrix:@Bob:Example.org", "*"],
-      startupResolvedEntries: [{ input: "Alice", id: "@startup-alice:example.org" }],
-      runtime,
-      resolveTargets,
-    });
-
-    expect(result).toEqual(["@bob:example.org", "*"]);
-    expect(resolveTargets).not.toHaveBeenCalled();
-  });
-
-  it("keeps unresolved live group allowlist entries configured for fail-closed matching", async () => {
-    const runtime = createRuntime();
-    const resolveTargets = vi.fn(async () => [
-      { input: "Alice", resolved: true, id: "@alice:example.org" },
-    ]);
-
-    const result = await resolveMatrixMonitorLiveUserAllowlist({
-      cfg: createConfig(),
-      accountId: "ops",
-      entries: ["Alice", "matrix:@Bob:Example.org"],
-      failClosedOnUnresolved: true,
-      startupResolvedEntries: [{ input: "Alice", id: "@startup-alice:example.org" }],
-      runtime,
-      resolveTargets,
-    });
-
-    expect(result).toEqual(["Alice", "@bob:example.org"]);
-    expect(resolveTargets).not.toHaveBeenCalled();
-  });
-
-  it("resolves mutable live allowlist entries when name matching is enabled", async () => {
-    const runtime = createRuntime();
-    const resolveTargets = vi.fn(async () => [
-      { input: "Alice", resolved: true, id: "@alice:example.org" },
-    ]);
-
-    const result = await resolveMatrixMonitorLiveUserAllowlist({
-      cfg: createConfig({ dangerouslyAllowNameMatching: true }),
-      accountId: "ops",
-      entries: ["Alice", "matrix:@Bob:Example.org", "*"],
-      runtime,
-      resolveTargets,
-    });
-
-    expect(result).toEqual(["@bob:example.org", "*", "@alice:example.org"]);
-    expectResolveTargetCall(resolveTargets, 0, {
-      accountId: "ops",
-      kind: "user",
-      inputs: ["Alice"],
-    });
   });
 });

@@ -1,17 +1,27 @@
-import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
-import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { Type } from "typebox";
+import { Type } from "@sinclair/typebox";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  jsonResult,
+  readConfiguredSecretString,
+  readProviderEnvValue,
+  readStringParam,
+  resolveProviderWebSearchPluginConfig,
+} from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiCodeExecutionPayload,
   requestXaiCodeExecution,
   resolveXaiCodeExecutionMaxTurns,
   resolveXaiCodeExecutionModel,
 } from "./src/code-execution-shared.js";
-import {
-  isXaiToolEnabled,
-  resolveXaiToolApiKeyWithAuth,
-  type XaiToolAuthContext,
-} from "./src/tool-auth-shared.js";
+
+type XaiPluginConfig = NonNullable<
+  NonNullable<OpenClawConfig["plugins"]>["entries"]
+>["xai"] extends {
+  config?: infer Config;
+}
+  ? Config
+  : undefined;
 
 type CodeExecutionConfig = {
   enabled?: boolean;
@@ -26,19 +36,24 @@ function readCodeExecutionConfigRecord(
   return config && typeof config === "object" ? (config as Record<string, unknown>) : undefined;
 }
 
-function readPluginCodeExecutionConfig(cfg?: unknown): CodeExecutionConfig | undefined {
-  if (!cfg || typeof cfg !== "object") {
+function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
+  const search = cfg?.tools?.web?.search;
+  if (!search || typeof search !== "object") {
     return undefined;
   }
-  const entries = (cfg as Record<string, unknown>).plugins;
-  const pluginEntries =
-    entries && typeof entries === "object"
-      ? ((entries as Record<string, unknown>).entries as Record<string, unknown> | undefined)
-      : undefined;
-  if (!pluginEntries) {
+  const grok = (search as Record<string, unknown>).grok;
+  return readConfiguredSecretString(
+    grok && typeof grok === "object" ? (grok as Record<string, unknown>).apiKey : undefined,
+    "tools.web.search.grok.apiKey",
+  );
+}
+
+function readPluginCodeExecutionConfig(cfg?: OpenClawConfig): CodeExecutionConfig | undefined {
+  const entries = cfg?.plugins?.entries;
+  if (!entries || typeof entries !== "object") {
     return undefined;
   }
-  const xaiEntry = pluginEntries.xai;
+  const xaiEntry = (entries as Record<string, unknown>).xai;
   if (!xaiEntry || typeof xaiEntry !== "object") {
     return undefined;
   }
@@ -53,24 +68,34 @@ function readPluginCodeExecutionConfig(cfg?: unknown): CodeExecutionConfig | und
   return codeExecution as CodeExecutionConfig;
 }
 
+function resolveFallbackXaiApiKey(cfg?: OpenClawConfig): string | undefined {
+  return (
+    readConfiguredSecretString(
+      resolveProviderWebSearchPluginConfig(cfg as Record<string, unknown> | undefined, "xai")
+        ?.apiKey,
+      "plugins.entries.xai.config.webSearch.apiKey",
+    ) ?? readLegacyGrokApiKey(cfg)
+  );
+}
+
 function resolveCodeExecutionEnabled(params: {
-  sourceConfig?: unknown;
-  runtimeConfig?: unknown;
+  sourceConfig?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig;
   config?: CodeExecutionConfig;
-  auth?: XaiToolAuthContext;
 }): boolean {
-  return isXaiToolEnabled({
-    enabled: readCodeExecutionConfigRecord(params.config)?.enabled as boolean | undefined,
-    runtimeConfig: params.runtimeConfig as never,
-    sourceConfig: params.sourceConfig as never,
-    auth: params.auth,
-  });
+  if (readCodeExecutionConfigRecord(params.config)?.enabled === false) {
+    return false;
+  }
+  return Boolean(
+    resolveFallbackXaiApiKey(params.runtimeConfig) ??
+    resolveFallbackXaiApiKey(params.sourceConfig) ??
+    readProviderEnvValue(["XAI_API_KEY"]),
+  );
 }
 
 export function createCodeExecutionTool(options?: {
-  config?: unknown;
-  runtimeConfig?: Record<string, unknown> | null;
-  auth?: XaiToolAuthContext;
+  config?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig | null;
 }) {
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
   const codeExecutionConfig =
@@ -81,7 +106,6 @@ export function createCodeExecutionTool(options?: {
       sourceConfig: options?.config,
       runtimeConfig: runtimeConfig ?? undefined,
       config: codeExecutionConfig,
-      auth: options?.auth,
     })
   ) {
     return null;
@@ -99,16 +123,15 @@ export function createCodeExecutionTool(options?: {
       }),
     }),
     execute: async (_toolCallId: string, args: Record<string, unknown>) => {
-      const apiKey = await resolveXaiToolApiKeyWithAuth({
-        runtimeConfig: (runtimeConfig ?? undefined) as never,
-        sourceConfig: options?.config as never,
-        auth: options?.auth,
-      });
+      const apiKey =
+        resolveFallbackXaiApiKey(runtimeConfig ?? undefined) ??
+        resolveFallbackXaiApiKey(options?.config) ??
+        readProviderEnvValue(["XAI_API_KEY"]);
       if (!apiKey) {
         return jsonResult({
           error: "missing_xai_api_key",
           message:
-            "code_execution needs xAI credentials. Run `openclaw onboard --auth-choice xai-oauth` to sign in with Grok, run `openclaw onboard --auth-choice xai-api-key`, set `XAI_API_KEY` in the Gateway environment, or configure `plugins.entries.xai.config.webSearch.apiKey`.",
+            "code_execution needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
           docs: "https://docs.openclaw.ai/tools/code-execution",
         });
       }

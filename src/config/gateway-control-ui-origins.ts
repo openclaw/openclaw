@@ -1,10 +1,10 @@
+import type { OpenClawConfig } from "./config.js";
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
-import type { OpenClawConfig } from "./types.openclaw.js";
 
-export type GatewayNonLoopbackBindMode = "lan" | "tailnet" | "custom" | "auto";
+export type GatewayNonLoopbackBindMode = "lan" | "tailnet" | "custom";
 
 export function isGatewayNonLoopbackBindMode(bind: unknown): bind is GatewayNonLoopbackBindMode {
-  return bind === "lan" || bind === "tailnet" || bind === "custom" || bind === "auto";
+  return bind === "lan" || bind === "tailnet" || bind === "custom";
 }
 
 export function hasConfiguredControlUiAllowedOrigins(params: {
@@ -45,39 +45,18 @@ export function buildDefaultControlUiAllowedOrigins(params: {
 
 export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   config: OpenClawConfig,
-  opts?: {
-    defaultPort?: number;
-    requireControlUiEnabled?: boolean;
-    /** Resolved runtime bind override. Mirrors Gateway runtime precedence:
-     *  explicit CLI/runtime bind wins over gateway.bind. */
-    runtimeBind?: unknown;
-    /** Resolved runtime port override. Mirrors Gateway runtime precedence:
-     *  explicit CLI/runtime port wins over gateway.port. */
-    runtimePort?: unknown;
-    /** Optional container-detection callback.  When provided and `gateway.bind`
-     *  is unset, the function is called to determine whether the runtime will
-     *  default to `"auto"` (container) so that origins can be seeded
-     *  proactively.  Keeping this as an injected callback avoids a hard
-     *  dependency from the config layer on the gateway runtime layer. */
-    isContainerEnvironment?: () => boolean;
-  },
+  opts?: { defaultPort?: number; requireControlUiEnabled?: boolean },
 ): {
   config: OpenClawConfig;
   seededOrigins: string[] | null;
   bind: GatewayNonLoopbackBindMode | null;
 } {
-  const bind = opts?.runtimeBind ?? config.gateway?.bind;
-  // When bind is unset (undefined) and we are inside a container, the runtime
-  // will default to "auto" → 0.0.0.0 via defaultGatewayBindMode().  We must
-  // seed origins *before* resolveGatewayRuntimeConfig runs, otherwise the
-  // non-loopback Control UI origin check will hard-fail on startup.
-  const effectiveBind: typeof bind =
-    bind ?? (opts?.isContainerEnvironment?.() ? "auto" : undefined);
-  if (!isGatewayNonLoopbackBindMode(effectiveBind)) {
+  const bind = config.gateway?.bind;
+  if (!isGatewayNonLoopbackBindMode(bind)) {
     return { config, seededOrigins: null, bind: null };
   }
   if (opts?.requireControlUiEnabled && config.gateway?.controlUi?.enabled === false) {
-    return { config, seededOrigins: null, bind: effectiveBind };
+    return { config, seededOrigins: null, bind };
   }
   if (
     hasConfiguredControlUiAllowedOrigins({
@@ -86,16 +65,13 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
         config.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback,
     })
   ) {
-    return { config, seededOrigins: null, bind: effectiveBind };
+    return { config, seededOrigins: null, bind };
   }
 
-  const port = resolveGatewayPortWithDefault(
-    opts?.runtimePort ?? config.gateway?.port,
-    opts?.defaultPort,
-  );
+  const port = resolveGatewayPortWithDefault(config.gateway?.port, opts?.defaultPort);
   const seededOrigins = buildDefaultControlUiAllowedOrigins({
     port,
-    bind: effectiveBind,
+    bind,
     customBindHost: config.gateway?.customBindHost,
   });
   return {
@@ -110,6 +86,6 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
       },
     },
     seededOrigins,
-    bind: effectiveBind,
+    bind,
   };
 }

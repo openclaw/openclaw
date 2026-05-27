@@ -9,6 +9,8 @@ import {
   type LineConfig,
 } from "./setup-runtime-api.js";
 
+const channel = "line" as const;
+
 export function patchLineAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -39,7 +41,7 @@ export function patchLineAccountConfig(params: {
   }
 
   const nextAccount = {
-    ...lineConfig.accounts?.[accountId],
+    ...(lineConfig.accounts?.[accountId] ?? {}),
   } as Record<string, unknown>;
   for (const field of clearFields) {
     delete nextAccount[field];

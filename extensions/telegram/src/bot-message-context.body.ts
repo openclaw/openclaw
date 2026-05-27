@@ -1,31 +1,33 @@
 import {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import {
   buildMentionRegexes,
   formatLocationText,
-  implicitMentionKindWhen,
   logInboundDrop,
   matchesMentionWithExplicit,
-  resolveInboundMentionDecision,
+  resolveMentionGatingWithBypass,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+} from "openclaw/plugin-sdk/config-runtime";
 import {
-  createInternalHookEvent,
-  fireAndForgetHook,
-  toInternalMessageReceivedContext,
-  triggerInternalHook,
-} from "openclaw/plugin-sdk/hook-runtime";
-import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+  recordPendingHistoryEntryIfEnabled,
+  type HistoryEntry,
+} from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { NormalizedAllowFrom } from "./bot-access.js";
+import { isSenderAllowed } from "./bot-access.js";
 import type {
   TelegramLogger,
   TelegramMediaRef,
@@ -33,33 +35,15 @@ import type {
 } from "./bot-message-context.types.js";
 import {
   buildSenderLabel,
-  buildSenderName,
+  buildTelegramGroupPeerId,
+  expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
-  renderTelegramTextEntities,
-  resolveTelegramPrimaryMedia,
-} from "./bot/body-helpers.js";
-import { buildTelegramGroupPeerId, buildTelegramInboundOriginTarget } from "./bot/helpers.js";
+  resolveTelegramMediaPlaceholder,
+} from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
-import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
-
-type StickerVisionRuntime = typeof import("./sticker-vision.runtime.js");
-type MediaUnderstandingRuntime = typeof import("./media-understanding.runtime.js");
-
-let stickerVisionRuntimePromise: Promise<StickerVisionRuntime> | undefined;
-let mediaUnderstandingRuntimePromise: Promise<MediaUnderstandingRuntime> | undefined;
-
-function loadStickerVisionRuntime(): Promise<StickerVisionRuntime> {
-  stickerVisionRuntimePromise ??= import("./sticker-vision.runtime.js");
-  return stickerVisionRuntimePromise;
-}
-
-function loadMediaUnderstandingRuntime(): Promise<MediaUnderstandingRuntime> {
-  mediaUnderstandingRuntimePromise ??= import("./media-understanding.runtime.js");
-  return mediaUnderstandingRuntimePromise;
-}
 
 export type TelegramInboundBodyResult = {
   bodyText: string;
@@ -69,61 +53,25 @@ export type TelegramInboundBodyResult = {
   effectiveWasMentioned: boolean;
   canDetectMention: boolean;
   shouldBypassMention: boolean;
-  hasControlCommand: boolean;
-  audioTranscribedMediaIndex?: number;
   stickerCacheHit: boolean;
   locationData?: NormalizedLocation;
 };
-
-function formatAudioTranscriptForAgent(transcript: string): string {
-  return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
-}
-
-type TelegramSavedMediaKind = "audio" | "document" | "image" | "video";
-
-function resolveSavedMediaKind(contentType: string | undefined): TelegramSavedMediaKind {
-  const normalized = contentType?.split(";")[0]?.trim().toLowerCase();
-  if (normalized?.startsWith("audio/")) {
-    return "audio";
-  }
-  if (normalized?.startsWith("image/")) {
-    return "image";
-  }
-  if (normalized?.startsWith("video/")) {
-    return "video";
-  }
-  return "document";
-}
-
-function formatSavedMediaPlaceholder(allMedia: TelegramMediaRef[]): string | undefined {
-  if (allMedia.length === 0) {
-    return undefined;
-  }
-  const kinds = allMedia.map((media) => resolveSavedMediaKind(media.contentType));
-  const firstKind = kinds[0] ?? "document";
-  const kind = kinds.every((candidate) => candidate === firstKind) ? firstKind : "document";
-  if (allMedia.length === 1) {
-    return `<media:${kind}>`;
-  }
-  if (kind === "image") {
-    return `<media:image> (${allMedia.length} images)`;
-  }
-  if (kind === "video") {
-    return `<media:video> (${allMedia.length} videos)`;
-  }
-  if (kind === "audio") {
-    return `<media:audio> (${allMedia.length} audio attachments)`;
-  }
-  return `<media:document> (${allMedia.length} attachments)`;
-}
 
 async function resolveStickerVisionSupport(params: {
   cfg: OpenClawConfig;
   agentId?: string;
 }): Promise<boolean> {
   try {
-    const { resolveStickerVisionSupportRuntime } = await loadStickerVisionRuntime();
-    return await resolveStickerVisionSupportRuntime(params);
+    const catalog = await loadModelCatalog({ config: params.cfg });
+    const defaultModel = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    });
+    const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
+    if (!entry) {
+      return false;
+    }
+    return modelSupportsVision(entry);
   } catch {
     return false;
   }
@@ -136,13 +84,9 @@ export async function resolveTelegramInboundBody(params: {
   allMedia: TelegramMediaRef[];
   isGroup: boolean;
   chatId: number | string;
-  accountId?: string;
   senderId: string;
   senderUsername: string;
-  sessionKey?: string;
   resolvedThreadId?: number;
-  replyThreadId?: number;
-  originatingTo?: string;
   routeAgentId?: string;
   effectiveGroupAllow: NormalizedAllowFrom;
   effectiveDmAllow: NormalizedAllowFrom;
@@ -161,13 +105,9 @@ export async function resolveTelegramInboundBody(params: {
     allMedia,
     isGroup,
     chatId,
-    accountId,
     senderId,
     senderUsername,
-    sessionKey,
     resolvedThreadId,
-    replyThreadId,
-    originatingTo: providedOriginatingTo,
     routeAgentId,
     effectiveGroupAllow,
     effectiveDmAllow,
@@ -179,37 +119,29 @@ export async function resolveTelegramInboundBody(params: {
     historyLimit,
     logger,
   } = params;
-  const botUsername = normalizeOptionalLowercaseString(primaryCtx.me?.username);
+  const botUsername = primaryCtx.me?.username?.toLowerCase();
   const mentionRegexes = buildMentionRegexes(cfg, routeAgentId);
   const messageTextParts = getTelegramTextParts(msg);
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
+  const senderAllowedForCommands = isSenderAllowed({
+    allow: allowForCommands,
+    senderId,
+    senderUsername,
+  });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const hasControlCommandInMessage = hasControlCommand(messageTextParts.text, cfg, {
     botUsername,
   });
-  const commandGate = await resolveTelegramCommandIngressAuthorization({
-    accountId: accountId ?? "default",
-    cfg,
-    dmPolicy: "pairing",
-    isGroup,
-    chatId,
-    resolvedThreadId,
-    senderId,
-    effectiveDmAllow,
-    effectiveGroupAllow,
-    ownerAccess: { ownerList: [], senderIsOwner: false },
-    eventKind: "message",
+  const commandGate = resolveControlCommandGate({
+    useAccessGroups,
+    authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,
-    modeWhenAccessGroupsOff: "allow",
-    includeDmAllowForGroupCommands: false,
   });
-  const commandAuthorized = commandGate.authorized;
+  const commandAuthorized = commandGate.commandAuthorized;
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
-  const originatingTo = providedOriginatingTo ?? buildTelegramInboundOriginTarget(chatId);
 
-  const primaryMedia = resolveTelegramPrimaryMedia(msg);
-  let placeholder = primaryMedia?.placeholder ?? "";
+  let placeholder = resolveTelegramMediaPlaceholder(msg) ?? "";
   const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
   const stickerSupportsVision = msg.sticker
     ? await resolveStickerVisionSupport({ cfg, agentId: routeAgentId })
@@ -224,10 +156,7 @@ export async function resolveTelegramInboundBody(params: {
 
   const locationData = extractTelegramLocation(msg);
   const locationText = locationData ? formatLocationText(locationData) : undefined;
-  const rawText = renderTelegramTextEntities(
-    messageTextParts.text,
-    messageTextParts.entities,
-  ).trim();
+  const rawText = expandTextLinks(messageTextParts.text, messageTextParts.entities).trim();
   const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
@@ -238,39 +167,24 @@ export async function resolveTelegramInboundBody(params: {
   }
 
   let bodyText = rawBody;
-  if (allMedia.length === 0 && placeholder && rawBody !== placeholder) {
-    const mediaTag = primaryMedia?.fileRef.file_id
-      ? `${placeholder} [file_id:${primaryMedia.fileRef.file_id}]`
-      : placeholder;
-    bodyText = `${mediaTag}\n${bodyText}`.trim();
-  }
   const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
-  const senderAllowedForAudioPreflight =
-    !useAccessGroups || !allowForCommands.hasEntries || commandAuthorized;
 
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
+    isGroup &&
+    requireMention &&
     hasAudio &&
     !hasUserText &&
-    (!isGroup ||
-      (requireMention &&
-        mentionRegexes.length > 0 &&
-        !disableAudioPreflight &&
-        senderAllowedForAudioPreflight));
+    mentionRegexes.length > 0 &&
+    !disableAudioPreflight;
 
   if (needsPreflightTranscription) {
     try {
-      const { transcribeFirstAudio } = await loadMediaUnderstandingRuntime();
+      const { transcribeFirstAudio } = await import("./media-understanding.runtime.js");
       const tempCtx: MsgContext = {
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: originatingTo,
-        AccountId: accountId,
-        MessageThreadId: replyThreadId,
         MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
         MediaTypes:
           allMedia.length > 0
@@ -286,26 +200,16 @@ export async function resolveTelegramInboundBody(params: {
       logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
     }
   }
-  const audioTranscribedMediaIndex =
-    preflightTranscript === undefined
-      ? undefined
-      : allMedia.findIndex((media) => media.contentType?.startsWith("audio/"));
 
   if (hasAudio && bodyText === "<media:audio>" && preflightTranscript) {
-    bodyText = formatAudioTranscriptForAgent(preflightTranscript);
+    bodyText = preflightTranscript;
   }
 
-  const savedMediaPlaceholder = formatSavedMediaPlaceholder(allMedia);
-  if (!hasAudio && savedMediaPlaceholder && placeholder && bodyText === placeholder) {
-    bodyText = savedMediaPlaceholder;
-  }
   if (!bodyText && allMedia.length > 0) {
     if (hasAudio) {
-      bodyText = preflightTranscript
-        ? formatAudioTranscriptForAgent(preflightTranscript)
-        : "<media:audio>";
+      bodyText = preflightTranscript || "<media:audio>";
     } else {
-      bodyText = savedMediaPlaceholder ?? "<media:document>";
+      bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
     }
   }
 
@@ -323,7 +227,7 @@ export async function resolveTelegramInboundBody(params: {
   });
   const wasMentioned = options?.forceWasMentioned === true ? true : computedWasMentioned;
 
-  if (isGroup && commandGate.shouldBlockControlCommand) {
+  if (isGroup && commandGate.shouldBlock) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
@@ -338,30 +242,24 @@ export async function resolveTelegramInboundBody(params: {
   const replyToBotMessage = botId != null && replyFromId === botId;
   const isReplyToServiceMessage =
     replyToBotMessage && isTelegramForumServiceMessage(msg.reply_to_message);
-  const implicitMentionKinds = implicitMentionKindWhen(
-    "reply_to_bot",
-    replyToBotMessage && !isReplyToServiceMessage,
-  );
+  const implicitMention = replyToBotMessage && !isReplyToServiceMessage;
   const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
-  const mentionDecision = resolveInboundMentionDecision({
-    facts: {
-      canDetectMention,
-      wasMentioned,
-      hasAnyMention,
-      implicitMentionKinds: isGroup ? implicitMentionKinds : [],
-    },
-    policy: {
-      isGroup,
-      requireMention: Boolean(requireMention),
-      allowTextCommands: true,
-      hasControlCommand: hasControlCommandInMessage,
-      commandAuthorized,
-    },
+  const mentionGate = resolveMentionGatingWithBypass({
+    isGroup,
+    requireMention: Boolean(requireMention),
+    canDetectMention,
+    wasMentioned,
+    implicitMention: isGroup && Boolean(requireMention) && implicitMention,
+    hasAnyMention,
+    allowTextCommands: true,
+    hasControlCommand: hasControlCommandInMessage,
+    commandAuthorized,
   });
-  const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
-  if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
+  const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
+  if (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) {
     logger.info({ chatId, reason: "no-mention" }, "skipping group message");
-    createChannelHistoryWindow({ historyMap: groupHistories }).record({
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: groupHistories,
       historyKey: historyKey ?? "",
       limit: historyLimit,
       entry: historyKey
@@ -373,48 +271,6 @@ export async function resolveTelegramInboundBody(params: {
           }
         : null,
     });
-    const telegramGroupPolicy = resolveChannelGroupPolicy({
-      cfg,
-      channel: "telegram",
-      groupId: String(chatId),
-      accountId,
-    });
-    const ingestEnabled =
-      topicConfig?.ingest ??
-      telegramGroupPolicy.groupConfig?.ingest ??
-      telegramGroupPolicy.defaultConfig?.ingest;
-    if (ingestEnabled === true && sessionKey) {
-      fireAndForgetHook(
-        triggerInternalHook(
-          createInternalHookEvent(
-            "message",
-            "received",
-            sessionKey,
-            toInternalMessageReceivedContext({
-              from: `telegram:group:${historyKey ?? chatId}`,
-              to: originatingTo,
-              content: rawBody,
-              timestamp: msg.date ? msg.date * 1000 : undefined,
-              channelId: "telegram",
-              accountId,
-              conversationId: originatingTo,
-              messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-              senderId: senderId || undefined,
-              senderName: buildSenderName(msg),
-              senderUsername: senderUsername || undefined,
-              provider: "telegram",
-              surface: "telegram",
-              threadId: resolvedThreadId,
-              originatingChannel: "telegram",
-              originatingTo,
-              isGroup: true,
-              groupId: `telegram:${chatId}`,
-            }),
-          ),
-        ),
-        "telegram: mention-skip message hook failed",
-      );
-    }
     return null;
   }
 
@@ -425,11 +281,7 @@ export async function resolveTelegramInboundBody(params: {
     commandAuthorized,
     effectiveWasMentioned,
     canDetectMention,
-    shouldBypassMention: mentionDecision.shouldBypassMention,
-    hasControlCommand: hasControlCommandInMessage,
-    ...(audioTranscribedMediaIndex !== undefined && audioTranscribedMediaIndex >= 0
-      ? { audioTranscribedMediaIndex }
-      : {}),
+    shouldBypassMention: mentionGate.shouldBypassMention,
     stickerCacheHit,
     locationData: locationData ?? undefined,
   };

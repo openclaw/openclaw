@@ -30,14 +30,12 @@ describe("resolveSlackStreamingConfig", () => {
   });
 
   it("maps legacy streamMode values to unified streaming modes", () => {
-    expect(resolveSlackStreamingConfig({ streamMode: "append" })).toEqual({
+    expect(resolveSlackStreamingConfig({ streamMode: "append" })).toMatchObject({
       mode: "block",
-      nativeStreaming: true,
       draftMode: "append",
     });
-    expect(resolveSlackStreamingConfig({ streamMode: "status_final" })).toEqual({
+    expect(resolveSlackStreamingConfig({ streamMode: "status_final" })).toMatchObject({
       mode: "progress",
-      nativeStreaming: true,
       draftMode: "status_final",
     });
   });

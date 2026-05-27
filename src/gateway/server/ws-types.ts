@@ -1,22 +1,13 @@
 import type { WebSocket } from "ws";
-import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
 import type { ConnectParams } from "../protocol/index.js";
 
-export type GatewayWsClient = PluginNodeCapabilityClient & {
+export type GatewayWsClient = {
   socket: WebSocket;
   connect: ConnectParams;
   connId: string;
-  isDeviceTokenAuth?: boolean;
-  usesSharedGatewayAuth: boolean;
-  sharedGatewaySessionGeneration?: string;
   presenceKey?: string;
   clientIp?: string;
-  internal?: {
-    approvalRuntime?: boolean;
-  };
   canvasHostUrl?: string;
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;
-  invalidated?: boolean;
-  invalidatedReason?: string;
 };

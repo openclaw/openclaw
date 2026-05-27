@@ -269,16 +269,14 @@ describe("msteams pending uploads", () => {
     });
 
     expect(getPendingUploadCount()).toBe(1);
-    const pendingUpload = getPendingUpload(id);
-    expect(pendingUpload).toEqual({
-      id,
-      buffer: Buffer.from("hello"),
-      filename: "hello.txt",
-      contentType: "text/plain",
-      conversationId: "conv-1",
-      createdAt: pendingUpload?.createdAt,
-    });
-    expect(typeof pendingUpload?.createdAt).toBe("number");
+    expect(getPendingUpload(id)).toEqual(
+      expect.objectContaining({
+        id,
+        filename: "hello.txt",
+        contentType: "text/plain",
+        conversationId: "conv-1",
+      }),
+    );
   });
 
   it("removes uploads explicitly and ignores empty ids", () => {

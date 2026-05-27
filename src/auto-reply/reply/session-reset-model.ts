@@ -1,19 +1,17 @@
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
-import { normalizeProviderId } from "../../agents/provider-id.js";
-import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import { loadModelCatalog, type ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
+  buildAllowedModelSet,
   modelKey,
-  resolveModelDirectiveSelection,
-  resolveModelRefFromDirectiveString,
+  normalizeProviderId,
+  resolveModelRefFromString,
   type ModelAliasIndex,
-  type ModelDirectiveSelection,
-} from "./model-selection-directive.js";
+} from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { updateSessionStore } from "../../config/sessions.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import type { MsgContext, TemplateContext } from "../templating.js";
+import { resolveModelDirectiveSelection, type ModelDirectiveSelection } from "./model-selection.js";
 
 type ResetModelResult = {
   selection?: ModelDirectiveSelection;
@@ -30,50 +28,6 @@ function splitBody(body: string) {
   };
 }
 
-async function loadResetModelCatalog(cfg: OpenClawConfig): Promise<ModelCatalogEntry[]> {
-  const { loadModelCatalog } = await import("../../agents/model-catalog.js");
-  return loadModelCatalog({ config: cfg });
-}
-
-async function resolveResetFallbackModels(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-}): Promise<string[]> {
-  if (params.agentId) {
-    const { resolveAgentModelFallbacksOverride } = await import("../../agents/agent-scope.js");
-    const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
-    if (override !== undefined) {
-      return override;
-    }
-  }
-  return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-}
-
-async function buildResetAllowedModelKeys(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  defaultProvider: string;
-  defaultModel?: string;
-  fallbackModels: readonly string[];
-}): Promise<Set<string>> {
-  const rawAllowlist = Object.keys(params.cfg.agents?.defaults?.models ?? {});
-  if (rawAllowlist.length > 0 || params.cfg.models?.providers) {
-    const { buildAllowedModelSetWithFallbacks } =
-      await import("../../agents/model-selection-shared.js");
-    return buildAllowedModelSetWithFallbacks(params).allowedKeys;
-  }
-
-  const allowedKeys = new Set<string>();
-  for (const entry of params.catalog) {
-    allowedKeys.add(modelKey(entry.provider, entry.id));
-  }
-  const defaultModel = params.defaultModel?.trim();
-  if (defaultModel) {
-    allowedKeys.add(modelKey(normalizeProviderId(params.defaultProvider), defaultModel));
-  }
-  return allowedKeys;
-}
-
 function buildSelectionFromExplicit(params: {
   raw: string;
   defaultProvider: string;
@@ -81,7 +35,7 @@ function buildSelectionFromExplicit(params: {
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
 }): ModelDirectiveSelection | undefined {
-  const resolved = resolveModelRefFromDirectiveString({
+  const resolved = resolveModelRefFromString({
     raw: params.raw,
     defaultProvider: params.defaultProvider,
     aliasIndex: params.aliasIndex,
@@ -90,7 +44,7 @@ function buildSelectionFromExplicit(params: {
     return undefined;
   }
   const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (params.allowedModelKeys.size > 0 && !isModelKeyAllowedBySet(params.allowedModelKeys, key)) {
+  if (params.allowedModelKeys.size > 0 && !params.allowedModelKeys.has(key)) {
     return undefined;
   }
   const isDefault =
@@ -123,15 +77,11 @@ function applySelectionToSession(params: {
   }
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
-    void import("../../config/sessions.js")
-      .then(({ updateSessionStore }) =>
-        updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        }),
-      )
-      .catch(() => {
-        // Ignore persistence errors; session still proceeds.
-      });
+    updateSessionStore(storePath, (store) => {
+      store[sessionKey] = sessionEntry;
+    }).catch(() => {
+      // Ignore persistence errors; session still proceeds.
+    });
   }
 }
 
@@ -154,7 +104,7 @@ export async function applyResetModelOverride(params: {
   if (!params.resetTriggered) {
     return {};
   }
-  const rawBody = normalizeOptionalString(params.bodyStripped);
+  const rawBody = params.bodyStripped?.trim();
   if (!rawBody) {
     return {};
   }
@@ -164,17 +114,15 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const catalog = params.modelCatalog ?? (await loadResetModelCatalog(params.cfg));
-  const allowedModelKeys = await buildResetAllowedModelKeys({
+  const catalog = params.modelCatalog ?? (await loadModelCatalog({ config: params.cfg }));
+  const allowed = buildAllowedModelSet({
     cfg: params.cfg,
     catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
-    fallbackModels: await resolveResetFallbackModels({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }),
+    agentId: params.agentId,
   });
+  const allowedModelKeys = allowed.allowedKeys;
   if (allowedModelKeys.size === 0) {
     return {};
   }

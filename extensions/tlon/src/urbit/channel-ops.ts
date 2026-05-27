@@ -1,8 +1,8 @@
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { LookupFn, SsrFPolicy } from "../../api.js";
 import { UrbitHttpError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
-type UrbitChannelDeps = {
+export type UrbitChannelDeps = {
   baseUrl: string;
   cookie: string;
   ship: string;
@@ -88,17 +88,13 @@ export async function scryUrbitPath(
     if (!response.ok) {
       throw new Error(`Scry failed: ${response.status} for path ${params.path}`);
     }
-    try {
-      return await response.json();
-    } catch (cause) {
-      throw new Error(`Urbit scry response was malformed JSON for path ${params.path}`, { cause });
-    }
+    return await response.json();
   } finally {
     await release();
   }
 }
 
-async function createUrbitChannel(
+export async function createUrbitChannel(
   deps: UrbitChannelDeps,
   params: { body: unknown; auditContext: string },
 ): Promise<void> {
@@ -113,7 +109,7 @@ async function createUrbitChannel(
   }
 }
 
-async function wakeUrbitChannel(deps: UrbitChannelDeps): Promise<void> {
+export async function wakeUrbitChannel(deps: UrbitChannelDeps): Promise<void> {
   const { response, release } = await putUrbitChannel(deps, {
     body: [
       {

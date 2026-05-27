@@ -1,14 +1,13 @@
 import { StaticAuthProvider } from "@twurple/auth";
 import { ChatClient } from "@twurple/chat";
-import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { BaseProbeResult } from "../runtime-api.js";
 import type { TwitchAccountConfig } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
 
 /**
  * Result of probing a Twitch account
  */
-type ProbeTwitchResult = BaseProbeResult<string> & {
+export type ProbeTwitchResult = BaseProbeResult<string> & {
   username?: string;
   elapsedMs: number;
   connected?: boolean;
@@ -83,22 +82,12 @@ export async function probeTwitch(
       });
     });
 
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(
-        () => reject(new Error(`timeout after ${timeoutMs}ms`)),
-        timeoutMs,
-      );
+      setTimeout(() => reject(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs);
     });
 
     client.connect();
-    try {
-      await Promise.race([connectionPromise, timeout]);
-    } finally {
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-      }
-    }
+    await Promise.race([connectionPromise, timeout]);
 
     client.quit();
     client = undefined;
@@ -113,7 +102,7 @@ export async function probeTwitch(
   } catch (error) {
     return {
       ok: false,
-      error: formatErrorMessage(error),
+      error: error instanceof Error ? error.message : String(error),
       username: account.username,
       channel: account.channel,
       elapsedMs: Date.now() - started,

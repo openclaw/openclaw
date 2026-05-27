@@ -1,9 +1,3 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
-
 export type ServicePrefix<TService extends string> = { prefix: string; service: TService };
 
 export type ChatTargetPrefixesParams = {
@@ -27,20 +21,18 @@ export type ChatSenderAllowParams = {
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
-  allowConversationTargets?: boolean | null;
 };
 
-export function isAllowedParsedChatSender(params: {
+function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>(params: {
   allowFrom: Array<string | number>;
   sender: string;
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
-  allowConversationTargets?: boolean | null;
   normalizeSender: (sender: string) => string;
-  parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
+  parseAllowTarget: (entry: string) => TParsed;
 }): boolean {
-  const allowFrom = normalizeStringEntries(params.allowFrom);
+  const allowFrom = params.allowFrom.map((entry) => String(entry).trim());
   if (allowFrom.length === 0) {
     return false;
   }
@@ -49,12 +41,9 @@ export function isAllowedParsedChatSender(params: {
   }
 
   const senderNormalized = params.normalizeSender(params.sender);
-  const allowConversationTargets = params.allowConversationTargets === true;
-  const chatId = allowConversationTargets ? (params.chatId ?? undefined) : undefined;
-  const chatGuid = allowConversationTargets ? normalizeOptionalString(params.chatGuid) : undefined;
-  const chatIdentifier = allowConversationTargets
-    ? normalizeOptionalString(params.chatIdentifier)
-    : undefined;
+  const chatId = params.chatId ?? undefined;
+  const chatGuid = params.chatGuid?.trim();
+  const chatIdentifier = params.chatIdentifier?.trim();
 
   for (const entry of allowFrom) {
     if (!entry) {
@@ -105,7 +94,7 @@ export function resolveServicePrefixedTarget<TService extends string, TTarget>(p
     if (!remainder) {
       throw new Error(`${prefix} target is required`);
     }
-    const remainderLower = normalizeLowercaseStringOrEmpty(remainder);
+    const remainderLower = remainder.toLowerCase();
     if (params.isChatTarget(remainderLower)) {
       return params.parseTarget(remainder);
     }
@@ -229,10 +218,9 @@ export function resolveServicePrefixedOrChatAllowTarget<
   return null;
 }
 
-export function createAllowedChatSenderMatcher(params: {
+export function createAllowedChatSenderMatcher<TParsed extends ParsedChatAllowTarget>(params: {
   normalizeSender: (sender: string) => string;
-  parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
-  allowConversationTargets?: boolean;
+  parseAllowTarget: (entry: string) => TParsed;
 }): (input: ChatSenderAllowParams) => boolean {
   return (input) =>
     isAllowedParsedChatSender({
@@ -241,8 +229,6 @@ export function createAllowedChatSenderMatcher(params: {
       chatId: input.chatId,
       chatGuid: input.chatGuid,
       chatIdentifier: input.chatIdentifier,
-      allowConversationTargets:
-        input.allowConversationTargets ?? params.allowConversationTargets ?? false,
       normalizeSender: params.normalizeSender,
       parseAllowTarget: params.parseAllowTarget,
     });

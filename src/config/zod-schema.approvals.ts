@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-export const NativeExecApprovalEnableModeSchema = z.union([z.boolean(), z.literal("auto")]);
-
 const ExecApprovalForwardTargetSchema = z
   .object({
     channel: z.string().min(1),

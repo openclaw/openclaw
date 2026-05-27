@@ -1,4 +1,4 @@
-type FeishuBlockText = {
+export type FeishuBlockText = {
   elements?: Array<{
     text_run?: {
       content?: string;
@@ -6,7 +6,7 @@ type FeishuBlockText = {
   }>;
 };
 
-type FeishuBlockTableProperty = {
+export type FeishuBlockTableProperty = {
   row_size?: number;
   column_size?: number;
   column_width?: number[];

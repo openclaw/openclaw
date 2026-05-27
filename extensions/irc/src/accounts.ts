@@ -1,15 +1,9 @@
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
-import {
-  parseOptionalDelimitedEntries,
-  tryReadSecretFileSync,
-} from "openclaw/plugin-sdk/channel-core";
+import { parseOptionalDelimitedEntries } from "openclaw/plugin-sdk/core";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
@@ -34,7 +28,7 @@ function parseTruthy(value?: string): boolean {
   if (!value) {
     return false;
   }
-  return TRUTHY_ENV.has(normalizeLowercaseStringOrEmpty(value));
+  return TRUTHY_ENV.has(value.trim().toLowerCase());
 }
 
 function parseIntEnv(value?: string): number | undefined {
@@ -49,14 +43,7 @@ function parseIntEnv(value?: string): number | undefined {
 }
 
 const { listAccountIds: listIrcAccountIds, resolveDefaultAccountId: resolveDefaultIrcAccountId } =
-  createAccountListHelpers("irc", {
-    normalizeAccountId,
-    hasImplicitDefaultAccount: (cfg) =>
-      Boolean(
-        (cfg.channels?.irc?.host?.trim() || process.env.IRC_HOST?.trim()) &&
-        (cfg.channels?.irc?.nick?.trim() || process.env.IRC_NICK?.trim()),
-      ),
-  });
+  createAccountListHelpers("irc", { normalizeAccountId });
 export { listIrcAccountIds, resolveDefaultIrcAccountId };
 
 function mergeIrcAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountConfig {
@@ -122,7 +109,7 @@ function resolveNickServConfig(accountId: string, nickserv?: IrcNickServConfig):
 
   const merged: IrcNickServConfig = {
     ...base,
-    service: normalizeOptionalString(base.service),
+    service: base.service?.trim() || undefined,
     passwordFile: passwordFile || undefined,
     password: resolvedPassword || undefined,
     registerEmail: base.registerEmail?.trim() || envRegisterEmail || undefined,
@@ -197,7 +184,7 @@ export function resolveIrcAccount(params: {
     return {
       accountId,
       enabled,
-      name: normalizeOptionalString(merged.name),
+      name: merged.name?.trim() || undefined,
       configured: Boolean(host && nick),
       host,
       port,

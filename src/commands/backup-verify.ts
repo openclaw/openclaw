@@ -1,8 +1,7 @@
 import path from "node:path";
 import * as tar from "tar";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { readStringValue } from "../shared/string-coerce.js";
-import { isRecord, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 
@@ -52,11 +51,9 @@ export type BackupVerifyResult = {
   entryCount: number;
 };
 
-type ArchiveEntry = {
-  path: string;
-  linkpath?: string;
-  type?: string;
-};
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function stripTrailingSlashes(value: string): string {
   return value.replace(/\/+$/u, "");
@@ -102,7 +99,7 @@ function parseManifest(raw: string): BackupManifest {
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new Error("Backup manifest is not valid JSON.", { cause: err });
+    throw new Error(`Backup manifest is not valid JSON: ${String(err)}`, { cause: err });
   }
 
   if (!isRecord(parsed)) {
@@ -157,9 +154,10 @@ function parseManifest(raw: string): BackupManifest {
       : undefined,
     paths: isRecord(parsed.paths)
       ? {
-          stateDir: readStringValue(parsed.paths.stateDir),
-          configPath: readStringValue(parsed.paths.configPath),
-          oauthDir: readStringValue(parsed.paths.oauthDir),
+          stateDir: typeof parsed.paths.stateDir === "string" ? parsed.paths.stateDir : undefined,
+          configPath:
+            typeof parsed.paths.configPath === "string" ? parsed.paths.configPath : undefined,
+          oauthDir: typeof parsed.paths.oauthDir === "string" ? parsed.paths.oauthDir : undefined,
           workspaceDirs: Array.isArray(parsed.paths.workspaceDirs)
             ? parsed.paths.workspaceDirs.filter(
                 (entry): entry is string => typeof entry === "string",
@@ -172,18 +170,13 @@ function parseManifest(raw: string): BackupManifest {
   };
 }
 
-async function listArchiveEntries(archivePath: string): Promise<ArchiveEntry[]> {
-  const entries: ArchiveEntry[] = [];
+async function listArchiveEntries(archivePath: string): Promise<string[]> {
+  const entries: string[] = [];
   await tar.t({
     file: archivePath,
     gzip: true,
     onentry: (entry) => {
-      entries.push({
-        path: entry.path,
-        ...(entry.linkpath ? { linkpath: entry.linkpath } : {}),
-        ...(entry.type ? { type: entry.type } : {}),
-      });
-      entry.resume();
+      entries.push(entry.path);
     },
   });
   return entries;
@@ -259,26 +252,6 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
   }
 }
 
-function verifyHardlinkTargetsAgainstArchiveRoot(
-  hardlinkTargets: Array<{ entryPath: string; normalized: string }>,
-  archiveRoot: string,
-  entries: Set<string>,
-): void {
-  const normalizedRoot = normalizeArchiveRoot(archiveRoot);
-  for (const target of hardlinkTargets) {
-    if (!isArchivePathWithin(target.normalized, normalizedRoot)) {
-      throw new Error(
-        `Archive hardlink target is outside the declared archive root: ${target.entryPath} -> ${target.normalized}`,
-      );
-    }
-    if (!entries.has(target.normalized)) {
-      throw new Error(
-        `Archive hardlink target is missing from archive entries: ${target.entryPath} -> ${target.normalized}`,
-      );
-    }
-  }
-}
-
 function formatResult(result: BackupVerifyResult): string {
   return [
     `Backup archive OK: ${result.archivePath}`,
@@ -314,18 +287,9 @@ export async function backupVerifyCommand(
   }
 
   const entries = rawEntries.map((entry) => ({
-    raw: entry.path,
-    normalized: normalizeArchivePath(entry.path, "Archive entry"),
+    raw: entry,
+    normalized: normalizeArchivePath(entry, "Archive entry"),
   }));
-  const hardlinkTargets = rawEntries
-    .filter((entry) => entry.type === "Link" && entry.linkpath)
-    .map((entry) => ({
-      entryPath: entry.path,
-      normalized: normalizeArchivePath(
-        entry.linkpath ?? "",
-        `Archive hardlink target for ${entry.path}`,
-      ),
-    }));
   const normalizedEntrySet = new Set(entries.map((entry) => entry.normalized));
 
   const manifestMatches = entries.filter((entry) => isRootManifestEntry(entry.normalized));
@@ -344,11 +308,6 @@ export async function backupVerifyCommand(
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
   const manifest = parseManifest(manifestRaw);
   verifyManifestAgainstEntries(manifest, normalizedEntrySet);
-  verifyHardlinkTargetsAgainstArchiveRoot(
-    hardlinkTargets,
-    manifest.archiveRoot,
-    normalizedEntrySet,
-  );
 
   const result: BackupVerifyResult = {
     ok: true,

@@ -12,16 +12,14 @@ export function resolveWebSearchProviderCredential(params: {
     return fromConfig;
   }
 
-  const credentialRef = resolveSecretInputRef({ value: params.credentialValue }).ref;
-  if (credentialRef) {
-    if (credentialRef.source !== "env") {
-      return undefined;
-    }
+  const credentialRef = resolveSecretInputRef({
+    value: params.credentialValue,
+  }).ref;
+  if (credentialRef?.source === "env") {
     const fromEnvRef = normalizeSecretInput(process.env[credentialRef.id]);
     if (fromEnvRef) {
       return fromEnvRef;
     }
-    return undefined;
   }
 
   for (const envVar of params.envVars) {

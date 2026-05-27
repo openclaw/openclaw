@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-type SecretFiles = {
+export type SecretFiles = {
   passwordFile?: string;
   tokenFile?: string;
 };

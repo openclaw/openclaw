@@ -4,9 +4,9 @@ import { issuePairingChallenge } from "./pairing-challenge.js";
 describe("issuePairingChallenge", () => {
   function createBaseChallengeParams() {
     return {
-      channel: "forum",
+      channel: "telegram",
       senderId: "123",
-      senderIdLine: "Your forum user id: 123",
+      senderIdLine: "Your Telegram user id: 123",
     } as const;
   }
 
@@ -114,9 +114,9 @@ describe("issuePairingChallenge", () => {
         const upsert = vi.fn(async () => ({ code: "1111", created: true }));
         return {
           issueParams: {
-            channel: "guildchat",
+            channel: "discord",
             senderId: "42",
-            senderIdLine: "Your guildchat user id: 42",
+            senderIdLine: "Your Discord user id: 42",
             meta: { name: "alice" },
             upsertPairingRequest: upsert,
             onCreated,
@@ -136,9 +136,9 @@ describe("issuePairingChallenge", () => {
         const onReplyError = vi.fn();
         return {
           issueParams: {
-            channel: "quietchat",
+            channel: "signal",
             senderId: "+1555",
-            senderIdLine: "Your quietchat sender id: +1555",
+            senderIdLine: "Your Signal sender id: +1555",
             upsertPairingRequest: async () => ({ code: "9999", created: true }),
             onReplyError,
           },

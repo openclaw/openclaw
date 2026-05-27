@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createDiscordMessageHandler,
   preflightDiscordMessageMock,
@@ -9,11 +9,6 @@ import {
   createDiscordHandlerParams,
   createDiscordPreflightContext,
 } from "./message-handler.test-helpers.js";
-
-async function flushAsyncWork() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
 
 function createMessageData(authorId: string, channelId = "ch-1") {
   return {
@@ -61,8 +56,9 @@ describe("createDiscordMessageHandler bot-self filter", () => {
       handler(createMessageData("user-456") as never, {} as never),
     ).resolves.toBeUndefined();
 
-    await flushAsyncWork();
-    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
-    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -1,11 +1,11 @@
 import { beforeEach } from "vitest";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   heartbeatRunnerSlackPlugin,
   heartbeatRunnerTelegramPlugin,
   heartbeatRunnerWhatsAppPlugin,
-} from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+} from "./heartbeat-runner.test-channel-plugins.js";
 
 export function installHeartbeatRunnerTestRuntime(params?: { includeSlack?: boolean }): void {
   beforeEach(() => {

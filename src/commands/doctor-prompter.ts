@@ -6,21 +6,25 @@ import {
   shouldAutoApproveDoctorFix,
   type DoctorRepairMode,
 } from "./doctor-repair-mode.js";
-import type { DoctorOptions } from "./doctor.types.js";
 import { guardCancel } from "./onboard-helpers.js";
 
-export type { DoctorOptions } from "./doctor.types.js";
-
-type DoctorConfirmParams = Parameters<typeof confirm>[0];
-type DoctorRuntimeRepairConfirmParams = DoctorConfirmParams & {
-  requiresInteractiveConfirmation?: boolean;
+export type DoctorOptions = {
+  workspaceSuggestions?: boolean;
+  yes?: boolean;
+  nonInteractive?: boolean;
+  deep?: boolean;
+  repair?: boolean;
+  force?: boolean;
+  generateGatewayToken?: boolean;
+  watch?: boolean;
+  intervalMs?: number;
 };
 
 export type DoctorPrompter = {
   confirm: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
   confirmAutoFix: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
   confirmAggressiveAutoFix: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
-  confirmRuntimeRepair: (params: DoctorRuntimeRepairConfirmParams) => Promise<boolean>;
+  confirmRuntimeRepair: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;
   select: <T>(params: Parameters<typeof select>[0], fallback: T) => Promise<T>;
   shouldRepair: boolean;
   shouldForce: boolean;
@@ -40,7 +44,7 @@ export function createDoctorPrompter(params: {
       return false;
     }
     if (!repairMode.canPrompt) {
-      return p.initialValue ?? false;
+      return Boolean(p.initialValue ?? false);
     }
     return guardCancel(
       await confirm({
@@ -65,7 +69,7 @@ export function createDoctorPrompter(params: {
         return false;
       }
       if (!repairMode.canPrompt) {
-        return p.initialValue ?? false;
+        return Boolean(p.initialValue ?? false);
       }
       return guardCancel(
         await confirm({
@@ -76,26 +80,19 @@ export function createDoctorPrompter(params: {
       );
     },
     confirmRuntimeRepair: async (p) => {
-      const { requiresInteractiveConfirmation, ...confirmParams } = p;
-      if (
-        requiresInteractiveConfirmation !== true &&
-        shouldAutoApproveDoctorFix(repairMode, { blockDuringUpdate: true })
-      ) {
+      if (shouldAutoApproveDoctorFix(repairMode, { blockDuringUpdate: true })) {
         return true;
-      }
-      if (requiresInteractiveConfirmation === true && !repairMode.canPrompt) {
-        return false;
       }
       if (repairMode.nonInteractive) {
         return false;
       }
       if (!repairMode.canPrompt) {
-        return confirmParams.initialValue ?? false;
+        return Boolean(p.initialValue ?? false);
       }
       return guardCancel(
         await confirm({
-          ...confirmParams,
-          message: stylePromptMessage(confirmParams.message),
+          ...p,
+          message: stylePromptMessage(p.message),
         }),
         params.runtime,
       );

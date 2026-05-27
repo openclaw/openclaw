@@ -1,9 +1,7 @@
 import { t } from "../../i18n/index.ts";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
-import { getCronJobPayload, hasCronJobPayload } from "../cron-payload.ts";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
 import type {
   CronJob,
   CronDeliveryStatus,
@@ -43,15 +41,11 @@ export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
 export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron";
 export type CronJobsLastStatusFilter = "all" | "ok" | "error" | "skipped";
-export type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
 export type CronState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   cronLoading: boolean;
-  cronQuickCreateOpen: boolean;
-  cronQuickCreateStep: import("../views/cron-quick-create.ts").CronQuickCreateStep;
-  cronQuickCreateDraft: import("../views/cron-quick-create.ts").CronQuickCreateDraft | null;
   cronJobsLoadingMore: boolean;
   cronJobs: CronJob[];
   cronJobsTotal: number;
@@ -67,7 +61,6 @@ export type CronState = {
   cronStatus: CronStatus | null;
   cronError: string | null;
   cronForm: CronFormState;
-  cronFormCollapsed: boolean;
   cronFieldErrors: CronFieldErrors;
   cronEditingJobId: string | null;
   cronRunsJobId: string | null;
@@ -92,7 +85,9 @@ export type CronModelSuggestionsState = {
   cronModelSuggestions: string[];
 };
 
-function supportsAnnounceDelivery(form: Pick<CronFormState, "sessionTarget" | "payloadKind">) {
+export function supportsAnnounceDelivery(
+  form: Pick<CronFormState, "sessionTarget" | "payloadKind">,
+) {
   return form.sessionTarget !== "main" && form.payloadKind === "agentTurn";
 }
 
@@ -206,7 +201,7 @@ export async function loadCronModelSuggestions(state: CronModelSuggestionsState)
     return;
   }
   try {
-    const res = await state.client.request("models.list", { view: "configured" });
+    const res = await state.client.request("models.list", {});
     const models = (res as { models?: unknown[] } | null)?.models;
     if (!Array.isArray(models)) {
       state.cronModelSuggestions = [];
@@ -221,33 +216,19 @@ export async function loadCronModelSuggestions(state: CronModelSuggestionsState)
         return typeof id === "string" ? id.trim() : "";
       })
       .filter(Boolean);
-    state.cronModelSuggestions = sortUniqueStrings(ids);
+    state.cronModelSuggestions = Array.from(new Set(ids)).toSorted((a, b) => a.localeCompare(b));
   } catch {
     state.cronModelSuggestions = [];
   }
 }
 
-async function withCronBusy(
-  state: CronState,
-  run: (client: GatewayBrowserClient) => Promise<void>,
-) {
-  const client = state.client;
-  if (!client || !state.connected || state.cronBusy) {
-    return;
-  }
-  state.cronBusy = true;
-  state.cronError = null;
-  try {
-    await run(client);
-  } catch (err) {
-    state.cronError = String(err);
-  } finally {
-    state.cronBusy = false;
-  }
+export async function loadCronJobs(state: CronState) {
+  return await loadCronJobsPage(state, { append: false });
 }
 
 function normalizeCronPageMeta(params: {
   totalRaw: unknown;
+  limitRaw: unknown;
   offsetRaw: unknown;
   nextOffsetRaw: unknown;
   hasMoreRaw: unknown;
@@ -257,6 +238,10 @@ function normalizeCronPageMeta(params: {
     typeof params.totalRaw === "number" && Number.isFinite(params.totalRaw)
       ? Math.max(0, Math.floor(params.totalRaw))
       : params.pageCount;
+  const limit =
+    typeof params.limitRaw === "number" && Number.isFinite(params.limitRaw)
+      ? Math.max(1, Math.floor(params.limitRaw))
+      : Math.max(1, params.pageCount);
   const offset =
     typeof params.offsetRaw === "number" && Number.isFinite(params.offsetRaw)
       ? Math.max(0, Math.floor(params.offsetRaw))
@@ -271,7 +256,7 @@ function normalizeCronPageMeta(params: {
       : hasMore
         ? offset + params.pageCount
         : null;
-  return { total, hasMore, nextOffset };
+  return { total, limit, offset, hasMore, nextOffset };
 }
 
 export async function loadCronJobsPage(state: CronState, opts?: { append?: boolean }) {
@@ -282,10 +267,10 @@ export async function loadCronJobsPage(state: CronState, opts?: { append?: boole
     return;
   }
   const append = opts?.append === true;
-  if (append && !state.cronJobsHasMore) {
-    return;
-  }
   if (append) {
+    if (!state.cronJobsHasMore) {
+      return;
+    }
     state.cronJobsLoadingMore = true;
   } else {
     state.cronLoading = true;
@@ -302,15 +287,15 @@ export async function loadCronJobsPage(state: CronState, opts?: { append?: boole
       sortBy: state.cronJobsSortBy,
       sortDir: state.cronJobsSortDir,
     });
-    const rawJobs = Array.isArray(res.jobs) ? res.jobs : [];
-    const jobs = rawJobs.filter(hasCronJobPayload);
+    const jobs = Array.isArray(res.jobs) ? res.jobs : [];
     state.cronJobs = append ? [...state.cronJobs, ...jobs] : jobs;
     const meta = normalizeCronPageMeta({
       totalRaw: res.total,
+      limitRaw: res.limit,
       offsetRaw: res.offset,
       nextOffsetRaw: res.nextOffset,
       hasMoreRaw: res.hasMore,
-      pageCount: rawJobs.length,
+      pageCount: jobs.length,
     });
     state.cronJobsTotal = Math.max(meta.total, state.cronJobs.length);
     state.cronJobsHasMore = meta.hasMore;
@@ -332,6 +317,14 @@ export async function loadCronJobsPage(state: CronState, opts?: { append?: boole
   }
 }
 
+export async function loadMoreCronJobs(state: CronState) {
+  await loadCronJobsPage(state, { append: true });
+}
+
+export async function reloadCronJobs(state: CronState) {
+  await loadCronJobsPage(state, { append: false });
+}
+
 export function updateCronJobsFilter(
   state: CronState,
   patch: Partial<
@@ -349,12 +342,21 @@ export function updateCronJobsFilter(
   if (typeof patch.cronJobsQuery === "string") {
     state.cronJobsQuery = patch.cronJobsQuery;
   }
-  state.cronJobsEnabledFilter = patch.cronJobsEnabledFilter ?? state.cronJobsEnabledFilter;
-  state.cronJobsScheduleKindFilter =
-    patch.cronJobsScheduleKindFilter ?? state.cronJobsScheduleKindFilter;
-  state.cronJobsLastStatusFilter = patch.cronJobsLastStatusFilter ?? state.cronJobsLastStatusFilter;
-  state.cronJobsSortBy = patch.cronJobsSortBy ?? state.cronJobsSortBy;
-  state.cronJobsSortDir = patch.cronJobsSortDir ?? state.cronJobsSortDir;
+  if (patch.cronJobsEnabledFilter) {
+    state.cronJobsEnabledFilter = patch.cronJobsEnabledFilter;
+  }
+  if (patch.cronJobsScheduleKindFilter) {
+    state.cronJobsScheduleKindFilter = patch.cronJobsScheduleKindFilter;
+  }
+  if (patch.cronJobsLastStatusFilter) {
+    state.cronJobsLastStatusFilter = patch.cronJobsLastStatusFilter;
+  }
+  if (patch.cronJobsSortBy) {
+    state.cronJobsSortBy = patch.cronJobsSortBy;
+  }
+  if (patch.cronJobsSortDir) {
+    state.cronJobsSortDir = patch.cronJobsSortDir;
+  }
 }
 
 export function getVisibleCronJobs(
@@ -379,13 +381,6 @@ export function getVisibleCronJobs(
 
 function clearCronEditState(state: CronState) {
   state.cronEditingJobId = null;
-}
-
-function clearCronRunsPage(state: CronState) {
-  state.cronRuns = [];
-  state.cronRunsTotal = 0;
-  state.cronRunsHasMore = false;
-  state.cronRunsNextOffset = null;
 }
 
 function resetCronFormToDefaults(state: CronState) {
@@ -443,7 +438,6 @@ function parseStaggerSchedule(
 
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = job.failureAlert;
-  const payload = getCronJobPayload(job);
   const next: CronFormState = {
     ...prev,
     name: job.name,
@@ -464,11 +458,12 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     staggerUnit: "seconds",
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
-    payloadText: payload?.kind === "systemEvent" ? payload.text : (payload?.message ?? ""),
-    payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
-    payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
-    payloadLightContext: payload?.kind === "agentTurn" ? payload.lightContext === true : false,
+    payloadKind: job.payload.kind,
+    payloadText: job.payload.kind === "systemEvent" ? job.payload.text : job.payload.message,
+    payloadModel: job.payload.kind === "agentTurn" ? (job.payload.model ?? "") : "",
+    payloadThinking: job.payload.kind === "agentTurn" ? (job.payload.thinking ?? "") : "",
+    payloadLightContext:
+      job.payload.kind === "agentTurn" ? job.payload.lightContext === true : false,
     deliveryMode: job.delivery?.mode ?? "none",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",
@@ -502,8 +497,8 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     failureAlertAccountId:
       failureAlert && typeof failureAlert === "object" ? (failureAlert.accountId ?? "") : "",
     timeoutSeconds:
-      payload?.kind === "agentTurn" && typeof payload.timeoutSeconds === "number"
-        ? String(payload.timeoutSeconds)
+      job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+        ? String(job.payload.timeoutSeconds)
         : "",
   };
 
@@ -525,7 +520,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   return normalizeCronFormState(next);
 }
 
-function buildCronSchedule(form: CronFormState) {
+export function buildCronSchedule(form: CronFormState) {
   if (form.scheduleKind === "at") {
     const ms = Date.parse(form.scheduleAt);
     if (!Number.isFinite(ms)) {
@@ -561,7 +556,7 @@ function buildCronSchedule(form: CronFormState) {
   return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined, staggerMs };
 }
 
-function buildCronPayload(form: CronFormState) {
+export function buildCronPayload(form: CronFormState) {
   if (form.payloadKind === "systemEvent") {
     const text = form.payloadText.trim();
     if (!text) {
@@ -599,21 +594,7 @@ function buildCronPayload(form: CronFormState) {
   return payload;
 }
 
-function normalizePersistedDeliveryChannel(
-  value: string,
-  options: { preserveLastOnUpdate?: boolean } = {},
-) {
-  const channel = value.trim();
-  if (!channel) {
-    return undefined;
-  }
-  if (channel === CRON_CHANNEL_LAST) {
-    return options.preserveLastOnUpdate ? CRON_CHANNEL_LAST : undefined;
-  }
-  return channel;
-}
-
-function buildFailureAlert(form: CronFormState, existingChannel?: string) {
+function buildFailureAlert(form: CronFormState) {
   if (form.failureAlertMode === "disabled") {
     return false as const;
   }
@@ -631,22 +612,26 @@ function buildFailureAlert(form: CronFormState, existingChannel?: string) {
   const accountId = form.failureAlertAccountId.trim();
   const patch: Record<string, unknown> = {
     after: after > 0 ? Math.floor(after) : undefined,
-    channel: normalizePersistedDeliveryChannel(form.failureAlertChannel, {
-      preserveLastOnUpdate: Boolean(existingChannel),
-    }),
+    channel: form.failureAlertChannel.trim() || CRON_CHANNEL_LAST,
     to: form.failureAlertTo.trim() || undefined,
     ...(cooldownMs !== undefined ? { cooldownMs } : {}),
   };
+  // Always include mode and accountId so users can switch/clear them
   if (deliveryMode) {
     patch.mode = deliveryMode;
   }
+  // Include accountId if explicitly set, or send undefined to allow clearing
   patch.accountId = accountId || undefined;
   return patch;
 }
 
-export async function addCronJob(state: CronState): Promise<boolean> {
-  let saved = false;
-  await withCronBusy(state, async (client) => {
+export async function addCronJob(state: CronState) {
+  if (!state.client || !state.connected || state.cronBusy) {
+    return;
+  }
+  state.cronBusy = true;
+  state.cronError = null;
+  try {
     const form = normalizeCronFormState(state.cronForm);
     if (form !== state.cronForm) {
       state.cronForm = form;
@@ -662,10 +647,9 @@ export async function addCronJob(state: CronState): Promise<boolean> {
     const editingJob = state.cronEditingJobId
       ? state.cronJobs.find((job) => job.id === state.cronEditingJobId)
       : undefined;
-    const editingPayload = editingJob ? getCronJobPayload(editingJob) : null;
     if (payload.kind === "agentTurn") {
       const existingLightContext =
-        editingPayload?.kind === "agentTurn" ? editingPayload.lightContext : undefined;
+        editingJob?.payload.kind === "agentTurn" ? editingJob.payload.lightContext : undefined;
       if (
         !form.payloadLightContext &&
         state.cronEditingJobId &&
@@ -681,9 +665,7 @@ export async function addCronJob(state: CronState): Promise<boolean> {
             mode: selectedDeliveryMode,
             channel:
               selectedDeliveryMode === "announce"
-                ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
-                    preserveLastOnUpdate: Boolean(editingJob?.delivery?.channel),
-                  })
+                ? form.deliveryChannel.trim() || "last"
                 : undefined,
             to: form.deliveryTo.trim() || undefined,
             accountId:
@@ -693,12 +675,7 @@ export async function addCronJob(state: CronState): Promise<boolean> {
         : selectedDeliveryMode === "none"
           ? ({ mode: "none" } as const)
           : undefined;
-    const failureAlert = buildFailureAlert(
-      form,
-      editingJob?.failureAlert && typeof editingJob.failureAlert === "object"
-        ? editingJob.failureAlert.channel
-        : undefined,
-    );
+    const failureAlert = buildFailureAlert(form);
     const agentId = form.clearAgent ? null : form.agentId.trim();
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
@@ -720,69 +697,108 @@ export async function addCronJob(state: CronState): Promise<boolean> {
       throw new Error(t("cron.errors.nameRequiredShort"));
     }
     if (state.cronEditingJobId) {
-      await client.request("cron.update", {
+      await state.client.request("cron.update", {
         id: state.cronEditingJobId,
         patch: job,
       });
       clearCronEditState(state);
     } else {
-      await client.request("cron.add", job);
+      await state.client.request("cron.add", job);
       resetCronFormToDefaults(state);
     }
-    await loadCronJobsPage(state);
+    await loadCronJobs(state);
     await loadCronStatus(state);
-    saved = true;
-  });
-  return saved;
+  } catch (err) {
+    state.cronError = String(err);
+  } finally {
+    state.cronBusy = false;
+  }
 }
 
 export async function toggleCronJob(state: CronState, job: CronJob, enabled: boolean) {
-  await withCronBusy(state, async (client) => {
-    await client.request("cron.update", { id: job.id, patch: { enabled } });
-    await loadCronJobsPage(state);
+  if (!state.client || !state.connected || state.cronBusy) {
+    return;
+  }
+  state.cronBusy = true;
+  state.cronError = null;
+  try {
+    await state.client.request("cron.update", { id: job.id, patch: { enabled } });
+    await loadCronJobs(state);
     await loadCronStatus(state);
-  });
+  } catch (err) {
+    state.cronError = String(err);
+  } finally {
+    state.cronBusy = false;
+  }
 }
 
 export async function runCronJob(state: CronState, job: CronJob, mode: "force" | "due" = "force") {
-  await withCronBusy(state, async (client) => {
-    await client.request("cron.run", { id: job.id, mode });
-    await loadCronRuns(state, state.cronRunsScope === "all" ? null : job.id);
-  });
+  if (!state.client || !state.connected || state.cronBusy) {
+    return;
+  }
+  state.cronBusy = true;
+  state.cronError = null;
+  try {
+    await state.client.request("cron.run", { id: job.id, mode });
+    if (state.cronRunsScope === "all") {
+      await loadCronRuns(state, null);
+    } else {
+      await loadCronRuns(state, job.id);
+    }
+  } catch (err) {
+    state.cronError = String(err);
+  } finally {
+    state.cronBusy = false;
+  }
 }
 
 export async function removeCronJob(state: CronState, job: CronJob) {
-  await withCronBusy(state, async (client) => {
-    await client.request("cron.remove", { id: job.id });
+  if (!state.client || !state.connected || state.cronBusy) {
+    return;
+  }
+  state.cronBusy = true;
+  state.cronError = null;
+  try {
+    await state.client.request("cron.remove", { id: job.id });
     if (state.cronEditingJobId === job.id) {
       clearCronEditState(state);
     }
     if (state.cronRunsJobId === job.id) {
       state.cronRunsJobId = null;
-      clearCronRunsPage(state);
+      state.cronRuns = [];
+      state.cronRunsTotal = 0;
+      state.cronRunsHasMore = false;
+      state.cronRunsNextOffset = null;
     }
-    await loadCronJobsPage(state);
+    await loadCronJobs(state);
     await loadCronStatus(state);
-  });
+  } catch (err) {
+    state.cronError = String(err);
+  } finally {
+    state.cronBusy = false;
+  }
 }
 
 export async function loadCronRuns(
   state: CronState,
   jobId: string | null,
   opts?: { append?: boolean },
-): Promise<CronRunsLoadStatus> {
+) {
   if (!state.client || !state.connected) {
-    return "skipped";
+    return;
   }
   const scope = state.cronRunsScope;
   const activeJobId = jobId ?? state.cronRunsJobId;
   if (scope === "job" && !activeJobId) {
-    clearCronRunsPage(state);
-    return "skipped";
+    state.cronRuns = [];
+    state.cronRunsTotal = 0;
+    state.cronRunsHasMore = false;
+    state.cronRunsNextOffset = null;
+    return;
   }
   const append = opts?.append === true;
   if (append && !state.cronRunsHasMore) {
-    return "skipped";
+    return;
   }
   try {
     if (append) {
@@ -811,6 +827,7 @@ export async function loadCronRuns(
     }
     const meta = normalizeCronPageMeta({
       totalRaw: res.total,
+      limitRaw: res.limit,
       offsetRaw: res.offset,
       nextOffsetRaw: res.nextOffset,
       hasMoreRaw: res.hasMore,
@@ -819,10 +836,8 @@ export async function loadCronRuns(
     state.cronRunsTotal = Math.max(meta.total, state.cronRuns.length);
     state.cronRunsHasMore = meta.hasMore;
     state.cronRunsNextOffset = meta.nextOffset;
-    return "ok";
   } catch (err) {
     state.cronError = String(err);
-    return "error";
   } finally {
     if (append) {
       state.cronRunsLoadingMore = false;
@@ -851,7 +866,9 @@ export function updateCronRunsFilter(
     >
   >,
 ) {
-  state.cronRunsScope = patch.cronRunsScope ?? state.cronRunsScope;
+  if (patch.cronRunsScope) {
+    state.cronRunsScope = patch.cronRunsScope;
+  }
   if (Array.isArray(patch.cronRunsStatuses)) {
     state.cronRunsStatuses = patch.cronRunsStatuses;
     state.cronRunsStatusFilter =
@@ -868,7 +885,9 @@ export function updateCronRunsFilter(
   if (typeof patch.cronRunsQuery === "string") {
     state.cronRunsQuery = patch.cronRunsQuery;
   }
-  state.cronRunsSortDir = patch.cronRunsSortDir ?? state.cronRunsSortDir;
+  if (patch.cronRunsSortDir) {
+    state.cronRunsSortDir = patch.cronRunsSortDir;
+  }
 }
 
 export function startCronEdit(state: CronState, job: CronJob) {
@@ -881,13 +900,13 @@ export function startCronEdit(state: CronState, job: CronJob) {
 function buildCloneName(name: string, existingNames: Set<string>) {
   const base = name.trim() || "Job";
   const first = `${base} copy`;
-  if (!existingNames.has(normalizeLowercaseStringOrEmpty(first))) {
+  if (!existingNames.has(first.toLowerCase())) {
     return first;
   }
   let index = 2;
   while (index < 1000) {
     const next = `${base} copy ${index}`;
-    if (!existingNames.has(normalizeLowercaseStringOrEmpty(next))) {
+    if (!existingNames.has(next.toLowerCase())) {
       return next;
     }
     index += 1;
@@ -898,9 +917,7 @@ function buildCloneName(name: string, existingNames: Set<string>) {
 export function startCronClone(state: CronState, job: CronJob) {
   clearCronEditState(state);
   state.cronRunsJobId = job.id;
-  const existingNames = new Set(
-    state.cronJobs.map((entry) => normalizeLowercaseStringOrEmpty(entry.name)),
-  );
+  const existingNames = new Set(state.cronJobs.map((entry) => entry.name.trim().toLowerCase()));
   const cloned = jobToForm(job, state.cronForm);
   cloned.name = buildCloneName(job.name, existingNames);
   state.cronForm = cloned;

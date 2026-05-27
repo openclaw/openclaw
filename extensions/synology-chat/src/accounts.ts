@@ -9,8 +9,7 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type {
   SynologyChatChannelConfig,
   ResolvedSynologyChatAccount,
@@ -19,7 +18,7 @@ import type {
 
 /** Extract the channel config from the full OpenClaw config object. */
 function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig | undefined {
-  return cfg?.channels?.["synology-chat"] as SynologyChatChannelConfig | undefined;
+  return cfg?.channels?.["synology-chat"];
 }
 
 function resolveImplicitAccountId(channelCfg: SynologyChatChannelConfig): string | undefined {
@@ -56,13 +55,12 @@ function resolveWebhookPathSource(params: {
 
 /** Parse allowedUserIds from string or array to string[]. */
 function parseAllowedUserIds(raw: string | string[] | undefined): string[] {
-  if (!raw) {
-    return [];
-  }
-  if (Array.isArray(raw)) {
-    return raw.filter(Boolean);
-  }
-  return normalizeStringEntries(raw.split(","));
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter(Boolean);
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 function parseRateLimitPerMinute(raw: string | undefined): number {

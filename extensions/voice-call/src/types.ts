@@ -1,11 +1,11 @@
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import type { CallMode } from "./config.js";
 
 // -----------------------------------------------------------------------------
 // Provider Identifiers
 // -----------------------------------------------------------------------------
 
-const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock"]);
+export const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock"]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
 // -----------------------------------------------------------------------------
@@ -16,13 +16,13 @@ export type ProviderName = z.infer<typeof ProviderNameSchema>;
 export type CallId = string;
 
 /** Provider-specific call identifier */
-type ProviderCallId = string;
+export type ProviderCallId = string;
 
 // -----------------------------------------------------------------------------
 // Call Lifecycle States
 // -----------------------------------------------------------------------------
 
-const CallStateSchema = z.enum([
+export const CallStateSchema = z.enum([
   // Non-terminal states
   "initiated",
   "ringing",
@@ -55,7 +55,7 @@ export const TerminalStates = new Set<CallState>([
   "voicemail",
 ]);
 
-const EndReasonSchema = z.enum([
+export const EndReasonSchema = z.enum([
   "completed",
   "hangup-user",
   "hangup-bot",
@@ -87,7 +87,7 @@ const BaseEventSchema = z.object({
   to: z.string().optional(),
 });
 
-const NormalizedEventSchema = z.discriminatedUnion("type", [
+export const NormalizedEventSchema = z.discriminatedUnion("type", [
   BaseEventSchema.extend({
     type: z.literal("call.initiated"),
   }),
@@ -134,13 +134,14 @@ export type NormalizedEvent = z.infer<typeof NormalizedEventSchema>;
 // Call Direction
 // -----------------------------------------------------------------------------
 
-const CallDirectionSchema = z.enum(["outbound", "inbound"]);
+export const CallDirectionSchema = z.enum(["outbound", "inbound"]);
+export type CallDirection = z.infer<typeof CallDirectionSchema>;
 
 // -----------------------------------------------------------------------------
 // Call Record
 // -----------------------------------------------------------------------------
 
-const TranscriptEntrySchema = z.object({
+export const TranscriptEntrySchema = z.object({
   timestamp: z.number(),
   speaker: z.enum(["bot", "user"]),
   text: z.string(),
@@ -211,19 +212,8 @@ export type InitiateCallInput = {
   to: string;
   webhookUrl: string;
   clientState?: Record<string, string>;
-  /** Inline TwiML to execute without fetching webhook TwiML. */
+  /** Inline TwiML to execute (skips webhook, used for notify mode) */
   inlineTwiml?: string;
-  /** TwiML to serve once before normal webhook-driven call handling resumes. */
-  preConnectTwiml?: string;
-  /**
-   * Optional `wss://` URL the carrier should open for bidirectional Media
-   * Streaming on call connect. Used by carriers (e.g. Telnyx) that attach
-   * streaming at dial time. Twilio learns the URL from TwiML so it ignores
-   * this field.
-   */
-  streamUrl?: string;
-  /** Per-call auth token the carrier echoes back on the WS upgrade. */
-  streamAuthToken?: string;
 };
 
 export type InitiateCallResult = {
@@ -237,32 +227,12 @@ export type HangupCallInput = {
   reason: EndReason;
 };
 
-export type AnswerCallInput = {
-  callId: CallId;
-  providerCallId: ProviderCallId;
-  /**
-   * Optional `wss://` URL the carrier should open for bidirectional Media
-   * Streaming on answer. Used by carriers (e.g. Telnyx) that attach
-   * streaming at answer time. Twilio learns the URL from TwiML so it ignores
-   * this field.
-   */
-  streamUrl?: string;
-  /** Per-call auth token the carrier echoes back on the WS upgrade. */
-  streamAuthToken?: string;
-};
-
 export type PlayTtsInput = {
   callId: CallId;
   providerCallId: ProviderCallId;
   text: string;
   voice?: string;
   locale?: string;
-};
-
-export type SendDtmfInput = {
-  callId: CallId;
-  providerCallId: ProviderCallId;
-  digits: string;
 };
 
 export type StartListeningInput = {
@@ -304,8 +274,31 @@ export type OutboundCallOptions = {
   message?: string;
   /** Call mode (overrides config default) */
   mode?: CallMode;
-  /** DTMF digits to send after the call is connected */
-  dtmfSequence?: string;
-  /** Session that initiated the call, used for agent context/delegated message routing */
-  requesterSessionKey?: string;
+};
+
+// -----------------------------------------------------------------------------
+// Tool Result Types
+// -----------------------------------------------------------------------------
+
+export type InitiateCallToolResult = {
+  success: boolean;
+  callId?: string;
+  status?: "initiated" | "queued" | "no-answer" | "busy" | "failed";
+  error?: string;
+};
+
+export type ContinueCallToolResult = {
+  success: boolean;
+  transcript?: string;
+  error?: string;
+};
+
+export type SpeakToUserToolResult = {
+  success: boolean;
+  error?: string;
+};
+
+export type EndCallToolResult = {
+  success: boolean;
+  error?: string;
 };

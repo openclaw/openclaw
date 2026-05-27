@@ -60,7 +60,7 @@ function matchesAnyPattern(value: string, patterns: readonly RegExp[]): boolean 
 }
 
 export function sanitizeEnvVars(
-  envVars: Record<string, string | undefined>,
+  envVars: Record<string, string>,
   options: EnvSanitizationOptions = {},
 ): EnvVarSanitizationResult {
   const allowed: Record<string, string> = {};
@@ -72,7 +72,7 @@ export function sanitizeEnvVars(
 
   for (const [rawKey, value] of Object.entries(envVars)) {
     const key = rawKey.trim();
-    if (!key || value === undefined) {
+    if (!key) {
       continue;
     }
 
@@ -101,30 +101,10 @@ export function sanitizeEnvVars(
   return { allowed, blocked, warnings };
 }
 
-export function sanitizeExplicitSandboxEnvVars(
-  envVars: Record<string, string | undefined>,
-): EnvVarSanitizationResult {
-  const allowed: Record<string, string> = {};
-  const blocked: string[] = [];
-  const warnings: string[] = [];
+export function getBlockedPatterns(): string[] {
+  return BLOCKED_ENV_VAR_PATTERNS.map((pattern) => pattern.source);
+}
 
-  for (const [rawKey, value] of Object.entries(envVars)) {
-    const key = rawKey.trim();
-    if (!key || value === undefined) {
-      continue;
-    }
-
-    const warning = validateEnvVarValue(value);
-    if (warning) {
-      if (warning === "Contains null bytes") {
-        blocked.push(key);
-        continue;
-      }
-      warnings.push(`${key}: ${warning}`);
-    }
-
-    allowed[key] = value;
-  }
-
-  return { allowed, blocked, warnings };
+export function getAllowedPatterns(): string[] {
+  return ALLOWED_ENV_VAR_PATTERNS.map((pattern) => pattern.source);
 }

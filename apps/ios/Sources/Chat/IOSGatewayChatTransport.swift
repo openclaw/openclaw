@@ -1,10 +1,10 @@
-import Foundation
 import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
+import Foundation
 import OSLog
 
-struct IOSGatewayChatTransport: OpenClawChatTransport {
+struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "ios.chat.transport")
     private let gateway: GatewayNodeSession
 
@@ -70,9 +70,10 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     {
         let startLogMessage =
             "chat.send start sessionKey=\(sessionKey) "
-                + "len=\(message.count) attachments=\(attachments.count)"
+            + "len=\(message.count) attachments=\(attachments.count)"
         Self.logger.info(
-            "\(startLogMessage, privacy: .public)")
+            "\(startLogMessage, privacy: .public)"
+        )
         struct Params: Codable {
             var sessionKey: String
             var message: String

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildSlackSlashCommandMatcher } from "./monitor/commands.js";
-import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
-import { resolveSlackThreadTs } from "./monitor/replies.js";
+import {
+  buildSlackSlashCommandMatcher,
+  isSlackChannelAllowedByPolicy,
+  resolveSlackThreadTs,
+} from "./monitor.js";
 
 describe("slack groupPolicy gating", () => {
   it("allows when policy is open", () => {
@@ -60,7 +62,7 @@ describe("resolveSlackThreadTs", () => {
   const messageTs = "9999999999.999999";
 
   it("stays in incoming threads for all replyToMode values", () => {
-    for (const replyToMode of ["off", "first", "all", "batched"] as const) {
+    for (const replyToMode of ["off", "first", "all"] as const) {
       for (const hasReplied of [false, true]) {
         expect(
           resolveSlackThreadTs({
@@ -68,7 +70,6 @@ describe("resolveSlackThreadTs", () => {
             incomingThreadTs: threadTs,
             messageTs,
             hasReplied,
-            isThreadReply: true,
           }),
         ).toBe(threadTs);
       }

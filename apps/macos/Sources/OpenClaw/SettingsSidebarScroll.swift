@@ -10,7 +10,5 @@ struct SettingsSidebarScroll<Content: View>: View {
                 .padding(.horizontal, 10)
         }
         .settingsSidebarCardLayout()
-        .padding(.leading, 16)
-        .padding(.trailing, 16)
     }
 }

@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-const NODE_PENDING_WORK_TYPES = ["status.request", "location.request"] as const;
+export const NODE_PENDING_WORK_TYPES = ["status.request", "location.request"] as const;
 export type NodePendingWorkType = (typeof NODE_PENDING_WORK_TYPES)[number];
 
-const NODE_PENDING_WORK_PRIORITIES = ["default", "normal", "high"] as const;
+export const NODE_PENDING_WORK_PRIORITIES = ["default", "normal", "high"] as const;
 export type NodePendingWorkPriority = (typeof NODE_PENDING_WORK_PRIORITIES)[number];
 
-type NodePendingWorkItem = {
+export type NodePendingWorkItem = {
   id: string;
   type: NodePendingWorkType;
   priority: NodePendingWorkPriority;
@@ -69,12 +69,6 @@ function pruneExpired(state: NodePendingWorkState, nowMs: number): boolean {
     state.revision += 1;
   }
   return changed;
-}
-
-function pruneStateIfEmpty(nodeId: string, state: NodePendingWorkState) {
-  if (state.itemsById.size === 0) {
-    stateByNodeId.delete(nodeId);
-  }
 }
 
 function sortedItems(state: NodePendingWorkState): NodePendingWorkItem[] {
@@ -144,7 +138,6 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   const revision = state?.revision ?? 0;
   if (state) {
     pruneExpired(state, nowMs);
-    pruneStateIfEmpty(normalizedNodeId, state);
   }
   const maxItems = Math.min(MAX_ITEMS, Math.max(1, Math.trunc(opts.maxItems ?? DEFAULT_MAX_ITEMS)));
   const explicitItems = state ? sortedItems(state) : [];
@@ -188,7 +181,6 @@ export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: st
   if (removedItemIds.length > 0) {
     state.revision += 1;
   }
-  pruneStateIfEmpty(nodeId, state);
   return { revision: state.revision, removedItemIds };
 }
 

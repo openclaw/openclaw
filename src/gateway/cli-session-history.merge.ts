@@ -1,6 +1,4 @@
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
-import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
@@ -9,22 +7,17 @@ function extractComparableText(message: unknown): string | undefined {
     return undefined;
   }
   const record = message as { role?: unknown; text?: unknown; content?: unknown };
-  const role = readStringValue(record.role);
+  const role = typeof record.role === "string" ? record.role : undefined;
   const parts: string[] = [];
-  const text = readStringValue(record.text);
-  if (text !== undefined) {
-    parts.push(text);
+  if (typeof record.text === "string") {
+    parts.push(record.text);
   }
-  const content = readStringValue(record.content);
-  if (content !== undefined) {
-    parts.push(content);
+  if (typeof record.content === "string") {
+    parts.push(record.content);
   } else if (Array.isArray(record.content)) {
     for (const block of record.content) {
-      if (block && typeof block === "object" && "text" in block) {
-        const blockText = readStringValue(block.text);
-        if (blockText !== undefined) {
-          parts.push(blockText);
-        }
+      if (block && typeof block === "object" && "text" in block && typeof block.text === "string") {
+        parts.push(block.text);
       }
     }
   }
@@ -40,61 +33,42 @@ function extractComparableText(message: unknown): string | undefined {
   return normalized || undefined;
 }
 
+function resolveFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function resolveComparableTimestamp(message: unknown): number | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  return asFiniteNumber((message as { timestamp?: unknown }).timestamp);
+  return resolveFiniteNumber((message as { timestamp?: unknown }).timestamp);
 }
 
 function resolveComparableRole(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  return readStringValue((message as { role?: unknown }).role);
+  const role = (message as { role?: unknown }).role;
+  return typeof role === "string" ? role : undefined;
 }
 
-type ImportedExternalIdentity = {
-  externalId: string;
-  importedFrom?: string;
-  cliSessionId?: string;
-};
-
-function resolveImportedExternalIdentity(message: unknown): ImportedExternalIdentity | undefined {
+function resolveImportedExternalId(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
   const meta =
     "__openclaw" in message &&
-    (message as { __openclaw?: unknown })["__openclaw"] &&
-    typeof (message as { __openclaw?: unknown })["__openclaw"] === "object"
-      ? ((message as { __openclaw?: Record<string, unknown> })["__openclaw"] ?? {})
+    (message as { __openclaw?: unknown }).__openclaw &&
+    typeof (message as { __openclaw?: unknown }).__openclaw === "object"
+      ? ((message as { __openclaw?: Record<string, unknown> }).__openclaw ?? {})
       : undefined;
-  const externalId = normalizeOptionalString(meta?.externalId);
-  return externalId
-    ? {
-        externalId,
-        importedFrom: normalizeOptionalString(meta?.importedFrom),
-        cliSessionId: normalizeOptionalString(meta?.cliSessionId),
-      }
-    : undefined;
-}
-
-function hasSameExternalIdentity(existing: unknown, imported: unknown): boolean {
-  const importedIdentity = resolveImportedExternalIdentity(imported);
-  const existingIdentity = resolveImportedExternalIdentity(existing);
-  if (!importedIdentity || !existingIdentity) {
-    return false;
-  }
-  return (
-    importedIdentity.externalId === existingIdentity.externalId &&
-    importedIdentity.importedFrom === existingIdentity.importedFrom &&
-    importedIdentity.cliSessionId === existingIdentity.cliSessionId
-  );
+  const externalId = meta?.externalId;
+  return typeof externalId === "string" && externalId.trim() ? externalId : undefined;
 }
 
 function isEquivalentImportedMessage(existing: unknown, imported: unknown): boolean {
-  if (hasSameExternalIdentity(existing, imported)) {
+  const importedExternalId = resolveImportedExternalId(imported);
+  if (importedExternalId && resolveImportedExternalId(existing) === importedExternalId) {
     return true;
   }
 
@@ -127,6 +101,12 @@ function compareHistoryMessages(
   const bTimestamp = resolveComparableTimestamp(b.message);
   if (aTimestamp !== undefined && bTimestamp !== undefined && aTimestamp !== bTimestamp) {
     return aTimestamp - bTimestamp;
+  }
+  if (aTimestamp !== undefined && bTimestamp === undefined) {
+    return -1;
+  }
+  if (aTimestamp === undefined && bTimestamp !== undefined) {
+    return 1;
   }
   return a.order - b.order;
 }

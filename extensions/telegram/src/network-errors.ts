@@ -4,7 +4,6 @@ import {
   formatErrorMessage,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
 
@@ -12,7 +11,6 @@ const RECOVERABLE_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
   "EPIPE",
-  "ENETDOWN",
   "ETIMEDOUT",
   "ESOCKETTIMEDOUT",
   "ENETUNREACH",
@@ -42,7 +40,6 @@ const PRE_CONNECT_ERROR_CODES = new Set([
   "ECONNREFUSED", // Server actively refused the connection (never reached Telegram)
   "ENOTFOUND", // DNS resolution failed (never sent)
   "EAI_AGAIN", // Transient DNS failure (never sent)
-  "ENETDOWN", // Local network interface is down before connect completes (never sent)
   "ENETUNREACH", // No route to host (never sent)
   "EHOSTUNREACH", // Host unreachable (never sent)
 ]);
@@ -105,40 +102,6 @@ function getErrorCode(err: unknown): string | undefined {
   return undefined;
 }
 
-function getNumericHttpStatus(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const candidate = err as { error_code?: unknown; status?: unknown; statusCode?: unknown };
-  for (const value of [candidate.error_code, candidate.status, candidate.statusCode]) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
-    }
-    if (typeof value === "string") {
-      const trimmed = value.trim();
-      if (/^\d+$/.test(trimmed)) {
-        return Number.parseInt(trimmed, 10);
-      }
-    }
-  }
-  return undefined;
-}
-
-export function isTelegramMisdirectedRequestError(err: unknown): boolean {
-  for (const candidate of collectTelegramErrorCandidates(err)) {
-    const code = normalizeCode(getErrorCode(candidate));
-    if (code === "421" || getNumericHttpStatus(candidate) === 421) {
-      return true;
-    }
-
-    const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(candidate));
-    if (/\b421\b/.test(message) && message.includes("misdirected request")) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export type TelegramNetworkErrorContext = "polling" | "send" | "webhook" | "unknown";
 export type TelegramNetworkErrorOrigin = {
   method?: string | null;
@@ -150,7 +113,7 @@ function normalizeTelegramNetworkMethod(method?: string | null): string | null {
   if (!trimmed) {
     return null;
   }
-  return normalizeLowercaseStringOrEmpty(trimmed);
+  return trimmed.toLowerCase();
 }
 
 export function tagTelegramNetworkError(err: unknown, origin: TelegramNetworkErrorOrigin): void {
@@ -198,9 +161,6 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  if (isTelegramMisdirectedRequestError(err)) {
-    return true;
-  }
   for (const candidate of collectTelegramErrorCandidates(err)) {
     const code = normalizeCode(getErrorCode(candidate));
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
@@ -223,47 +183,9 @@ function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean):
   return false;
 }
 
-function hasTelegramRetryAfter(err: unknown): boolean {
-  for (const candidate of collectTelegramErrorCandidates(err)) {
-    if (!candidate || typeof candidate !== "object") {
-      continue;
-    }
-    const retryAfter =
-      "parameters" in candidate && candidate.parameters && typeof candidate.parameters === "object"
-        ? (candidate.parameters as { retry_after?: unknown }).retry_after
-        : "response" in candidate &&
-            candidate.response &&
-            typeof candidate.response === "object" &&
-            "parameters" in candidate.response
-          ? (
-              candidate.response as {
-                parameters?: { retry_after?: unknown };
-              }
-            ).parameters?.retry_after
-          : "error" in candidate &&
-              candidate.error &&
-              typeof candidate.error === "object" &&
-              "parameters" in candidate.error
-            ? (candidate.error as { parameters?: { retry_after?: unknown } }).parameters
-                ?.retry_after
-            : undefined;
-    if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /** Returns true for HTTP 5xx server errors (error may have been processed). */
 export function isTelegramServerError(err: unknown): boolean {
   return hasTelegramErrorCode(err, (code) => code >= 500);
-}
-
-export function isTelegramRateLimitError(err: unknown): boolean {
-  return (
-    hasTelegramErrorCode(err, (code) => code === 429) ||
-    (hasTelegramRetryAfter(err) && /(?:^|\b)429\b|too many requests/i.test(formatErrorMessage(err)))
-  );
 }
 
 /** Returns true for HTTP 4xx client errors (Telegram explicitly rejected, not applied). */
@@ -294,7 +216,7 @@ export function isRecoverableTelegramNetworkError(
       return true;
     }
 
-    const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(candidate));
+    const message = formatErrorMessage(candidate).trim().toLowerCase();
     if (message && ALWAYS_RECOVERABLE_MESSAGES.has(message)) {
       return true;
     }

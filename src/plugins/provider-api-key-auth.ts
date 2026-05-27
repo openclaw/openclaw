@@ -1,9 +1,7 @@
-import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type {
   ProviderAuthMethod,
@@ -32,8 +30,6 @@ type ProviderApiKeyAuthMethodOptions = {
   applyConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 };
 
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
 const loadProviderApiKeyAuthRuntime = createLazyRuntimeSurface(
   () => import("./provider-api-key-auth.runtime.js"),
   ({ providerApiKeyAuthRuntime }) => providerApiKeyAuthRuntime,
@@ -44,7 +40,7 @@ function resolveStringOption(opts: Record<string, unknown> | undefined, optionKe
 }
 
 function resolveProfileId(params: { providerId: string; profileId?: string }) {
-  return normalizeOptionalString(params.profileId) || `${params.providerId}:default`;
+  return params.profileId?.trim() || `${params.providerId}:default`;
 }
 
 function resolveProfileIds(params: {
@@ -52,20 +48,13 @@ function resolveProfileIds(params: {
   profileId?: string;
   profileIds?: string[];
 }) {
-  const explicit = normalizeUniqueStringEntries(params.profileIds ?? []);
+  const explicit = Array.from(
+    new Set((params.profileIds ?? []).map((value) => value.trim()).filter(Boolean)),
+  );
   if (explicit.length > 0) {
     return explicit;
   }
   return [resolveProfileId(params)];
-}
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
 }
 
 async function applyApiKeyConfig(params: {
@@ -80,7 +69,7 @@ async function applyApiKeyConfig(params: {
   for (const profileId of params.profileIds) {
     next = applyAuthProfileConfig(next, {
       profileId,
-      provider: normalizeOptionalString(profileId.split(":", 1)[0]) || params.providerId,
+      provider: profileId.split(":", 1)[0]?.trim() || params.providerId,
       mode: "api_key",
     });
   }
@@ -149,15 +138,10 @@ export function createProviderApiKeyAuthMethod(
         profiles: profileIds.map((profileId) => ({
           profileId,
           credential: buildApiKeyCredential(
-            normalizeOptionalString(profileId.split(":", 1)[0]) || params.providerId,
+            profileId.split(":", 1)[0]?.trim() || params.providerId,
             credentialInput,
             params.metadata,
-            capturedMode
-              ? {
-                  secretInputMode: capturedMode,
-                  config: ctx.config,
-                }
-              : undefined,
+            capturedMode ? { secretInputMode: capturedMode } : undefined,
           ),
         })),
         ...(params.applyConfig ? { configPatch: params.applyConfig(ctx.config) } : {}),
@@ -181,14 +165,14 @@ export function createProviderApiKeyAuthMethod(
       if (resolved.source !== "profile") {
         for (const profileId of profileIds) {
           const credential = ctx.toApiKeyCredential({
-            provider: normalizeOptionalString(profileId.split(":", 1)[0]) || params.providerId,
+            provider: profileId.split(":", 1)[0]?.trim() || params.providerId,
             resolved,
             ...(params.metadata ? { metadata: params.metadata } : {}),
           });
           if (!credential) {
             return null;
           }
-          await upsertAuthProfileWithLockOrThrow({
+          upsertAuthProfile({
             profileId,
             credential,
             agentDir: ctx.agentDir,

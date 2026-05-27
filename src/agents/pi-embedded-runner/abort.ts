@@ -1,5 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-
 /**
  * Runner abort check. Catches any abort-related message for embedded runners.
  * More permissive than the core isAbortError since runners need to catch
@@ -14,8 +12,6 @@ export function isRunnerAbortError(err: unknown): boolean {
     return true;
   }
   const message =
-    "message" in err && typeof err.message === "string"
-      ? normalizeLowercaseStringOrEmpty(err.message)
-      : "";
+    "message" in err && typeof err.message === "string" ? err.message.toLowerCase() : "";
   return message.includes("aborted");
 }

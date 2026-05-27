@@ -1,6 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-
-type SecurityPathCanonicalization = {
+export type SecurityPathCanonicalization = {
   canonicalPath: string;
   candidates: string[];
   decodePasses: number;
@@ -20,7 +18,7 @@ function normalizePathSeparators(pathname: string): string {
 }
 
 function normalizeProtectedPrefix(prefix: string): string {
-  return normalizePathSeparators(normalizeLowercaseStringOrEmpty(prefix)) || "/";
+  return normalizePathSeparators(prefix.toLowerCase()) || "/";
 }
 
 function resolveDotSegments(pathname: string): string {
@@ -32,9 +30,7 @@ function resolveDotSegments(pathname: string): string {
 }
 
 function normalizePathForSecurity(pathname: string): string {
-  return (
-    normalizePathSeparators(normalizeLowercaseStringOrEmpty(resolveDotSegments(pathname))) || "/"
-  );
+  return normalizePathSeparators(resolveDotSegments(pathname).toLowerCase()) || "/";
 }
 
 function pushNormalizedCandidate(candidates: string[], seen: Set<string>, value: string): void {
@@ -117,8 +113,13 @@ export function canonicalizePathForSecurity(pathname: string): SecurityPathCanon
     decodePasses,
     decodePassLimitReached,
     malformedEncoding,
-    rawNormalizedPath: normalizePathSeparators(normalizeLowercaseStringOrEmpty(pathname)) || "/",
+    rawNormalizedPath: normalizePathSeparators(pathname.toLowerCase()) || "/",
   };
+}
+
+export function hasSecurityPathCanonicalizationAnomaly(pathname: string): boolean {
+  const canonical = canonicalizePathForSecurity(pathname);
+  return canonical.malformedEncoding || canonical.decodePassLimitReached;
 }
 
 const normalizedPrefixesCache = new WeakMap<readonly string[], readonly string[]>();

@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { getPrimaryIdentityId, getReplyContext, getSenderIdentity } from "../../identity.js";
-import type { WebInboundMsg } from "../types.js";
+import { resolveMessagePrefix } from "openclaw/plugin-sdk/agent-runtime";
 import {
   formatInboundEnvelope,
-  resolveMessagePrefix,
   type EnvelopeFormatOptions,
-} from "./message-line.runtime.js";
+} from "openclaw/plugin-sdk/channel-inbound";
+import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getPrimaryIdentityId, getReplyContext, getSenderIdentity } from "../../identity.js";
+import type { WebInboundMsg } from "../types.js";
 
 export function formatReplyContext(msg: WebInboundMsg) {
   const replyTo = getReplyContext(msg);
@@ -18,7 +18,7 @@ export function formatReplyContext(msg: WebInboundMsg) {
 }
 
 export function buildInboundLine(params: {
-  cfg: OpenClawConfig;
+  cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
   agentId: string;
   previousTimestamp?: number;

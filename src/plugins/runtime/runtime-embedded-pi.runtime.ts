@@ -1,1 +1,1 @@
-export { runEmbeddedAgent, runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+export { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";

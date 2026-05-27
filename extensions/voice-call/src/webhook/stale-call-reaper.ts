@@ -1,5 +1,4 @@
 import type { CallManager } from "../manager.js";
-import { TerminalStates } from "../types.js";
 
 const CHECK_INTERVAL_MS = 30_000;
 
@@ -16,10 +15,6 @@ export function startStaleCallReaper(params: {
   const interval = setInterval(() => {
     const now = Date.now();
     for (const call of params.manager.getActiveCalls()) {
-      if (call.answeredAt || TerminalStates.has(call.state)) {
-        continue;
-      }
-
       const age = now - call.startedAt;
       if (age > maxAgeMs) {
         console.log(

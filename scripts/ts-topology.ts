@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import path from "node:path";
-import { formatErrorMessage } from "../src/infra/errors.ts";
 import { analyzeTopology } from "./lib/ts-topology/analyze.js";
 import { renderTextReport } from "./lib/ts-topology/reports.js";
 import {
@@ -137,7 +136,7 @@ export async function main(argv: string[], io: IoLike = process): Promise<number
   try {
     options = parseArgs(argv);
   } catch (error) {
-    io.stderr.write(`${formatErrorMessage(error)}\n`);
+    io.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
 
@@ -159,7 +158,7 @@ export async function main(argv: string[], io: IoLike = process): Promise<number
     io.stdout.write(`${renderTextReport(envelope, options.limit)}\n`);
     return 0;
   } catch (error) {
-    io.stderr.write(`${formatErrorMessage(error)}\n`);
+    io.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
 }

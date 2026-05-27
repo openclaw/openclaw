@@ -1,5 +1,5 @@
 import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
-import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
+import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   applyAccountNameToChannelSection,
@@ -83,7 +83,7 @@ export function setIrcGroupAccess(
     return updateIrcAccountConfig(cfg, accountId, { enabled: true, groupPolicy: policy });
   }
   const normalizedEntries = [
-    ...new Set(entries.flatMap((entry) => normalizeGroupEntry(entry) ?? [])),
+    ...new Set(entries.map((entry) => normalizeGroupEntry(entry)).filter(Boolean)),
   ];
   const groups = Object.fromEntries(normalizedEntries.map((entry) => [entry, {}]));
   return updateIrcAccountConfig(cfg, accountId, {
@@ -117,7 +117,7 @@ export const ircSetupAdapter: ChannelSetupAdapter = {
       name: setupInput.name,
     });
     const portInput =
-      typeof setupInput.port === "number" ? String(setupInput.port) : (setupInput.port ?? "");
+      typeof setupInput.port === "number" ? String(setupInput.port) : String(setupInput.port ?? "");
     const patch: Partial<IrcAccountConfig> = {
       enabled: true,
       host: setupInput.host?.trim(),

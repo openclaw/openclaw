@@ -1,5 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-
 const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
 export function isValidProfileName(value: string): boolean {
@@ -15,7 +13,7 @@ export function normalizeProfileName(raw?: string | null): string | null {
   if (!profile) {
     return null;
   }
-  if (normalizeLowercaseStringOrEmpty(profile) === "default") {
+  if (profile.toLowerCase() === "default") {
     return null;
   }
   if (!isValidProfileName(profile)) {

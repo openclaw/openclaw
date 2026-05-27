@@ -11,7 +11,6 @@ export type MockCommandInteraction = {
     getNumber: ReturnType<typeof vi.fn>;
     getBoolean: ReturnType<typeof vi.fn>;
   };
-  defer: ReturnType<typeof vi.fn>;
   reply: ReturnType<typeof vi.fn>;
   followUp: ReturnType<typeof vi.fn>;
   client: object;
@@ -56,7 +55,6 @@ export function createMockCommandInteraction(
       getNumber: vi.fn().mockReturnValue(null),
       getBoolean: vi.fn().mockReturnValue(null),
     },
-    defer: vi.fn().mockResolvedValue(undefined),
     reply: vi.fn().mockResolvedValue({ ok: true }),
     followUp: vi.fn().mockResolvedValue({ ok: true }),
     client: {},

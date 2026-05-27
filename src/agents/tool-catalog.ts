@@ -1,15 +1,3 @@
-import {
-  CRON_TOOL_DISPLAY_SUMMARY,
-  EXEC_TOOL_DISPLAY_SUMMARY,
-  PROCESS_TOOL_DISPLAY_SUMMARY,
-  SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
-  SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
-  SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
-  SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
-  SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
-  UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
-} from "./tool-description-presets.js";
-
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
 type ToolProfilePolicy = {
@@ -17,7 +5,7 @@ type ToolProfilePolicy = {
   deny?: string[];
 };
 
-type CoreToolSection = {
+export type CoreToolSection = {
   id: string;
   label: string;
   tools: Array<{
@@ -82,14 +70,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "exec",
     label: "exec",
-    description: EXEC_TOOL_DISPLAY_SUMMARY,
+    description: "Run shell commands",
     sectionId: "runtime",
     profiles: ["coding"],
   },
   {
     id: "process",
     label: "process",
-    description: PROCESS_TOOL_DISPLAY_SUMMARY,
+    description: "Manage background processes",
     sectionId: "runtime",
     profiles: ["coding"],
   },
@@ -144,7 +132,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions_list",
     label: "sessions_list",
-    description: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
+    description: "List sessions",
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -152,7 +140,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions_history",
     label: "sessions_history",
-    description: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
+    description: "Session history",
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -160,7 +148,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions_send",
     label: "sessions_send",
-    description: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
+    description: "Send to session",
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -168,7 +156,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions_spawn",
     label: "sessions_spawn",
-    description: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
+    description: "Spawn sub-agent",
     sectionId: "sessions",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -192,7 +180,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "session_status",
     label: "session_status",
-    description: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+    description: "Session status",
     sectionId: "sessions",
     profiles: ["minimal", "coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -208,9 +196,10 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "canvas",
     label: "canvas",
-    description: "Control node Canvas surfaces when the Canvas plugin is enabled",
+    description: "Control canvases",
     sectionId: "ui",
     profiles: [],
+    includeInOpenClawGroup: true,
   },
   {
     id: "message",
@@ -221,17 +210,9 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "heartbeat_respond",
-    label: "heartbeat_respond",
-    description: "Record heartbeat outcomes",
-    sectionId: "automation",
-    profiles: [],
-    includeInOpenClawGroup: true,
-  },
-  {
     id: "cron",
     label: "cron",
-    description: CRON_TOOL_DISPLAY_SUMMARY,
+    description: "Schedule tasks",
     sectionId: "automation",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -261,14 +242,6 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "update_plan",
-    label: "update_plan",
-    description: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
-    sectionId: "agents",
-    profiles: ["coding"],
-    includeInOpenClawGroup: true,
-  },
-  {
     id: "image",
     label: "image",
     description: "Image understanding",
@@ -280,22 +253,6 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     id: "image_generate",
     label: "image_generate",
     description: "Image generation",
-    sectionId: "media",
-    profiles: ["coding"],
-    includeInOpenClawGroup: true,
-  },
-  {
-    id: "music_generate",
-    label: "music_generate",
-    description: "Music generation",
-    sectionId: "media",
-    profiles: ["coding"],
-    includeInOpenClawGroup: true,
-  },
-  {
-    id: "video_generate",
-    label: "video_generate",
-    description: "Video generation",
     sectionId: "media",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -325,14 +282,12 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
     allow: listCoreToolIdsForProfile("minimal"),
   },
   coding: {
-    allow: [...listCoreToolIdsForProfile("coding"), "bundle-mcp"],
+    allow: listCoreToolIdsForProfile("coding"),
   },
   messaging: {
-    allow: [...listCoreToolIdsForProfile("messaging"), "bundle-mcp"],
+    allow: listCoreToolIdsForProfile("messaging"),
   },
-  full: {
-    allow: ["*"],
-  },
+  full: {},
 };
 
 function buildCoreToolGroupMap() {

@@ -7,18 +7,9 @@ import {
   parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
 
-function requireFetchCall(
-  mock: ReturnType<typeof vi.fn>,
-): [URL | RequestInfo, RequestInit | undefined] {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected fetch call");
-  }
-  return call as [URL | RequestInfo, RequestInit | undefined];
-}
-
 describe("provider usage fetch shared helpers", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -40,6 +31,7 @@ describe("provider usage fetch shared helpers", () => {
   });
 
   it("forwards request init and clears the timeout on success", async () => {
+    vi.useFakeTimers();
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     const fetchFnMock = vi.fn(
       async (_input: URL | RequestInfo, init?: RequestInit) =>
@@ -57,38 +49,37 @@ describe("provider usage fetch shared helpers", () => {
       fetchFn,
     );
 
-    expect(fetchFnMock).toHaveBeenCalledOnce();
-    const [input, init] = requireFetchCall(fetchFnMock);
-    expect(input).toBe("https://example.com/usage");
-    expect(init?.method).toBe("POST");
-    expect(init?.headers).toEqual({ authorization: "Bearer test" });
-    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchFnMock).toHaveBeenCalledWith(
+      "https://example.com/usage",
+      expect.objectContaining({
+        method: "POST",
+        headers: { authorization: "Bearer test" },
+        signal: expect.any(AbortSignal),
+      }),
+    );
     await expect(response.json()).resolves.toEqual({ aborted: false });
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
   });
 
   it("aborts timed out requests and clears the timer on rejection", async () => {
     vi.useFakeTimers();
-    try {
-      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-      const fetchFnMock = vi.fn(
-        (_input: URL | RequestInfo, init?: RequestInit) =>
-          new Promise<Response>((_, reject) => {
-            init?.signal?.addEventListener("abort", () => reject(new Error("aborted by timeout")), {
-              once: true,
-            });
-          }),
-      );
-      const fetchFn = withFetchPreconnect(fetchFnMock);
-      const responsePromise = fetchJson("https://example.com/usage", {}, 10, fetchFn);
-      const rejection = expect(responsePromise).rejects.toThrow("aborted by timeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const fetchFnMock = vi.fn(
+      (_input: URL | RequestInfo, init?: RequestInit) =>
+        new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted by timeout")), {
+            once: true,
+          });
+        }),
+    );
+    const fetchFn = withFetchPreconnect(fetchFnMock);
 
-      await vi.advanceTimersByTimeAsync(10);
-      await rejection;
-      expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    const request = fetchJson("https://example.com/usage", {}, 50, fetchFn);
+    const rejection = expect(request).rejects.toThrow("aborted by timeout");
+    await vi.advanceTimersByTimeAsync(50);
+
+    await rejection;
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
   });
 
   it("maps configured status codes to token expired", () => {

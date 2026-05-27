@@ -1,4 +1,3 @@
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
 
@@ -36,22 +35,11 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
   });
 }
 
-function renderEnvironmentFileLines(environmentFiles: string[] | undefined): string[] {
-  if (!environmentFiles) {
-    return [];
-  }
-  return normalizeStringEntries(environmentFiles).map((entry) => {
-    assertNoSystemdLineBreaks(entry, "Systemd EnvironmentFile values");
-    return `EnvironmentFile=-${systemdEscapeArg(entry)}`;
-  });
-}
-
 export function buildSystemdUnit({
   description,
   programArguments,
   workingDirectory,
   environment,
-  environmentFiles,
 }: GatewayServiceRenderArgs): string {
   const execStart = programArguments.map(systemdEscapeArg).join(" ");
   const descriptionValue = description?.trim() || "OpenClaw Gateway";
@@ -61,20 +49,16 @@ export function buildSystemdUnit({
     ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
     : null;
   const envLines = renderEnvLines(environment);
-  const environmentFileLines = renderEnvironmentFileLines(environmentFiles);
   return [
     "[Unit]",
     descriptionLine,
     "After=network-online.target",
     "Wants=network-online.target",
-    "StartLimitBurst=5",
-    "StartLimitIntervalSec=60",
     "",
     "[Service]",
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
-    "RestartPreventExitStatus=78",
     "TimeoutStopSec=30",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
@@ -82,7 +66,6 @@ export function buildSystemdUnit({
     // orphan ACP/runtime workers behind.
     "KillMode=control-group",
     workingDirLine,
-    ...environmentFileLines,
     ...envLines,
     "",
     "[Install]",
@@ -104,8 +87,7 @@ export function parseSystemdEnvAssignment(raw: string): { key: string; value: st
   }
 
   const unquoted = (() => {
-    const quote = trimmed[0];
-    if (!((quote === '"' || quote === "'") && trimmed.endsWith(quote))) {
+    if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) {
       return trimmed;
     }
     let out = "";
@@ -135,19 +117,4 @@ export function parseSystemdEnvAssignment(raw: string): { key: string; value: st
   }
   const value = unquoted.slice(eq + 1);
   return { key, value };
-}
-
-export function parseSystemdEnvAssignments(raw: string): Array<{ key: string; value: string }> {
-  return splitArgsPreservingQuotes(raw, {
-    escapeMode: "backslash",
-    quoteChars: ['"', "'"],
-    quoteStart: "item-start",
-  }).flatMap((entry) => {
-    const parsed = parseSystemdEnvAssignment(entry);
-    return parsed ? [parsed] : [];
-  });
-}
-
-export function renderSystemdEnvAssignment(key: string, value: string): string {
-  return systemdEscapeArg(`${key}=${value}`);
 }

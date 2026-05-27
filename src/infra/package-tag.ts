@@ -1,10 +1,8 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-
 export function normalizePackageTagInput(
   value: string | undefined | null,
   packageNames: readonly string[],
 ): string | null {
-  const trimmed = normalizeOptionalString(value);
+  const trimmed = value?.trim();
   if (!trimmed) {
     return null;
   }

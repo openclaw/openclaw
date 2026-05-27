@@ -4,16 +4,10 @@ import {
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { canExecRequestNode } from "../agents/exec-defaults.js";
 import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { listReservedChatSlashCommandNames } from "./skill-commands-base.js";
 export {
   listReservedChatSlashCommandNames,
@@ -23,21 +17,12 @@ export {
 export function listSkillCommandsForWorkspace(params: {
   workspaceDir: string;
   cfg: OpenClawConfig;
-  agentId?: string;
   skillFilter?: string[];
 }): SkillCommandSpec[] {
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     config: params.cfg,
-    agentId: params.agentId,
     skillFilter: params.skillFilter,
-    eligibility: {
-      remote: getRemoteSkillEligibility({
-        advertiseExecNode: canExecRequestNode({
-          cfg: params.cfg,
-          agentId: params.agentId,
-        }),
-      }),
-    },
+    eligibility: { remote: getRemoteSkillEligibility() },
     reservedNames: listReservedChatSlashCommandNames(),
   });
 }
@@ -46,7 +31,7 @@ function dedupeBySkillName(commands: SkillCommandSpec[]): SkillCommandSpec[] {
   const seen = new Set<string>();
   const out: SkillCommandSpec[] = [];
   for (const cmd of commands) {
-    const key = normalizeOptionalLowercaseString(cmd.skillName);
+    const key = cmd.skillName.trim().toLowerCase();
     if (key && seen.has(key)) {
       continue;
     }
@@ -70,12 +55,12 @@ export function listSkillCommandsForAgents(params: {
     }
     // An empty allowlist contributes no skills but does not widen the merge to unrestricted.
     if (existing.length === 0) {
-      return uniqueStrings(incoming);
+      return Array.from(new Set(incoming));
     }
     if (incoming.length === 0) {
-      return uniqueStrings(existing);
+      return Array.from(new Set(existing));
     }
-    return uniqueStrings([...existing, ...incoming]);
+    return Array.from(new Set([...existing, ...incoming]));
   };
 
   const agentIds = params.agentIds ?? listAgentIds(params.cfg);
@@ -113,24 +98,17 @@ export function listSkillCommandsForAgents(params: {
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       config: params.cfg,
       skillFilter,
-      eligibility: {
-        remote: getRemoteSkillEligibility({
-          advertiseExecNode: canExecRequestNode({
-            cfg: params.cfg,
-          }),
-        }),
-      },
+      eligibility: { remote: getRemoteSkillEligibility() },
       reservedNames: used,
     });
     for (const command of commands) {
-      used.add(normalizeLowercaseStringOrEmpty(command.name));
+      used.add(command.name.toLowerCase());
       entries.push(command);
     }
   }
   return dedupeBySkillName(entries);
 }
 
-export const testing = {
+export const __testing = {
   dedupeBySkillName,
 };
-export { testing as __testing };

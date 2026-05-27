@@ -1,12 +1,11 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { GroupPolicy } from "./types.base.js";
 
-type RuntimeGroupPolicyResolution = {
+export type RuntimeGroupPolicyResolution = {
   groupPolicy: GroupPolicy;
   providerMissingFallbackApplied: boolean;
 };
 
-type RuntimeGroupPolicyParams = {
+export type RuntimeGroupPolicyParams = {
   providerConfigPresent: boolean;
   groupPolicy?: GroupPolicy;
   defaultGroupPolicy?: GroupPolicy;
@@ -27,13 +26,13 @@ export function resolveRuntimeGroupPolicy(
   return { groupPolicy, providerMissingFallbackApplied };
 }
 
-type ResolveProviderRuntimeGroupPolicyParams = {
+export type ResolveProviderRuntimeGroupPolicyParams = {
   providerConfigPresent: boolean;
   groupPolicy?: GroupPolicy;
   defaultGroupPolicy?: GroupPolicy;
 };
 
-type GroupPolicyDefaultsConfig = {
+export type GroupPolicyDefaultsConfig = {
   channels?: {
     defaults?: {
       groupPolicy?: GroupPolicy;
@@ -104,7 +103,7 @@ export function warnMissingProviderGroupPolicyFallbackOnce(params: {
     return false;
   }
   warnedMissingProviderGroupPolicy.add(key);
-  const blockedLabel = normalizeOptionalString(params.blockedLabel) || "group messages";
+  const blockedLabel = params.blockedLabel?.trim() || "group messages";
   params.log(
     `${params.providerKey}: channels.${params.providerKey} is missing; defaulting groupPolicy to "allowlist" (${blockedLabel} blocked until explicitly configured).`,
   );

@@ -1,40 +1,14 @@
 import { afterEach, beforeEach } from "vitest";
-import { normalizeE164 } from "../../plugin-sdk/account-resolution.js";
+import { normalizeWhatsAppAllowFromEntries } from "../../channels/plugins/normalize/whatsapp.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { lowercasePreservingWhitespace } from "../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 function formatDiscordAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return normalizeStringEntries(allowFrom)
+  return allowFrom
+    .map((entry) => String(entry).trim())
+    .filter(Boolean)
     .map((entry) => entry.replace(/^(discord|user|pk):/i, "").replace(/^<@!?(\d+)>$/, "$1"))
-    .map((entry) => lowercasePreservingWhitespace(entry));
-}
-
-function normalizePhoneAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return normalizeStringEntries(allowFrom)
-    .map((entry) => {
-      if (entry === "*") {
-        return entry;
-      }
-      const stripped = entry.replace(/^whatsapp:/i, "").trim();
-      if (/@g\.us$/i.test(stripped)) {
-        return stripped;
-      }
-      if (/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i.test(stripped)) {
-        const match = stripped.match(/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i);
-        return match ? normalizeE164(match[1]) : null;
-      }
-      if (/^(\d+)@lid$/i.test(stripped)) {
-        const match = stripped.match(/^(\d+)@lid$/i);
-        return match ? normalizeE164(match[1]) : null;
-      }
-      if (stripped.includes("@")) {
-        return null;
-      }
-      return normalizeE164(stripped);
-    })
-    .filter((entry): entry is string => Boolean(entry));
+    .map((entry) => entry.toLowerCase());
 }
 
 function resolveChannelAllowFrom(
@@ -53,7 +27,7 @@ function resolveChannelAllowFrom(
   return Array.isArray(allowFrom) ? allowFrom : undefined;
 }
 
-const createCommandAuthRegistry = () =>
+export const createCommandAuthRegistry = () =>
   createTestRegistry([
     {
       pluginId: "discord",
@@ -78,7 +52,7 @@ const createCommandAuthRegistry = () =>
           resolveAllowFrom: ({ cfg }: { cfg: Record<string, unknown> }) =>
             resolveChannelAllowFrom(cfg, "whatsapp"),
           formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-            normalizePhoneAllowFromEntries(allowFrom),
+            normalizeWhatsAppAllowFromEntries(allowFrom),
         },
       },
       source: "test",

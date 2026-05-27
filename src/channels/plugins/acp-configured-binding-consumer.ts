@@ -12,11 +12,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type {
   ConfiguredBindingRuleConfig,
   ConfiguredBindingTargetFactory,
@@ -30,9 +26,8 @@ function resolveAgentRuntimeAcpDefaults(params: { cfg: OpenClawConfig; ownerAgen
   cwd?: string;
   backend?: string;
 } {
-  const ownerAgentId = normalizeLowercaseStringOrEmpty(params.ownerAgentId);
   const agent = params.cfg.agents?.list?.find(
-    (entry) => normalizeOptionalLowercaseString(entry.id) === ownerAgentId,
+    (entry) => entry.id?.trim().toLowerCase() === params.ownerAgentId.toLowerCase(),
   );
   if (!agent || agent.runtime?.type !== "acp") {
     return {};

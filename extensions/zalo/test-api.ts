@@ -1,1 +1,1 @@
-export { resolveZaloRuntimeGroupPolicy } from "./src/group-access.js";
+export { sendMessageZalo } from "./src/send.js";

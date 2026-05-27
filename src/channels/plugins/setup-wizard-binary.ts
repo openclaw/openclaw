@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { detectBinary as defaultDetectBinary } from "../../plugins/setup-binary.js";
 import type {
   ChannelSetupWizard,
@@ -18,11 +18,8 @@ export function createDetectedBinaryStatus(params: {
   unconfiguredHint: string;
   configuredScore: number;
   unconfiguredScore: number;
-  resolveConfigured: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string;
-  }) => boolean | Promise<boolean>;
-  resolveBinaryPath: (params: { cfg: OpenClawConfig; accountId?: string }) => string;
+  resolveConfigured: (params: { cfg: OpenClawConfig }) => boolean | Promise<boolean>;
+  resolveBinaryPath: (params: { cfg: OpenClawConfig }) => string;
   detectBinary?: (path: string) => Promise<boolean>;
 }): ChannelSetupWizardStatus {
   const detectBinary = params.detectBinary ?? defaultDetectBinary;
@@ -35,8 +32,8 @@ export function createDetectedBinaryStatus(params: {
     configuredScore: params.configuredScore,
     unconfiguredScore: params.unconfiguredScore,
     resolveConfigured: params.resolveConfigured,
-    async resolveStatusLines({ cfg, accountId, configured }: SetupStatusParams): Promise<string[]> {
-      const binaryPath = params.resolveBinaryPath({ cfg, accountId });
+    async resolveStatusLines({ cfg, configured }: SetupStatusParams): Promise<string[]> {
+      const binaryPath = params.resolveBinaryPath({ cfg });
       const detected = await detectBinary(binaryPath);
       return [
         `${params.channelLabel}: ${configured ? params.configuredLabel : params.unconfiguredLabel}`,
@@ -45,25 +42,21 @@ export function createDetectedBinaryStatus(params: {
     },
     async resolveSelectionHint({
       cfg,
-      accountId,
     }: {
       cfg: OpenClawConfig;
-      accountId?: string;
       configured: boolean;
     }): Promise<string | undefined> {
-      return (await detectBinary(params.resolveBinaryPath({ cfg, accountId })))
+      return (await detectBinary(params.resolveBinaryPath({ cfg })))
         ? params.configuredHint
         : params.unconfiguredHint;
     },
     async resolveQuickstartScore({
       cfg,
-      accountId,
     }: {
       cfg: OpenClawConfig;
-      accountId?: string;
       configured: boolean;
     }): Promise<number | undefined> {
-      return (await detectBinary(params.resolveBinaryPath({ cfg, accountId })))
+      return (await detectBinary(params.resolveBinaryPath({ cfg })))
         ? params.configuredScore
         : params.unconfiguredScore;
     },

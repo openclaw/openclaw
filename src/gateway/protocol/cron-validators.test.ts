@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   validateCronAddParams,
-  validateCronGetParams,
   validateCronListParams,
   validateCronRemoveParams,
   validateCronRunParams,
@@ -55,50 +54,6 @@ describe("cron protocol validators", () => {
     expect(validateCronUpdateParams({ jobId: "job-2", patch: { enabled: true } })).toBe(true);
   });
 
-  it("accepts get params for id and jobId selectors", () => {
-    expect(validateCronGetParams({ id: "job-1" })).toBe(true);
-    expect(validateCronGetParams({ jobId: "job-2" })).toBe(true);
-    expect(validateCronGetParams({})).toBe(false);
-    expect(validateCronGetParams({ id: "" })).toBe(false);
-  });
-
-  it("accepts delivery threadId on add and update params", () => {
-    expect(
-      validateCronAddParams({
-        ...minimalAddParams,
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "-100123",
-          threadId: 42,
-        },
-      }),
-    ).toBe(true);
-    expect(
-      validateCronUpdateParams({
-        id: "job-1",
-        patch: {
-          delivery: {
-            mode: "announce",
-            channel: "telegram",
-            to: "-100123",
-            threadId: "topic-42",
-          },
-        },
-      }),
-    ).toBe(true);
-    expect(
-      validateCronUpdateParams({
-        id: "job-1",
-        patch: {
-          delivery: {
-            threadId: 42,
-          },
-        },
-      }),
-    ).toBe(true);
-  });
-
   it("accepts remove params for id and jobId selectors", () => {
     expect(validateCronRemoveParams({ id: "job-1" })).toBe(true);
     expect(validateCronRemoveParams({ jobId: "job-2" })).toBe(true);
@@ -119,11 +74,9 @@ describe("cron protocol validators", () => {
         enabled: "all",
         sortBy: "nextRunAtMs",
         sortDir: "asc",
-        agentId: "ops",
       }),
     ).toBe(true);
     expect(validateCronListParams({ offset: -1 })).toBe(false);
-    expect(validateCronListParams({ agentId: "" })).toBe(false);
   });
 
   it("enforces runs limit minimum for id and jobId selectors", () => {
@@ -144,7 +97,6 @@ describe("cron protocol validators", () => {
     expect(
       validateCronRunsParams({
         id: "job-1",
-        runId: "manual:job-1:123:0",
         limit: 50,
         offset: 0,
         status: "error",
@@ -153,7 +105,6 @@ describe("cron protocol validators", () => {
       }),
     ).toBe(true);
     expect(validateCronRunsParams({ id: "job-1", offset: -1 })).toBe(false);
-    expect(validateCronRunsParams({ id: "job-1", runId: "" })).toBe(false);
   });
 
   it("accepts all-scope runs with multi-select filters", () => {

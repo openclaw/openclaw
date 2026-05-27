@@ -4,17 +4,8 @@ import {
   clearCronScheduleCacheForTest,
   computeNextRunAtMs,
   computePreviousRunAtMs,
-  getCronScheduleCacheMaxForTest,
   getCronScheduleCacheSizeForTest,
-  hasCronInCacheForTest,
 } from "./schedule.js";
-
-function requireTimestamp(value: number | undefined, label: string): number {
-  if (value === undefined) {
-    throw new Error(`expected ${label} timestamp`);
-  }
-  return value;
-}
 
 describe("cron schedule", () => {
   beforeEach(() => {
@@ -118,7 +109,8 @@ describe("cron schedule", () => {
       { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
       nowMs,
     );
-    expect(requireTimestamp(next, "next run")).toBeGreaterThan(nowMs);
+    expect(next).toBeDefined();
+    expect(next!).toBeGreaterThan(nowMs);
   });
 
   it("never returns a previous run that is at-or-after now", () => {
@@ -136,52 +128,20 @@ describe("cron schedule", () => {
     const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
     expect(getCronScheduleCacheSizeForTest()).toBe(0);
 
-    requireTimestamp(
-      computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" }, nowMs),
-      "first next run",
+    const first = computeNextRunAtMs(
+      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      nowMs,
     );
-    requireTimestamp(
-      computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" }, nowMs + 1_000),
-      "second next run",
+    const second = computeNextRunAtMs(
+      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+      nowMs + 1_000,
     );
-    requireTimestamp(
-      computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs),
-      "third next run",
-    );
+    const third = computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs);
+
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(third).toBeDefined();
     expect(getCronScheduleCacheSizeForTest()).toBe(2);
-  });
-
-  it("promotes accessed entries to avoid premature LRU eviction", () => {
-    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
-    const cacheMax = getCronScheduleCacheMaxForTest();
-
-    // Fill cache to capacity with unique expressions.
-    // i=0 → "0 0 * * *", i=1 → "1 0 * * *", ..., i=511 → "31 8 * * *"
-    for (let i = 0; i < cacheMax; i++) {
-      computeNextRunAtMs(
-        { kind: "cron", expr: `${i % 60} ${Math.floor(i / 60)} * * *`, tz: "UTC" },
-        nowMs,
-      );
-    }
-    expect(getCronScheduleCacheSizeForTest()).toBe(cacheMax);
-
-    // Entry #0 ("0 0 * * *") is the oldest by insertion order.
-    // Access it so LRU promotes it (delete + re-insert at end of Map).
-    computeNextRunAtMs({ kind: "cron", expr: "0 0 * * *", tz: "UTC" }, nowMs);
-
-    // Entry #1 ("1 0 * * *") is now the least-recently-used.
-    // Insert a new entry to trigger one eviction.
-    computeNextRunAtMs({ kind: "cron", expr: "0 0 1 1 *", tz: "UTC" }, nowMs);
-    expect(getCronScheduleCacheSizeForTest()).toBe(cacheMax);
-
-    // Under LRU: entry #0 survived (was promoted), entry #1 was evicted.
-    // Under FIFO: entry #0 would be evicted instead — this assertion would fail.
-    expect(hasCronInCacheForTest("0 0 * * *", "UTC")).toBe(true);
-    expect(hasCronInCacheForTest("1 0 * * *", "UTC")).toBe(false);
-
-    // The new entry and a non-evicted middle entry should both be present.
-    expect(hasCronInCacheForTest("0 0 1 1 *", "UTC")).toBe(true);
-    expect(hasCronInCacheForTest("2 0 * * *", "UTC")).toBe(true);
   });
 
   describe("cron with specific seconds (6-field pattern)", () => {
@@ -250,7 +210,7 @@ describe("coerceFiniteScheduleNumber", () => {
   it("returns undefined for invalid inputs", () => {
     expect(coerceFiniteScheduleNumber("")).toBeUndefined();
     expect(coerceFiniteScheduleNumber("abc")).toBeUndefined();
-    expect(coerceFiniteScheduleNumber(Number.NaN)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(NaN)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(Infinity)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(null)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(undefined)).toBeUndefined();

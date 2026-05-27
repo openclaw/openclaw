@@ -7,20 +7,7 @@ export function readEnvNumber(name, env = process.env) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export function readFlagValue(args, name) {
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === name) {
-      return args[index + 1];
-    }
-    if (arg.startsWith(`${name}=`)) {
-      return arg.slice(name.length + 1);
-    }
-  }
-  return undefined;
-}
-
-function consumeStringFlag(argv, index, flag, currentValue) {
+export function consumeStringFlag(argv, index, flag, currentValue) {
   if (argv[index] !== flag) {
     return null;
   }
@@ -30,7 +17,18 @@ function consumeStringFlag(argv, index, flag, currentValue) {
   };
 }
 
-function consumeIntFlag(argv, index, flag, currentValue, options = {}) {
+export function consumeStringListFlag(argv, index, flag) {
+  if (argv[index] !== flag) {
+    return null;
+  }
+  const value = argv[index + 1];
+  return {
+    nextIndex: index + 1,
+    value: typeof value === "string" && value.length > 0 ? value : null,
+  };
+}
+
+export function consumeIntFlag(argv, index, flag, currentValue, options = {}) {
   if (argv[index] !== flag) {
     return null;
   }
@@ -42,7 +40,7 @@ function consumeIntFlag(argv, index, flag, currentValue, options = {}) {
   };
 }
 
-function consumeFloatFlag(argv, index, flag, currentValue, options = {}) {
+export function consumeFloatFlag(argv, index, flag, currentValue, options = {}) {
   if (argv[index] !== flag) {
     return null;
   }
@@ -67,6 +65,25 @@ export function stringFlag(flag, key) {
         nextIndex: option.nextIndex,
         apply(target) {
           target[key] = option.value;
+        },
+      };
+    },
+  };
+}
+
+export function stringListFlag(flag, key) {
+  return {
+    consume(argv, index) {
+      const option = consumeStringListFlag(argv, index, flag);
+      if (!option) {
+        return null;
+      }
+      return {
+        nextIndex: option.nextIndex,
+        apply(target) {
+          if (option.value) {
+            target[key].push(option.value);
+          }
         },
       };
     },
@@ -121,10 +138,9 @@ export function booleanFlag(flag, key, value = true) {
 }
 
 export function parseFlagArgs(argv, args, specs, options = {}) {
-  const ignoreDoubleDash = options.ignoreDoubleDash ?? true;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--" && ignoreDoubleDash) {
+    if (arg === "--" && options.ignoreDoubleDash) {
       continue;
     }
     let handled = false;

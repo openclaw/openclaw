@@ -1,13 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionScope } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, normalizeMainKey } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-type GatewayAgentListRow = {
+export type GatewayAgentListRow = {
   id: string;
   name?: string;
 };
@@ -62,10 +61,8 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
     if (!entry?.id) {
       continue;
     }
-    const configuredName = normalizeOptionalString(entry.name);
-    const identityName = normalizeOptionalString(entry.identity?.name);
     configuredById.set(normalizeAgentId(entry.id), {
-      name: configuredName ?? identityName,
+      name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : undefined,
     });
   }
   const explicitIds = new Set(

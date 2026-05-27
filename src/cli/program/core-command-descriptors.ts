@@ -1,17 +1,13 @@
-import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
-import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
+export type CoreCliCommandDescriptor = {
+  name: string;
+  description: string;
+  hasSubcommands: boolean;
+};
 
-export type CoreCliCommandDescriptor = NamedCommandDescriptor;
-
-const coreCliCommandCatalog = defineCommandDescriptorCatalog([
-  {
-    name: "crestodian",
-    description: "Open the interactive setup and repair assistant",
-    hasSubcommands: false,
-  },
+export const CORE_CLI_COMMAND_DESCRIPTORS = [
   {
     name: "setup",
-    description: "Initialize local config and an agent workspace",
+    description: "Initialize local config and agent workspace",
     hasSubcommands: false,
   },
   {
@@ -36,13 +32,8 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
-    name: "migrate",
-    description: "Import state from another agent system",
-    hasSubcommands: true,
-  },
-  {
     name: "doctor",
-    description: "Diagnose and repair config, Gateway, plugin, and channel problems",
+    description: "Health checks + quick fixes for the gateway and channels",
     hasSubcommands: false,
   },
   {
@@ -62,18 +53,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "message",
-    description: "Send, read, and manage channel messages",
-    hasSubcommands: true,
-  },
-  {
-    name: "mcp",
-    description: "Manage OpenClaw MCP config and channel bridge",
-    hasSubcommands: true,
-    parentDefaultHelp: true,
-  },
-  {
-    name: "transcripts",
-    description: "Inspect stored transcripts",
+    description: "Send, read, and manage messages",
     hasSubcommands: true,
   },
   {
@@ -88,12 +68,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "status",
-    description: "Show Gateway, channel, model, and recent-session status",
+    description: "Show channel health and recent session recipients",
     hasSubcommands: false,
   },
   {
     name: "health",
-    description: "Fetch detailed health from the running Gateway",
+    description: "Fetch health from the running gateway",
     hasSubcommands: false,
   },
   {
@@ -102,31 +82,18 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
-    name: "commitments",
-    description: "List and manage inferred follow-up commitments",
-    hasSubcommands: true,
-  },
-  {
     name: "tasks",
-    description: "Inspect durable background tasks and flows",
+    description: "Inspect durable background task state",
     hasSubcommands: true,
   },
-] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>);
-
-export const CORE_CLI_COMMAND_DESCRIPTORS = coreCliCommandCatalog.descriptors;
+] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>;
 
 export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {
-  return coreCliCommandCatalog.getDescriptors();
-}
-
-export function getCoreCliCommandNames(): string[] {
-  return coreCliCommandCatalog.getNames();
+  return CORE_CLI_COMMAND_DESCRIPTORS;
 }
 
 export function getCoreCliCommandsWithSubcommands(): string[] {
-  return coreCliCommandCatalog.getCommandsWithSubcommands();
-}
-
-export function getCoreCliParentDefaultHelpCommands(): string[] {
-  return coreCliCommandCatalog.getParentDefaultHelpCommands();
+  return CORE_CLI_COMMAND_DESCRIPTORS.filter((command) => command.hasSubcommands).map(
+    (command) => command.name,
+  );
 }

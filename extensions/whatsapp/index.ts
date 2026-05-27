@@ -1,16 +1,14 @@
-import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { whatsappPlugin } from "./src/channel.js";
+import { setWhatsAppRuntime } from "./src/runtime.js";
 
-export default defineBundledChannelEntry({
+export { whatsappPlugin } from "./src/channel.js";
+export { setWhatsAppRuntime } from "./src/runtime.js";
+
+export default defineChannelPluginEntry({
   id: "whatsapp",
   name: "WhatsApp",
   description: "WhatsApp channel plugin",
-  importMetaUrl: import.meta.url,
-  plugin: {
-    specifier: "./channel-plugin-api.js",
-    exportName: "whatsappPlugin",
-  },
-  runtime: {
-    specifier: "./runtime-setter-api.js",
-    exportName: "setWhatsAppRuntime",
-  },
+  plugin: whatsappPlugin,
+  setRuntime: setWhatsAppRuntime,
 });

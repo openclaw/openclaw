@@ -1,15 +1,14 @@
-import { formatCliCommand } from "../cli/command-format.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import type { WizardSection } from "./configure.shared.js";
 import { CONFIGURE_WIZARD_SECTIONS, parseConfigureWizardSections } from "./configure.shared.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 
-async function configureCommand(runtime: RuntimeEnv = defaultRuntime) {
+export async function configureCommand(runtime: RuntimeEnv = defaultRuntime) {
   await runConfigureWizard({ command: "configure" }, runtime);
 }
 
-async function configureCommandWithSections(
+export async function configureCommandWithSections(
   sections: WizardSection[],
   runtime: RuntimeEnv = defaultRuntime,
 ) {
@@ -28,7 +27,7 @@ export async function configureCommandFromSectionsArg(
 
   if (invalid.length > 0) {
     runtime.error(
-      `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}. Run ${formatCliCommand("openclaw configure")} without --section to use the full wizard.`,
+      `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}.`,
     );
     runtime.exit(1);
     return;

@@ -5,8 +5,6 @@ export type ChannelsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   channelsLoading: boolean;
-  channelsLoadingProbe?: boolean | null;
-  channelsRefreshSeq?: number;
   channelsSnapshot: ChannelsStatusSnapshot | null;
   channelsError: string | null;
   channelsLastSuccess: number | null;

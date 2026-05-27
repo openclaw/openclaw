@@ -1,8 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
-import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
 
 describe("normalizeAttachmentPath", () => {
@@ -19,8 +18,12 @@ describe("normalizeAttachmentPath", () => {
   });
 
   it("rejects Windows network paths", () => {
-    withMockedPlatform("win32", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
       expect(normalizeAttachmentPath("\\\\attacker\\share\\photo.png")).toBeUndefined();
-    });
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 });

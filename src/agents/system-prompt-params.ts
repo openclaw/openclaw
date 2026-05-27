@@ -1,9 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { findGitRoot } from "../infra/git-root.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import {
   formatUserTime,
   resolveUserTimeFormat,
@@ -11,7 +9,7 @@ import {
   type ResolvedTimeFormat,
 } from "./date-time.js";
 
-type RuntimeInfoInput = {
+export type RuntimeInfoInput = {
   agentId?: string;
   host: string;
   os: string;
@@ -25,10 +23,9 @@ type RuntimeInfoInput = {
   /** Supported message actions for the current channel (e.g., react, edit, unsend) */
   channelActions?: string[];
   repoRoot?: string;
-  activeProcessSessions?: ActiveProcessSessionReference[];
 };
 
-type SystemPromptRuntimeParams = {
+export type SystemPromptRuntimeParams = {
   runtimeInfo: RuntimeInfoInput;
   userTimezone: string;
   userTime?: string;
@@ -79,7 +76,9 @@ function resolveRepoRoot(params: {
       // ignore invalid config path
     }
   }
-  const candidates = normalizeStringEntries([params.workspaceDir ?? "", params.cwd ?? ""]);
+  const candidates = [params.workspaceDir, params.cwd]
+    .map((value) => value?.trim())
+    .filter(Boolean) as string[];
   const seen = new Set<string>();
   for (const candidate of candidates) {
     const resolved = path.resolve(candidate);

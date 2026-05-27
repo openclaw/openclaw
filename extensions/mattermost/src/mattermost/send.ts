@@ -1,16 +1,5 @@
-import {
-  createMessageReceiptFromOutboundResults,
-  type MessageReceipt,
-  type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -36,13 +25,12 @@ import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js"
 import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
 export type MattermostSendOpts = {
-  cfg: OpenClawConfig;
+  cfg?: OpenClawConfig;
   botToken?: string;
   baseUrl?: string;
   accountId?: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   replyToId?: string;
   props?: Record<string, unknown>;
   buttons?: Array<unknown>;
@@ -54,7 +42,6 @@ export type MattermostSendOpts = {
 export type MattermostSendResult = {
   messageId: string;
   channelId: string;
-  receipt: MessageReceipt;
 };
 
 export type MattermostReplyButtons = Array<
@@ -72,39 +59,6 @@ const channelByNameCache = new Map<string, string>();
 const dmChannelCache = new Map<string, string>();
 
 const getCore = () => getMattermostRuntime();
-
-function createMattermostSendReceipt(params: {
-  messageId: string;
-  channelId: string;
-  kind: MessageReceiptPartKind;
-  replyToId?: string;
-}): MessageReceipt {
-  const messageIds =
-    params.messageId.trim() && params.messageId !== "unknown" ? [params.messageId] : [];
-  return createMessageReceiptFromOutboundResults({
-    kind: params.kind,
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    results: messageIds.map((messageId) => ({
-      channel: "mattermost",
-      messageId,
-      channelId: params.channelId,
-    })),
-  });
-}
-
-function resolveMattermostReceiptKind(params: {
-  fileIds?: readonly string[];
-  buttons?: readonly unknown[];
-  props?: Record<string, unknown>;
-}): MessageReceiptPartKind {
-  if (params.fileIds?.length) {
-    return "media";
-  }
-  if (params.buttons?.length || params.props) {
-    return "card";
-  }
-  return "text";
-}
 
 function recordMattermostOutboundActivity(accountId: string): void {
   try {
@@ -125,8 +79,8 @@ function cacheKey(baseUrl: string, token: string): string {
 }
 
 function normalizeMessage(text: string, mediaUrl?: string): string {
-  const trimmed = normalizeOptionalString(text) ?? "";
-  const media = normalizeOptionalString(mediaUrl);
+  const trimmed = text.trim();
+  const media = mediaUrl?.trim();
   return [trimmed, media].filter(Boolean).join("\n");
 }
 
@@ -138,7 +92,7 @@ export function parseMattermostTarget(raw: string): MattermostTarget {
   if (!trimmed) {
     throw new Error("Recipient is required for Mattermost sends");
   }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  const lower = trimmed.toLowerCase();
   if (lower.startsWith("channel:")) {
     const id = trimmed.slice("channel:".length).trim();
     if (!id) {
@@ -213,7 +167,7 @@ async function resolveUserIdByUsername(params: {
   allowPrivateNetwork?: boolean;
 }): Promise<string> {
   const { baseUrl, token, username } = params;
-  const key = `${cacheKey(baseUrl, token)}::${normalizeLowercaseStringOrEmpty(username)}`;
+  const key = `${cacheKey(baseUrl, token)}::${username.toLowerCase()}`;
   const cached = userByNameCache.get(key);
   if (cached?.id) {
     return cached.id;
@@ -235,7 +189,7 @@ async function resolveChannelIdByName(params: {
   allowPrivateNetwork?: boolean;
 }): Promise<string> {
   const { baseUrl, token, name } = params;
-  const key = `${cacheKey(baseUrl, token)}::channel::${normalizeLowercaseStringOrEmpty(name)}`;
+  const key = `${cacheKey(baseUrl, token)}::channel::${name.toLowerCase()}`;
   const cached = channelByNameCache.get(key);
   if (cached) {
     return cached;
@@ -355,21 +309,16 @@ type MattermostSendContext = {
 
 async function resolveMattermostSendContext(
   to: string,
-  opts: MattermostSendOpts,
+  opts: MattermostSendOpts = {},
 ): Promise<MattermostSendContext> {
   const core = getCore();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
-  if (!opts?.cfg) {
-    throw new Error(
-      "Mattermost send requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
-  }
-  const cfg = requireRuntimeConfig(opts.cfg, "Mattermost send");
+  const cfg = opts.cfg ?? core.config.loadConfig();
   const account = resolveMattermostAccount({
     cfg,
     accountId: opts.accountId,
   });
-  const token = normalizeOptionalString(opts.botToken) ?? normalizeOptionalString(account.botToken);
+  const token = opts.botToken?.trim() || account.botToken?.trim();
   if (!token) {
     throw new Error(
       `Mattermost bot token missing for account "${account.accountId}" (set channels.mattermost.accounts.${account.accountId}.botToken or MATTERMOST_BOT_TOKEN for default).`,
@@ -382,7 +331,7 @@ async function resolveMattermostSendContext(
     );
   }
 
-  const trimmedTo = normalizeOptionalString(to) ?? "";
+  const trimmedTo = to?.trim() ?? "";
   const opaqueTarget = await resolveMattermostOpaqueTarget({
     input: trimmedTo,
     token,
@@ -405,7 +354,7 @@ async function resolveMattermostSendContext(
     : undefined;
   const dmRetryOptions = mergeDmRetryOptions(accountRetryConfig, opts.dmRetryOptions);
 
-  const allowPrivateNetwork = isPrivateNetworkOptInEnabled(account.config);
+  const allowPrivateNetwork = account.config.allowPrivateNetwork === true;
   const channelId = await resolveTargetChannelId({
     target,
     baseUrl,
@@ -427,7 +376,7 @@ async function resolveMattermostSendContext(
 
 export async function resolveMattermostSendChannelId(
   to: string,
-  opts: MattermostSendOpts,
+  opts: MattermostSendOpts = {},
 ): Promise<string> {
   return (await resolveMattermostSendContext(to, opts)).channelId;
 }
@@ -435,7 +384,7 @@ export async function resolveMattermostSendChannelId(
 export async function sendMessageMattermost(
   to: string,
   text: string,
-  opts: MattermostSendOpts,
+  opts: MattermostSendOpts = {},
 ): Promise<MattermostSendResult> {
   const core = getCore();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
@@ -460,7 +409,7 @@ export async function sendMessageMattermost(
       text: opts.attachmentText,
     });
   }
-  let message = normalizeOptionalString(text) ?? "";
+  let message = text?.trim() ?? "";
   let fileIds: string[] | undefined;
   let uploadError: Error | undefined;
   const mediaUrl = opts.mediaUrl?.trim();
@@ -468,7 +417,6 @@ export async function sendMessageMattermost(
     try {
       const media = await loadOutboundMediaFromUrl(mediaUrl, {
         mediaLocalRoots: opts.mediaLocalRoots,
-        mediaReadFile: opts.mediaReadFile,
       });
       const fileInfo = await uploadMattermostFile(client, {
         channelId,
@@ -513,20 +461,9 @@ export async function sendMessageMattermost(
   });
 
   recordMattermostOutboundActivity(accountId);
-  const messageId = post.id ?? "unknown";
 
   return {
-    messageId,
+    messageId: post.id ?? "unknown",
     channelId,
-    receipt: createMattermostSendReceipt({
-      messageId,
-      channelId,
-      kind: resolveMattermostReceiptKind({
-        fileIds,
-        buttons: opts.buttons,
-        props,
-      }),
-      replyToId: opts.replyToId,
-    }),
   };
 }

@@ -1,7 +1,6 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
 
 type ThreadTsCacheEntry = {
@@ -16,11 +15,6 @@ const normalizeThreadTs = (threadTs?: string | null) => {
   const trimmed = threadTs?.trim();
   return trimmed ? trimmed : undefined;
 };
-
-const markAmbiguousThreadReply = (message: SlackMessageEvent): SlackMessageEvent => ({
-  ...message,
-  _ambiguousThreadReply: true,
-});
 
 async function resolveThreadTsFromHistory(params: {
   client: SlackWebClient;
@@ -41,7 +35,7 @@ async function resolveThreadTsFromHistory(params: {
   } catch (err) {
     if (shouldLogVerbose()) {
       logVerbose(
-        `slack inbound: failed to resolve thread_ts via conversations.history for channel=${params.channelId} ts=${params.messageTs}: ${formatSlackError(err)}`,
+        `slack inbound: failed to resolve thread_ts via conversations.history for channel=${params.channelId} ts=${params.messageTs}: ${String(err)}`,
       );
     }
     return undefined;
@@ -92,7 +86,7 @@ export function createSlackThreadTsResolver(params: {
       const now = Date.now();
       const cached = getCached(cacheKey, now);
       if (cached !== undefined) {
-        return cached ? { ...message, thread_ts: cached } : markAmbiguousThreadReply(message);
+        return cached ? { ...message, thread_ts: cached } : message;
       }
 
       if (shouldLogVerbose()) {
@@ -131,10 +125,10 @@ export function createSlackThreadTsResolver(params: {
 
       if (shouldLogVerbose()) {
         logVerbose(
-          `slack inbound: could not resolve missing thread_ts channel=${message.channel} ts=${message.ts}; marking reply ambiguous`,
+          `slack inbound: could not resolve missing thread_ts channel=${message.channel} ts=${message.ts}`,
         );
       }
-      return markAmbiguousThreadReply(message);
+      return message;
     },
   };
 }

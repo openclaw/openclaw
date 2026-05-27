@@ -32,17 +32,17 @@ const slackPlugin: Pick<ChannelPlugin, "actions"> = {
         account.appToken.trim() !== "";
       const capabilities = new Set<string>();
       if (enabled) {
-        capabilities.add("presentation");
+        capabilities.add("blocks");
       }
       if (
         account?.capabilities &&
         (account.capabilities as { interactiveReplies?: unknown }).interactiveReplies === true
       ) {
-        capabilities.add("presentation");
+        capabilities.add("interactive");
       }
       return {
         actions: enabled ? ["send"] : [],
-        capabilities: Array.from(capabilities) as Array<"presentation">,
+        capabilities: Array.from(capabilities) as Array<"blocks" | "interactive">,
       };
     },
     supportsAction: () => true,
@@ -61,7 +61,7 @@ const mattermostPlugin: Pick<ChannelPlugin, "actions"> = {
         account.baseUrl.trim() !== "";
       return {
         actions: enabled ? ["send"] : [],
-        capabilities: enabled ? (["presentation"] as const) : [],
+        capabilities: enabled ? (["buttons"] as const) : [],
       };
     },
     supportsAction: () => true,
@@ -80,7 +80,7 @@ const feishuPlugin: Pick<ChannelPlugin, "actions"> = {
         account.appSecret.trim() !== "";
       return {
         actions: enabled ? ["send"] : [],
-        capabilities: enabled ? (["presentation"] as const) : [],
+        capabilities: enabled ? (["cards"] as const) : [],
       };
     },
     supportsAction: () => true,
@@ -101,7 +101,7 @@ const msteamsPlugin: Pick<ChannelPlugin, "actions"> = {
         account.appPassword.trim() !== "";
       return {
         actions: enabled ? ["poll"] : [],
-        capabilities: enabled ? (["presentation"] as const) : [],
+        capabilities: enabled ? (["cards"] as const) : [],
       };
     },
     supportsAction: () => true,
@@ -127,7 +127,7 @@ describe("channel action capability matrix", () => {
     return [...(describeMessageTool?.({ cfg })?.capabilities ?? [])];
   }
 
-  it("exposes Slack presentation when configured", () => {
+  it("exposes Slack blocks by default and interactive when enabled", () => {
     const baseCfg = {
       channels: {
         slack: {
@@ -146,26 +146,26 @@ describe("channel action capability matrix", () => {
       },
     } as OpenClawConfig;
 
-    expect(getCapabilities(slackPlugin, baseCfg)).toEqual(["presentation"]);
-    expect(getCapabilities(slackPlugin, interactiveCfg)).toEqual(["presentation"]);
+    expect(getCapabilities(slackPlugin, baseCfg)).toEqual(["blocks"]);
+    expect(getCapabilities(slackPlugin, interactiveCfg)).toEqual(["blocks", "interactive"]);
   });
 
   it("forwards Telegram action capabilities through the channel wrapper", () => {
     telegramDescribeMessageToolMock.mockReturnValue({
-      capabilities: ["presentation"],
+      capabilities: ["interactive", "buttons"],
     });
 
     const result = getCapabilities(telegramPlugin, {} as OpenClawConfig);
 
-    expect(result).toEqual(["presentation"]);
+    expect(result).toEqual(["interactive", "buttons"]);
     expect(telegramDescribeMessageToolMock).toHaveBeenCalledWith({ cfg: {} });
     discordDescribeMessageToolMock.mockReturnValue({
-      capabilities: ["presentation"],
+      capabilities: ["interactive", "components"],
     });
 
     const discordResult = getCapabilities(discordPlugin, {} as OpenClawConfig);
 
-    expect(discordResult).toEqual(["presentation"]);
+    expect(discordResult).toEqual(["interactive", "components"]);
     expect(discordDescribeMessageToolMock).toHaveBeenCalledWith({ cfg: {} });
   });
 
@@ -225,12 +225,12 @@ describe("channel action capability matrix", () => {
       },
     } as OpenClawConfig;
 
-    expect(getCapabilities(mattermostPlugin, configuredCfg)).toEqual(["presentation"]);
-    expect(getCapabilities(mattermostPlugin, unconfiguredCfg)).toStrictEqual([]);
-    expect(getCapabilities(feishuPlugin, configuredFeishuCfg)).toEqual(["presentation"]);
-    expect(getCapabilities(feishuPlugin, disabledFeishuCfg)).toStrictEqual([]);
-    expect(getCapabilities(msteamsPlugin, configuredMsteamsCfg)).toEqual(["presentation"]);
-    expect(getCapabilities(msteamsPlugin, disabledMsteamsCfg)).toStrictEqual([]);
+    expect(getCapabilities(mattermostPlugin, configuredCfg)).toEqual(["buttons"]);
+    expect(getCapabilities(mattermostPlugin, unconfiguredCfg)).toEqual([]);
+    expect(getCapabilities(feishuPlugin, configuredFeishuCfg)).toEqual(["cards"]);
+    expect(getCapabilities(feishuPlugin, disabledFeishuCfg)).toEqual([]);
+    expect(getCapabilities(msteamsPlugin, configuredMsteamsCfg)).toEqual(["cards"]);
+    expect(getCapabilities(msteamsPlugin, disabledMsteamsCfg)).toEqual([]);
   });
 
   it("keeps Zalo actions on the empty capability set", () => {
@@ -243,6 +243,6 @@ describe("channel action capability matrix", () => {
       },
     } as OpenClawConfig;
 
-    expect(getCapabilities(zaloPlugin, cfg)).toStrictEqual([]);
+    expect(getCapabilities(zaloPlugin, cfg)).toEqual([]);
   });
 });

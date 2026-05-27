@@ -1,6 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/config-runtime";
 
 /**
  * Marks every session entry in the store whose key contains {@link threadId}
@@ -18,7 +17,7 @@ export async function closeDiscordThreadSessions(params: {
 }): Promise<number> {
   const { cfg, accountId, threadId } = params;
 
-  const normalizedThreadId = normalizeOptionalLowercaseString(threadId) ?? "";
+  const normalizedThreadId = threadId.trim().toLowerCase();
   if (!normalizedThreadId) {
     return 0;
   }

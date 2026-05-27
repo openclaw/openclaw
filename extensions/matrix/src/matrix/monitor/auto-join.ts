@@ -1,8 +1,7 @@
-import { normalizeStringifiedEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { RuntimeEnv } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
-import type { RuntimeEnv } from "./runtime-api.js";
 
 export function registerMatrixAutoJoin(params: {
   client: MatrixClient;
@@ -18,7 +17,9 @@ export function registerMatrixAutoJoin(params: {
     runtime.log?.(message);
   };
   const autoJoin = accountConfig.autoJoin ?? "off";
-  const rawAllowlist = normalizeStringifiedEntries(accountConfig.autoJoinAllowlist ?? []);
+  const rawAllowlist = (accountConfig.autoJoinAllowlist ?? [])
+    .map((entry) => String(entry).trim())
+    .filter(Boolean);
   const autoJoinAllowlist = new Set(rawAllowlist);
   const allowedRoomIds = new Set(rawAllowlist.filter((entry) => entry.startsWith("!")));
   const allowedAliases = rawAllowlist.filter((entry) => entry.startsWith("#"));

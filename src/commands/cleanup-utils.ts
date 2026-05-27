@@ -1,17 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isPathInside } from "../infra/path-guards.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveHomeDir, resolveUserPath, shortenHomeInString } from "../utils.js";
 
-type RemovalResult = {
+export type RemovalResult = {
   ok: boolean;
   skipped?: boolean;
 };
 
-type CleanupResolvedPaths = {
+export type CleanupResolvedPaths = {
   stateDir: string;
   configPath: string;
   oauthDir: string;
@@ -19,7 +18,7 @@ type CleanupResolvedPaths = {
   oauthInsideState: boolean;
 };
 
-function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
+export function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
   const dirs = new Set<string>();
   const defaults = cfg?.agents?.defaults;
   if (typeof defaults?.workspace === "string" && defaults.workspace.trim()) {
@@ -56,7 +55,8 @@ export function buildCleanupPlan(params: {
 }
 
 export function isPathWithin(child: string, parent: string): boolean {
-  return isPathInside(parent, child);
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function isUnsafeRemovalTarget(target: string): boolean {

@@ -1,19 +1,20 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-type OsSummary = {
+export type OsSummary = {
   platform: NodeJS.Platform;
   arch: string;
   release: string;
   label: string;
 };
 
-const cachedOsSummaryByKey = new Map<string, OsSummary>();
+function safeTrim(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
 
 function macosVersion(): string {
   const res = spawnSync("sw_vers", ["-productVersion"], { encoding: "utf-8" });
-  const out = normalizeOptionalString(res.stdout) ?? "";
+  const out = safeTrim(res.stdout);
   return out || os.release();
 }
 
@@ -21,11 +22,6 @@ export function resolveOsSummary(): OsSummary {
   const platform = os.platform();
   const release = os.release();
   const arch = os.arch();
-  const cacheKey = `${platform}\0${release}\0${arch}`;
-  const cached = cachedOsSummaryByKey.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
   const label = (() => {
     if (platform === "darwin") {
       return `macos ${macosVersion()} (${arch})`;
@@ -35,7 +31,5 @@ export function resolveOsSummary(): OsSummary {
     }
     return `${platform} ${release} (${arch})`;
   })();
-  const summary = { platform, arch, release, label };
-  cachedOsSummaryByKey.set(cacheKey, summary);
-  return summary;
+  return { platform, arch, release, label };
 }

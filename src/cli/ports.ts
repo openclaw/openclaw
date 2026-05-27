@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
-import { formatErrorMessage } from "../infra/errors.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
 import { tryListenOnPort } from "../infra/ports-probe.js";
 import { sleep } from "../utils.js";
@@ -65,7 +64,7 @@ function isRecoverableLsofError(err: unknown): boolean {
   if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
     return true;
   }
-  const message = formatErrorMessage(err);
+  const message = err instanceof Error ? err.message : String(err);
   return /lsof.*(permission denied|not permitted|operation not permitted|eacces|eperm)/i.test(
     message,
   );
@@ -266,10 +265,6 @@ export async function forceFreePortAndWait(
   let killed: PortProcess[] = [];
   let useFuserFallback = false;
 
-  if (!(await isPortBusy(port))) {
-    return { killed, waitedMs: 0, escalatedToSigkill: false };
-  }
-
   try {
     killed = forceFreePort(port);
   } catch (err) {
@@ -278,10 +273,6 @@ export async function forceFreePortAndWait(
     }
     useFuserFallback = true;
     killed = killPortWithFuser(port, "SIGTERM");
-  }
-
-  if (killed.length === 0) {
-    return { killed, waitedMs: 0, escalatedToSigkill: false };
   }
 
   const checkBusy = async (): Promise<boolean> =>

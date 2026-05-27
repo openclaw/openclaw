@@ -51,7 +51,7 @@ describe("extractUrls", () => {
   });
 
   it("returns empty array for text without URLs", () => {
-    expect(extractUrls("No links here")).toStrictEqual([]);
+    expect(extractUrls("No links here")).toEqual([]);
   });
 
   it("handles URLs with query params and fragments", () => {

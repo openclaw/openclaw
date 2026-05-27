@@ -4,12 +4,12 @@ import {
   unwrapKnownDispatchWrapperInvocation,
 } from "./dispatch-wrapper-resolution.js";
 import {
-  extractBindableShellWrapperInlineCommand,
+  extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
   unwrapKnownShellMultiplexerInvocation,
 } from "./shell-wrapper-resolution.js";
 
-type ExecWrapperTrustPlan = {
+export type ExecWrapperTrustPlan = {
   argv: string[];
   policyArgv: string[];
   wrapperChain: string[];
@@ -46,20 +46,15 @@ function finalizeExecWrapperTrustPlan(
   const rawExecutable = argv[0]?.trim() ?? "";
   const shellWrapperExecutable =
     !policyBlocked && rawExecutable.length > 0 && isShellWrapperExecutable(rawExecutable);
-  const plan: ExecWrapperTrustPlan = {
+  return {
     argv,
     policyArgv,
     wrapperChain,
     policyBlocked,
+    blockedWrapper,
     shellWrapperExecutable,
-    shellInlineCommand: shellWrapperExecutable
-      ? extractBindableShellWrapperInlineCommand(argv)
-      : null,
+    shellInlineCommand: shellWrapperExecutable ? extractShellWrapperInlineCommand(argv) : null,
   };
-  if (blockedWrapper !== undefined) {
-    plan.blockedWrapper = blockedWrapper;
-  }
-  return plan;
 }
 
 export function resolveExecWrapperTrustPlan(

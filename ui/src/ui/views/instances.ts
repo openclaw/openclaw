@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 import { formatPresenceAge } from "../presenter.ts";
 import type { PresenceEntry } from "../types.ts";
@@ -21,8 +20,8 @@ export function renderInstances(props: InstancesProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">${t("instances.title")}</div>
-          <div class="card-sub">${t("instances.subtitle")}</div>
+          <div class="card-title">Connected Instances</div>
+          <div class="card-sub">Presence beacons from the gateway and clients.</div>
         </div>
         <div class="row" style="gap: 8px;">
           <button
@@ -31,15 +30,15 @@ export function renderInstances(props: InstancesProps) {
               hostsRevealed = !hostsRevealed;
               props.onRefresh();
             }}
-            title=${masked ? t("instances.showHosts") : t("instances.hideHosts")}
-            aria-label=${t("instances.toggleHostVisibility")}
+            title=${masked ? "Show hosts and IPs" : "Hide hosts and IPs"}
+            aria-label="Toggle host visibility"
             aria-pressed=${!masked}
             style="width: 36px; height: 36px;"
           >
             ${masked ? icons.eyeOff : icons.eye}
           </button>
           <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-            ${props.loading ? t("common.loading") : t("common.refresh")}
+            ${props.loading ? "Loading…" : "Refresh"}
           </button>
         </div>
       </div>
@@ -51,7 +50,7 @@ export function renderInstances(props: InstancesProps) {
         : nothing}
       <div class="list" style="margin-top: 16px;">
         ${props.entries.length === 0
-          ? html` <div class="muted">${t("instances.noInstances")}</div> `
+          ? html` <div class="muted">No instances reported yet.</div> `
           : props.entries.map((entry) => renderEntry(entry, masked))}
       </div>
     </section>
@@ -59,10 +58,7 @@ export function renderInstances(props: InstancesProps) {
 }
 
 function renderEntry(entry: PresenceEntry, masked: boolean) {
-  const lastInput =
-    entry.lastInputSeconds != null
-      ? t("common.secondsAgo", { count: String(entry.lastInputSeconds) })
-      : t("common.na");
+  const lastInput = entry.lastInputSeconds != null ? `${entry.lastInputSeconds}s ago` : "n/a";
   const mode = entry.mode ?? "unknown";
   const host = entry.host ?? "unknown host";
   const ip = entry.ip ?? null;
@@ -98,8 +94,8 @@ function renderEntry(entry: PresenceEntry, masked: boolean) {
       </div>
       <div class="list-meta">
         <div>${formatPresenceAge(entry)}</div>
-        <div class="muted">${t("instances.lastInput", { time: lastInput })}</div>
-        <div class="muted">${t("instances.reason", { reason: entry.reason ?? "" })}</div>
+        <div class="muted">Last input ${lastInput}</div>
+        <div class="muted">Reason ${entry.reason ?? ""}</div>
       </div>
     </div>
   `;

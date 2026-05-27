@@ -1,6 +1,5 @@
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { SessionsUsageResult, CostUsageSummary, SessionUsageTimeSeries } from "../types.ts";
 import type { SessionLogEntry } from "../views/usage.ts";
 import {
@@ -17,7 +16,6 @@ export type UsageState = {
   usageError: string | null;
   usageStartDate: string;
   usageEndDate: string;
-  usageScope: "instance" | "family";
   usageSelectedSessions: string[];
   usageSelectedDays: string[];
   usageTimeSeries: SessionUsageTimeSeries | null;
@@ -30,31 +28,41 @@ export type UsageState = {
   settings?: { gatewayUrl?: string };
 };
 
+type DateInterpretationMode = "utc" | "gateway" | "specific";
+
+type UsageDateInterpretationParams = {
+  mode: DateInterpretationMode;
+  utcOffset?: string;
+};
+
 const LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY = "openclaw.control.usage.date-params.v1";
-const LEGACY_USAGE_SCOPE_PARAMS_STORAGE_KEY = "openclaw.control.usage.scope-params.v1";
+const LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY = "__default__";
 const LEGACY_USAGE_DATE_PARAMS_MODE_RE = /unexpected property ['"]mode['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_OFFSET_RE = /unexpected property ['"]utcoffset['"]/i;
-const LEGACY_USAGE_SCOPE_PARAMS_GROUP_BY_RE = /unexpected property ['"]groupby['"]/i;
-const LEGACY_USAGE_SCOPE_PARAMS_INCLUDE_HISTORICAL_RE =
-  /unexpected property ['"]includehistorical['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_INVALID_RE = /invalid sessions\.usage params/i;
 
 let legacyUsageDateParamsCache: Set<string> | null = null;
-let legacyUsageScopeParamsCache: Set<string> | null = null;
 
-function loadLegacyGatewayParamCache(storageKey: string): Set<string> {
-  const raw = getSafeLocalStorage()?.getItem(storageKey);
-  if (!raw) {
+function getLocalStorage(): Storage | null {
+  return getSafeLocalStorage();
+}
+
+function loadLegacyUsageDateParamsCache(): Set<string> {
+  const storage = getLocalStorage();
+  if (!storage) {
     return new Set<string>();
   }
   try {
-    const keys = (JSON.parse(raw) as { unsupportedGatewayKeys?: unknown } | null)
-      ?.unsupportedGatewayKeys;
-    if (!Array.isArray(keys)) {
+    const raw = storage.getItem(LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY);
+    if (!raw) {
+      return new Set<string>();
+    }
+    const parsed = JSON.parse(raw) as { unsupportedGatewayKeys?: unknown } | null;
+    if (!parsed || !Array.isArray(parsed.unsupportedGatewayKeys)) {
       return new Set<string>();
     }
     return new Set(
-      keys
+      parsed.unsupportedGatewayKeys
         .filter((entry): entry is string => typeof entry === "string")
         .map((entry) => entry.trim())
         .filter(Boolean),
@@ -64,10 +72,14 @@ function loadLegacyGatewayParamCache(storageKey: string): Set<string> {
   }
 }
 
-function persistLegacyGatewayParamCache(storageKey: string, cache: Set<string>) {
+function persistLegacyUsageDateParamsCache(cache: Set<string>) {
+  const storage = getLocalStorage();
+  if (!storage) {
+    return;
+  }
   try {
-    getSafeLocalStorage()?.setItem(
-      storageKey,
+    storage.setItem(
+      LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY,
       JSON.stringify({ unsupportedGatewayKeys: Array.from(cache) }),
     );
   } catch {
@@ -77,56 +89,37 @@ function persistLegacyGatewayParamCache(storageKey: string, cache: Set<string>) 
 
 function getLegacyUsageDateParamsCache(): Set<string> {
   if (!legacyUsageDateParamsCache) {
-    legacyUsageDateParamsCache = loadLegacyGatewayParamCache(LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY);
+    legacyUsageDateParamsCache = loadLegacyUsageDateParamsCache();
   }
   return legacyUsageDateParamsCache;
-}
-
-function getLegacyUsageScopeParamsCache(): Set<string> {
-  if (!legacyUsageScopeParamsCache) {
-    legacyUsageScopeParamsCache = loadLegacyGatewayParamCache(
-      LEGACY_USAGE_SCOPE_PARAMS_STORAGE_KEY,
-    );
-  }
-  return legacyUsageScopeParamsCache;
 }
 
 function normalizeGatewayCompatibilityKey(gatewayUrl?: string): string {
   const trimmed = gatewayUrl?.trim();
   if (!trimmed) {
-    return "__default__";
+    return LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY;
   }
   try {
     const parsed = new URL(trimmed);
     const pathname = parsed.pathname === "/" ? "" : parsed.pathname;
-    return normalizeLowercaseStringOrEmpty(`${parsed.protocol}//${parsed.host}${pathname}`);
+    return `${parsed.protocol}//${parsed.host}${pathname}`.toLowerCase();
   } catch {
-    return normalizeLowercaseStringOrEmpty(trimmed);
+    return trimmed.toLowerCase();
   }
 }
 
+function resolveGatewayCompatibilityKey(state: UsageState): string {
+  return normalizeGatewayCompatibilityKey(state.settings?.gatewayUrl);
+}
+
 function shouldSendLegacyDateInterpretation(state: UsageState): boolean {
-  return !getLegacyUsageDateParamsCache().has(
-    normalizeGatewayCompatibilityKey(state.settings?.gatewayUrl),
-  );
+  return !getLegacyUsageDateParamsCache().has(resolveGatewayCompatibilityKey(state));
 }
 
 function rememberLegacyDateInterpretation(state: UsageState) {
   const cache = getLegacyUsageDateParamsCache();
-  cache.add(normalizeGatewayCompatibilityKey(state.settings?.gatewayUrl));
-  persistLegacyGatewayParamCache(LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY, cache);
-}
-
-function shouldSendLegacyUsageScopeParams(state: UsageState): boolean {
-  return !getLegacyUsageScopeParamsCache().has(
-    normalizeGatewayCompatibilityKey(state.settings?.gatewayUrl),
-  );
-}
-
-function rememberLegacyUsageScopeParams(state: UsageState) {
-  const cache = getLegacyUsageScopeParamsCache();
-  cache.add(normalizeGatewayCompatibilityKey(state.settings?.gatewayUrl));
-  persistLegacyGatewayParamCache(LEGACY_USAGE_SCOPE_PARAMS_STORAGE_KEY, cache);
+  cache.add(resolveGatewayCompatibilityKey(state));
+  persistLegacyUsageDateParamsCache(cache);
 }
 
 function isLegacyDateInterpretationUnsupportedError(err: unknown): boolean {
@@ -135,15 +128,6 @@ function isLegacyDateInterpretationUnsupportedError(err: unknown): boolean {
     LEGACY_USAGE_DATE_PARAMS_INVALID_RE.test(message) &&
     (LEGACY_USAGE_DATE_PARAMS_MODE_RE.test(message) ||
       LEGACY_USAGE_DATE_PARAMS_OFFSET_RE.test(message))
-  );
-}
-
-function isLegacyUsageScopeUnsupportedError(err: unknown): boolean {
-  const message = toErrorMessage(err);
-  return (
-    LEGACY_USAGE_DATE_PARAMS_INVALID_RE.test(message) &&
-    (LEGACY_USAGE_SCOPE_PARAMS_GROUP_BY_RE.test(message) ||
-      LEGACY_USAGE_SCOPE_PARAMS_INCLUDE_HISTORICAL_RE.test(message))
   );
 }
 
@@ -160,7 +144,13 @@ const formatUtcOffset = (timezoneOffsetMinutes: number): string => {
     : `UTC${sign}${hours}:${minutes.toString().padStart(2, "0")}`;
 };
 
-const buildDateInterpretationParams = (timeZone: "local" | "utc") => {
+const buildDateInterpretationParams = (
+  timeZone: "local" | "utc",
+  includeDateInterpretation: boolean,
+): UsageDateInterpretationParams | undefined => {
+  if (!includeDateInterpretation) {
+    return undefined;
+  }
   if (timeZone === "utc") {
     return { mode: "utc" };
   }
@@ -179,21 +169,15 @@ function toErrorMessage(err: unknown): string {
   }
   if (err && typeof err === "object") {
     try {
-      return JSON.stringify(err) || "request failed";
+      const serialized = JSON.stringify(err);
+      if (serialized) {
+        return serialized;
+      }
     } catch {
       // ignore
     }
   }
   return "request failed";
-}
-
-function applyUsageResults(state: UsageState, sessionsRes: unknown, costRes: unknown) {
-  if (sessionsRes) {
-    state.usageResult = sessionsRes as SessionsUsageResult;
-  }
-  if (costRes) {
-    state.usageCostSummary = costRes as CostUsageSummary;
-  }
 }
 
 export async function loadUsage(
@@ -205,7 +189,10 @@ export async function loadUsage(
 ) {
   // Capture client for TS18047 work around on it being possibly null
   const client = state.client;
-  if (!client || !state.connected || state.usageLoading) {
+  if (!client || !state.connected) {
+    return;
+  }
+  if (state.usageLoading) {
     return;
   }
   state.usageLoading = true;
@@ -213,22 +200,16 @@ export async function loadUsage(
   try {
     const startDate = overrides?.startDate ?? state.usageStartDate;
     const endDate = overrides?.endDate ?? state.usageEndDate;
-    const runUsageRequests = (includeDateInterpretation: boolean, includeUsageScope: boolean) => {
-      const dateInterpretation = includeDateInterpretation
-        ? buildDateInterpretationParams(state.usageTimeZone)
-        : undefined;
-      const usageScopeParams = includeUsageScope
-        ? {
-            groupBy: state.usageScope,
-            includeHistorical: state.usageScope === "family",
-          }
-        : undefined;
-      return Promise.all([
+    const runUsageRequests = async (includeDateInterpretation: boolean) => {
+      const dateInterpretation = buildDateInterpretationParams(
+        state.usageTimeZone,
+        includeDateInterpretation,
+      );
+      return await Promise.all([
         client.request("sessions.usage", {
           startDate,
           endDate,
           ...dateInterpretation,
-          ...usageScopeParams,
           limit: 1000, // Cap at 1000 sessions
           includeContextWeight: true,
         }),
@@ -240,31 +221,27 @@ export async function loadUsage(
       ]);
     };
 
-    let includeDateInterpretation = shouldSendLegacyDateInterpretation(state);
-    let includeUsageScope = shouldSendLegacyUsageScopeParams(state);
-    while (true) {
-      try {
-        const [sessionsRes, costRes] = await runUsageRequests(
-          includeDateInterpretation,
-          includeUsageScope,
-        );
-        applyUsageResults(state, sessionsRes, costRes);
-        break;
-      } catch (err) {
-        if (includeUsageScope && isLegacyUsageScopeUnsupportedError(err)) {
-          // Older gateways reject `groupBy`/`includeHistorical` in `sessions.usage`.
-          // Remember this per gateway and retry with instance-compatible params.
-          rememberLegacyUsageScopeParams(state);
-          includeUsageScope = false;
-          continue;
-        }
-        if (includeDateInterpretation && isLegacyDateInterpretationUnsupportedError(err)) {
-          // Older gateways reject `mode`/`utcOffset` in `sessions.usage`.
-          // Remember this per gateway and retry once without those fields.
-          rememberLegacyDateInterpretation(state);
-          includeDateInterpretation = false;
-          continue;
-        }
+    const applyUsageResults = (sessionsRes: unknown, costRes: unknown) => {
+      if (sessionsRes) {
+        state.usageResult = sessionsRes as SessionsUsageResult;
+      }
+      if (costRes) {
+        state.usageCostSummary = costRes as CostUsageSummary;
+      }
+    };
+
+    const includeDateInterpretation = shouldSendLegacyDateInterpretation(state);
+    try {
+      const [sessionsRes, costRes] = await runUsageRequests(includeDateInterpretation);
+      applyUsageResults(sessionsRes, costRes);
+    } catch (err) {
+      if (includeDateInterpretation && isLegacyDateInterpretationUnsupportedError(err)) {
+        // Older gateways reject `mode`/`utcOffset` in `sessions.usage`.
+        // Remember this per gateway and retry once without those fields.
+        rememberLegacyDateInterpretation(state);
+        const [sessionsRes, costRes] = await runUsageRequests(false);
+        applyUsageResults(sessionsRes, costRes);
+      } else {
         throw err;
       }
     }
@@ -281,59 +258,62 @@ export async function loadUsage(
   }
 }
 
-export const testApi = {
+export const __test = {
   formatUtcOffset,
   buildDateInterpretationParams,
   toErrorMessage,
   isLegacyDateInterpretationUnsupportedError,
-  isLegacyUsageScopeUnsupportedError,
   normalizeGatewayCompatibilityKey,
   shouldSendLegacyDateInterpretation,
   rememberLegacyDateInterpretation,
-  shouldSendLegacyUsageScopeParams,
-  rememberLegacyUsageScopeParams,
   resetLegacyUsageDateParamsCache: () => {
     legacyUsageDateParamsCache = null;
-    legacyUsageScopeParamsCache = null;
   },
 };
-export { testApi as __test };
-
-async function runOptionalUsageDetailRequest(
-  state: UsageState,
-  loadingKey: "usageTimeSeriesLoading" | "usageSessionLogsLoading",
-  run: (client: GatewayBrowserClient) => Promise<void>,
-) {
-  const client = state.client;
-  if (!client || !state.connected || state[loadingKey]) {
-    return;
-  }
-  state[loadingKey] = true;
-  try {
-    await run(client);
-  } catch {
-    // Silently fail - optional detail endpoints
-  } finally {
-    state[loadingKey] = false;
-  }
-}
 
 export async function loadSessionTimeSeries(state: UsageState, sessionKey: string) {
-  await runOptionalUsageDetailRequest(state, "usageTimeSeriesLoading", async (client) => {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (state.usageTimeSeriesLoading) {
+    return;
+  }
+  state.usageTimeSeriesLoading = true;
+  state.usageTimeSeries = null;
+  try {
+    const res = await state.client.request("sessions.usage.timeseries", { key: sessionKey });
+    if (res) {
+      state.usageTimeSeries = res as SessionUsageTimeSeries;
+    }
+  } catch {
+    // Silently fail - time series is optional
     state.usageTimeSeries = null;
-    const res = await client.request("sessions.usage.timeseries", { key: sessionKey });
-    state.usageTimeSeries = res ? (res as SessionUsageTimeSeries) : null;
-  });
+  } finally {
+    state.usageTimeSeriesLoading = false;
+  }
 }
 
 export async function loadSessionLogs(state: UsageState, sessionKey: string) {
-  await runOptionalUsageDetailRequest(state, "usageSessionLogsLoading", async (client) => {
-    state.usageSessionLogs = null;
-    const payload = (await client.request("sessions.usage.logs", {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (state.usageSessionLogsLoading) {
+    return;
+  }
+  state.usageSessionLogsLoading = true;
+  state.usageSessionLogs = null;
+  try {
+    const res = await state.client.request("sessions.usage.logs", {
       key: sessionKey,
       limit: 1000,
-    })) as { logs?: unknown } | null;
-    const logs = payload?.logs;
-    state.usageSessionLogs = Array.isArray(logs) ? (logs as SessionLogEntry[]) : null;
-  });
+    });
+    if (res && Array.isArray((res as { logs: SessionLogEntry[] }).logs)) {
+      state.usageSessionLogs = (res as { logs: SessionLogEntry[] }).logs;
+    }
+  } catch {
+    // Silently fail - logs are optional
+    state.usageSessionLogs = null;
+  } finally {
+    state.usageSessionLogsLoading = false;
+  }
 }

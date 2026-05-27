@@ -1,11 +1,14 @@
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveMatrixDefaultOrOnlyAccountId } from "../account-selection.js";
 import type { CoreConfig } from "../types.js";
-import { resolveMatrixConfigFieldPath } from "./config-paths.js";
+import { resolveDefaultMatrixAccountId } from "./accounts.js";
+import { resolveMatrixConfigFieldPath } from "./config-update.js";
 
-function resolveMatrixEncryptionConfigPath(cfg: CoreConfig, accountId?: string | null): string {
+export function resolveMatrixEncryptionConfigPath(
+  cfg: CoreConfig,
+  accountId?: string | null,
+): string {
   const effectiveAccountId =
-    normalizeOptionalAccountId(accountId) ?? resolveMatrixDefaultOrOnlyAccountId(cfg);
+    normalizeOptionalAccountId(accountId) ?? resolveDefaultMatrixAccountId(cfg);
   return resolveMatrixConfigFieldPath(cfg, effectiveAccountId, "encryption");
 }
 

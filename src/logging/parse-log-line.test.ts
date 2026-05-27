@@ -15,6 +15,7 @@ describe("parseLogLine", () => {
 
     const parsed = parseLogLine(line);
 
+    expect(parsed).not.toBeNull();
     expect(parsed?.time).toBe("2026-01-09T01:38:41.523Z");
     expect(parsed?.level).toBe("info");
     expect(parsed?.subsystem).toBe("gateway/channels/demo-channel");

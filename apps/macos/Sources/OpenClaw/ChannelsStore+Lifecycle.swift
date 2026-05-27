@@ -1,36 +1,15 @@
 import Foundation
 import OpenClawProtocol
 
-func whatsappLoginWaitRequestTimeoutMs(
-    startedAt: Date,
-    timeoutMs: Int,
-    didRunFinalWait: inout Bool,
-    now: Date = Date()) -> Int?
-{
-    let elapsedMs = Int(now.timeIntervalSince(startedAt) * 1000)
-    let remainingMs = max(timeoutMs - elapsedMs, 0)
-    if remainingMs > 0 {
-        return remainingMs
-    }
-    if didRunFinalWait {
-        return nil
-    }
-    didRunFinalWait = true
-    return 1
-}
-
 extension ChannelsStore {
     func start() {
         guard !self.isPreview else { return }
-        self.startCount += 1
-        guard self.startCount == 1 else { return }
         guard self.pollTask == nil else { return }
         self.pollTask = Task.detached { [weak self] in
             guard let self else { return }
-            await self.refresh(probe: false)
-            async let schemaLoad: Void = self.loadConfigSchema()
-            async let configLoad: Void = self.loadConfig(force: false)
-            _ = await (schemaLoad, configLoad)
+            await self.refresh(probe: true)
+            await self.loadConfigSchema()
+            await self.loadConfig()
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))
                 await self.refresh(probe: false)
@@ -39,10 +18,6 @@ extension ChannelsStore {
     }
 
     func stop() {
-        guard !self.isPreview else { return }
-        guard self.startCount > 0 else { return }
-        self.startCount -= 1
-        guard self.startCount == 0 else { return }
         self.pollTask?.cancel()
         self.pollTask = nil
     }
@@ -53,15 +28,14 @@ extension ChannelsStore {
         defer { self.isRefreshing = false }
 
         do {
-            let statusTimeoutMs = probe ? 8000 : 2500
             let params: [String: AnyCodable] = [
                 "probe": AnyCodable(probe),
-                "timeoutMs": AnyCodable(statusTimeoutMs),
+                "timeoutMs": AnyCodable(8000),
             ]
             let snap: ChannelsStatusSnapshot = try await GatewayConnection.shared.requestDecoded(
                 method: .channelsStatus,
                 params: params,
-                timeoutMs: probe ? 12000 : 5000)
+                timeoutMs: 12000)
             self.snapshot = snap
             self.lastSuccess = Date()
             self.lastError = nil
@@ -86,7 +60,7 @@ extension ChannelsStore {
                 timeoutMs: 35000)
             self.whatsappLoginMessage = result.message
             self.whatsappLoginQrDataUrl = result.qrDataUrl
-            self.whatsappLoginConnected = result.connected
+            self.whatsappLoginConnected = nil
             shouldAutoWait = autoWait && result.qrDataUrl != nil
         } catch {
             self.whatsappLoginMessage = error.localizedDescription
@@ -103,28 +77,18 @@ extension ChannelsStore {
         guard !self.whatsappBusy else { return }
         self.whatsappBusy = true
         defer { self.whatsappBusy = false }
-        let startedAt = Date()
-        var didRunFinalWait = false
         do {
-            while let remainingMs = whatsappLoginWaitRequestTimeoutMs(
-                startedAt: startedAt,
-                timeoutMs: timeoutMs,
-                didRunFinalWait: &didRunFinalWait)
-            {
-                var params: [String: AnyCodable] = [
-                    "timeoutMs": AnyCodable(remainingMs),
-                ]
-                if let currentQrDataUrl = self.whatsappLoginQrDataUrl {
-                    params["currentQrDataUrl"] = AnyCodable(currentQrDataUrl)
-                }
-                let result: WhatsAppLoginWaitResult = try await GatewayConnection.shared.requestDecoded(
-                    method: .webLoginWait,
-                    params: params,
-                    timeoutMs: Double(remainingMs) + 5000)
-                self.applyWhatsAppLoginWaitResult(result)
-                if result.connected || result.qrDataUrl == nil || didRunFinalWait {
-                    break
-                }
+            let params: [String: AnyCodable] = [
+                "timeoutMs": AnyCodable(timeoutMs),
+            ]
+            let result: WhatsAppLoginWaitResult = try await GatewayConnection.shared.requestDecoded(
+                method: .webLoginWait,
+                params: params,
+                timeoutMs: Double(timeoutMs) + 5000)
+            self.whatsappLoginMessage = result.message
+            self.whatsappLoginConnected = result.connected
+            if result.connected {
+                self.whatsappLoginQrDataUrl = nil
             }
         } catch {
             self.whatsappLoginMessage = error.localizedDescription
@@ -184,13 +148,11 @@ extension ChannelsStore {
 private struct WhatsAppLoginStartResult: Codable {
     let qrDataUrl: String?
     let message: String
-    let connected: Bool?
 }
 
-struct WhatsAppLoginWaitResult: Codable {
+private struct WhatsAppLoginWaitResult: Codable {
     let connected: Bool
     let message: String
-    let qrDataUrl: String?
 }
 
 private struct ChannelLogoutResult: Codable {

@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import {
   buildWorkspaceHookStatus,
   type HookStatusEntry,
@@ -10,16 +10,13 @@ import {
 import { resolveHookEntries } from "../hooks/policy.js";
 import type { HookEntry } from "../hooks/types.js";
 import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { buildPluginDiagnosticsReport } from "../plugins/status.js";
+import { buildPluginStatusReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
-import { decorativeEmoji, decorativePrefix } from "../terminal/decorative-emoji.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
-import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
 
@@ -49,7 +46,7 @@ function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntr
 function buildHooksReport(config: OpenClawConfig): HookStatusReport {
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const workspaceEntries = loadWorkspaceHookEntries(workspaceDir, { config });
-  const pluginReport = buildPluginDiagnosticsReport({ config, workspaceDir });
+  const pluginReport = buildPluginStatusReport({ config, workspaceDir });
   const pluginEntries = pluginReport.hooks.map((hook) => hook.entry);
   const entries = mergeHookEntries(pluginEntries, workspaceEntries);
   return buildWorkspaceHookStatus(workspaceDir, { config, entries });
@@ -104,15 +101,14 @@ function formatHookStatus(hook: HookStatusEntry): string {
     return theme.success("✓ ready");
   }
   if (!hook.enabledByConfig) {
-    return theme.warn(decorativePrefix("⏸", "disabled"));
+    return theme.warn("⏸ disabled");
   }
   return theme.error("✗ missing");
 }
 
 function formatHookName(hook: HookStatusEntry): string {
-  const emoji = hook.emoji ?? decorativeEmoji("🔗");
-  const name = theme.command(hook.name);
-  return emoji ? `${emoji} ${name}` : name;
+  const emoji = hook.emoji ?? "🔗";
+  return `${emoji} ${theme.command(hook.name)}`;
 }
 
 function formatHookSource(hook: HookStatusEntry): string {
@@ -143,7 +139,9 @@ function formatHookMissingSummary(hook: HookStatusEntry): string {
 }
 
 function exitHooksCliWithError(err: unknown): never {
-  defaultRuntime.error(`${theme.error("Error:")} ${formatErrorMessage(err)}`);
+  defaultRuntime.error(
+    `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+  );
   process.exit(1);
 }
 
@@ -268,14 +266,14 @@ export function formatHookInfo(
   }
 
   const lines: string[] = [];
-  const emoji = hook.emoji ?? decorativeEmoji("🔗");
+  const emoji = hook.emoji ?? "🔗";
   const status = hook.loadable
     ? theme.success("✓ Ready")
     : !hook.enabledByConfig
-      ? theme.warn(decorativePrefix("⏸", "Disabled"))
+      ? theme.warn("⏸ Disabled")
       : theme.error("✗ Missing requirements");
 
-  lines.push(`${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${status}`);
+  lines.push(`${emoji} ${theme.heading(hook.name)} ${status}`);
   lines.push("");
   lines.push(hook.description);
   lines.push("");
@@ -411,8 +409,7 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
       if (hook.missing.os.length > 0) {
         reasons.push(`os: ${hook.missing.os.join(", ")}`);
       }
-      const emoji = hook.emoji ?? decorativeEmoji("🔗");
-      lines.push(`  ${emoji ? `${emoji} ` : ""}${hook.name} - ${reasons.join("; ")}`);
+      lines.push(`  ${hook.emoji ?? "🔗"} ${hook.name} - ${reasons.join("; ")}`);
     }
   }
 
@@ -435,7 +432,7 @@ export async function enableHook(hookName: string): Promise<void> {
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
   });
   defaultRuntime.log(
-    `${theme.success("✓")} Enabled hook: ${hook.emoji ? `${hook.emoji} ${theme.command(hookName)}` : decorativePrefix("🔗", theme.command(hookName))}`,
+    `${theme.success("✓")} Enabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
   );
 }
 
@@ -450,7 +447,7 @@ export async function disableHook(hookName: string): Promise<void> {
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
   });
   defaultRuntime.log(
-    `${theme.warn(decorativePrefix("⏸", "Disabled hook:"))} ${hook.emoji ? `${hook.emoji} ${theme.command(hookName)}` : decorativePrefix("🔗", theme.command(hookName))}`,
+    `${theme.warn("⏸")} Disabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
   );
 }
 
@@ -472,7 +469,7 @@ export function registerHooksCli(program: Command): void {
     .option("-v, --verbose", "Show more details including missing requirements", false)
     .action(async (opts) =>
       runHooksCliAction(async () => {
-        const config = getRuntimeConfig();
+        const config = loadConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHooksList(report, opts), opts.json);
       }),
@@ -484,7 +481,7 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (name, opts) =>
       runHooksCliAction(async () => {
-        const config = getRuntimeConfig();
+        const config = loadConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHookInfo(report, name, opts), opts.json);
       }),
@@ -496,7 +493,7 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (opts) =>
       runHooksCliAction(async () => {
-        const config = getRuntimeConfig();
+        const config = loadConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHooksCheck(report, opts), opts.json);
       }),
@@ -517,20 +514,6 @@ export function registerHooksCli(program: Command): void {
     .action(async (name) =>
       runHooksCliAction(async () => {
         await disableHook(name);
-      }),
-    );
-
-  hooks
-    .command("relay", { hidden: true })
-    .description("Internal native harness hook relay")
-    .requiredOption("--provider <provider>", "Native harness provider")
-    .requiredOption("--relay-id <id>", "Native hook relay id")
-    .option("--generation <generation>", "Native hook relay registration generation")
-    .requiredOption("--event <event>", "Native hook event")
-    .option("--timeout <ms>", "Gateway timeout in ms", "5000")
-    .action(async (opts: NativeHookRelayCliOptions) =>
-      runHooksCliAction(async () => {
-        process.exitCode = await runNativeHookRelayCli(opts);
       }),
     );
 
@@ -562,7 +545,7 @@ export function registerHooksCli(program: Command): void {
 
   hooks.action(async () =>
     runHooksCliAction(async () => {
-      const config = getRuntimeConfig();
+      const config = loadConfig();
       const report = buildHooksReport(config);
       defaultRuntime.log(formatHooksList(report, {}));
     }),

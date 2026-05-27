@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
 import type {
   ExecApprovalsAllowlistEntry,
   ExecApprovalsFile,
@@ -10,7 +9,7 @@ import {
   resolveNodeTargets,
   type NodeTargetOption,
 } from "./nodes-shared.ts";
-import type { NodesProps } from "./nodes.types.ts";
+import type { NodesProps } from "./nodes.ts";
 
 type ExecSecurity = "deny" | "allowlist" | "full";
 type ExecAsk = "off" | "on-miss" | "always";
@@ -89,7 +88,7 @@ function resolveExecApprovalsDefaults(
     security: normalizeSecurity(defaults.security),
     ask: normalizeAsk(defaults.ask),
     askFallback: normalizeSecurity(defaults.askFallback ?? "deny"),
-    autoAllowSkills: defaults.autoAllowSkills ?? false,
+    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? false),
   };
 }
 
@@ -216,7 +215,7 @@ export function renderExecApprovals(state: ExecApprovalsState) {
         ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
             <div class="muted">Load exec approvals to edit allowlists.</div>
             <button class="btn" ?disabled=${state.loading || !targetReady} @click=${state.onLoad}>
-              ${state.loading ? t("common.loading") : t("common.loadApprovals")}
+              ${state.loading ? "Loading…" : "Load approvals"}
             </button>
           </div>`
         : html`

@@ -1,25 +1,28 @@
 ---
+title: "Pi Development Workflow"
 summary: "Developer workflow for Pi integration: build, test, and live validation"
-title: "Pi development workflow"
 read_when:
   - Working on Pi integration code or tests
   - Running Pi-specific lint, typecheck, and live test flows
 ---
 
-A sane workflow for working on the Pi integration in OpenClaw.
+# Pi Development Workflow
 
-## Type checking and linting
+This guide summarizes a sane workflow for working on the pi integration in OpenClaw.
 
-- Default local gate: `pnpm check`
-- Build gate: `pnpm build` when the change can affect build output, packaging, or lazy-loading/module boundaries
-- Full landing gate for Pi-heavy changes: `pnpm check && pnpm test`
+## Type Checking and Linting
 
-## Running Pi tests
+- Type check and build: `pnpm build`
+- Lint: `pnpm lint`
+- Format check: `pnpm format`
+- Full gate before pushing: `pnpm lint && pnpm build && pnpm test`
+
+## Running Pi Tests
 
 Run the Pi-focused test set directly with Vitest:
 
 ```bash
-pnpm test \
+pnpm test -- \
   "src/agents/pi-*.test.ts" \
   "src/agents/pi-embedded-*.test.ts" \
   "src/agents/pi-tools*.test.ts" \
@@ -31,7 +34,7 @@ pnpm test \
 To include the live provider exercise:
 
 ```bash
-OPENCLAW_LIVE_TEST=1 pnpm test src/agents/pi-embedded-runner-extraparams.live.test.ts
+OPENCLAW_LIVE_TEST=1 pnpm test -- src/agents/pi-embedded-runner-extraparams.live.test.ts
 ```
 
 This covers the main Pi unit suites:
@@ -43,7 +46,7 @@ This covers the main Pi unit suites:
 - `src/agents/pi-tool-definition-adapter.test.ts`
 - `src/agents/pi-hooks/*.test.ts`
 
-## Manual testing
+## Manual Testing
 
 Recommended flow:
 
@@ -56,27 +59,22 @@ Recommended flow:
 
 For tool call behavior, prompt for a `read` or `exec` action so you can see tool streaming and payload handling.
 
-## Clean slate reset
+## Clean Slate Reset
 
 State lives under the OpenClaw state directory. Default is `~/.openclaw`. If `OPENCLAW_STATE_DIR` is set, use that directory instead.
 
 To reset everything:
 
 - `openclaw.json` for config
-- `agents/<agentId>/agent/auth-profiles.json` for model auth profiles (API keys + OAuth)
-- `credentials/` for provider/channel state that still lives outside the auth profile store
+- `credentials/` for auth profiles and tokens
 - `agents/<agentId>/sessions/` for agent session history
-- `agents/<agentId>/sessions/sessions.json` for the session index
+- `agents/<agentId>/sessions.json` for the session index
 - `sessions/` if legacy paths exist
 - `workspace/` if you want a blank workspace
 
-If you only want to reset sessions, delete `agents/<agentId>/sessions/` for that agent. If you want to keep auth, leave `agents/<agentId>/agent/auth-profiles.json` and any provider state under `credentials/` in place.
+If you only want to reset sessions, delete `agents/<agentId>/sessions/` and `agents/<agentId>/sessions.json` for that agent. Keep `credentials/` if you do not want to reauthenticate.
 
 ## References
 
 - [Testing](/help/testing)
 - [Getting Started](/start/getting-started)
-
-## Related
-
-- [Pi integration architecture](/pi)

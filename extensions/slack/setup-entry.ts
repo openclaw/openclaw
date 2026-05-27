@@ -1,13 +1,6 @@
-import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { slackSetupPlugin } from "./src/channel.setup.js";
 
-export default defineBundledChannelSetupEntry({
-  importMetaUrl: import.meta.url,
-  plugin: {
-    specifier: "./setup-plugin-api.js",
-    exportName: "slackSetupPlugin",
-  },
-  secrets: {
-    specifier: "./secret-contract-api.js",
-    exportName: "channelSecrets",
-  },
-});
+export { slackSetupPlugin } from "./src/channel.setup.js";
+
+export default defineSetupPluginEntry(slackSetupPlugin);

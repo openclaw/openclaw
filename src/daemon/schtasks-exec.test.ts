@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { execSchtasks } from "./schtasks-exec.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeout(...args),
 }));
+
+const { execSchtasks } = await import("./schtasks-exec.js");
 
 beforeEach(() => {
   runCommandWithTimeout.mockReset();
@@ -29,7 +30,7 @@ describe("execSchtasks", () => {
     });
     expect(runCommandWithTimeout).toHaveBeenCalledWith(["schtasks", "/Query"], {
       timeoutMs: 15_000,
-      noOutputTimeoutMs: 30_000,
+      noOutputTimeoutMs: 5_000,
     });
   });
 

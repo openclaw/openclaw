@@ -1,5 +1,14 @@
-import { getChatChannelMeta } from "../channels/chat-meta.js";
-import { getRegisteredChannelPluginMeta, normalizeChatChannelId } from "../channels/registry.js";
+import type { ChannelId } from "../channels/plugins/types.js";
+import {
+  CHANNEL_IDS,
+  getChatChannelMeta,
+  getRegisteredChannelPluginMeta,
+  listRegisteredChannelPluginAliases,
+  listRegisteredChannelPluginIds,
+  listChatChannelAliases,
+  normalizeChatChannelId,
+  normalizeAnyChannelId,
+} from "../channels/registry.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -8,27 +17,9 @@ import {
   normalizeGatewayClientMode,
   normalizeGatewayClientName,
 } from "../gateway/protocol/client-info.js";
-export {
-  isDeliverableMessageChannel,
-  isGatewayMessageChannel,
-  listDeliverableMessageChannels,
-  normalizeMessageChannel,
-  resolveGatewayMessageChannel,
-  resolveMessageChannel,
-  type DeliverableMessageChannel,
-  type GatewayMessageChannel,
-} from "./message-channel-normalize.js";
-export {
-  INTERNAL_MESSAGE_CHANNEL,
-  INTERNAL_NON_DELIVERY_CHANNELS,
-  isInternalNonDeliveryChannel,
-  type InternalMessageChannel,
-} from "./message-channel-constants.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  type InternalMessageChannel,
-} from "./message-channel-constants.js";
-import { normalizeMessageChannel } from "./message-channel-normalize.js";
+
+export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
+export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;
 
 export { GATEWAY_CLIENT_NAMES, GATEWAY_CLIENT_MODES };
 export type { GatewayClientName, GatewayClientMode };
@@ -65,6 +56,76 @@ export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean 
   return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.WEBCHAT_UI;
 }
 
+export function normalizeMessageChannel(raw?: string | null): string | undefined {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === INTERNAL_MESSAGE_CHANNEL) {
+    return INTERNAL_MESSAGE_CHANNEL;
+  }
+  const builtIn = normalizeChatChannelId(normalized);
+  if (builtIn) {
+    return builtIn;
+  }
+  return normalizeAnyChannelId(normalized) ?? normalized;
+}
+
+const listPluginChannelIds = (): string[] => {
+  return listRegisteredChannelPluginIds();
+};
+
+const listPluginChannelAliases = (): string[] => {
+  return listRegisteredChannelPluginAliases();
+};
+
+export const listDeliverableMessageChannels = (): ChannelId[] =>
+  Array.from(new Set([...CHANNEL_IDS, ...listPluginChannelIds()]));
+
+export type DeliverableMessageChannel = ChannelId;
+
+export type GatewayMessageChannel = DeliverableMessageChannel | InternalMessageChannel;
+
+export const listGatewayMessageChannels = (): GatewayMessageChannel[] => [
+  ...listDeliverableMessageChannels(),
+  INTERNAL_MESSAGE_CHANNEL,
+];
+
+export const listGatewayAgentChannelAliases = (): string[] =>
+  Array.from(new Set([...listChatChannelAliases(), ...listPluginChannelAliases()]));
+
+export type GatewayAgentChannelHint = GatewayMessageChannel | "last";
+
+export const listGatewayAgentChannelValues = (): string[] =>
+  Array.from(
+    new Set([...listGatewayMessageChannels(), "last", ...listGatewayAgentChannelAliases()]),
+  );
+
+export function isGatewayMessageChannel(value: string): value is GatewayMessageChannel {
+  return listGatewayMessageChannels().includes(value as GatewayMessageChannel);
+}
+
+export function isDeliverableMessageChannel(value: string): value is DeliverableMessageChannel {
+  return listDeliverableMessageChannels().includes(value as DeliverableMessageChannel);
+}
+
+export function resolveGatewayMessageChannel(
+  raw?: string | null,
+): GatewayMessageChannel | undefined {
+  const normalized = normalizeMessageChannel(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  return isGatewayMessageChannel(normalized) ? normalized : undefined;
+}
+
+export function resolveMessageChannel(
+  primary?: string | null,
+  fallback?: string | null,
+): string | undefined {
+  return normalizeMessageChannel(primary) ?? normalizeMessageChannel(fallback);
+}
+
 export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {
   const channel = normalizeMessageChannel(raw);
   if (!channel) {
@@ -75,10 +136,7 @@ export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {
   }
   const builtInChannel = normalizeChatChannelId(channel);
   if (builtInChannel) {
-    const builtInMeta = getChatChannelMeta(builtInChannel);
-    if (builtInMeta) {
-      return builtInMeta.markdownCapable === true;
-    }
+    return getChatChannelMeta(builtInChannel).markdownCapable === true;
   }
   return getRegisteredChannelPluginMeta(channel)?.markdownCapable === true;
 }

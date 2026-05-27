@@ -1,6 +1,6 @@
 import { type EnvMap, resolveAutoNodeExtraCaCerts } from "./node-extra-ca-certs.js";
 
-type NodeStartupTlsEnvironment = {
+export type NodeStartupTlsEnvironment = {
   NODE_EXTRA_CA_CERTS?: string;
   NODE_USE_SYSTEM_CA?: string;
 };

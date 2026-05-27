@@ -1,5 +1,5 @@
 import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
-import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, expect, vi, type Mock } from "vitest";
 import * as harness from "./bot.media.e2e-harness.js";
 
 type StickerSpy = Mock<(...args: unknown[]) => unknown>;
@@ -21,16 +21,16 @@ let createTelegramBotRef: typeof import("./bot.js").createTelegramBot;
 let replySpyRef: ReturnType<typeof vi.fn>;
 let onSpyRef: Mock;
 let sendChatActionSpyRef: Mock;
-let readRemoteMediaBufferSpyRef: Mock;
+let fetchRemoteMediaSpyRef: Mock;
 let undiciFetchSpyRef: Mock;
-let resetReadRemoteMediaBufferMockRef: () => void;
+let resetFetchRemoteMediaMockRef: () => void;
 
 type FetchMockHandle = Mock & { mockRestore: () => void };
 
 function createFetchMockHandle(): FetchMockHandle {
-  return Object.assign(readRemoteMediaBufferSpyRef, {
+  return Object.assign(fetchRemoteMediaSpyRef, {
     mockRestore: () => {
-      resetReadRemoteMediaBufferMockRef();
+      resetFetchRemoteMediaMockRef();
     },
   }) as FetchMockHandle;
 }
@@ -88,7 +88,7 @@ export function mockTelegramFileDownload(params: {
       headers: { "content-type": params.contentType },
     }),
   );
-  readRemoteMediaBufferSpyRef.mockResolvedValueOnce({
+  fetchRemoteMediaSpyRef.mockResolvedValueOnce({
     buffer: Buffer.from(params.bytes),
     contentType: params.contentType,
     fileName: "mock-file",
@@ -103,7 +103,7 @@ export function mockTelegramPngDownload(): FetchMockHandle {
       headers: { "content-type": "image/png" },
     }),
   );
-  readRemoteMediaBufferSpyRef.mockResolvedValue({
+  fetchRemoteMediaSpyRef.mockResolvedValue({
     buffer: Buffer.from(new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
     contentType: "image/png",
     fileName: "mock-file.png",
@@ -118,9 +118,9 @@ export function watchTelegramFetch(): FetchMockHandle {
 async function loadTelegramBotHarness() {
   onSpyRef = harness.onSpy;
   sendChatActionSpyRef = harness.sendChatActionSpy;
-  readRemoteMediaBufferSpyRef = harness.readRemoteMediaBufferSpy;
+  fetchRemoteMediaSpyRef = harness.fetchRemoteMediaSpy;
   undiciFetchSpyRef = harness.undiciFetchSpy;
-  resetReadRemoteMediaBufferMockRef = harness.resetReadRemoteMediaBufferMock;
+  resetFetchRemoteMediaMockRef = harness.resetFetchRemoteMediaMock;
   const botModule = await import("./bot.js");
   botModule.setTelegramBotRuntimeForTest(
     harness.telegramBotRuntimeForTest as unknown as Parameters<
@@ -132,17 +132,13 @@ async function loadTelegramBotHarness() {
       ...opts,
       telegramDeps: harness.telegramBotDepsForTest,
     });
-  replySpyRef = harness.mediaHarnessReplySpy;
+  const replyModule = await import("openclaw/plugin-sdk/reply-runtime");
+  replySpyRef = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
 }
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   await loadTelegramBotHarness();
-});
-
-beforeEach(() => {
-  onSpyRef.mockClear();
-  replySpyRef.mockClear();
-  sendChatActionSpyRef.mockClear();
   vi.useRealTimers();
   lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
   resolvePinnedHostnameSpy = vi
@@ -156,11 +152,12 @@ afterEach(() => {
   resolvePinnedHostnameSpy = null;
 });
 
-vi.mock("./sticker-cache.js", () => ({
-  cacheSticker: (...args: unknown[]) => cacheStickerSpy(...args),
-  getCachedSticker: (...args: unknown[]) => getCachedStickerSpy(...args),
-  describeStickerImage: (...args: unknown[]) => describeStickerImageSpy(...args),
-  getAllCachedStickers: vi.fn(() => []),
-  getCacheStats: vi.fn(() => ({ count: 0 })),
-  searchStickers: vi.fn(() => []),
-}));
+vi.mock("./sticker-cache.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sticker-cache.js")>();
+  return {
+    ...actual,
+    cacheSticker: (...args: unknown[]) => cacheStickerSpy(...args),
+    getCachedSticker: (...args: unknown[]) => getCachedStickerSpy(...args),
+    describeStickerImage: (...args: unknown[]) => describeStickerImageSpy(...args),
+  };
+});

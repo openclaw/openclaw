@@ -1,5 +1,4 @@
 import path from "node:path";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 
@@ -26,7 +25,7 @@ export function resolvePluginSourceRoots(params: {
   return { stock, global, workspace };
 }
 
-// Shared env-aware key inputs for plugin loader registry reuse.
+// Shared env-aware cache inputs for discovery, manifest, and loader caches.
 export function resolvePluginCacheInputs(params: {
   workspaceDir?: string;
   loadPaths?: string[];
@@ -38,8 +37,10 @@ export function resolvePluginCacheInputs(params: {
     env,
   });
   // Preserve caller order because load-path precedence follows input order.
-  const loadPaths = normalizeStringEntries(
-    (params.loadPaths ?? []).filter((entry): entry is string => typeof entry === "string"),
-  ).map((entry) => resolveUserPath(entry, env));
+  const loadPaths = (params.loadPaths ?? [])
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => resolveUserPath(entry, env));
   return { roots, loadPaths };
 }

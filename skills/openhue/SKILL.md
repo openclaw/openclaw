@@ -1,6 +1,6 @@
 ---
 name: openhue
-description: "Control Philips Hue lights and scenes via the OpenHue CLI."
+description: Control Philips Hue lights and scenes via the OpenHue CLI.
 homepage: https://www.openhue.io/cli
 metadata:
   {
@@ -28,7 +28,7 @@ Use `openhue` to control Philips Hue lights and scenes via a Hue Bridge.
 
 ## When to Use
 
-Use when:
+✅ **USE this skill when:**
 
 - "Turn on/off the lights"
 - "Dim the living room lights"
@@ -38,10 +38,10 @@ Use when:
 
 ## When NOT to Use
 
-Do not use when:
+❌ **DON'T use this skill when:**
 
-- Non-Hue smart devices (other brands) -> not supported
-- HomeKit scenes or Shortcuts -> use Apple's ecosystem
+- Non-Hue smart devices (other brands) → not supported
+- HomeKit scenes or Shortcuts → use Apple's ecosystem
 - TV or entertainment system control
 - Thermostat or HVAC
 - Smart plugs (unless Hue smart plugs)

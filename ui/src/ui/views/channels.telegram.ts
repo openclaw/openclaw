@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { ChannelAccountSnapshot, TelegramStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
@@ -32,19 +31,19 @@ export function renderTelegramCard(params: {
         </div>
         <div class="status-list account-card-status">
           <div>
-            <span class="label">${t("common.running")}</span>
-            <span>${account.running ? t("common.yes") : t("common.no")}</span>
+            <span class="label">Running</span>
+            <span>${account.running ? "Yes" : "No"}</span>
           </div>
           <div>
-            <span class="label">${t("common.configured")}</span>
-            <span>${account.configured ? t("common.yes") : t("common.no")}</span>
+            <span class="label">Configured</span>
+            <span>${account.configured ? "Yes" : "No"}</span>
           </div>
           <div>
-            <span class="label">${t("common.lastInbound")}</span>
+            <span class="label">Last inbound</span>
             <span
               >${account.lastInboundAt
                 ? formatRelativeTimestamp(account.lastInboundAt)
-                : t("common.na")}</span
+                : "n/a"}</span
             >
           </div>
           ${account.lastError
@@ -71,14 +70,14 @@ export function renderTelegramCard(params: {
           : nothing}
         ${telegram?.probe
           ? html`<div class="callout" style="margin-top: 12px;">
-              ${telegram.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
-              ${telegram.probe.status ?? ""} ${telegram.probe.error ?? ""}
+              Probe ${telegram.probe.ok ? "ok" : "failed"} · ${telegram.probe.status ?? ""}
+              ${telegram.probe.error ?? ""}
             </div>`
           : nothing}
         ${renderChannelConfigSection({ channelId: "telegram", props })}
 
         <div class="row" style="margin-top: 12px;">
-          <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.probe")}</button>
+          <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
         </div>
       </div>
     `;
@@ -89,32 +88,28 @@ export function renderTelegramCard(params: {
     subtitle: "Bot status and channel configuration.",
     accountCountLabel,
     statusRows: [
-      { label: t("common.configured"), value: formatNullableBoolean(configured) },
-      { label: t("common.running"), value: telegram?.running ? t("common.yes") : t("common.no") },
-      { label: t("common.mode"), value: telegram?.mode ?? t("common.na") },
+      { label: "Configured", value: formatNullableBoolean(configured) },
+      { label: "Running", value: telegram?.running ? "Yes" : "No" },
+      { label: "Mode", value: telegram?.mode ?? "n/a" },
       {
-        label: t("common.lastStart"),
-        value: telegram?.lastStartAt
-          ? formatRelativeTimestamp(telegram.lastStartAt)
-          : t("common.na"),
+        label: "Last start",
+        value: telegram?.lastStartAt ? formatRelativeTimestamp(telegram.lastStartAt) : "n/a",
       },
       {
-        label: t("common.lastProbe"),
-        value: telegram?.lastProbeAt
-          ? formatRelativeTimestamp(telegram.lastProbeAt)
-          : t("common.na"),
+        label: "Last probe",
+        value: telegram?.lastProbeAt ? formatRelativeTimestamp(telegram.lastProbeAt) : "n/a",
       },
     ],
     lastError: telegram?.lastError,
     secondaryCallout: telegram?.probe
       ? html`<div class="callout" style="margin-top: 12px;">
-          ${telegram.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
-          ${telegram.probe.status ?? ""} ${telegram.probe.error ?? ""}
+          Probe ${telegram.probe.ok ? "ok" : "failed"} · ${telegram.probe.status ?? ""}
+          ${telegram.probe.error ?? ""}
         </div>`
       : nothing,
     configSection: renderChannelConfigSection({ channelId: "telegram", props }),
     footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.probe")}</button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
     </div>`,
   });
 }

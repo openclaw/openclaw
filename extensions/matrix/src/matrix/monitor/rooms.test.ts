@@ -4,9 +4,9 @@ import { resolveMatrixRoomConfig } from "./rooms.js";
 describe("resolveMatrixRoomConfig", () => {
   it("matches room IDs and aliases, not names", () => {
     const rooms = {
-      "!room:example.org": { enabled: true },
-      "#alias:example.org": { enabled: true },
-      "Project Room": { enabled: true },
+      "!room:example.org": { allow: true },
+      "#alias:example.org": { allow: true },
+      "Project Room": { allow: true },
     };
 
     const byId = resolveMatrixRoomConfig({
@@ -26,7 +26,7 @@ describe("resolveMatrixRoomConfig", () => {
     expect(byAlias.matchKey).toBe("#alias:example.org");
 
     const byName = resolveMatrixRoomConfig({
-      rooms: { "Project Room": { enabled: true } },
+      rooms: { "Project Room": { allow: true } },
       roomId: "!different:example.org",
       aliases: [],
     });
@@ -37,37 +37,37 @@ describe("resolveMatrixRoomConfig", () => {
   describe("matchSource classification", () => {
     it('returns matchSource="direct" for exact room ID match', () => {
       const result = resolveMatrixRoomConfig({
-        rooms: { "!room:example.org": { enabled: true } },
+        rooms: { "!room:example.org": { allow: true } },
         roomId: "!room:example.org",
         aliases: [],
       });
       expect(result.matchSource).toBe("direct");
-      expect(result.config).toEqual({ enabled: true });
+      expect(result.config).toBeDefined();
     });
 
     it('returns matchSource="direct" for alias match', () => {
       const result = resolveMatrixRoomConfig({
-        rooms: { "#alias:example.org": { enabled: true } },
+        rooms: { "#alias:example.org": { allow: true } },
         roomId: "!room:example.org",
         aliases: ["#alias:example.org"],
       });
       expect(result.matchSource).toBe("direct");
-      expect(result.config).toEqual({ enabled: true });
+      expect(result.config).toBeDefined();
     });
 
     it('returns matchSource="wildcard" for wildcard match', () => {
       const result = resolveMatrixRoomConfig({
-        rooms: { "*": { enabled: true } },
+        rooms: { "*": { allow: true } },
         roomId: "!any:example.org",
         aliases: [],
       });
       expect(result.matchSource).toBe("wildcard");
-      expect(result.config).toEqual({ enabled: true });
+      expect(result.config).toBeDefined();
     });
 
     it("returns undefined matchSource when no match", () => {
       const result = resolveMatrixRoomConfig({
-        rooms: { "!other:example.org": { enabled: true } },
+        rooms: { "!other:example.org": { allow: true } },
         roomId: "!room:example.org",
         aliases: [],
       });
@@ -78,8 +78,8 @@ describe("resolveMatrixRoomConfig", () => {
     it("direct match takes priority over wildcard", () => {
       const result = resolveMatrixRoomConfig({
         rooms: {
-          "!room:example.org": { enabled: true, systemPrompt: "room-specific" },
-          "*": { enabled: true, systemPrompt: "generic" },
+          "!room:example.org": { allow: true, systemPrompt: "room-specific" },
+          "*": { allow: true, systemPrompt: "generic" },
         },
         roomId: "!room:example.org",
         aliases: [],
@@ -96,7 +96,7 @@ describe("resolveMatrixRoomConfig", () => {
 
     it("wildcard config should NOT be usable to override DM classification", () => {
       const result = resolveMatrixRoomConfig({
-        rooms: { "*": { enabled: true, skills: ["general"] } },
+        rooms: { "*": { allow: true, skills: ["general"] } },
         roomId: "!dm-room:example.org",
         aliases: [],
       });
@@ -108,8 +108,8 @@ describe("resolveMatrixRoomConfig", () => {
     it("explicitly configured room should be usable to override DM classification", () => {
       const result = resolveMatrixRoomConfig({
         rooms: {
-          "!configured-room:example.org": { enabled: true },
-          "*": { enabled: true },
+          "!configured-room:example.org": { allow: true },
+          "*": { allow: true },
         },
         roomId: "!configured-room:example.org",
         aliases: [],

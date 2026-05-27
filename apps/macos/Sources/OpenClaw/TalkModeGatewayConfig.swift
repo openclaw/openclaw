@@ -11,7 +11,6 @@ struct TalkModeGatewayConfigState {
     let outputFormat: String?
     let interruptOnSpeech: Bool
     let silenceTimeoutMs: Int
-    let speechLocaleID: String?
     let apiKey: String?
     let seamColorHex: String?
 }
@@ -45,16 +44,9 @@ enum TalkModeGatewayConfigParser {
                 acc[key] = value
             } ?? [:]
         let model = activeConfig?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedModel: String? = if model?.isEmpty == false {
-            model!
-        } else if activeProvider == defaultProvider {
-            defaultModelIdFallback
-        } else {
-            nil
-        }
+        let resolvedModel = (model?.isEmpty == false) ? model! : defaultModelIdFallback
         let outputFormat = activeConfig?["outputFormat"]?.stringValue
         let interrupt = talk?["interruptOnSpeech"]?.boolValue
-        let speechLocaleID = TalkConfigParsing.resolvedSpeechLocaleID(talk)
         let apiKey = activeConfig?["apiKey"]?.stringValue
         let resolvedVoice: String? = if activeProvider == defaultProvider {
             (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil) ??
@@ -80,7 +72,6 @@ enum TalkModeGatewayConfigParser {
             outputFormat: outputFormat,
             interruptOnSpeech: interrupt ?? true,
             silenceTimeoutMs: silenceTimeoutMs,
-            speechLocaleID: speechLocaleID,
             apiKey: resolvedApiKey,
             seamColorHex: rawSeam.isEmpty ? nil : rawSeam)
     }
@@ -107,7 +98,6 @@ enum TalkModeGatewayConfigParser {
             outputFormat: nil,
             interruptOnSpeech: true,
             silenceTimeoutMs: defaultSilenceTimeoutMs,
-            speechLocaleID: nil,
             apiKey: resolvedApiKey,
             seamColorHex: nil)
     }

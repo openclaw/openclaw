@@ -1,9 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("../../plugins/provider-runtime.js", () => ({
-  resolveProviderCacheTtlEligibility: () => undefined,
-}));
-
+import { describe, expect, it } from "vitest";
 import { isCacheTtlEligibleProvider } from "./cache-ttl.js";
 
 describe("kilocode cache-ttl eligibility", () => {

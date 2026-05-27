@@ -1,5 +1,5 @@
-import { getRuntimeConfig } from "../../config/config.js";
-import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
+import { loadConfig } from "../../config/config.js";
+import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getSandboxBackendManager } from "./backend.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
@@ -53,24 +53,17 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
     }
     try {
       await params.removeRuntime(entry);
+    } catch {
+      // ignore prune failures
+    } finally {
       await params.remove(entry.containerName);
       await params.onRemoved?.(entry);
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : typeof error === "string"
-            ? error
-            : JSON.stringify(error);
-      defaultRuntime.error?.(
-        `Sandbox prune failed to remove ${entry.containerName}: ${message ?? "unknown error"}`,
-      );
     }
   }
 }
 
 async function pruneSandboxContainers(cfg: SandboxConfig) {
-  const config = getRuntimeConfig();
+  const config = loadConfig();
   await pruneSandboxRegistryEntries<SandboxRegistryEntry>({
     cfg,
     read: readRegistry,
@@ -86,7 +79,7 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
 }
 
 async function pruneSandboxBrowsers(cfg: SandboxConfig) {
-  const config = getRuntimeConfig();
+  const config = loadConfig();
   await pruneSandboxRegistryEntries<
     SandboxBrowserRegistryEntry & {
       backendId?: string;

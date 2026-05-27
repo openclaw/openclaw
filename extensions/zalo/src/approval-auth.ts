@@ -1,7 +1,7 @@
 import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-auth-runtime";
+} from "openclaw/plugin-sdk/approval-runtime";
 import { resolveZaloAccount } from "./accounts.js";
 
 function normalizeZaloApproverId(value: string | number): string | undefined {

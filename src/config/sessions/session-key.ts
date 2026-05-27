@@ -2,7 +2,6 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
-  normalizeAgentId,
   normalizeMainKey,
 } from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
@@ -27,12 +26,7 @@ export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
  * Resolve the session key with a canonical direct-chat bucket (default: "main").
  * All non-group direct chats collapse to this bucket; groups stay isolated.
  */
-export function resolveSessionKey(
-  scope: SessionScope,
-  ctx: MsgContext,
-  mainKey?: string,
-  agentId: string = DEFAULT_AGENT_ID,
-) {
+export function resolveSessionKey(scope: SessionScope, ctx: MsgContext, mainKey?: string) {
   const explicit = ctx.SessionKey?.trim();
   if (explicit) {
     return normalizeExplicitSessionKey(explicit, ctx);
@@ -41,15 +35,14 @@ export function resolveSessionKey(
   if (scope === "global") {
     return raw;
   }
-  const canonicalAgentId = normalizeAgentId(agentId);
   const canonicalMainKey = normalizeMainKey(mainKey);
   const canonical = buildAgentMainSessionKey({
-    agentId: canonicalAgentId,
+    agentId: DEFAULT_AGENT_ID,
     mainKey: canonicalMainKey,
   });
   const isGroup = raw.includes(":group:") || raw.includes(":channel:");
   if (!isGroup) {
     return canonical;
   }
-  return `agent:${canonicalAgentId}:${raw}`;
+  return `agent:${DEFAULT_AGENT_ID}:${raw}`;
 }

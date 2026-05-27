@@ -1,10 +1,3 @@
-import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   Client,
   ReadyListener,
@@ -12,23 +5,21 @@ import {
   type BaseMessageInteractiveComponent,
   type Modal,
   type Plugin,
-} from "../internal/discord.js";
-import type { GatewayPlugin } from "../internal/gateway.js";
-import { VoicePlugin } from "../internal/voice.js";
-import { parseApplicationIdFromToken } from "../probe.js";
-import { DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
+} from "@buape/carbon";
+import type { GatewayPlugin } from "@buape/carbon/gateway";
+import { VoicePlugin } from "@buape/carbon/voice";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import type { DiscordDmPolicy } from "./dm-command-auth.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
-import {
-  createDiscordGatewayPlugin,
-  waitForDiscordGatewayPluginRegistration,
-} from "./gateway-plugin.js";
+import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import {
   DiscordMessageListener,
-  DiscordInteractionListener,
   DiscordPresenceListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
@@ -47,17 +38,8 @@ type CreateClientFn = (
   handlers: ConstructorParameters<typeof Client>[1],
   plugins: ConstructorParameters<typeof Client>[2],
 ) => Client;
-type DiscordEventQueueOptions = NonNullable<ConstructorParameters<typeof Client>[0]["eventQueue"]>;
 
-function registerLatePlugin(client: Client, plugin: Plugin) {
-  void plugin.registerClient?.(client);
-  void plugin.registerRoutes?.(client);
-  if (!client.plugins.some((entry) => entry.id === plugin.id)) {
-    client.plugins.push({ id: plugin.id, plugin });
-  }
-}
-
-function createDiscordStatusReadyListener(params: {
+export function createDiscordStatusReadyListener(params: {
   discordConfig: Parameters<typeof resolveDiscordPresenceUpdate>[0];
   getAutoPresenceController: () => DiscordAutoPresenceController | null;
 }): ReadyListener {
@@ -84,20 +66,16 @@ function createDiscordStatusReadyListener(params: {
   })();
 }
 
-export async function createDiscordMonitorClient(params: {
+export function createDiscordMonitorClient(params: {
   accountId: string;
   applicationId: string;
   token: string;
-  restFetch?: typeof fetch;
   commands: BaseCommand[];
   components: BaseMessageInteractiveComponent[];
   modals: Modal[];
   voiceEnabled: boolean;
   discordConfig: Parameters<typeof resolveDiscordPresenceUpdate>[0] & {
-    eventQueue?: Pick<
-      DiscordEventQueueOptions,
-      "listenerTimeout" | "maxQueueSize" | "maxConcurrency"
-    >;
+    eventQueue?: { listenerTimeout?: number };
   };
   runtime: RuntimeEnv;
   createClient: CreateClientFn;
@@ -116,16 +94,14 @@ export async function createDiscordMonitorClient(params: {
   if (params.voiceEnabled) {
     clientPlugins.push(new VoicePlugin());
   }
-  const voicePlugin = clientPlugins.find((plugin) => plugin.id === "voice");
-  const constructorPlugins = voicePlugin
-    ? clientPlugins.filter((plugin) => plugin !== voicePlugin)
-    : clientPlugins;
 
+  // Pass eventQueue config to Carbon so the gateway listener budget can be tuned.
+  // Default listenerTimeout is 120s (Carbon defaults to 30s, which is too short for some
+  // Discord normalization/enqueue work).
   const eventQueueOpts = {
     listenerTimeout: 120_000,
-    slowListenerThreshold: 30_000,
     ...params.discordConfig.eventQueue,
-  } satisfies DiscordEventQueueOptions;
+  };
   const readyListener = createDiscordStatusReadyListener({
     discordConfig: params.discordConfig,
     getAutoPresenceController: () => autoPresenceController,
@@ -138,17 +114,6 @@ export async function createDiscordMonitorClient(params: {
       publicKey: "a",
       token: params.token,
       autoDeploy: false,
-      commandDeployHashStorePath: path.join(
-        resolveStateDir(process.env),
-        "discord",
-        "command-deploy-cache.json",
-      ),
-      requestOptions: {
-        timeout: DISCORD_REST_TIMEOUT_MS,
-        runtimeProfile: "persistent",
-        maxQueueSize: 1000,
-        ...(params.restFetch ? { fetch: params.restFetch } : {}),
-      },
       eventQueue: eventQueueOpts,
     },
     {
@@ -157,13 +122,9 @@ export async function createDiscordMonitorClient(params: {
       components: params.components,
       modals: params.modals,
     },
-    constructorPlugins,
+    clientPlugins,
   );
-  if (voicePlugin) {
-    registerLatePlugin(client, voicePlugin);
-  }
   const gateway = client.getPlugin<GatewayPlugin>("gateway") as MutableDiscordGateway | undefined;
-  await waitForDiscordGatewayPluginRegistration(gateway);
   const gatewaySupervisor = params.createGatewaySupervisor({
     gateway,
     isDisallowedIntentsError: params.isDisallowedIntentsError,
@@ -191,49 +152,24 @@ export async function createDiscordMonitorClient(params: {
 
 export async function fetchDiscordBotIdentity(params: {
   client: Pick<Client, "fetchUser">;
-  token?: string;
   runtime: RuntimeEnv;
   logStartupPhase: (phase: string, details?: string) => void;
 }) {
   params.logStartupPhase("fetch-bot-identity:start");
-  const parsedBotUserId = parseApplicationIdFromToken(params.token ?? "");
-  if (parsedBotUserId) {
+  try {
+    const botUser = await params.client.fetchUser("@me");
+    const botUserId = botUser?.id;
+    const botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
     params.logStartupPhase(
       "fetch-bot-identity:done",
-      `botUserId=${parsedBotUserId} botUserName=<missing> source=token`,
+      `botUserId=${botUserId ?? "<missing>"} botUserName=${botUserName ?? "<missing>"}`,
     );
-    return { botUserId: parsedBotUserId, botUserName: undefined };
-  }
-
-  let botUser: Awaited<ReturnType<typeof params.client.fetchUser>>;
-  try {
-    botUser = await params.client.fetchUser("@me");
+    return { botUserId, botUserName };
   } catch (err) {
     params.runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
     params.logStartupPhase("fetch-bot-identity:error", String(err));
-    throw new Error("Failed to resolve Discord bot identity", { cause: err });
+    return { botUserId: undefined, botUserName: undefined };
   }
-
-  const botUserRecord = botUser as
-    | { id?: unknown; username?: unknown; globalName?: unknown }
-    | null
-    | undefined;
-  const botUserId = normalizeOptionalString(botUserRecord?.id);
-  const botUserName =
-    normalizeOptionalString(botUserRecord?.username) ??
-    normalizeOptionalString(botUserRecord?.globalName);
-  if (!botUserId) {
-    const details = 'fetchUser("@me") returned no usable id';
-    params.runtime.error?.(danger(`discord: failed to fetch bot identity: ${details}`));
-    params.logStartupPhase("fetch-bot-identity:error", details);
-    throw new Error("Failed to resolve Discord bot identity");
-  }
-
-  params.logStartupPhase(
-    "fetch-bot-identity:done",
-    `botUserId=${botUserId} botUserName=${botUserName ?? "<missing>"}`,
-  );
-  return { botUserId, botUserName };
 }
 
 export function registerDiscordMonitorListeners(params: {
@@ -253,42 +189,39 @@ export function registerDiscordMonitorListeners(params: {
   logger: NonNullable<ConstructorParameters<typeof DiscordMessageListener>[1]>;
   messageHandler: ConstructorParameters<typeof DiscordMessageListener>[0];
   trackInboundEvent?: () => void;
+  eventQueueListenerTimeoutMs?: number;
 }) {
   registerDiscordListener(
     params.client.listeners,
-    new DiscordInteractionListener(params.logger, params.trackInboundEvent),
+    new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent, {
+      timeoutMs: params.eventQueueListenerTimeoutMs,
+    }),
+  );
+
+  const reactionListenerOptions: ConstructorParameters<typeof DiscordReactionListener>[0] = {
+    cfg: params.cfg,
+    accountId: params.accountId,
+    runtime: params.runtime,
+    botUserId: params.botUserId,
+    dmEnabled: params.dmEnabled,
+    groupDmEnabled: params.groupDmEnabled,
+    groupDmChannels: params.groupDmChannels ?? [],
+    dmPolicy: params.dmPolicy,
+    allowFrom: params.allowFrom ?? [],
+    groupPolicy: params.groupPolicy,
+    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
+    guildEntries: params.guildEntries,
+    logger: params.logger,
+    onEvent: params.trackInboundEvent,
+  };
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordReactionListener(reactionListenerOptions),
   );
   registerDiscordListener(
     params.client.listeners,
-    new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent),
+    new DiscordReactionRemoveListener(reactionListenerOptions),
   );
-
-  if (shouldRegisterDiscordReactionListeners(params)) {
-    const reactionListenerOptions: ConstructorParameters<typeof DiscordReactionListener>[0] = {
-      cfg: params.cfg,
-      accountId: params.accountId,
-      runtime: params.runtime,
-      botUserId: params.botUserId,
-      dmEnabled: params.dmEnabled,
-      groupDmEnabled: params.groupDmEnabled,
-      groupDmChannels: params.groupDmChannels ?? [],
-      dmPolicy: params.dmPolicy,
-      allowFrom: params.allowFrom ?? [],
-      groupPolicy: params.groupPolicy,
-      allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
-      guildEntries: params.guildEntries,
-      logger: params.logger,
-      onEvent: params.trackInboundEvent,
-    };
-    registerDiscordListener(
-      params.client.listeners,
-      new DiscordReactionListener(reactionListenerOptions),
-    );
-    registerDiscordListener(
-      params.client.listeners,
-      new DiscordReactionRemoveListener(reactionListenerOptions),
-    );
-  }
   registerDiscordListener(
     params.client.listeners,
     new DiscordThreadUpdateListener(params.cfg, params.accountId, params.logger),
@@ -301,23 +234,4 @@ export function registerDiscordMonitorListeners(params: {
     );
     params.runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
   }
-}
-
-function shouldRegisterDiscordReactionListeners(params: {
-  dmEnabled: boolean;
-  groupDmEnabled: boolean;
-  groupPolicy: "open" | "allowlist" | "disabled";
-  guildEntries?: Record<string, DiscordGuildEntryResolved>;
-}): boolean {
-  if (params.dmEnabled || params.groupDmEnabled) {
-    return true;
-  }
-  if (params.groupPolicy === "disabled") {
-    return false;
-  }
-  const guildEntries = Object.values(params.guildEntries ?? {});
-  if (guildEntries.length === 0) {
-    return true;
-  }
-  return guildEntries.some((entry) => entry.reactionNotifications !== "off");
 }

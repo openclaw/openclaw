@@ -1,4 +1,4 @@
-type CmdSetAssignment = { key: string; value: string };
+export type CmdSetAssignment = { key: string; value: string };
 
 export function assertNoCmdLineBreak(value: string, field: string): void {
   if (/[\r\n]/.test(value)) {

@@ -1,33 +1,15 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
-import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
-import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
-import {
-  normalizeOptionalString,
-  normalizeUniqueTrimmedStringList,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { isSlackApprovalAuthorizedSender } from "../../approval-auth.js";
-import { isSlackExecApprovalAuthorizedSender } from "../../exec-approvals.js";
-import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
-import {
-  SLACK_REPLY_BUTTON_ACTION_ID,
-  SLACK_REPLY_SELECT_ACTION_ID,
-} from "../../reply-action-ids.js";
-import {
-  authorizeSlackSystemEventSender,
-  resolveSlackCommandIngress,
-  resolveSlackEffectiveAllowFrom,
-} from "../auth.js";
-import { resolveSlackChannelConfig } from "../channel-config.js";
-import type { SlackMonitorContext } from "../context.js";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
-} from "../conversation.runtime.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
+import { SLACK_REPLY_BUTTON_ACTION_ID, SLACK_REPLY_SELECT_ACTION_ID } from "../../blocks-render.js";
+import { authorizeSlackSystemEventSender } from "../auth.js";
+import type { SlackMonitorContext } from "../context.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 
 type InteractionMessageBlock = {
@@ -70,7 +52,7 @@ type InteractionSelectionFields = {
   routedChannelId?: string;
 };
 
-type InteractionSummary = InteractionSelectionFields & {
+export type InteractionSummary = InteractionSelectionFields & {
   interactionType?: "block_action" | "view_submission" | "view_closed";
   actionId: string;
   userId?: string;
@@ -139,7 +121,20 @@ function readOptionLabels(options: unknown): string[] | undefined {
 }
 
 function uniqueNonEmptyStrings(values: string[]): string[] {
-  return normalizeUniqueTrimmedStringList(values);
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of values) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    unique.push(trimmed);
+  }
+  return unique;
 }
 
 function collectRichTextFragments(value: unknown, out: string[]): void {
@@ -331,8 +326,7 @@ function formatInteractionConfirmationText(params: {
   selectedLabel: string;
   userId?: string;
 }): string {
-  const userId = normalizeOptionalString(params.userId);
-  const actor = userId ? ` by <@${userId}>` : "";
+  const actor = params.userId?.trim() ? ` by <@${params.userId.trim()}>` : "";
   return `:white_check_mark: *${escapeSlackMrkdwn(params.selectedLabel)}* selected${actor}`;
 }
 
@@ -340,13 +334,13 @@ function buildSlackPluginInteractionData(params: {
   actionId: string;
   summary: SlackActionSummary;
 }): string | null {
-  const actionId = normalizeOptionalString(params.actionId) ?? "";
+  const actionId = params.actionId.trim();
   if (!actionId) {
     return null;
   }
   const payload =
-    normalizeOptionalString(params.summary.value) ||
-    params.summary.selectedValues?.map((value) => normalizeOptionalString(value)).find(Boolean) ||
+    params.summary.value?.trim() ||
+    params.summary.selectedValues?.map((value) => value.trim()).find(Boolean) ||
     "";
   if (
     actionId === SLACK_REPLY_BUTTON_ACTION_ID ||
@@ -377,15 +371,15 @@ function buildSlackPluginInteractionId(params: {
   summary: SlackActionSummary;
 }): string {
   const primaryValue =
-    normalizeOptionalString(params.summary.value) ||
-    params.summary.selectedValues?.map((value) => normalizeOptionalString(value)).find(Boolean) ||
+    params.summary.value?.trim() ||
+    params.summary.selectedValues?.map((value) => value.trim()).find(Boolean) ||
     "";
   return [
-    normalizeOptionalString(params.userId) ?? "",
-    normalizeOptionalString(params.channelId) ?? "",
-    normalizeOptionalString(params.messageTs) ?? "",
-    normalizeOptionalString(params.triggerId) ?? "",
-    normalizeOptionalString(params.actionId) ?? "",
+    params.userId?.trim() || "",
+    params.channelId?.trim() || "",
+    params.messageTs?.trim() || "",
+    params.triggerId?.trim() || "",
+    params.actionId.trim(),
     primaryValue,
   ].join(":");
 }
@@ -476,11 +470,6 @@ async function authorizeSlackBlockAction(params: {
     ctx: params.ctx,
     senderId: params.parsed.userId,
     channelId: params.parsed.channelId,
-    // Block action sender identity is verified by Slack's request signing.
-    // Pass the Slack-verified userId as expectedSenderId to satisfy the
-    // mandatory actor-binding requirement for interactive events.
-    expectedSenderId: params.parsed.userId,
-    interactiveEvent: true,
   });
   if (auth.allowed) {
     return auth;
@@ -522,73 +511,6 @@ async function handleSlackPluginBindingApproval(params: {
   return true;
 }
 
-async function handleSlackExecApprovalInteraction(params: {
-  ctx: SlackMonitorContext;
-  parsed: ParsedSlackBlockAction;
-  pluginInteractionData: string;
-  respond?: SlackBlockActionRespond;
-}): Promise<boolean> {
-  const approval = parseExecApprovalCommandText(params.pluginInteractionData);
-  if (!approval) {
-    return false;
-  }
-  const pluginApprovalAuthorizedSender = isSlackApprovalAuthorizedSender({
-    cfg: params.ctx.cfg,
-    accountId: params.ctx.accountId,
-    senderId: params.parsed.userId,
-  });
-  const execApprovalAuthorizedSender = isSlackExecApprovalAuthorizedSender({
-    cfg: params.ctx.cfg,
-    accountId: params.ctx.accountId,
-    senderId: params.parsed.userId,
-  });
-  const isPluginApproval = approval.approvalId.startsWith("plugin:");
-  const resolveUnprefixedAsPlugin =
-    !isPluginApproval && !execApprovalAuthorizedSender && pluginApprovalAuthorizedSender;
-  const authorized = isPluginApproval
-    ? pluginApprovalAuthorizedSender
-    : execApprovalAuthorizedSender || resolveUnprefixedAsPlugin;
-  const allowPluginFallback =
-    !isPluginApproval && execApprovalAuthorizedSender && pluginApprovalAuthorizedSender;
-  if (!authorized) {
-    params.ctx.runtime.log?.(
-      `slack:interaction drop exec approval user=${params.parsed.userId} (not authorized)`,
-    );
-    await respondEphemeral(params.respond, "You are not authorized to approve this request.");
-    return true;
-  }
-
-  try {
-    await resolveApprovalOverGateway({
-      cfg: params.ctx.cfg,
-      approvalId: approval.approvalId,
-      decision: approval.decision,
-      senderId: params.parsed.userId,
-      allowPluginFallback,
-      ...(resolveUnprefixedAsPlugin ? { resolveMethod: "plugin" as const } : {}),
-      clientDisplayName: `Slack approval (${params.parsed.userId.trim() || "unknown"})`,
-    });
-  } catch (error) {
-    params.ctx.runtime.log?.(
-      `slack:interaction exec approval resolve failed id=${approval.approvalId}: ${String(error)}`,
-    );
-    throw error;
-  }
-
-  try {
-    await updateSlackInteractionMessage({
-      ctx: params.ctx,
-      channelId: params.parsed.channelId,
-      messageTs: params.parsed.messageTs,
-      text: params.parsed.typedBody.message?.text ?? "",
-      blocks: [],
-    });
-  } catch {
-    // Best-effort cleanup only.
-  }
-  return true;
-}
-
 async function dispatchSlackPluginInteraction(params: {
   ctx: SlackMonitorContext;
   parsed: ParsedSlackBlockAction;
@@ -614,7 +536,8 @@ async function dispatchSlackPluginInteraction(params: {
   ) {
     return true;
   }
-  const pluginResult = await dispatchSlackPluginInteractiveHandler({
+  const pluginResult = await dispatchPluginInteractiveHandler({
+    channel: "slack",
     data: params.pluginInteractionData,
     interactionId: pluginInteractionId,
     ctx: {
@@ -673,69 +596,6 @@ async function dispatchSlackPluginInteraction(params: {
   return pluginResult.matched && pluginResult.handled;
 }
 
-async function resolveSlackBlockActionCommandAuthorized(params: {
-  ctx: SlackMonitorContext;
-  parsed: ParsedSlackBlockAction;
-  auth: { channelType?: "im" | "mpim" | "channel" | "group"; channelName?: string };
-}): Promise<boolean> {
-  const commandsAllowFrom = params.ctx.cfg.commands?.allowFrom;
-  const commandsAllowFromConfigured =
-    commandsAllowFrom != null &&
-    typeof commandsAllowFrom === "object" &&
-    (Array.isArray(commandsAllowFrom.slack) || Array.isArray(commandsAllowFrom["*"]));
-  if (commandsAllowFromConfigured) {
-    return resolveCommandAuthorization({
-      ctx: {
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        AccountId: params.ctx.accountId,
-        ChatType: params.auth.channelType === "im" ? "direct" : "group",
-        From: params.parsed.channelId ? `slack:${params.parsed.channelId}` : "slack",
-        SenderId: params.parsed.userId,
-      },
-      cfg: params.ctx.cfg,
-      commandAuthorized: false,
-    }).isAuthorizedSender;
-  }
-
-  const isDirectMessage = params.auth.channelType === "im";
-  const isRoom = params.auth.channelType === "channel" || params.auth.channelType === "group";
-  const allowFromLower = await resolveSlackEffectiveAllowFrom(params.ctx, {
-    includePairingStore: isDirectMessage,
-  });
-  const sender = await params.ctx.resolveUserName(params.parsed.userId).catch(() => undefined);
-  const senderName = sender?.name;
-
-  let channelUsers: Array<string | number> = [];
-  if (isRoom && params.parsed.channelId) {
-    const channelConfig = resolveSlackChannelConfig({
-      channelId: params.parsed.channelId,
-      channelName: params.auth.channelName,
-      channels: params.ctx.channelsConfig,
-      channelKeys: params.ctx.channelsConfigKeys,
-      defaultRequireMention: params.ctx.defaultRequireMention,
-      allowNameMatching: params.ctx.allowNameMatching,
-    });
-    channelUsers = Array.isArray(channelConfig?.users) ? channelConfig.users : [];
-  }
-
-  const commandIngress = await resolveSlackCommandIngress({
-    ctx: params.ctx,
-    senderId: params.parsed.userId,
-    senderName,
-    channelType: params.auth.channelType ?? "channel",
-    channelId: params.parsed.channelId ?? "slack-interaction",
-    ownerAllowFromLower: allowFromLower,
-    channelUsers,
-    allowTextCommands: false,
-    hasControlCommand: true,
-    eventKind: "button",
-    modeWhenAccessGroupsOff: "configured",
-  });
-  return commandIngress.commandAccess.authorized;
-}
-
 function enqueueSlackBlockActionEvent(params: {
   ctx: SlackMonitorContext;
   parsed: ParsedSlackBlockAction;
@@ -762,7 +622,6 @@ function enqueueSlackBlockActionEvent(params: {
     channelId: params.parsed.channelId,
     channelType: params.auth.channelType,
     senderId: params.parsed.userId,
-    threadTs: params.parsed.threadTs,
   });
   const contextParts = [
     "slack:interaction",
@@ -770,30 +629,10 @@ function enqueueSlackBlockActionEvent(params: {
     params.parsed.messageTs,
     params.parsed.actionId,
   ].filter(Boolean);
-  const queued = enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
+  enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
     sessionKey,
     contextKey: contextParts.join(":"),
-    deliveryContext: {
-      channel: "slack",
-      to:
-        params.auth.channelType === "im"
-          ? `user:${params.parsed.userId}`
-          : params.parsed.channelId
-            ? `channel:${params.parsed.channelId}`
-            : undefined,
-      accountId: params.ctx.accountId,
-      threadId: params.parsed.threadTs,
-    },
   });
-  if (queued) {
-    requestHeartbeat({
-      source: "hook",
-      intent: "immediate",
-      reason: "hook:slack-interaction",
-      sessionKey,
-      heartbeat: { target: "last" },
-    });
-  }
 }
 
 function buildSlackConfirmationBlocks(params: {
@@ -875,7 +714,6 @@ async function updateSlackLegacyBlockAction(params: {
 
 async function handleSlackBlockAction(params: {
   ctx: SlackMonitorContext;
-  trackEvent?: () => void;
   args: SlackActionMiddlewareArgs;
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): Promise<void> {
@@ -893,22 +731,6 @@ async function handleSlackBlockAction(params: {
   if (!parsed) {
     return;
   }
-  params.trackEvent?.();
-  const pluginInteractionData = buildSlackPluginInteractionData({
-    actionId: parsed.actionId,
-    summary: parsed.actionSummary,
-  });
-  if (pluginInteractionData && isSlackReplyActionId(parsed.actionId)) {
-    const handledExecApproval = await handleSlackExecApprovalInteraction({
-      ctx: params.ctx,
-      parsed,
-      pluginInteractionData,
-      respond,
-    });
-    if (handledExecApproval) {
-      return;
-    }
-  }
   const auth = await authorizeSlackBlockAction({
     ctx: params.ctx,
     parsed,
@@ -917,6 +739,10 @@ async function handleSlackBlockAction(params: {
   if (!auth.allowed) {
     return;
   }
+  const pluginInteractionData = buildSlackPluginInteractionData({
+    actionId: parsed.actionId,
+    summary: parsed.actionSummary,
+  });
   if (pluginInteractionData && isSlackReplyActionId(parsed.actionId)) {
     const handledBindingApproval = await handleSlackPluginBindingApproval({
       ctx: params.ctx,
@@ -928,17 +754,12 @@ async function handleSlackBlockAction(params: {
       return;
     }
   } else if (pluginInteractionData) {
-    const isAuthorizedSender = await resolveSlackBlockActionCommandAuthorized({
-      ctx: params.ctx,
-      parsed,
-      auth,
-    });
     const handled = await dispatchSlackPluginInteraction({
       ctx: params.ctx,
       parsed,
       pluginInteractionData,
       auth: {
-        isAuthorizedSender,
+        isAuthorizedSender: true,
       },
       respond,
     });
@@ -961,7 +782,6 @@ async function handleSlackBlockAction(params: {
 
 export function registerSlackBlockActionHandler(params: {
   ctx: SlackMonitorContext;
-  trackEvent?: () => void;
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): void {
   if (typeof params.ctx.app.action !== "function") {
@@ -970,7 +790,6 @@ export function registerSlackBlockActionHandler(params: {
   params.ctx.app.action(/.+/, async (args: SlackActionMiddlewareArgs) => {
     await handleSlackBlockAction({
       ctx: params.ctx,
-      trackEvent: params.trackEvent,
       args,
       formatSystemEvent: params.formatSystemEvent,
     });

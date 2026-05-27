@@ -5,7 +5,7 @@
  */
 
 // Inline content types
-type StoryInline =
+export type StoryInline =
   | string
   | { bold: StoryInline[] }
   | { italics: StoryInline[] }
@@ -19,14 +19,14 @@ type StoryInline =
   | { tag: string };
 
 // Block content types
-type StoryBlock =
+export type StoryBlock =
   | { header: { tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6"; content: StoryInline[] } }
   | { code: { code: string; lang: string } }
   | { image: { src: string; height: number; width: number; alt: string } }
   | { rule: null }
   | { listing: StoryListing };
 
-type StoryListing =
+export type StoryListing =
   | {
       list: {
         type: "ordered" | "unordered" | "tasklist";
@@ -37,7 +37,7 @@ type StoryListing =
   | { item: StoryInline[] };
 
 // A verse is either a block or inline content
-type StoryVerse = { block: StoryBlock } | { inline: StoryInline[] };
+export type StoryVerse = { block: StoryBlock } | { inline: StoryInline[] };
 
 // A story is a list of verses
 export type Story = StoryVerse[];
@@ -196,7 +196,7 @@ function processInlinesForImages(inlines: StoryInline[]): {
 
   for (const inline of inlines) {
     if (typeof inline === "object" && "__image" in inline) {
-      const img = (inline as unknown as { __image: { src: string; alt: string } })["__image"];
+      const img = (inline as unknown as { __image: { src: string; alt: string } }).__image;
       imageBlocks.push(createImageBlock(img.src, img.alt));
     } else {
       cleanInlines.push(inline);
@@ -242,7 +242,7 @@ export function markdownToStory(markdown: string): Story {
     const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
     if (headerMatch) {
       const level = headerMatch[1].length as 1 | 2 | 3 | 4 | 5 | 6;
-      const tag = `h${level}` as const;
+      const tag = `h${level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
       story.push({
         block: {
           header: {
@@ -329,4 +329,19 @@ export function markdownToStory(markdown: string): Story {
   }
 
   return story;
+}
+
+/**
+ * Convert plain text to simple story (no markdown parsing)
+ */
+export function textToStory(text: string): Story {
+  return [{ inline: [text] }];
+}
+
+/**
+ * Check if text contains markdown formatting
+ */
+export function hasMarkdown(text: string): boolean {
+  // Check for common markdown patterns
+  return /(\*\*|__|~~|`|^#{1,6}\s|^```|^\s*[-*]\s|\[.*\]\(.*\)|^>\s)/m.test(text);
 }

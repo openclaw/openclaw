@@ -6,9 +6,7 @@ describe("isPlainObject", () => {
     {},
     { a: 1 },
     Object.create(null),
-    new (class X {
-      readonly marker = true;
-    })(),
+    new (class X {})(),
     { [Symbol.toStringTag]: "Object" },
   ])("accepts object-tag values: %j", (value) => {
     expect(isPlainObject(value)).toBe(true);

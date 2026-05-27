@@ -1,77 +1,48 @@
-import {
-  defineBundledChannelEntry,
-  loadBundledEntryExportSync,
-} from "openclaw/plugin-sdk/channel-entry-contract";
-import type { OpenClawConfig, PluginRuntime, ResolvedNostrAccount } from "./api.js";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { nostrPlugin } from "./src/channel.js";
+import type { NostrProfile } from "./src/config-schema.js";
+import { createNostrProfileHttpHandler } from "./src/nostr-profile-http.js";
+import { getNostrRuntime, setNostrRuntime } from "./src/runtime.js";
+import { resolveNostrAccount } from "./src/types.js";
 
-function createNostrProfileHttpHandler() {
-  return loadBundledEntryExportSync<
-    (params: Record<string, unknown>) => (ctx: unknown) => Promise<void> | void
-  >(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "createNostrProfileHttpHandler",
-  });
-}
+export { nostrPlugin } from "./src/channel.js";
+export { setNostrRuntime } from "./src/runtime.js";
 
-function getNostrRuntime() {
-  return loadBundledEntryExportSync<() => PluginRuntime>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "getNostrRuntime",
-  })();
-}
-
-function resolveNostrAccount(params: { cfg: unknown; accountId: string }) {
-  return loadBundledEntryExportSync<
-    (params: { cfg: unknown; accountId: string }) => ResolvedNostrAccount
-  >(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "resolveNostrAccount",
-  })(params);
-}
-
-export default defineBundledChannelEntry({
+export default defineChannelPluginEntry({
   id: "nostr",
   name: "Nostr",
   description: "Nostr DM channel plugin via NIP-04",
-  importMetaUrl: import.meta.url,
-  plugin: {
-    specifier: "./channel-plugin-api.js",
-    exportName: "nostrPlugin",
-  },
-  runtime: {
-    specifier: "./api.js",
-    exportName: "setNostrRuntime",
-  },
+  plugin: nostrPlugin,
+  setRuntime: setNostrRuntime,
   registerFull(api) {
-    const httpHandler = createNostrProfileHttpHandler()({
+    const httpHandler = createNostrProfileHttpHandler({
       getConfigProfile: (accountId: string) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.current() as OpenClawConfig;
+        const cfg = runtime.config.loadConfig();
         const account = resolveNostrAccount({ cfg, accountId });
         return account.profile;
       },
-      updateConfigProfile: async (_accountId: string, profile: unknown) => {
+      updateConfigProfile: async (accountId: string, profile: NostrProfile) => {
         const runtime = getNostrRuntime();
+        const cfg = runtime.config.loadConfig();
 
-        await runtime.config.mutateConfigFile({
-          afterWrite: { mode: "auto" },
-          mutate: (draft) => {
-            const channels = (draft.channels ?? {}) as Record<string, unknown>;
-            const nostrConfig = (channels.nostr ?? {}) as Record<string, unknown>;
+        const channels = (cfg.channels ?? {}) as Record<string, unknown>;
+        const nostrConfig = (channels.nostr ?? {}) as Record<string, unknown>;
 
-            draft.channels = {
-              ...channels,
-              nostr: {
-                ...nostrConfig,
-                profile,
-              },
-            };
+        await runtime.config.writeConfigFile({
+          ...cfg,
+          channels: {
+            ...channels,
+            nostr: {
+              ...nostrConfig,
+              profile,
+            },
           },
         });
       },
       getAccountInfo: (accountId: string) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.current() as OpenClawConfig;
+        const cfg = runtime.config.loadConfig();
         const account = resolveNostrAccount({ cfg, accountId });
         if (!account.configured || !account.publicKey) {
           return null;
@@ -88,7 +59,6 @@ export default defineBundledChannelEntry({
       path: "/api/channels/nostr",
       auth: "gateway",
       match: "prefix",
-      gatewayRuntimeScopeSurface: "trusted-operator",
       handler: httpHandler,
     });
   },

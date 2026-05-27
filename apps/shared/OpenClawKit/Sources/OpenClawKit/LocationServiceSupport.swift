@@ -7,21 +7,21 @@ public protocol LocationServiceCommon: AnyObject, CLLocationManagerDelegate {
     var locationRequestContinuation: CheckedContinuation<CLLocation, Error>? { get set }
 }
 
-extension LocationServiceCommon {
-    public func configureLocationManager() {
+public extension LocationServiceCommon {
+    func configureLocationManager() {
         self.locationManager.delegate = self
         self.locationManager.desiredAccuracy = kCLLocationAccuracyBest
     }
 
-    public func authorizationStatus() -> CLAuthorizationStatus {
+    func authorizationStatus() -> CLAuthorizationStatus {
         self.locationManager.authorizationStatus
     }
 
-    public func accuracyAuthorization() -> CLAccuracyAuthorization {
+    func accuracyAuthorization() -> CLAccuracyAuthorization {
         LocationServiceSupport.accuracyAuthorization(manager: self.locationManager)
     }
 
-    public func requestLocationOnce() async throws -> CLLocation {
+    func requestLocationOnce() async throws -> CLLocation {
         try await LocationServiceSupport.requestLocation(manager: self.locationManager) { continuation in
             self.locationRequestContinuation = continuation
         }

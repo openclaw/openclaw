@@ -1,4 +1,4 @@
-import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { DeliveryContext } from "../utils/delivery-context.js";
 
 export type TaskRuntime = "subagent" | "acp" | "cli" | "cron";
 
@@ -22,7 +22,6 @@ export type TaskDeliveryStatus =
 export type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
 
 export type TaskTerminalOutcome = "succeeded" | "blocked";
-export type TaskScopeKind = "session" | "system";
 
 export type TaskStatusCounts = Record<TaskStatus, number>;
 export type TaskRuntimeCounts = Record<TaskRuntime, number>;
@@ -53,13 +52,9 @@ export type TaskDeliveryState = {
 export type TaskRecord = {
   taskId: string;
   runtime: TaskRuntime;
-  taskKind?: string;
   sourceId?: string;
   requesterSessionKey: string;
-  ownerKey: string;
-  scopeKind: TaskScopeKind;
   childSessionKey?: string;
-  parentFlowId?: string;
   parentTaskId?: string;
   agentId?: string;
   runId?: string;

@@ -3,11 +3,7 @@ import {
   type ModelRef,
   normalizeProviderId,
 } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import type { OpenClawConfig } from "../../config/config.js";
 
 export type ModelPickerCatalogEntry = {
   provider: string;
@@ -61,7 +57,7 @@ export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): Model
 
   for (const entry of catalog) {
     const provider = normalizeProviderId(entry.provider);
-    const model = normalizeOptionalString(entry.id);
+    const model = entry.id?.trim();
     if (!provider || !model) {
       continue;
     }
@@ -81,9 +77,7 @@ export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): Model
     if (providerOrder !== 0) {
       return providerOrder;
     }
-    return normalizeLowercaseStringOrEmpty(a.model).localeCompare(
-      normalizeLowercaseStringOrEmpty(b.model),
-    );
+    return a.model.toLowerCase().localeCompare(b.model.toLowerCase());
   });
 
   return out;
@@ -99,8 +93,8 @@ export function resolveProviderEndpointLabel(
     { baseUrl?: string; api?: string } | undefined
   >;
   const entry = findNormalizedProviderValue(providers, normalized);
-  const endpoint = normalizeOptionalString(entry?.baseUrl);
-  const api = normalizeOptionalString(entry?.api);
+  const endpoint = entry?.baseUrl?.trim();
+  const api = entry?.api?.trim();
   return {
     endpoint: endpoint || undefined,
     api: api || undefined,

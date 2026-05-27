@@ -13,16 +13,11 @@ private protocol SettingsWindowMenuActions {
 @MainActor
 final class SettingsWindowOpener {
     static let shared = SettingsWindowOpener()
-    static let windowID = "settings"
 
-    private var openSettingsAction: (@MainActor () -> Void)?
+    private var openSettingsAction: OpenSettingsAction?
 
     func register(openSettings: OpenSettingsAction) {
-        self.openSettingsAction = { openSettings() }
-    }
-
-    func register(openWindow: @escaping @MainActor () -> Void) {
-        self.openSettingsAction = openWindow
+        self.openSettingsAction = openSettings
     }
 
     func open() {

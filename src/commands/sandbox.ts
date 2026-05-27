@@ -7,8 +7,6 @@ import {
   type SandboxBrowserInfo,
   type SandboxContainerInfo,
 } from "../agents/sandbox.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   displayBrowsers,
@@ -76,9 +74,7 @@ export async function sandboxRecreateCommand(
   const filtered = await fetchAndFilterContainers(opts);
 
   if (filtered.containers.length + filtered.browsers.length === 0) {
-    runtime.log(
-      `No sandbox runtimes found matching the criteria. Run ${formatCliCommand("openclaw sandbox list")} to inspect active runtimes.`,
-    );
+    runtime.log("No sandbox runtimes found matching the criteria.");
     return;
   }
 
@@ -101,16 +97,14 @@ export async function sandboxRecreateCommand(
 
 function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeEnv): boolean {
   if (!opts.all && !opts.session && !opts.agent) {
-    runtime.error(
-      `Choose the sandbox scope: --all, --session <key>, or --agent <id>. Run ${formatCliCommand("openclaw sandbox list")} to inspect active runtimes first.`,
-    );
+    runtime.error("Please specify --all, --session <key>, or --agent <id>");
     runtime.exit(1);
     return false;
   }
 
   const exclusiveCount = [opts.all, opts.session, opts.agent].filter(Boolean).length;
   if (exclusiveCount > 1) {
-    runtime.error("Choose only one sandbox scope: --all, --session, or --agent.");
+    runtime.error("Please specify only one of: --all, --session, --agent");
     runtime.exit(1);
     return false;
   }
@@ -200,9 +194,7 @@ async function removeContainer(
     runtime.log(`✓ Removed ${containerName}`);
     return { success: true };
   } catch (err) {
-    runtime.error(
-      `Failed to remove ${containerName}: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw sandbox list")} to inspect what remains.`,
-    );
+    runtime.error(`✗ Failed to remove ${containerName}: ${String(err)}`);
     return { success: false };
   }
 }

@@ -4,19 +4,15 @@ import OpenClawKit
 
 final class RemindersService: RemindersServicing {
     func list(params: OpenClawRemindersListParams) async throws -> OpenClawRemindersListPayload {
+        let store = EKEventStore()
         let status = EKEventStore.authorizationStatus(for: .reminder)
-        let authorized: Bool = if status == .notDetermined || status == .writeOnly {
-            await Self.requestFullReminderAccess()
-        } else {
-            EventKitAuthorization.allowsRead(status: status)
-        }
+        let authorized = EventKitAuthorization.allowsRead(status: status)
         guard authorized else {
             throw NSError(domain: "Reminders", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
             ])
         }
 
-        let store = EKEventStore()
         let limit = max(1, min(params.limit ?? 50, 500))
         let statusFilter = params.status ?? .incomplete
 
@@ -27,11 +23,11 @@ final class RemindersService: RemindersServicing {
                 let filtered = (items ?? []).filter { reminder in
                     switch statusFilter {
                     case .all:
-                        true
+                        return true
                     case .completed:
-                        reminder.isCompleted
+                        return reminder.isCompleted
                     case .incomplete:
-                        !reminder.isCompleted
+                        return !reminder.isCompleted
                     }
                 }
                 let selected = Array(filtered.prefix(limit))
@@ -52,19 +48,15 @@ final class RemindersService: RemindersServicing {
     }
 
     func add(params: OpenClawRemindersAddParams) async throws -> OpenClawRemindersAddPayload {
+        let store = EKEventStore()
         let status = EKEventStore.authorizationStatus(for: .reminder)
-        let authorized: Bool = if status == .notDetermined {
-            await Self.requestFullReminderAccess()
-        } else {
-            EventKitAuthorization.allowsWrite(status: status)
-        }
+        let authorized = EventKitAuthorization.allowsWrite(status: status)
         guard authorized else {
             throw NSError(domain: "Reminders", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
             ])
         }
 
-        let store = EKEventStore()
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else {
             throw NSError(domain: "Reminders", code: 3, userInfo: [
@@ -106,15 +98,6 @@ final class RemindersService: RemindersServicing {
             listName: reminder.calendar.title)
 
         return OpenClawRemindersAddPayload(reminder: payload)
-    }
-
-    private static func requestFullReminderAccess() async -> Bool {
-        await PermissionRequestBridge.awaitRequest { completion in
-            let store = EKEventStore()
-            store.requestFullAccessToReminders { granted, _ in
-                completion(granted)
-            }
-        }
     }
 
     private static func resolveList(

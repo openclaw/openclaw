@@ -1,10 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 
 const TEST_SCOPE: PluginRuntimeGatewayRequestScope = {
   context: {} as PluginRuntimeGatewayRequestScope["context"],
   isWebchatConnect: (() => false) as PluginRuntimeGatewayRequestScope["isWebchatConnect"],
 };
+
+afterEach(() => {
+  vi.resetModules();
+});
 
 describe("gateway request scope", () => {
   async function importGatewayRequestScopeModule() {

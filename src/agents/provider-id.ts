@@ -1,10 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-
 export function normalizeProviderId(provider: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(provider);
-  if (normalized === "modelstudio" || normalized === "qwencloud") {
-    return "qwen";
-  }
+  const normalized = provider.trim().toLowerCase();
   if (normalized === "z.ai" || normalized === "z-ai") {
     return "zai";
   }
@@ -14,14 +9,8 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "opencode-go-auth") {
     return "opencode-go";
   }
-  if (normalized === "anthropic-cli") {
-    return "claude-cli";
-  }
   if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding") {
     return "kimi";
-  }
-  if (normalized === "moonshotai" || normalized === "moonshot-ai") {
-    return "moonshot";
   }
   if (normalized === "bedrock" || normalized === "aws-bedrock") {
     return "amazon-bedrock";
@@ -33,9 +22,16 @@ export function normalizeProviderId(provider: string): string {
   return normalized;
 }
 
-/** Normalize provider ID before manifest-owned auth alias lookup. */
+/** Normalize provider ID for auth lookup. Coding-plan variants share auth with base. */
 export function normalizeProviderIdForAuth(provider: string): string {
-  return normalizeProviderId(provider);
+  const normalized = normalizeProviderId(provider);
+  if (normalized === "volcengine-plan") {
+    return "volcengine";
+  }
+  if (normalized === "byteplus-plan") {
+    return "byteplus";
+  }
+  return normalized;
 }
 
 export function findNormalizedProviderValue<T>(

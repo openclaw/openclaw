@@ -2,7 +2,6 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveGitHeadPath } from "./git-root.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
@@ -18,7 +17,7 @@ const formatCommit = (value?: string | null) => {
   if (!match) {
     return null;
   }
-  return normalizeLowercaseStringOrEmpty(match[0].slice(0, 7));
+  return match[0].slice(0, 7).toLowerCase();
 };
 
 const cachedGitCommitBySearchDir = new Map<string, string | null>();
@@ -100,20 +99,12 @@ const readCommitFromGit = (
   }
   if (head.startsWith("ref:")) {
     const ref = head.replace(/^ref:\s*/i, "").trim();
-    const refsBase = resolveGitRefsBase(headPath);
-    const refPath = resolveRefPath(refsBase, ref);
+    const refPath = resolveRefPath(headPath, ref);
     if (!refPath) {
       return null;
     }
-    try {
-      const refHash = safeReadFilePrefix(refPath).trim();
-      return formatCommit(refHash);
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-    }
-    return readCommitFromPackedRefs(refsBase, ref);
+    const refHash = safeReadFilePrefix(refPath).trim();
+    return formatCommit(refHash);
   }
   return formatCommit(head);
 };
@@ -134,29 +125,8 @@ const resolveGitRefsBase = (headPath: string) => {
   return gitDir;
 };
 
-const readCommitFromPackedRefs = (refsBase: string, ref: string) => {
-  try {
-    const packedRefs = fs.readFileSync(path.join(refsBase, "packed-refs"), "utf-8");
-    for (const line of packedRefs.split("\n")) {
-      if (!line || line.startsWith("#") || line.startsWith("^")) {
-        continue;
-      }
-      const [commit, packedRef] = line.trim().split(/\s+/, 2);
-      if (packedRef === ref) {
-        return formatCommit(commit);
-      }
-    }
-    return null;
-  } catch (error) {
-    if (!isMissingPathError(error)) {
-      throw error;
-    }
-    return null;
-  }
-};
-
 /** Safely resolve a git ref path, rejecting traversal attacks from a crafted HEAD file. */
-const resolveRefPath = (refsBase: string, ref: string) => {
+const resolveRefPath = (headPath: string, ref: string) => {
   if (!ref.startsWith("refs/")) {
     return null;
   }
@@ -166,6 +136,7 @@ const resolveRefPath = (refsBase: string, ref: string) => {
   if (ref.split(/[/]/).includes("..")) {
     return null;
   }
+  const refsBase = resolveGitRefsBase(headPath);
   const resolved = path.resolve(refsBase, ref);
   const rel = path.relative(refsBase, resolved);
   if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
@@ -257,7 +228,6 @@ export const resolveCommitHash = (
   }
 };
 
-export const testing = {
+export const __testing = {
   clearCachedGitCommits,
 };
-export { testing as __testing };

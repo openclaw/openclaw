@@ -1,10 +1,6 @@
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import type { CommandArgValues } from "./commands-registry.types.js";
 
-type CommandArgsFormatter = (values: CommandArgValues) => string | undefined;
+export type CommandArgsFormatter = (values: CommandArgValues) => string | undefined;
 
 function normalizeArgValue(value: unknown): string | undefined {
   if (value == null) {
@@ -12,13 +8,13 @@ function normalizeArgValue(value: unknown): string | undefined {
   }
   let text: string;
   if (typeof value === "string") {
-    text = normalizeOptionalString(value) ?? "";
+    text = value.trim();
   } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    text = normalizeOptionalString(String(value)) ?? "";
+    text = String(value).trim();
   } else if (typeof value === "symbol") {
-    text = normalizeOptionalString(value.toString()) ?? "";
+    text = value.toString().trim();
   } else if (typeof value === "function") {
-    text = normalizeOptionalString(value.toString()) ?? "";
+    text = value.toString().trim();
   } else {
     // Objects and arrays
     text = JSON.stringify(value);
@@ -32,7 +28,7 @@ function formatActionArgs(
     formatKnownAction: (action: string, path: string | undefined) => string | undefined;
   },
 ): string | undefined {
-  const action = normalizeOptionalLowercaseString(normalizeArgValue(values.action));
+  const action = normalizeArgValue(values.action)?.toLowerCase();
   const path = normalizeArgValue(values.path);
   const value = normalizeArgValue(values.value);
   if (!action) {

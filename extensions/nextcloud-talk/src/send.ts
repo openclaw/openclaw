@@ -1,24 +1,19 @@
-import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-message";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { fetchWithSsrFGuard } from "../runtime-api.js";
+import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
-import {
-  convertMarkdownTables,
-  fetchWithSsrFGuard,
-  generateNextcloudTalkSignature,
-  getNextcloudTalkRuntime,
-  requireRuntimeConfig,
-  resolveMarkdownTableMode,
-  resolveNextcloudTalkAccount,
-  ssrfPolicyFromPrivateNetworkOptIn,
-} from "./send.runtime.js";
+import { getNextcloudTalkRuntime } from "./runtime.js";
+import { generateNextcloudTalkSignature } from "./signature.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
 type NextcloudTalkSendOpts = {
-  cfg: CoreConfig;
   baseUrl?: string;
   secret?: string;
   accountId?: string;
   replyTo?: string;
   verbose?: boolean;
+  cfg?: CoreConfig;
 };
 
 function resolveCredentials(
@@ -56,7 +51,7 @@ function resolveNextcloudTalkSendContext(opts: NextcloudTalkSendOpts): {
   baseUrl: string;
   secret: string;
 } {
-  const cfg = requireRuntimeConfig(opts.cfg, "Nextcloud Talk send") as CoreConfig;
+  const cfg = (opts.cfg ?? getNextcloudTalkRuntime().config.loadConfig()) as CoreConfig;
   const account = resolveNextcloudTalkAccount({
     cfg,
     accountId: opts.accountId,
@@ -82,32 +77,10 @@ function recordNextcloudTalkOutboundActivity(accountId: string): void {
   }
 }
 
-function createNextcloudTalkSendReceipt(params: {
-  messageId: string;
-  roomToken: string;
-  replyTo?: string;
-}) {
-  const messageId = params.messageId.trim();
-  return createMessageReceiptFromOutboundResults({
-    results:
-      messageId && messageId !== "unknown"
-        ? [
-            {
-              channel: "nextcloud-talk",
-              messageId,
-              conversationId: params.roomToken,
-            },
-          ]
-        : [],
-    kind: "text",
-    ...(params.replyTo ? { replyToId: params.replyTo } : {}),
-  });
-}
-
 export async function sendMessageNextcloudTalk(
   to: string,
   text: string,
-  opts: NextcloudTalkSendOpts,
+  opts: NextcloudTalkSendOpts = {},
 ): Promise<NextcloudTalkSendResult> {
   const { cfg, account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
   const roomToken = normalizeRoomToken(to);
@@ -155,7 +128,7 @@ export async function sendMessageNextcloudTalk(
       body: bodyStr,
     },
     auditContext: "nextcloud-talk-send",
-    policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
+    policy: account.config?.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
   });
 
   try {
@@ -167,8 +140,7 @@ export async function sendMessageNextcloudTalk(
       if (status === 400) {
         errorMsg = `Nextcloud Talk: bad request - ${errorBody || "invalid message format"}`;
       } else if (status === 401) {
-        errorMsg =
-          "Nextcloud Talk: bot send was rejected - check the bot secret and ensure the bot was installed with --feature response";
+        errorMsg = "Nextcloud Talk: authentication failed - check bot secret";
       } else if (status === 403) {
         errorMsg = "Nextcloud Talk: forbidden - bot may not have permission in this room";
       } else if (status === 404) {
@@ -207,16 +179,7 @@ export async function sendMessageNextcloudTalk(
 
     recordNextcloudTalkOutboundActivity(account.accountId);
 
-    return {
-      messageId,
-      roomToken,
-      receipt: createNextcloudTalkSendReceipt({
-        messageId,
-        roomToken,
-        ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
-      }),
-      timestamp,
-    };
+    return { messageId, roomToken, timestamp };
   } finally {
     await release();
   }
@@ -226,7 +189,7 @@ export async function sendReactionNextcloudTalk(
   roomToken: string,
   messageId: string,
   reaction: string,
-  opts: Omit<NextcloudTalkSendOpts, "replyTo">,
+  opts: Omit<NextcloudTalkSendOpts, "replyTo"> = {},
 ): Promise<{ ok: true }> {
   const { account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
   const normalizedToken = normalizeRoomToken(roomToken);
@@ -253,7 +216,7 @@ export async function sendReactionNextcloudTalk(
       body,
     },
     auditContext: "nextcloud-talk-reaction",
-    policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
+    policy: account.config?.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
   });
 
   try {

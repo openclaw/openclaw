@@ -43,4 +43,9 @@ export type NodesRpcOpts = {
   audio?: boolean;
 };
 
-export type { NodeListNode, PairedNode, PendingRequest } from "../../shared/node-list-types.js";
+export type {
+  NodeListNode,
+  PairedNode,
+  PairingList,
+  PendingRequest,
+} from "../../shared/node-list-types.js";

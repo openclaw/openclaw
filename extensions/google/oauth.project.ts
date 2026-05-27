@@ -8,11 +8,15 @@ import {
   USERINFO_URL,
 } from "./oauth.shared.js";
 
-const LOAD_CODE_ASSIST_METADATA = {
-  ideType: "IDE_UNSPECIFIED",
-  platform: "PLATFORM_UNSPECIFIED",
-  pluginType: "GEMINI",
-} as const;
+function resolvePlatform(): "WINDOWS" | "MACOS" | "PLATFORM_UNSPECIFIED" {
+  if (process.platform === "win32") {
+    return "WINDOWS";
+  }
+  if (process.platform === "darwin") {
+    return "MACOS";
+  }
+  return "PLATFORM_UNSPECIFIED";
+}
 
 async function getUserEmail(accessToken: string): Promise<string | undefined> {
   try {
@@ -84,34 +88,33 @@ async function pollOperation(
 
 export async function resolveGoogleOAuthIdentity(accessToken: string): Promise<{
   email?: string;
-  projectId?: string;
+  projectId: string;
 }> {
   const email = await getUserEmail(accessToken);
   const projectId = await discoverProject(accessToken);
   return { email, projectId };
 }
 
-export async function resolveGooglePersonalOAuthIdentity(accessToken: string): Promise<{
-  email?: string;
-  projectId?: string;
-}> {
-  return { email: await getUserEmail(accessToken) };
-}
-
 async function discoverProject(accessToken: string): Promise<string> {
   const envProject = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
+  const platform = resolvePlatform();
+  const metadata = {
+    ideType: "ANTIGRAVITY",
+    platform,
+    pluginType: "GEMINI",
+  };
   const headers = {
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
     "User-Agent": "google-api-nodejs-client/9.15.1",
     "X-Goog-Api-Client": `gl-node/${process.versions.node}`,
-    "Client-Metadata": JSON.stringify(LOAD_CODE_ASSIST_METADATA),
+    "Client-Metadata": JSON.stringify(metadata),
   };
 
   const loadBody = {
     ...(envProject ? { cloudaicompanionProject: envProject } : {}),
     metadata: {
-      ...LOAD_CODE_ASSIST_METADATA,
+      ...metadata,
       ...(envProject ? { duetProject: envProject } : {}),
     },
   };
@@ -190,7 +193,7 @@ async function discoverProject(accessToken: string): Promise<string> {
   const onboardBody: Record<string, unknown> = {
     tierId,
     metadata: {
-      ...LOAD_CODE_ASSIST_METADATA,
+      ...metadata,
     },
   };
   if (tierId !== TIER_FREE && envProject) {

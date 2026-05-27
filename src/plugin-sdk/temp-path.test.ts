@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,13 +5,8 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
 
 function expectPathInsideTmpRoot(resultPath: string) {
-  const tmpRoot = fsSync.realpathSync(resolvePreferredOpenClawTmpDir());
-  let resolved = path.resolve(resultPath);
-  try {
-    resolved = path.join(fsSync.realpathSync(path.dirname(resultPath)), path.basename(resultPath));
-  } catch {
-    // The temp parent is intentionally gone after withTempDownloadPath cleanup.
-  }
+  const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+  const resolved = path.resolve(resultPath);
   const rel = path.relative(tmpRoot, resolved);
   expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
   expect(resultPath).not.toContain("..");
@@ -57,42 +51,35 @@ describe("buildRandomTempFilePath", () => {
 });
 
 describe("withTempDownloadPath", () => {
-  it.each([
-    {
-      name: "creates a temp path under tmp dir and cleans up the temp directory",
-      input: { prefix: "line-media" },
-      expectCleanup: true,
-      expectedBasename: undefined,
-    },
-    {
-      name: "sanitizes prefix and fileName",
-      input: { prefix: "../../channels/../media", fileName: "../../evil.bin" },
-      expectCleanup: false,
-      expectedBasename: "evil.bin",
-    },
-  ])("$name", async ({ input, expectCleanup, expectedBasename }) => {
+  it("creates a temp path under tmp dir and cleans up the temp directory", async () => {
     let capturedPath = "";
-    await withTempDownloadPath(input, async (tmpPath) => {
-      capturedPath = tmpPath;
-      if (expectCleanup) {
+    await withTempDownloadPath(
+      {
+        prefix: "line-media",
+      },
+      async (tmpPath) => {
+        capturedPath = tmpPath;
         await fs.writeFile(tmpPath, "ok");
-      }
-    });
+      },
+    );
+
+    expect(capturedPath).toContain(path.join(resolvePreferredOpenClawTmpDir(), "line-media-"));
+    await expect(fs.stat(capturedPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("sanitizes prefix and fileName", async () => {
+    let capturedPath = "";
+    await withTempDownloadPath(
+      {
+        prefix: "../../channels/../media",
+        fileName: "../../evil.bin",
+      },
+      async (tmpPath) => {
+        capturedPath = tmpPath;
+      },
+    );
 
     expectPathInsideTmpRoot(capturedPath);
-    if (expectedBasename) {
-      expect(path.basename(capturedPath)).toBe(expectedBasename);
-    } else {
-      expect(capturedPath).toContain(path.join(resolvePreferredOpenClawTmpDir(), "line-media-"));
-    }
-    if (expectCleanup) {
-      let statError: NodeJS.ErrnoException | undefined;
-      try {
-        await fs.stat(capturedPath);
-      } catch (error) {
-        statError = error as NodeJS.ErrnoException;
-      }
-      expect(statError?.code).toBe("ENOENT");
-    }
+    expect(path.basename(capturedPath)).toBe("evil.bin");
   });
 });

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { migrateOrphanedSessionKeys } from "../infra/state-migrations.js";
 
 type SessionMigrationLogger = {

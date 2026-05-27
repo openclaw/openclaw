@@ -1,19 +1,15 @@
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveTimezone,
   formatUtcTimestamp,
   formatZonedTimestamp,
 } from "../infra/format-time/format-datetime.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 
-type AgentEnvelopeParams = {
+export type AgentEnvelopeParams = {
   channel: string;
   from?: string;
   timestamp?: number | Date;
@@ -80,7 +76,7 @@ function normalizeEnvelopeOptions(options?: EnvelopeFormatOptions): NormalizedEn
   const includeTimestamp = options?.includeTimestamp !== false;
   const includeElapsed = options?.includeElapsed !== false;
   return {
-    timezone: normalizeOptionalString(options?.timezone) || "local",
+    timezone: options?.timezone?.trim() || "local",
     includeTimestamp,
     includeElapsed,
     userTimezone: options?.userTimezone,
@@ -92,7 +88,7 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
   if (!trimmed) {
     return { mode: "local" };
   }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const lowered = trimmed.toLowerCase();
   if (lowered === "utc" || lowered === "gmt") {
     return { mode: "utc" };
   }
@@ -154,7 +150,7 @@ export function formatEnvelopeTimestamp(
 }
 
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
-  const channel = sanitizeEnvelopeHeaderPart(normalizeOptionalString(params.channel) || "Channel");
+  const channel = sanitizeEnvelopeHeaderPart(params.channel?.trim() || "Channel");
   const parts: string[] = [channel];
   const resolved = normalizeEnvelopeOptions(params.envelope);
   let elapsed: string | undefined;
@@ -171,20 +167,17 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
         ? formatTimeAgo(elapsedMs, { suffix: false })
         : undefined;
   }
-  const from = normalizeOptionalString(params.from);
-  if (from) {
-    const fromLabel = sanitizeEnvelopeHeaderPart(from);
-    parts.push(elapsed ? `${fromLabel} +${elapsed}` : fromLabel);
+  if (params.from?.trim()) {
+    const from = sanitizeEnvelopeHeaderPart(params.from.trim());
+    parts.push(elapsed ? `${from} +${elapsed}` : from);
   } else if (elapsed) {
     parts.push(`+${elapsed}`);
   }
-  const host = normalizeOptionalString(params.host);
-  if (host) {
-    parts.push(sanitizeEnvelopeHeaderPart(host));
+  if (params.host?.trim()) {
+    parts.push(sanitizeEnvelopeHeaderPart(params.host.trim()));
   }
-  const ip = normalizeOptionalString(params.ip);
-  if (ip) {
-    parts.push(sanitizeEnvelopeHeaderPart(ip));
+  if (params.ip?.trim()) {
+    parts.push(sanitizeEnvelopeHeaderPart(params.ip.trim()));
   }
   const ts = formatEnvelopeTimestamp(params.timestamp, resolved);
   if (ts) {
@@ -208,8 +201,7 @@ export function formatInboundEnvelope(params: {
 }): string {
   const chatType = normalizeChatType(params.chatType);
   const isDirect = !chatType || chatType === "direct";
-  const resolvedSenderRaw =
-    normalizeOptionalString(params.senderLabel) || resolveSenderLabel(params.sender ?? {});
+  const resolvedSenderRaw = params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
   const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
   const body =
     isDirect && params.fromMe
@@ -237,7 +229,7 @@ export function formatInboundFromLabel(params: {
 }): string {
   // Keep envelope headers compact: group labels include id, DMs only add id when it differs.
   if (params.isGroup) {
-    const label = normalizeOptionalString(params.groupLabel) || params.groupFallback || "Group";
+    const label = params.groupLabel?.trim() || params.groupFallback || "Group";
     const id = params.groupId?.trim();
     return id ? `${label} id:${id}` : label;
   }
@@ -248,4 +240,20 @@ export function formatInboundFromLabel(params: {
     return directLabel;
   }
   return `${directLabel} id:${directId}`;
+}
+
+export function formatThreadStarterEnvelope(params: {
+  channel: string;
+  author?: string;
+  timestamp?: number | Date;
+  body: string;
+  envelope?: EnvelopeFormatOptions;
+}): string {
+  return formatAgentEnvelope({
+    channel: params.channel,
+    from: params.author,
+    timestamp: params.timestamp,
+    envelope: params.envelope,
+    body: params.body,
+  });
 }

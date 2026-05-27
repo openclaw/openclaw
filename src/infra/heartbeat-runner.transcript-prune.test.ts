@@ -14,7 +14,7 @@ beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
 });
 
-describe("heartbeat transcript append-only (#39609)", () => {
+describe("heartbeat transcript pruning", () => {
   async function createTranscriptWithContent(transcriptPath: string, sessionId: string) {
     const header = {
       type: "session",
@@ -40,12 +40,13 @@ describe("heartbeat transcript append-only (#39609)", () => {
         cacheWriteTokens: number;
       };
     };
+    expectPruned: boolean;
   }) {
     await withTempTelegramHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
         const sessionKey = resolveMainSessionKey(undefined);
         const transcriptPath = path.join(tmpDir, `${params.sessionId}.jsonl`);
-        await createTranscriptWithContent(transcriptPath, params.sessionId);
+        const originalContent = await createTranscriptWithContent(transcriptPath, params.sessionId);
         const originalSize = (await fs.stat(transcriptPath)).size;
 
         await seedSessionStore(storePath, sessionKey, {
@@ -69,39 +70,41 @@ describe("heartbeat transcript append-only (#39609)", () => {
           agentId: undefined,
           reason: "test",
           cfg,
-          deps: {
-            sendTelegram: vi.fn(),
-            getReplyFromConfig: replySpy,
-          },
+          deps: { sendTelegram: vi.fn() },
         });
 
         const finalSize = (await fs.stat(transcriptPath)).size;
-        // Transcript must never be truncated — entries are append-only now.
-        // HEARTBEAT_OK entries stay in the file and are filtered at context
-        // build time instead of being removed via fs.truncate (#39609).
+        if (params.expectPruned) {
+          const finalContent = await fs.readFile(transcriptPath, "utf-8");
+          expect(finalContent).toBe(originalContent);
+          expect(finalSize).toBe(originalSize);
+          return;
+        }
         expect(finalSize).toBeGreaterThanOrEqual(originalSize);
       },
       { prefix: "openclaw-hb-prune-" },
     );
   }
 
-  it("does not truncate transcript when heartbeat returns HEARTBEAT_OK", async () => {
+  it("prunes transcript when heartbeat returns HEARTBEAT_OK", async () => {
     await runTranscriptScenario({
-      sessionId: "test-session-no-prune",
+      sessionId: "test-session-prune",
       reply: {
         text: "HEARTBEAT_OK",
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
       },
+      expectPruned: true,
     });
   });
 
-  it("does not truncate transcript when heartbeat returns meaningful content", async () => {
+  it("does not prune transcript when heartbeat returns meaningful content", async () => {
     await runTranscriptScenario({
-      sessionId: "test-session-content",
+      sessionId: "test-session-no-prune",
       reply: {
         text: "Alert: Something needs your attention!",
         usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
       },
+      expectPruned: false,
     });
   });
 });

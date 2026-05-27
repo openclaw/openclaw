@@ -17,7 +17,7 @@ export type SandboxDockerSettings = {
   user?: string;
   /** Drop Linux capabilities. */
   capDrop?: string[];
-  /** Explicit environment variables for sandbox container creation and exec. */
+  /** Extra environment variables for sandbox exec. */
   env?: Record<string, string>;
   /** Optional setup command run once after container creation (array entries are joined by newline). */
   setupCommand?: string;
@@ -29,8 +29,6 @@ export type SandboxDockerSettings = {
   memorySwap?: string | number;
   /** Limit container CPU shares (e.g. 0.5, 1, 2). */
   cpus?: number;
-  /** GPU devices to expose via Docker --gpus (e.g. "all", "device=GPU-uuid"). */
-  gpus?: string;
   /**
    * Set ulimit values by name (e.g. nofile, nproc).
    * Use "soft:hard" string, a number, or { soft, hard }.

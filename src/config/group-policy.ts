@@ -1,12 +1,7 @@
-import type { ChannelId } from "../channels/plugins/channel-id.types.js";
+import type { ChannelId } from "../channels/plugins/types.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeMessageChannel } from "../utils/message-channel-core.js";
-import type { OpenClawConfig } from "./types.openclaw.js";
+import type { OpenClawConfig } from "./config.js";
 import {
   parseToolsBySenderTypedKey,
   type GroupToolPolicyBySenderConfig,
@@ -14,11 +9,10 @@ import {
   type ToolsBySenderKeyType,
 } from "./types.tools.js";
 
-type GroupPolicyChannel = ChannelId;
+export type GroupPolicyChannel = ChannelId;
 
-type ChannelGroupConfig = {
+export type ChannelGroupConfig = {
   requireMention?: boolean;
-  ingest?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
@@ -47,25 +41,22 @@ function resolveChannelGroupConfig(
   if (!caseInsensitive) {
     return undefined;
   }
-  const target = normalizeLowercaseStringOrEmpty(groupId);
-  const matchedKey = Object.keys(groups).find(
-    (key) => key !== "*" && normalizeLowercaseStringOrEmpty(key) === target,
-  );
+  const target = groupId.toLowerCase();
+  const matchedKey = Object.keys(groups).find((key) => key !== "*" && key.toLowerCase() === target);
   if (!matchedKey) {
     return undefined;
   }
   return groups[matchedKey];
 }
 
-type GroupToolPolicySender = {
-  messageProvider?: string | null;
+export type GroupToolPolicySender = {
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
 };
 
-type SenderKeyType = ToolsBySenderKeyType;
+type SenderKeyType = "id" | "e164" | "username" | "name";
 type CompiledSenderPolicy = {
   buckets: SenderPolicyBuckets;
   wildcard?: GroupToolPolicyConfig;
@@ -94,38 +85,13 @@ function normalizeSenderKey(
     return "";
   }
   const withoutAt = options.stripLeadingAt && trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
-  return normalizeLowercaseStringOrEmpty(withoutAt);
+  return withoutAt.toLowerCase();
 }
 
 function normalizeTypedSenderKey(value: string, type: SenderKeyType): string {
-  if (type === "channel") {
-    return normalizeChannelSenderKey(value);
-  }
   return normalizeSenderKey(value, {
     stripLeadingAt: type === "username",
   });
-}
-
-function normalizeSenderPolicyChannel(value: string | null | undefined): string {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return "";
-  }
-  return normalizeMessageChannel(trimmed) ?? normalizeSenderKey(trimmed);
-}
-
-function normalizeChannelSenderKey(value: string): string {
-  const trimmed = value.trim();
-  const separatorIndex = trimmed.indexOf(":");
-  if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) {
-    return "";
-  }
-  const channel = normalizeSenderPolicyChannel(trimmed.slice(0, separatorIndex));
-  const senderId = normalizeTypedSenderKey(trimmed.slice(separatorIndex + 1), "id");
-  if (!channel || !senderId) {
-    return "";
-  }
-  return `${channel}:${senderId}`;
 }
 
 function normalizeLegacySenderKey(value: string): string {
@@ -141,7 +107,7 @@ function warnLegacyToolsBySenderKey(rawKey: string) {
   }
   warnedLegacyToolsBySenderKeys.add(trimmed);
   process.emitWarning(
-    `toolsBySender key "${trimmed}" is deprecated. Use explicit prefixes (channel:, id:, e164:, username:, name:). Legacy unprefixed keys are matched as id only.`,
+    `toolsBySender key "${trimmed}" is deprecated. Use explicit prefixes (id:, e164:, username:, name:). Legacy unprefixed keys are matched as id only.`,
     {
       type: "DeprecationWarning",
       code: "OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY",
@@ -185,7 +151,6 @@ function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined
 
 function createSenderPolicyBuckets(): SenderPolicyBuckets {
   return {
-    channel: new Map<string, GroupToolPolicyConfig>(),
     id: new Map<string, GroupToolPolicyConfig>(),
     e164: new Map<string, GroupToolPolicyConfig>(),
     username: new Map<string, GroupToolPolicyConfig>(),
@@ -241,7 +206,7 @@ function resolveCompiledToolsBySenderPolicy(
 }
 
 function normalizeCandidate(value: string | null | undefined, type: SenderKeyType): string {
-  const trimmed = normalizeOptionalString(value);
+  const trimmed = value?.trim();
   if (!trimmed) {
     return "";
   }
@@ -249,7 +214,7 @@ function normalizeCandidate(value: string | null | undefined, type: SenderKeyTyp
 }
 
 function normalizeSenderIdCandidates(value: string | null | undefined): string[] {
-  const trimmed = normalizeOptionalString(value);
+  const trimmed = value?.trim();
   if (!trimmed) {
     return [];
   }
@@ -268,17 +233,7 @@ function matchToolsBySenderPolicy(
   compiled: CompiledSenderPolicy,
   params: GroupToolPolicySender,
 ): GroupToolPolicyConfig | undefined {
-  const senderIdCandidates = normalizeSenderIdCandidates(params.senderId);
-  const channel = normalizeSenderPolicyChannel(params.messageProvider);
-  if (channel) {
-    for (const senderIdCandidate of senderIdCandidates) {
-      const match = compiled.buckets.channel.get(`${channel}:${senderIdCandidate}`);
-      if (match) {
-        return match;
-      }
-    }
-  }
-  for (const senderIdCandidate of senderIdCandidates) {
+  for (const senderIdCandidate of normalizeSenderIdCandidates(params.senderId)) {
     const match = compiled.buckets.id.get(senderIdCandidate);
     if (match) {
       return match;
@@ -340,21 +295,6 @@ function resolveChannelGroups(
     return undefined;
   }
   const accountGroups = resolveAccountEntry(channelConfig.accounts, normalizedAccountId)?.groups;
-  // In a single-account setup, treat an explicit empty account groups map
-  // (`accounts.<id>.groups: {}`) the same as undefined for fallback: the empty
-  // literal is almost always a config-migration artifact, not an intentional
-  // "block all groups" declaration — the explicit way to block is
-  // `groupPolicy: "disabled"` (or omitting the group from a populated
-  // allowlist). Without this, an empty `{}` paired with the default
-  // `groupPolicy: "allowlist"` silently denies every group update even though
-  // root `channels.<channel>.groups` is populated. Multi-account contexts keep
-  // the existing semantics so per-account explicit-empty groups still scope
-  // disable a single account without affecting siblings.
-  const isMultiAccount = Object.keys(channelConfig.accounts ?? {}).length > 1;
-  if (!isMultiAccount) {
-    const hasAccountGroups = accountGroups && Object.keys(accountGroups).length > 0;
-    return hasAccountGroups ? accountGroups : channelConfig.groups;
-  }
   return accountGroups ?? channelConfig.groups;
 }
 
@@ -425,7 +365,6 @@ export function resolveChannelGroupRequireMention(params: {
   accountId?: string | null;
   groupIdCaseInsensitive?: boolean;
   requireMentionOverride?: boolean;
-  configuredGroupDefaultsToNoMention?: boolean;
   overrideOrder?: "before-config" | "after-config";
 }): boolean {
   const { requireMentionOverride, overrideOrder = "after-config" } = params;
@@ -446,9 +385,6 @@ export function resolveChannelGroupRequireMention(params: {
   if (overrideOrder !== "before-config" && typeof requireMentionOverride === "boolean") {
     return requireMentionOverride;
   }
-  if (params.configuredGroupDefaultsToNoMention && groupConfig) {
-    return false;
-  }
   return true;
 }
 
@@ -457,32 +393,13 @@ export function resolveChannelGroupToolsPolicy(
     cfg: OpenClawConfig;
     channel: GroupPolicyChannel;
     groupId?: string | null;
-    groupIdCandidates?: Array<string | null | undefined>;
     accountId?: string | null;
     groupIdCaseInsensitive?: boolean;
   } & GroupToolPolicySender,
 ): GroupToolPolicyConfig | undefined {
-  const groups = resolveChannelGroups(params.cfg, params.channel, params.accountId);
-  const groupIds = [
-    params.groupId,
-    ...(Array.isArray(params.groupIdCandidates) ? params.groupIdCandidates : []),
-  ];
-  let groupConfig: ChannelGroupConfig | undefined;
-  for (const rawGroupId of groupIds) {
-    const groupId = rawGroupId?.trim();
-    if (!groupId) {
-      continue;
-    }
-    // Scoped ids can collapse to a parent group; try all exact matches before wildcard fallback.
-    groupConfig = resolveChannelGroupConfig(groups, groupId, params.groupIdCaseInsensitive);
-    if (groupConfig) {
-      break;
-    }
-  }
-  const defaultConfig = groups?.["*"];
+  const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
   const groupSenderPolicy = resolveToolsBySender({
     toolsBySender: groupConfig?.toolsBySender,
-    messageProvider: params.messageProvider ?? params.channel,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
@@ -496,7 +413,6 @@ export function resolveChannelGroupToolsPolicy(
   }
   const defaultSenderPolicy = resolveToolsBySender({
     toolsBySender: defaultConfig?.toolsBySender,
-    messageProvider: params.messageProvider ?? params.channel,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,

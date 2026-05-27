@@ -1,10 +1,12 @@
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import type { QueueDropPolicy, QueueMode } from "./types.js";
 
 export function normalizeQueueMode(raw?: string): QueueMode | undefined {
-  const cleaned = normalizeOptionalLowercaseString(raw);
-  if (!cleaned) {
+  if (!raw) {
     return undefined;
+  }
+  const cleaned = raw.trim().toLowerCase();
+  if (cleaned === "queue" || cleaned === "queued") {
+    return "steer";
   }
   if (cleaned === "interrupt" || cleaned === "interrupts" || cleaned === "abort") {
     return "interrupt";
@@ -18,29 +20,17 @@ export function normalizeQueueMode(raw?: string): QueueMode | undefined {
   if (cleaned === "collect" || cleaned === "coalesce") {
     return "collect";
   }
-  return undefined;
-}
-
-export function normalizePersistedQueueMode(raw?: string): QueueMode | undefined {
-  const normalized = normalizeQueueMode(raw);
-  if (normalized) {
-    return normalized;
-  }
-  const cleaned = normalizeOptionalLowercaseString(raw);
-  if (cleaned === "queue" || cleaned === "queued") {
-    return "steer";
-  }
   if (cleaned === "steer+backlog" || cleaned === "steer-backlog" || cleaned === "steer_backlog") {
-    return "followup";
+    return "steer-backlog";
   }
   return undefined;
 }
 
 export function normalizeQueueDropPolicy(raw?: string): QueueDropPolicy | undefined {
-  const cleaned = normalizeOptionalLowercaseString(raw);
-  if (!cleaned) {
+  if (!raw) {
     return undefined;
   }
+  const cleaned = raw.trim().toLowerCase();
   if (cleaned === "old" || cleaned === "oldest") {
     return "old";
   }

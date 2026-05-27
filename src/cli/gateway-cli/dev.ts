@@ -4,9 +4,8 @@ import path from "node:path";
 import { resolveWorkspaceTemplateDir } from "../../agents/workspace-templates.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
-import { createConfigIO, replaceConfigFile } from "../../config/config.js";
+import { createConfigIO, writeConfigFile } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 
 const DEV_IDENTITY_NAME = "C3-PO";
@@ -33,7 +32,7 @@ async function loadDevTemplate(name: string, fallback: string): Promise<string> 
 
 const resolveDevWorkspaceDir = (env: NodeJS.ProcessEnv = process.env): string => {
   const baseDir = resolveDefaultAgentWorkspaceDir(env, os.homedir);
-  const profile = normalizeOptionalLowercaseString(env.OPENCLAW_PROFILE);
+  const profile = env.OPENCLAW_PROFILE?.trim().toLowerCase();
   if (profile === "dev") {
     return baseDir;
   }
@@ -101,32 +100,29 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
     return;
   }
 
-  await replaceConfigFile({
-    nextConfig: {
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-      },
-      agents: {
-        defaults: {
-          workspace,
-          skipBootstrap: true,
-        },
-        list: [
-          {
-            id: "dev",
-            default: true,
-            workspace,
-            identity: {
-              name: DEV_IDENTITY_NAME,
-              theme: DEV_IDENTITY_THEME,
-              emoji: DEV_IDENTITY_EMOJI,
-            },
-          },
-        ],
-      },
+  await writeConfigFile({
+    gateway: {
+      mode: "local",
+      bind: "loopback",
     },
-    afterWrite: { mode: "auto" },
+    agents: {
+      defaults: {
+        workspace,
+        skipBootstrap: true,
+      },
+      list: [
+        {
+          id: "dev",
+          default: true,
+          workspace,
+          identity: {
+            name: DEV_IDENTITY_NAME,
+            theme: DEV_IDENTITY_THEME,
+            emoji: DEV_IDENTITY_EMOJI,
+          },
+        },
+      ],
+    },
   });
   await ensureDevWorkspace(workspace);
   defaultRuntime.log(`Dev config ready: ${shortenHomePath(configPath)}`);

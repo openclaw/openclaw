@@ -39,7 +39,7 @@ describe("resolveMessageSecretScope", () => {
       resolveMessageSecretScope({
         targets: ["signal:one", "imessage:two"],
       }),
-    ).toStrictEqual({});
+    ).toEqual({});
   });
 
   it("uses fallback channel/account when direct inputs are missing", () => {

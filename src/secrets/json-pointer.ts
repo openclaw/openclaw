@@ -1,5 +1,3 @@
-import { isRecord as isJsonObject } from "../shared/record-coerce.js";
-
 function failOrUndefined(params: { onMissing: "throw" | "undefined"; message: string }): undefined {
   if (params.onMissing === "throw") {
     throw new Error(params.message);
@@ -7,7 +5,7 @@ function failOrUndefined(params: { onMissing: "throw" | "undefined"; message: st
   return undefined;
 }
 
-function decodeJsonPointerToken(token: string): string {
+export function decodeJsonPointerToken(token: string): string {
   return token.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
@@ -47,19 +45,50 @@ export function readJsonPointer(
       current = current[index];
       continue;
     }
-    if (!isJsonObject(current)) {
+    if (typeof current !== "object" || current === null || Array.isArray(current)) {
       return failOrUndefined({
         onMissing,
         message: `JSON pointer segment "${token}" does not exist.`,
       });
     }
-    if (!Object.hasOwn(current, token)) {
+    const record = current as Record<string, unknown>;
+    if (!Object.hasOwn(record, token)) {
       return failOrUndefined({
         onMissing,
         message: `JSON pointer segment "${token}" does not exist.`,
       });
     }
-    current = current[token];
+    current = record[token];
   }
   return current;
+}
+
+export function setJsonPointer(
+  root: Record<string, unknown>,
+  pointer: string,
+  value: unknown,
+): void {
+  if (!pointer.startsWith("/")) {
+    throw new Error(`Invalid JSON pointer "${pointer}".`);
+  }
+
+  const tokens = pointer
+    .slice(1)
+    .split("/")
+    .map((token) => decodeJsonPointerToken(token));
+
+  let current: Record<string, unknown> = root;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const isLast = index === tokens.length - 1;
+    if (isLast) {
+      current[token] = value;
+      return;
+    }
+    const child = current[token];
+    if (typeof child !== "object" || child === null || Array.isArray(child)) {
+      current[token] = {};
+    }
+    current = current[token] as Record<string, unknown>;
+  }
 }

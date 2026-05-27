@@ -1,4 +1,3 @@
-import type { AuthConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
@@ -6,10 +5,6 @@ import {
   type SecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const PROVIDER_ID = "microsoft-foundry";
 export const DEFAULT_API = "openai-completions";
@@ -74,59 +69,39 @@ export type CachedTokenEntry = {
 
 export type FoundryProviderApi = typeof DEFAULT_API | typeof DEFAULT_GPT5_API;
 
-type FoundryDeploymentConfigInput = {
+export type FoundryDeploymentConfigInput = {
   name: string;
   modelName?: string;
   api?: FoundryProviderApi;
 };
-
-type FoundryModelCapabilities = {
-  modelName: string;
-  api: FoundryProviderApi;
-  input: Array<"text" | "image">;
-  compat?: FoundryModelCompat;
-};
-
-function normalizeModelInput(input?: unknown): Array<"text" | "image"> {
-  const normalized = Array.isArray(input)
-    ? input.filter((item): item is "text" | "image" => item === "text" || item === "image")
-    : [];
-  return normalized.length > 0 ? normalized : ["text"];
-}
 
 type FoundryModelCompat = {
   supportsStore?: boolean;
   maxTokensField: "max_completion_tokens" | "max_tokens";
 };
 
+type FoundryAuthProfileConfig = {
+  provider: string;
+  mode: "api_key" | "oauth" | "token";
+  email?: string;
+};
+
 type FoundryConfigShape = {
-  auth?: AuthConfig;
+  auth?: {
+    profiles?: Record<string, FoundryAuthProfileConfig>;
+    order?: Record<string, string[]>;
+  };
   models?: {
     providers?: Record<string, ModelProviderConfig>;
   };
 };
 
-function normalizeFoundryModelName(value?: string | null): string | undefined {
-  const trimmed = normalizeLowercaseStringOrEmpty(value);
+export function normalizeFoundryModelName(value?: string | null): string | undefined {
+  const trimmed = typeof value === "string" ? value.trim().toLowerCase() : "";
   return trimmed || undefined;
 }
 
 export function usesFoundryResponsesByDefault(value?: string | null): boolean {
-  const normalized = normalizeFoundryModelName(value);
-  if (!normalized) {
-    return false;
-  }
-  return (
-    normalized.startsWith("gpt-") ||
-    normalized.startsWith("o1") ||
-    normalized.startsWith("o3") ||
-    normalized.startsWith("o4") ||
-    normalized.startsWith("deepseek-v4") ||
-    normalized === "computer-use-preview"
-  );
-}
-
-export function supportsFoundryImageInput(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   if (!normalized) {
     return false;
@@ -158,7 +133,7 @@ export function isFoundryProviderApi(value?: string | null): value is FoundryPro
 }
 
 export function normalizeFoundryEndpoint(endpoint: string): string {
-  const trimmed = normalizeOptionalString(endpoint) ?? "";
+  const trimmed = endpoint.trim();
   if (!trimmed) {
     return trimmed;
   }
@@ -174,7 +149,7 @@ export function normalizeFoundryEndpoint(endpoint: string): string {
   }
 }
 
-function buildFoundryV1BaseUrl(endpoint: string): string {
+export function buildFoundryV1BaseUrl(endpoint: string): string {
   const base = normalizeFoundryEndpoint(endpoint);
   return base.endsWith("/openai/v1") ? base : `${base}/openai/v1`;
 }
@@ -182,7 +157,7 @@ function buildFoundryV1BaseUrl(endpoint: string): string {
 export function resolveFoundryApi(
   modelId: string,
   modelNameHint?: string | null,
-  configuredApi?: ModelApi | null,
+  configuredApi?: ModelApi | string | null,
 ): FoundryProviderApi {
   if (isFoundryProviderApi(configuredApi)) {
     return configuredApi;
@@ -193,9 +168,9 @@ export function resolveFoundryApi(
 
 export function buildFoundryProviderBaseUrl(
   endpoint: string,
-  _modelId: string,
-  _modelNameHint?: string | null,
-  _configuredApi?: ModelApi | null,
+  modelId: string,
+  modelNameHint?: string | null,
+  configuredApi?: ModelApi | string | null,
 ): string {
   return buildFoundryV1BaseUrl(endpoint);
 }
@@ -211,10 +186,10 @@ export function extractFoundryEndpoint(baseUrl: string | null | undefined): stri
   }
 }
 
-function buildFoundryModelCompat(
+export function buildFoundryModelCompat(
   modelId: string,
   modelNameHint?: string | null,
-  configuredApi?: ModelApi | null,
+  configuredApi?: ModelApi | string | null,
 ): FoundryModelCompat | undefined {
   const resolvedApi = resolveFoundryApi(modelId, modelNameHint, configuredApi);
   const configuredModelName = resolveConfiguredModelNameHint(modelId, modelNameHint);
@@ -228,39 +203,19 @@ function buildFoundryModelCompat(
   };
 }
 
-export function resolveFoundryModelCapabilities(
-  modelId: string,
-  modelNameHint?: string | null,
-  configuredApi?: ModelApi | null,
-  existingInput?: unknown,
-): FoundryModelCapabilities {
-  const modelName = resolveConfiguredModelNameHint(modelId, modelNameHint) ?? modelId;
-  const api = resolveFoundryApi(modelId, modelName, configuredApi);
-  const normalizedInput = normalizeModelInput(existingInput);
-  return {
-    modelName,
-    api,
-    input:
-      normalizedInput.includes("image") || supportsFoundryImageInput(modelName)
-        ? ["text", "image"]
-        : normalizedInput,
-    compat: buildFoundryModelCompat(modelId, modelName, api),
-  };
-}
-
 export function resolveConfiguredModelNameHint(
   modelId: string,
   modelNameHint?: string | null,
 ): string | undefined {
-  const trimmedName = normalizeOptionalString(modelNameHint) ?? "";
+  const trimmedName = typeof modelNameHint === "string" ? modelNameHint.trim() : "";
   if (trimmedName) {
     return trimmedName;
   }
-  const trimmedId = normalizeOptionalString(modelId) ?? "";
+  const trimmedId = modelId.trim();
   return trimmedId ? trimmedId : undefined;
 }
 
-function buildFoundryProviderConfig(
+export function buildFoundryProviderConfig(
   endpoint: string,
   modelId: string,
   modelNameHint?: string | null,
@@ -289,24 +244,20 @@ function buildFoundryProviderConfig(
         }
       : {}),
     models: deployments.map((deployment) => {
-      const capabilities = resolveFoundryModelCapabilities(
-        deployment.name,
-        deployment.modelName,
-        deployment.api,
-      );
-      return Object.assign(
-        {
-          id: deployment.name,
-          name: capabilities.modelName,
-          api: capabilities.api,
-          reasoning: false,
-          input: capabilities.input,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128e3,
-          maxTokens: 16384,
-        },
-        capabilities.compat ? { compat: capabilities.compat } : {},
-      );
+      const configuredName = resolveConfiguredModelNameHint(deployment.name, deployment.modelName);
+      const api = resolveFoundryApi(deployment.name, configuredName, deployment.api);
+      const compat = buildFoundryModelCompat(deployment.name, configuredName, api);
+      return {
+        id: deployment.name,
+        name: configuredName ?? deployment.name,
+        api,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 16_384,
+        ...(compat ? { compat } : {}),
+      };
     }),
   };
 }
@@ -480,7 +431,7 @@ export function resolveFoundryTargetProfileId(config: FoundryConfigShape): strin
   }
   // Prefer the explicitly ordered profile; fall back to the sole entry when there is exactly one.
   return (
-    config.auth?.order?.[PROVIDER_ID]?.find((profileId) => normalizeOptionalString(profileId)) ??
+    config.auth?.order?.[PROVIDER_ID]?.find((profileId) => profileId.trim().length > 0) ??
     (configuredProfileEntries.length === 1 ? configuredProfileEntries[0]?.[0] : undefined)
   );
 }

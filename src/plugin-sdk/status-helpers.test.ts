@@ -162,32 +162,27 @@ describe("createDefaultChannelRuntimeState", () => {
 });
 
 describe("buildBaseChannelStatusSummary", () => {
-  it.each([
-    {
-      name: "defaults missing values",
-      input: {},
-      expected: defaultChannelSummary,
-    },
-    {
-      name: "keeps explicit values",
-      input: {
+  it("defaults missing values", () => {
+    expect(buildBaseChannelStatusSummary({})).toEqual(defaultChannelSummary);
+  });
+
+  it("keeps explicit values", () => {
+    expect(
+      buildBaseChannelStatusSummary({
         configured: true,
         running: true,
         lastStartAt: 1,
         lastStopAt: 2,
         lastError: "boom",
-      },
-      expected: {
-        ...defaultChannelSummary,
-        configured: true,
-        running: true,
-        lastStartAt: 1,
-        lastStopAt: 2,
-        lastError: "boom",
-      },
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(buildBaseChannelStatusSummary(input)).toEqual(expected);
+      }),
+    ).toEqual({
+      ...defaultChannelSummary,
+      configured: true,
+      running: true,
+      lastStartAt: 1,
+      lastStopAt: 2,
+      lastError: "boom",
+    });
   });
 
   it("merges extra fields into the normalized channel summary", () => {
@@ -211,32 +206,30 @@ describe("buildBaseChannelStatusSummary", () => {
 });
 
 describe("buildBaseAccountStatusSnapshot", () => {
-  it.each([
-    {
-      name: "builds account status with runtime defaults",
-      input: {
+  it("builds account status with runtime defaults", () => {
+    expect(
+      buildBaseAccountStatusSnapshot({
         account: { accountId: "default", enabled: true, configured: true },
-      },
-      extra: undefined,
-      expected: expectedAccountSnapshot({ enabled: true, configured: true }),
-    },
-    {
-      name: "merges extra snapshot fields after the shared account shape",
-      input: {
-        account: { accountId: "default", configured: true },
-      },
-      extra: {
-        connected: true,
-        mode: "polling",
-      },
-      expected: {
-        ...expectedAccountSnapshot({ configured: true }),
-        connected: true,
-        mode: "polling",
-      },
-    },
-  ])("$name", ({ input, extra, expected }) => {
-    expect(buildBaseAccountStatusSnapshot(input, extra)).toEqual(expected);
+      }),
+    ).toEqual(expectedAccountSnapshot({ enabled: true, configured: true }));
+  });
+
+  it("merges extra snapshot fields after the shared account shape", () => {
+    expect(
+      buildBaseAccountStatusSnapshot(
+        {
+          account: { accountId: "default", configured: true },
+        },
+        {
+          connected: true,
+          mode: "polling",
+        },
+      ),
+    ).toEqual({
+      ...expectedAccountSnapshot({ configured: true }),
+      connected: true,
+      mode: "polling",
+    });
   });
 });
 
@@ -316,36 +309,6 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
         ...defaultRuntimeState,
         probe: undefined,
         port: 3978,
-      },
-    },
-    {
-      name: "preserves runtime connectivity metadata",
-      input: {
-        runtime: {
-          connected: true,
-          restartPending: true,
-          reconnectAttempts: 3,
-          lastConnectedAt: 11,
-          lastDisconnect: { at: 12, error: "boom" },
-          lastEventAt: 13,
-          lastTransportActivityAt: 14,
-          healthState: "healthy",
-          running: true,
-        },
-      },
-      extra: undefined,
-      expected: {
-        ...defaultRuntimeState,
-        running: true,
-        connected: true,
-        restartPending: true,
-        reconnectAttempts: 3,
-        lastConnectedAt: 11,
-        lastDisconnect: { at: 12, error: "boom" },
-        lastEventAt: 13,
-        lastTransportActivityAt: 14,
-        healthState: "healthy",
-        probe: undefined,
       },
     },
   ])("$name", ({ input, extra, expected }) => {

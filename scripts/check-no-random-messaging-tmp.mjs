@@ -9,11 +9,10 @@ import {
   unwrapExpression,
 } from "./lib/ts-guard-utils.mjs";
 
-export const messagingTmpdirGuardSourceRoots = [
+const sourceRoots = [
   "src/channels",
   "src/infra/outbound",
   "src/line",
-  "src/media",
   "src/media-understanding",
   "extensions",
 ];
@@ -73,7 +72,7 @@ export function findMessagingTmpdirCallLines(content, fileName = "source.ts") {
 export async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,
-    sourceRoots: messagingTmpdirGuardSourceRoots,
+    sourceRoots,
     findCallLines: findMessagingTmpdirCallLines,
     skipRelativePath: (relativePath) => allowedRelativePaths.has(relativePath),
     header: "Found os.tmpdir()/tmpdir() usage in messaging/channel runtime sources:",

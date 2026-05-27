@@ -1,8 +1,6 @@
 import os from "node:os";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import { VERSION as runtimeVersion } from "../version.js";
 
 vi.unmock("../version.js");
 
@@ -18,10 +16,8 @@ async function withPresenceModule<T>(
       ...env,
     },
     async () => {
-      const module = await importFreshModule<typeof import("./system-presence.js")>(
-        import.meta.url,
-        `./system-presence.js?scope=${JSON.stringify(env)}`,
-      );
+      vi.resetModules();
+      const module = await import("./system-presence.js");
       return await run(module);
     },
   );
@@ -50,7 +46,7 @@ describe("system-presence version fallback", () => {
         OPENCLAW_SERVICE_VERSION: "2.4.6-service",
         npm_package_version: "1.0.0-package",
       },
-      runtimeVersion,
+      async () => (await import("../version.js")).VERSION,
     );
   });
 
@@ -72,7 +68,7 @@ describe("system-presence version fallback", () => {
         OPENCLAW_SERVICE_VERSION: "2.4.6-service",
         npm_package_version: "1.0.0-package",
       },
-      runtimeVersion,
+      async () => (await import("../version.js")).VERSION,
     );
   });
 
@@ -83,7 +79,7 @@ describe("system-presence version fallback", () => {
         OPENCLAW_SERVICE_VERSION: "\t",
         npm_package_version: "1.0.0-package",
       },
-      runtimeVersion,
+      async () => (await import("../version.js")).VERSION,
     );
   });
 
@@ -94,7 +90,7 @@ describe("system-presence version fallback", () => {
         OPENCLAW_SERVICE_VERSION: "\t",
         npm_package_version: "1.0.0-package",
       },
-      runtimeVersion,
+      async () => (await import("../version.js")).VERSION,
     );
   });
 
@@ -104,10 +100,8 @@ describe("system-presence version fallback", () => {
       vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
         throw new Error("uv_interface_addresses failed");
       });
-      const module = await importFreshModule<typeof import("./system-presence.js")>(
-        import.meta.url,
-        "./system-presence.js?scope=hostname-fallback",
-      );
+      vi.resetModules();
+      const module = await import("./system-presence.js");
       const selfEntry = module.listSystemPresence().find((entry) => entry.reason === "self");
       expect(selfEntry?.host).toBe("test-host");
       expect(selfEntry?.ip).toBe("test-host");

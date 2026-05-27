@@ -1,10 +1,9 @@
 export {
-  getRuntimeConfig,
+  createConfigIO,
   getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  mutateConfigFile,
-  replaceConfigFile,
+  loadConfig,
+  writeConfigFile,
   type BrowserConfig,
   type BrowserProfileConfig,
   type OpenClawConfig,
-} from "../sdk-config.js";
+} from "openclaw/plugin-sdk/browser-support";

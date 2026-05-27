@@ -1,23 +1,16 @@
 import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
-import { formatCliCommand } from "./command-format.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
-type SystemEventOpts = GatewayRpcOpts & {
-  text?: string;
-  mode?: string;
-  sessionKey?: string;
-  json?: boolean;
-};
+type SystemEventOpts = GatewayRpcOpts & { text?: string; mode?: string; json?: boolean };
 type SystemGatewayOpts = GatewayRpcOpts & { json?: boolean };
 
 const normalizeWakeMode = (raw: unknown) => {
-  const mode = normalizeOptionalString(raw) ?? "";
+  const mode = typeof raw === "string" ? raw.trim() : "";
   if (!mode) {
     return "next-heartbeat" as const;
   }
@@ -61,29 +54,17 @@ export function registerSystemCli(program: Command) {
       .description("Enqueue a system event and optionally trigger a heartbeat")
       .requiredOption("--text <text>", "System event text")
       .option("--mode <mode>", "Wake mode (now|next-heartbeat)", "next-heartbeat")
-      .option(
-        "--session-key <sessionKey>",
-        "Target a specific session for the event (defaults to the agent's main session)",
-      )
       .option("--json", "Output JSON", false),
   ).action(async (opts: SystemEventOpts) => {
     await runSystemGatewayCommand(
       opts,
       async () => {
-        const text = normalizeOptionalString(opts.text) ?? "";
+        const text = typeof opts.text === "string" ? opts.text.trim() : "";
         if (!text) {
-          throw new Error(
-            `--text is required. Example: ${formatCliCommand('openclaw system event --text "deploy finished"')}.`,
-          );
+          throw new Error("--text is required");
         }
         const mode = normalizeWakeMode(opts.mode);
-        const sessionKey = normalizeOptionalString(opts.sessionKey);
-        return await callGatewayFromCli(
-          "wake",
-          opts,
-          sessionKey ? { mode, text, sessionKey } : { mode, text },
-          { expectFinal: false },
-        );
+        return await callGatewayFromCli("wake", opts, { mode, text }, { expectFinal: false });
       },
       "ok",
     );

@@ -1,16 +1,15 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { listCombinedAccountIds } from "openclaw/plugin-sdk/account-resolution";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
-import { resolveDefaultDiscordAccountId } from "./accounts.js";
 import { mergeDiscordAccountConfig, resolveDiscordAccountConfig } from "./accounts.js";
 import type { DiscordAccountConfig } from "./runtime-api.js";
 import { resolveDiscordToken } from "./token.js";
 
-type InspectedDiscordSetupAccount = {
+export type InspectedDiscordSetupAccount = {
   accountId: string;
   enabled: boolean;
   token: string;
@@ -55,16 +54,14 @@ export function listDiscordSetupAccountIds(cfg: OpenClawConfig): string[] {
 }
 
 export function resolveDefaultDiscordSetupAccountId(cfg: OpenClawConfig): string {
-  return resolveDefaultDiscordAccountId(cfg);
+  return listDiscordSetupAccountIds(cfg)[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
 export function resolveDiscordSetupAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): { accountId: string; config: DiscordAccountConfig } {
-  const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultDiscordSetupAccountId(params.cfg),
-  );
+  const accountId = normalizeAccountId(params.accountId ?? DEFAULT_ACCOUNT_ID);
   return {
     accountId,
     config: mergeDiscordAccountConfig(params.cfg, accountId),

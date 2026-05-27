@@ -8,54 +8,35 @@ type MinimaxBaseResp = {
 };
 
 export function isMinimaxVlmProvider(provider: string): boolean {
-  const normalized = provider.trim().toLowerCase();
-  return (
-    normalized === "minimax" ||
-    normalized === "minimax-cn" ||
-    normalized === "minimax-portal" ||
-    normalized === "minimax-portal-cn"
-  );
+  return provider === "minimax" || provider === "minimax-portal";
 }
 
 export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
   return isMinimaxVlmProvider(provider) && modelId.trim() === "MiniMax-VL-01";
 }
 
-function isMinimaxCnProvider(provider: string | undefined): boolean {
-  const normalized = provider?.trim().toLowerCase();
-  return normalized === "minimax-cn" || normalized === "minimax-portal-cn";
-}
-
 function coerceApiHost(params: {
   apiHost?: string;
   modelBaseUrl?: string;
-  provider?: string;
   env?: NodeJS.ProcessEnv;
 }): string {
   const env = params.env ?? process.env;
-  const defaultHost = isMinimaxCnProvider(params.provider)
-    ? "https://api.minimaxi.com"
-    : "https://api.minimax.io";
   const raw =
     params.apiHost?.trim() ||
     env.MINIMAX_API_HOST?.trim() ||
     params.modelBaseUrl?.trim() ||
-    defaultHost;
+    "https://api.minimax.io";
 
   try {
     const url = new URL(raw);
     return url.origin;
   } catch {}
 
-  if (/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) {
-    return defaultHost;
-  }
-
   try {
     const url = new URL(`https://${raw}`);
     return url.origin;
   } catch {
-    return defaultHost;
+    return "https://api.minimax.io";
   }
 }
 
@@ -70,8 +51,6 @@ export async function minimaxUnderstandImage(params: {
   imageDataUrl: string;
   apiHost?: string;
   modelBaseUrl?: string;
-  provider?: string;
-  timeoutMs?: number;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
@@ -92,20 +71,12 @@ export async function minimaxUnderstandImage(params: {
   const host = coerceApiHost({
     apiHost: params.apiHost,
     modelBaseUrl: params.modelBaseUrl,
-    provider: params.provider,
   });
   const url = new URL("/v1/coding_plan/vlm", host).toString();
 
   // Ensure env-based proxy dispatcher is active before the outbound fetch call.
   // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
   ensureGlobalUndiciEnvProxyDispatcher();
-
-  const timeoutMs =
-    typeof params.timeoutMs === "number" &&
-    Number.isFinite(params.timeoutMs) &&
-    params.timeoutMs > 0
-      ? Math.floor(params.timeoutMs)
-      : 60_000;
 
   const res = await fetch(url, {
     method: "POST",
@@ -114,7 +85,6 @@ export async function minimaxUnderstandImage(params: {
       "Content-Type": "application/json",
       "MM-API-Source": "OpenClaw",
     },
-    signal: AbortSignal.timeout(timeoutMs),
     body: JSON.stringify({
       prompt,
       image_url: imageDataUrl,

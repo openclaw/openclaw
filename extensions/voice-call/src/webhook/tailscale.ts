@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import type { VoiceCallConfig } from "../config.js";
 
-type TailscaleSelfInfo = {
+export type TailscaleSelfInfo = {
   dnsName: string | null;
   nodeId: string | null;
 };
@@ -16,32 +16,18 @@ function runTailscaleCommand(
     });
 
     let stdout = "";
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const finish = (result: { code: number; stdout: string }) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    };
-
     proc.stdout.on("data", (data) => {
       stdout += data;
     });
 
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       proc.kill("SIGKILL");
-      finish({ code: -1, stdout: "" });
+      resolve({ code: -1, stdout: "" });
     }, timeoutMs);
 
-    proc.on("error", () => {
-      finish({ code: -1, stdout: "" });
-    });
-
     proc.on("close", (code) => {
-      finish({ code: code ?? -1, stdout });
+      clearTimeout(timer);
+      resolve({ code: code ?? -1, stdout });
     });
   });
 }

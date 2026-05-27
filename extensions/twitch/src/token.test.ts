@@ -13,8 +13,6 @@ import type { OpenClawConfig } from "../api.js";
 import { resolveTwitchToken, type TwitchTokenSource } from "./token.js";
 
 describe("token", () => {
-  const originalAccessToken = process.env.OPENCLAW_TWITCH_ACCESS_TOKEN;
-
   // Multi-account config for testing non-default accounts
   const mockMultiAccountConfig = {
     channels: {
@@ -49,11 +47,7 @@ describe("token", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    if (originalAccessToken === undefined) {
-      delete process.env.OPENCLAW_TWITCH_ACCESS_TOKEN;
-    } else {
-      process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = originalAccessToken;
-    }
+    delete process.env.OPENCLAW_TWITCH_ACCESS_TOKEN;
   });
 
   describe("resolveTwitchToken", () => {
@@ -68,27 +62,6 @@ describe("token", () => {
       const result = resolveTwitchToken(mockMultiAccountConfig, { accountId: "other" });
 
       expect(result.token).toBe("oauth:other-token");
-      expect(result.source).toBe("config");
-    });
-
-    it("should resolve token from normalized account id", () => {
-      const result = resolveTwitchToken(
-        {
-          channels: {
-            twitch: {
-              accounts: {
-                Secondary: {
-                  username: "secondary",
-                  accessToken: "oauth:secondary-token",
-                },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        { accountId: "secondary" },
-      );
-
-      expect(result.token).toBe("oauth:secondary-token");
       expect(result.source).toBe("config");
     });
 

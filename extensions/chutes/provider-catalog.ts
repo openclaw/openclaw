@@ -4,15 +4,7 @@ import {
   CHUTES_MODEL_CATALOG,
   buildChutesModelDefinition,
   discoverChutesModels,
-} from "./models.js";
-
-export function buildStaticChutesProvider(): ModelProviderConfig {
-  return {
-    baseUrl: CHUTES_BASE_URL,
-    api: "openai-completions",
-    models: CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition),
-  };
-}
+} from "./api.js";
 
 /**
  * Build the Chutes provider with dynamic model discovery.

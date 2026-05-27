@@ -1,32 +1,24 @@
 import path from "node:path";
 import type { CliBackendConfig } from "../../config/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
   CLI_WATCHDOG_MIN_TIMEOUT_MS,
 } from "../cli-watchdog-defaults.js";
-import type { EmbeddedRunTrigger } from "../pi-embedded-runner/run/params.js";
 
 function pickWatchdogProfile(
   backend: CliBackendConfig,
   useResume: boolean,
-  trigger?: EmbeddedRunTrigger,
 ): {
   noOutputTimeoutMs?: number;
   noOutputTimeoutRatio: number;
   minMs: number;
   maxMs: number;
 } {
+  const defaults = useResume ? CLI_RESUME_WATCHDOG_DEFAULTS : CLI_FRESH_WATCHDOG_DEFAULTS;
   const configured = useResume
     ? backend.reliability?.watchdog?.resume
     : backend.reliability?.watchdog?.fresh;
-  const defaults =
-    trigger === "cron" && useResume && !configured
-      ? CLI_FRESH_WATCHDOG_DEFAULTS
-      : useResume
-        ? CLI_RESUME_WATCHDOG_DEFAULTS
-        : CLI_FRESH_WATCHDOG_DEFAULTS;
 
   const ratio = (() => {
     const value = configured?.noOutputTimeoutRatio;
@@ -66,9 +58,8 @@ export function resolveCliNoOutputTimeoutMs(params: {
   backend: CliBackendConfig;
   timeoutMs: number;
   useResume: boolean;
-  trigger?: EmbeddedRunTrigger;
 }): number {
-  const profile = pickWatchdogProfile(params.backend, params.useResume, params.trigger);
+  const profile = pickWatchdogProfile(params.backend, params.useResume);
   // Keep watchdog below global timeout in normal cases.
   const cap = Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, params.timeoutMs - 1_000);
   if (profile.noOutputTimeoutMs !== undefined) {
@@ -84,8 +75,11 @@ export function buildCliSupervisorScopeKey(params: {
   backendId: string;
   cliSessionId?: string;
 }): string | undefined {
-  const commandToken = normalizeLowercaseStringOrEmpty(path.basename(params.backend.command ?? ""));
-  const backendToken = normalizeLowercaseStringOrEmpty(params.backendId);
+  const commandToken = path
+    .basename(params.backend.command ?? "")
+    .trim()
+    .toLowerCase();
+  const backendToken = params.backendId.trim().toLowerCase();
   const sessionToken = params.cliSessionId?.trim();
   if (!sessionToken) {
     return undefined;

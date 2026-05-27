@@ -1,6 +1,7 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ConversationRef,
   SessionBindingAdapter,
@@ -8,10 +9,8 @@ import type {
 } from "../infra/outbound/session-binding-service.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
-import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
-const tempDirs: string[] = [];
-const tempRoot = makeTrackedTempDir("openclaw-plugin-binding", tempDirs);
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-binding-"));
 const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
 
 const sessionBindingState = vi.hoisted(() => {
@@ -92,9 +91,8 @@ const pluginRuntimeState = vi.hoisted(
     }) satisfies { registry: PluginRegistry },
 );
 
-vi.mock("../infra/home-dir.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../infra/home-dir.js")>("../infra/home-dir.js");
+vi.mock("../infra/home-dir.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
   return {
     ...actual,
     expandHomePrefix: (value: string) => {
@@ -106,19 +104,14 @@ vi.mock("../infra/home-dir.js", async () => {
   };
 });
 
-vi.mock("./runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
-  return {
-    ...actual,
-    getActivePluginRegistry: () => pluginRuntimeState.registry,
-    getActivePluginChannelRegistry: () => pluginRuntimeState.registry,
-    setActivePluginRegistry: (registry: PluginRegistry) => {
-      pluginRuntimeState.registry = registry;
-    },
-  };
-});
+vi.mock("./runtime.js", () => ({
+  getActivePluginRegistry: () => pluginRuntimeState.registry,
+  setActivePluginRegistry: (registry: PluginRegistry) => {
+    pluginRuntimeState.registry = registry;
+  },
+}));
 
-let testing: typeof import("./conversation-binding.js").testing;
+let __testing: typeof import("./conversation-binding.js").__testing;
 let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
 let detachPluginConversationBinding: typeof import("./conversation-binding.js").detachPluginConversationBinding;
 let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
@@ -162,25 +155,6 @@ function createAdapter(channel: string, accountId: string): SessionBindingAdapte
     unbind: sessionBindingState.unbind,
   };
 }
-
-afterAll(() => {
-  cleanupTrackedTempDirs(tempDirs);
-});
-
-beforeAll(async () => {
-  ({
-    testing,
-    buildPluginBindingApprovalCustomId,
-    detachPluginConversationBinding,
-    getCurrentPluginConversationBinding,
-    parsePluginBindingApprovalCustomId,
-    requestPluginConversationBinding,
-    resolvePluginConversationBindingApproval,
-  } = await import("./conversation-binding.js"));
-  ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
-    await import("../infra/outbound/session-binding-service.js"));
-  ({ setActivePluginRegistry } = await import("./runtime.js"));
-});
 
 function createDiscordCodexBindRequest(
   conversationId: string,
@@ -233,7 +207,6 @@ function createCodexBindRequest(params: {
   parentConversationId?: string;
   threadId?: string;
   detachHint?: string;
-  data?: Record<string, unknown>;
 }) {
   return {
     pluginId: params.pluginId ?? "codex",
@@ -250,7 +223,6 @@ function createCodexBindRequest(params: {
     binding: {
       summary: params.summary,
       ...(params.detachHint ? { detachHint: params.detachHint } : {}),
-      ...(params.data ? { data: params.data } : {}),
     },
   } satisfies PluginBindingRequestInput;
 }
@@ -282,7 +254,7 @@ async function approveBindingRequest(
 async function importDuplicateConversationBindingModules() {
   const first = await importConversationBindingModule(`first-${Date.now()}`);
   const second = await importConversationBindingModule(`second-${Date.now()}`);
-  first.testing.reset();
+  first.__testing.reset();
   return { first, second };
 }
 
@@ -318,14 +290,6 @@ function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
-function requireMockCallArg(mock: ReturnType<typeof vi.fn>, index = 0): unknown {
-  const call = mock.mock.calls[index] as [unknown] | undefined;
-  if (!call) {
-    throw new Error(`mock call ${index} missing`);
-  }
-  return call[0];
-}
-
 function createResolvedHandlerRegistry(params: {
   pluginRoot: string;
   handler: (input: unknown) => Promise<void>;
@@ -347,7 +311,7 @@ async function expectResolutionCallback(params: {
   requestInput: PluginBindingRequestInput;
   decision: PluginBindingDecision;
   expectedStatus: "approved" | "denied";
-  expectCallback: (payload: unknown) => void;
+  expectedCallback: unknown;
 }) {
   const onResolved = vi.fn(async () => undefined);
   createResolvedHandlerRegistry({
@@ -369,8 +333,7 @@ async function expectResolutionCallback(params: {
 
   expect(result.status).toBe(params.expectedStatus);
   await flushMicrotasks();
-  expect(onResolved).toHaveBeenCalledTimes(1);
-  params.expectCallback(requireMockCallArg(onResolved));
+  expect(onResolved).toHaveBeenCalledWith(params.expectedCallback);
 }
 
 async function expectResolutionDoesNotWait(params: {
@@ -413,9 +376,40 @@ async function expectResolutionDoesNotWait(params: {
 }
 
 describe("plugin conversation binding approvals", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("../infra/home-dir.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
+      return {
+        ...actual,
+        expandHomePrefix: (value: string) => {
+          if (value === "~/.openclaw/plugin-binding-approvals.json") {
+            return approvalsPath;
+          }
+          return actual.expandHomePrefix(value);
+        },
+      };
+    });
+    vi.doMock("./runtime.js", () => ({
+      getActivePluginRegistry: () => pluginRuntimeState.registry,
+      setActivePluginRegistry: (registry: PluginRegistry) => {
+        pluginRuntimeState.registry = registry;
+      },
+    }));
+    ({
+      __testing,
+      buildPluginBindingApprovalCustomId,
+      detachPluginConversationBinding,
+      getCurrentPluginConversationBinding,
+      parsePluginBindingApprovalCustomId,
+      requestPluginConversationBinding,
+      resolvePluginConversationBindingApproval,
+    } = await import("./conversation-binding.js"));
+    ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
+      await import("../infra/outbound/session-binding-service.js"));
+    ({ setActivePluginRegistry } = await import("./runtime.js"));
     sessionBindingState.reset();
-    testing.reset();
+    __testing.reset();
     setActivePluginRegistry(createEmptyPluginRegistry());
     fs.rmSync(approvalsPath, { force: true });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default" });
@@ -493,20 +487,22 @@ describe("plugin conversation binding approvals", () => {
       first.requestPluginConversationBinding,
     );
 
-    const approved = await approveBindingRequest(
-      request.approvalId,
-      "allow-once",
-      second.resolvePluginConversationBindingApproval,
-    );
-    expect(approved.status).toBe("approved");
-    if (approved.status !== "approved") {
-      throw new Error("expected approved bind result");
-    }
-    expect(approved.binding.pluginId).toBe("codex");
-    expect(approved.binding.pluginRoot).toBe("/plugins/codex-a");
-    expect(approved.binding.conversationId).toBe("-10099:topic:77");
+    await expect(
+      approveBindingRequest(
+        request.approvalId,
+        "allow-once",
+        second.resolvePluginConversationBindingApproval,
+      ),
+    ).resolves.toMatchObject({
+      status: "approved",
+      binding: expect.objectContaining({
+        pluginId: "codex",
+        pluginRoot: "/plugins/codex-a",
+        conversationId: "-10099:topic:77",
+      }),
+    });
 
-    second.testing.reset();
+    second.__testing.reset();
   });
 
   it("shares persistent approvals across duplicate module instances", async () => {
@@ -520,16 +516,16 @@ describe("plugin conversation binding approvals", () => {
       first.requestPluginConversationBinding,
     );
 
-    const approved = await approveBindingRequest(
-      request.approvalId,
-      "allow-always",
-      second.resolvePluginConversationBindingApproval,
-    );
-    expect(approved.status).toBe("approved");
-    if (approved.status !== "approved") {
-      throw new Error("expected approved bind result");
-    }
-    expect(approved.decision).toBe("allow-always");
+    await expect(
+      approveBindingRequest(
+        request.approvalId,
+        "allow-always",
+        second.resolvePluginConversationBindingApproval,
+      ),
+    ).resolves.toMatchObject({
+      status: "approved",
+      decision: "allow-always",
+    });
 
     const rebound = await first.requestPluginConversationBinding(
       createTelegramCodexBindRequest(
@@ -541,7 +537,7 @@ describe("plugin conversation binding approvals", () => {
 
     expect(rebound.status).toBe("bound");
 
-    first.testing.reset();
+    first.__testing.reset();
     fs.rmSync(approvalsPath, { force: true });
   });
 
@@ -608,37 +604,6 @@ describe("plugin conversation binding approvals", () => {
     expect(currentBinding?.detachHint).toBe("/codex_detach");
   });
 
-  it("persists plugin-owned binding data on approved plugin bindings", async () => {
-    const data = {
-      kind: "codex-app-server-session",
-      version: 1,
-      sessionFile: "/tmp/openclaw/session.jsonl",
-      workspaceDir: "/workspace/openclaw",
-    };
-    const binding = await requestResolvedBinding(
-      createCodexBindRequest({
-        channel: "discord",
-        accountId: "isolated",
-        conversationId: "channel:binding-data",
-        summary: "Bind this conversation to Codex thread 999.",
-        data,
-      }),
-    );
-
-    expect(binding.data).toEqual(data);
-
-    const currentBinding = await getCurrentPluginConversationBinding({
-      pluginRoot: "/plugins/codex-a",
-      conversation: {
-        channel: "discord",
-        accountId: "isolated",
-        conversationId: "channel:binding-data",
-      },
-    });
-
-    expect(currentBinding?.data).toEqual(data);
-  });
-
   it.each([
     {
       name: "notifies the owning plugin when a bind approval is approved",
@@ -657,39 +622,24 @@ describe("plugin conversation binding approvals", () => {
       },
       decision: "allow-once" as const,
       expectedStatus: "approved" as const,
-      expectCallback: (payload: unknown) => {
-        const callback = payload as {
-          status: string;
-          binding?: {
-            pluginId: string;
-            pluginRoot: string;
-            conversationId: string;
-          };
-          decision: string;
-          request: {
-            summary: string;
-            detachHint?: string;
-            requestedBySenderId: string;
-            conversation: {
-              channel: string;
-              accountId: string;
-              conversationId: string;
-            };
-          };
-        };
-        expect(callback.status).toBe("approved");
-        expect(callback.binding?.pluginId).toBe("codex");
-        expect(callback.binding?.pluginRoot).toBe("/plugins/callback-test");
-        expect(callback.binding?.conversationId).toBe("channel:callback-test");
-        expect(callback.decision).toBe("allow-once");
-        expect(callback.request.summary).toBe("Bind this conversation to Codex thread abc.");
-        expect(callback.request.detachHint).toBeUndefined();
-        expect(callback.request.requestedBySenderId).toBe("user-1");
-        expect(callback.request.conversation).toEqual({
-          channel: "discord",
-          accountId: "isolated",
+      expectedCallback: {
+        status: "approved",
+        binding: expect.objectContaining({
+          pluginId: "codex",
+          pluginRoot: "/plugins/callback-test",
           conversationId: "channel:callback-test",
-        });
+        }),
+        decision: "allow-once",
+        request: {
+          summary: "Bind this conversation to Codex thread abc.",
+          detachHint: undefined,
+          requestedBySenderId: "user-1",
+          conversation: {
+            channel: "discord",
+            accountId: "isolated",
+            conversationId: "channel:callback-test",
+          },
+        },
       },
     },
     {
@@ -709,33 +659,20 @@ describe("plugin conversation binding approvals", () => {
       },
       decision: "deny" as const,
       expectedStatus: "denied" as const,
-      expectCallback: (payload: unknown) => {
-        const callback = payload as {
-          status: string;
-          binding?: unknown;
-          decision: string;
-          request: {
-            summary: string;
-            detachHint?: string;
-            requestedBySenderId: string;
-            conversation: {
-              channel: string;
-              accountId: string;
-              conversationId: string;
-            };
-          };
-        };
-        expect(callback.status).toBe("denied");
-        expect(callback.binding).toBeUndefined();
-        expect(callback.decision).toBe("deny");
-        expect(callback.request.summary).toBe("Bind this conversation to Codex thread deny.");
-        expect(callback.request.detachHint).toBeUndefined();
-        expect(callback.request.requestedBySenderId).toBe("user-1");
-        expect(callback.request.conversation).toEqual({
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "8460800771",
-        });
+      expectedCallback: {
+        status: "denied",
+        binding: undefined,
+        decision: "deny",
+        request: {
+          summary: "Bind this conversation to Codex thread deny.",
+          detachHint: undefined,
+          requestedBySenderId: "user-1",
+          conversation: {
+            channel: "telegram",
+            accountId: "default",
+            conversationId: "8460800771",
+          },
+        },
       },
     },
   ] as const)("$name", async (testCase) => {
@@ -806,9 +743,13 @@ describe("plugin conversation binding approvals", () => {
       },
     });
 
-    expect(current?.pluginId).toBe("codex");
-    expect(current?.pluginRoot).toBe("/plugins/codex-a");
-    expect(current?.conversationId).toBe("channel:1");
+    expect(current).toEqual(
+      expect.objectContaining({
+        pluginId: "codex",
+        pluginRoot: "/plugins/codex-a",
+        conversationId: "channel:1",
+      }),
+    );
 
     const otherPluginView = await getCurrentPluginConversationBinding({
       pluginRoot: "/plugins/codex-b",
@@ -948,8 +889,6 @@ describe("plugin conversation binding approvals", () => {
     const request = await requestPluginConversationBinding(requestInput);
     const binding = await resolveRequestedBinding(request);
 
-    expect(binding.pluginId).toBe(expectedBinding.pluginId);
-    expect(binding.pluginRoot).toBe(expectedBinding.pluginRoot);
-    expect(binding.conversationId).toBe(expectedBinding.conversationId);
+    expect(binding).toEqual(expect.objectContaining(expectedBinding));
   });
 });

@@ -1,23 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  countTrackedSessionBrowserTabsForTests,
-  resetTrackedSessionBrowserTabsForTests,
+  __countTrackedSessionBrowserTabsForTests,
+  __resetTrackedSessionBrowserTabsForTests,
   closeTrackedBrowserTabsForSessions,
-  sweepTrackedBrowserTabs,
-  touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./session-tab-registry.js";
 
 describe("session tab registry", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
-    resetTrackedSessionBrowserTabsForTests();
+    __resetTrackedSessionBrowserTabsForTests();
   });
 
   afterEach(() => {
-    resetTrackedSessionBrowserTabsForTests();
-    vi.useRealTimers();
+    __resetTrackedSessionBrowserTabsForTests();
   });
 
   it("tracks and closes tabs for normalized session keys", async () => {
@@ -33,7 +29,7 @@ describe("session tab registry", () => {
       baseUrl: "http://127.0.0.1:9222",
       profile: "OpenClaw",
     });
-    expect(countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(2);
+    expect(__countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(2);
 
     const closeTab = vi.fn(async () => {});
     const closed = await closeTrackedBrowserTabsForSessions({
@@ -53,7 +49,7 @@ describe("session tab registry", () => {
       baseUrl: "http://127.0.0.1:9222",
       profile: "openclaw",
     });
-    expect(countTrackedSessionBrowserTabsForTests()).toBe(0);
+    expect(__countTrackedSessionBrowserTabsForTests()).toBe(0);
   });
 
   it("untracks specific tabs", async () => {
@@ -112,85 +108,7 @@ describe("session tab registry", () => {
 
     expect(closed).toBe(0);
     expect(closeTab).toHaveBeenCalledTimes(2);
-    expect(warnings).toEqual(["failed to close tracked browser tab tab-b: Error: network down"]);
-    expect(countTrackedSessionBrowserTabsForTests()).toBe(0);
-  });
-
-  it("sweeps idle tracked tabs and keeps recently touched tabs", async () => {
-    vi.setSystemTime(1_000);
-    trackSessionBrowserTab({
-      sessionKey: "agent:main:main",
-      targetId: "old-tab",
-    });
-    trackSessionBrowserTab({
-      sessionKey: "agent:main:main",
-      targetId: "active-tab",
-    });
-    touchSessionBrowserTab({
-      sessionKey: "agent:main:main",
-      targetId: "active-tab",
-      now: 11_000,
-    });
-
-    const closeTab = vi.fn(async () => {});
-    const closed = await sweepTrackedBrowserTabs({
-      now: 11_000,
-      idleMs: 5_000,
-      closeTab,
-    });
-
-    expect(closed).toBe(1);
-    expect(closeTab).toHaveBeenCalledWith({
-      targetId: "old-tab",
-      baseUrl: undefined,
-      profile: undefined,
-    });
-    expect(countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(1);
-  });
-
-  it("caps tracked tabs per session by closing least recently used tabs first", async () => {
-    vi.setSystemTime(1_000);
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-a" });
-    vi.setSystemTime(2_000);
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-b" });
-    vi.setSystemTime(3_000);
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-c" });
-
-    const closeTab = vi.fn(async () => {});
-    const closed = await sweepTrackedBrowserTabs({
-      now: 4_000,
-      maxTabsPerSession: 2,
-      closeTab,
-    });
-
-    expect(closed).toBe(1);
-    expect(closeTab).toHaveBeenCalledWith({
-      targetId: "tab-a",
-      baseUrl: undefined,
-      profile: undefined,
-    });
-    expect(countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(2);
-  });
-
-  it("honors session filters during sweeps", async () => {
-    vi.setSystemTime(1_000);
-    trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "primary-tab" });
-    trackSessionBrowserTab({ sessionKey: "agent:main:subagent:child", targetId: "child-tab" });
-
-    const closeTab = vi.fn(async () => {});
-    const closed = await sweepTrackedBrowserTabs({
-      now: 10_000,
-      idleMs: 1,
-      sessionFilter: (sessionKey) => !sessionKey.includes(":subagent:"),
-      closeTab,
-    });
-
-    expect(closed).toBe(1);
-    expect(closeTab).toHaveBeenCalledWith({
-      targetId: "primary-tab",
-      baseUrl: undefined,
-      profile: undefined,
-    });
-    expect(countTrackedSessionBrowserTabsForTests()).toBe(1);
+    expect(warnings).toEqual([expect.stringContaining("network down")]);
+    expect(__countTrackedSessionBrowserTabsForTests()).toBe(0);
   });
 });

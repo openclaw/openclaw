@@ -1,4 +1,3 @@
-import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   fetchMattermostUserTeams,
@@ -23,6 +22,10 @@ import {
 } from "./slash-commands.js";
 import { activateSlashCommands } from "./slash-state.js";
 
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
 function buildSlashCommands(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -36,9 +39,7 @@ function buildSlashCommands(params: {
     const skillCommands = listSkillCommandsForAgents({ cfg: params.cfg });
     for (const spec of skillCommands) {
       const name = typeof spec.name === "string" ? spec.name.trim() : "";
-      if (!name) {
-        continue;
-      }
+      if (!name) continue;
       const trigger = name.startsWith("oc_") ? name : `oc_${name}`;
       commandsToRegister.push({
         trigger,

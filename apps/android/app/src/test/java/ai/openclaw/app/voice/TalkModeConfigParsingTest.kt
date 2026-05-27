@@ -13,8 +13,7 @@ class TalkModeConfigParsingTest {
   @Test
   fun readsMainSessionKeyAndInterruptFlag() {
     val config =
-      json
-        .parseToJsonElement(
+      json.parseToJsonElement(
           """
           {
             "talk": {
@@ -26,7 +25,8 @@ class TalkModeConfigParsingTest {
             }
           }
           """.trimIndent(),
-        ).jsonObject
+        )
+        .jsonObject
 
     val parsed = TalkModeGatewayConfigParser.parse(config)
 

@@ -1,17 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
-import {
-  ensureChannelSetupPluginInstalled,
-  loadChannelSetupPluginRegistrySnapshotForChannel,
-  reloadChannelSetupPluginRegistry,
-} from "../commands/channel-setup/plugin-install.js";
-import { getChannelSetupWizardAdapter } from "../commands/channel-setup/registry.js";
-import type { ChannelSetupWizardAdapter } from "../commands/channel-setup/types.js";
+import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
+import type { ChannelSetupWizardAdapter } from "./channel-setup/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import {
+  ensureChannelSetupPluginInstalled,
+  loadChannelSetupPluginRegistrySnapshotForChannel,
+  reloadChannelSetupPluginRegistry,
+} from "./channel-setup/plugin-install.js";
+import { setupChannels } from "./onboard-channels.js";
 import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
 
 const catalogMocks = vi.hoisted(() => ({
@@ -43,61 +44,7 @@ function createUnexpectedPromptGuards() {
   };
 }
 
-type MockWithCalls = {
-  mock: { calls: unknown[][] };
-};
-
-function callArgAt(mock: MockWithCalls, index: number): Record<string, unknown> {
-  const value = mock.mock.calls[index]?.[0];
-  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected call ${index} to receive an object argument`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function hasCallWithFields(mock: MockWithCalls, expected: Record<string, unknown>): boolean {
-  return mock.mock.calls.some(([value]) => {
-    if (
-      value === undefined ||
-      value === null ||
-      typeof value !== "object" ||
-      Array.isArray(value)
-    ) {
-      return false;
-    }
-    const arg = value as Record<string, unknown>;
-    return Object.entries(expected).every(([key, expectedValue]) => arg[key] === expectedValue);
-  });
-}
-
-function expectCalledWithFields(mock: MockWithCalls, expected: Record<string, unknown>): void {
-  expect(hasCallWithFields(mock, expected)).toBe(true);
-}
-
-function expectCalledWithMessage(mock: MockWithCalls, message: string): void {
-  expect(hasCallWithFields(mock, { message })).toBe(true);
-}
-
-function expectCalledWithMessageContaining(mock: MockWithCalls, text: string): void {
-  const hasMatch = mock.mock.calls.some(([value]) => {
-    if (
-      value === undefined ||
-      value === null ||
-      typeof value !== "object" ||
-      Array.isArray(value)
-    ) {
-      return false;
-    }
-    const message = (value as Record<string, unknown>).message;
-    return typeof message === "string" && message.includes(text);
-  });
-  expect(hasMatch).toBe(true);
-}
-
-type SetupChannels = typeof import("./onboard-channels.js").setupChannels;
-let setupChannels: SetupChannels;
-
-type SetupChannelsOptions = Parameters<SetupChannels>[3];
+type SetupChannelsOptions = Parameters<typeof setupChannels>[3];
 
 function runSetupChannels(
   cfg: OpenClawConfig,
@@ -150,17 +97,17 @@ function createTelegramCfg(botToken: string, enabled?: boolean): OpenClawConfig 
 
 function createMSTeamsCatalogEntry(): ChannelPluginCatalogEntry {
   return {
-    id: "external-chat",
-    pluginId: "@openclaw/external-chat-plugin",
+    id: "msteams",
+    pluginId: "@openclaw/msteams-plugin",
     meta: {
-      id: "external-chat",
-      label: "External Chat",
-      selectionLabel: "External Chat",
-      docsPath: "/channels/external-chat",
-      blurb: "external chat channel",
+      id: "msteams",
+      label: "Microsoft Teams",
+      selectionLabel: "Microsoft Teams",
+      docsPath: "/channels/msteams",
+      blurb: "teams channel",
     },
     install: {
-      npmSpec: "@openclaw/external-chat",
+      npmSpec: "@openclaw/msteams",
     },
   };
 }
@@ -178,13 +125,7 @@ function setMinimalOnboardingRegistryForTests(): void {
             capabilities: { chatTypes: ["direct", "group"] },
           }),
           setup: {
-            applyAccountConfig: ({
-              cfg,
-              input,
-            }: {
-              cfg: OpenClawConfig;
-              input: { token?: string };
-            }) =>
+            applyAccountConfig: ({ cfg, input }: { cfg: OpenClawConfig; input: { token?: string } }) =>
               ({
                 ...cfg,
                 channels: {
@@ -310,10 +251,10 @@ type PatchedSetupAdapterFields = {
 
 function createMSTeamsPluginRegistryEntry(params?: { includeSetupWizard?: boolean }) {
   return {
-    pluginId: "@openclaw/external-chat-plugin",
+    pluginId: "@openclaw/msteams-plugin",
     source: "test",
     plugin: {
-      id: "external-chat",
+      id: "msteams",
       meta: createMSTeamsCatalogEntry().meta,
       capabilities: { chatTypes: ["direct"] as const },
       config: {
@@ -323,7 +264,7 @@ function createMSTeamsPluginRegistryEntry(params?: { includeSetupWizard?: boolea
       ...(params?.includeSetupWizard
         ? {
             setupWizard: {
-              channel: "external-chat",
+              channel: "msteams",
               status: {
                 configuredLabel: "configured",
                 unconfiguredLabel: "installed",
@@ -344,7 +285,7 @@ function mockMSTeamsRegistrySnapshot(params?: { includeSetupWizard?: boolean }) 
   vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementation(
     ({ channel }: { channel: string }) => {
       const registry = createEmptyPluginRegistry();
-      if (channel === "external-chat") {
+      if (channel === "msteams") {
         if (params?.includeSetupWizard) {
           registry.channelSetups.push(createMSTeamsPluginRegistryEntry(params) as never);
         } else {
@@ -420,6 +361,32 @@ function createUnexpectedConfigureCall(message: string) {
   });
 }
 
+async function expectQuickstartPickerSkipsWithoutRuntime() {
+  const select = vi.fn(async ({ message }: { message: string }) => {
+    if (message === "Select channel (QuickStart)") {
+      return "__skip__";
+    }
+    return "__done__";
+  });
+  const { multiselect, text } = createUnexpectedPromptGuards();
+  const prompter = createPrompter({
+    select: select as unknown as WizardPrompter["select"],
+    multiselect,
+    text,
+  });
+
+  await expect(
+    runSetupChannels({} as OpenClawConfig, prompter, {
+      quickstartDefaults: true,
+    }),
+  ).resolves.toEqual({} as OpenClawConfig);
+
+  expect(select).toHaveBeenCalledWith(
+    expect.objectContaining({ message: "Select channel (QuickStart)" }),
+  );
+  expect(multiselect).not.toHaveBeenCalled();
+}
+
 async function runConfiguredTelegramSetup(params: {
   strictUnexpected?: boolean;
   configureWhenConfigured: NonNullable<
@@ -489,10 +456,12 @@ vi.mock("node:fs/promises", () => ({
   },
 }));
 
-vi.mock("../channels/plugins/catalog.js", async () => {
-  const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
-    "../channels/plugins/catalog.js",
-  );
+vi.mock("../channel-web.js", () => ({
+  loginWeb: vi.fn(async () => {}),
+}));
+
+vi.mock("../channels/plugins/catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/plugins/catalog.js")>();
   return {
     ...actual,
     listChannelPluginCatalogEntries: ((...args) => {
@@ -505,90 +474,20 @@ vi.mock("../channels/plugins/catalog.js", async () => {
   };
 });
 
-vi.mock("../plugins/manifest-registry.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/manifest-registry.js")>(
-    "../plugins/manifest-registry.js",
-  );
+vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
   return {
     ...actual,
     loadPluginManifestRegistry: manifestRegistryMocks.loadPluginManifestRegistry,
   };
 });
 
-vi.mock("../plugin-sdk/matrix-deps.js", () => ({
-  ensureMatrixSdkInstalled: vi.fn(async () => {}),
-  isMatrixSdkAvailable: vi.fn(() => true),
-}));
-
-vi.mock("../channels/plugins/bundled.js", () => ({
-  getBundledChannelSetupPlugin: (channel: string) =>
-    channel === "telegram"
-      ? {
-          id: "telegram",
-          meta: {
-            id: "telegram",
-            label: "Telegram",
-            selectionLabel: "Telegram",
-            docsPath: "/channels/telegram",
-            blurb: "test stub.",
-          },
-          capabilities: { chatTypes: ["direct", "group"] },
-          config: {
-            listAccountIds: () => ["default"],
-            resolveAccount: () => ({}),
-          },
-          setup: {
-            applyAccountConfig: ({
-              cfg,
-              input,
-            }: {
-              cfg: OpenClawConfig;
-              input: { token?: string };
-            }) =>
-              ({
-                ...cfg,
-                channels: {
-                  ...cfg.channels,
-                  telegram: {
-                    ...(cfg.channels?.telegram as Record<string, unknown> | undefined),
-                    ...(input.token ? { botToken: input.token } : {}),
-                  },
-                },
-              }) as OpenClawConfig,
-          },
-          setupWizard: {
-            channel: "telegram",
-            status: {
-              configuredLabel: "configured",
-              unconfiguredLabel: "not configured",
-              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
-                Boolean(cfg.channels?.telegram?.botToken),
-            },
-            credentials: [
-              {
-                inputKey: "token",
-                providerHint: "BotFather",
-                credentialLabel: "Telegram bot token",
-                envPrompt: "Use TELEGRAM_BOT_TOKEN from env?",
-                keepPrompt: "Keep current Telegram bot token?",
-                inputPrompt: "Enter Telegram bot token",
-                inspect: ({ cfg }: { cfg: OpenClawConfig }) => ({
-                  accountConfigured: Boolean(cfg.channels?.telegram?.botToken),
-                  hasConfiguredValue: Boolean(cfg.channels?.telegram?.botToken),
-                }),
-              },
-            ],
-          },
-        }
-      : undefined,
-}));
-
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: vi.fn(async () => false),
 }));
 
-vi.mock("../commands/channel-setup/plugin-install.js", async () => {
-  const actual = await vi.importActual("../commands/channel-setup/plugin-install.js");
+vi.mock("./channel-setup/plugin-install.js", async (importOriginal) => {
+  const actual = await importOriginal();
   return {
     ...(actual as Record<string, unknown>),
     ensureChannelSetupPluginInstalled: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
@@ -602,11 +501,9 @@ vi.mock("../commands/channel-setup/plugin-install.js", async () => {
 });
 
 describe("setupChannels", () => {
-  beforeEach(async () => {
-    ({ setupChannels } = await import("./onboard-channels.js"));
+  beforeEach(() => {
     setMinimalOnboardingRegistryForTests();
     catalogMocks.listChannelPluginCatalogEntries.mockReset();
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([]);
     manifestRegistryMocks.loadPluginManifestRegistry.mockReset();
     manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [],
@@ -616,11 +513,50 @@ describe("setupChannels", () => {
     vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
       cfg,
       installed: true,
-      status: "installed",
     }));
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
     vi.mocked(reloadChannelSetupPluginRegistry).mockClear();
   });
+  it("QuickStart uses single-select (no multiselect) and doesn't prompt for Telegram token when WhatsApp is chosen", async () => {
+    const select = vi.fn(async () => "whatsapp");
+    const multiselect = vi.fn(async () => {
+      throw new Error("unexpected multiselect");
+    });
+    const text = vi.fn(async ({ message }: { message: string }) => {
+      if (message.includes("Enter Telegram bot token")) {
+        throw new Error("unexpected Telegram token prompt");
+      }
+      if (message.includes("Your personal WhatsApp number")) {
+        return "+15555550123";
+      }
+      throw new Error(`unexpected text prompt: ${message}`);
+    });
+
+    const prompter = createPrompter({
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text: text as unknown as WizardPrompter["text"],
+    });
+
+    await runSetupChannels({} as OpenClawConfig, prompter, {
+      quickstartDefaults: true,
+      forceAllowFromChannels: ["whatsapp"],
+    });
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select channel (QuickStart)" }),
+    );
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("renders the QuickStart channel picker without requiring the LINE runtime", async () => {
+    await expectQuickstartPickerSkipsWithoutRuntime();
+  });
+
+  it("renders the QuickStart channel picker without requiring the Matrix runtime", async () => {
+    await expectQuickstartPickerSkipsWithoutRuntime();
+  });
+
   it("continues Telegram setup when the plugin registry is empty", async () => {
     // Simulate missing registry entries (the scenario reported in #25545).
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -642,7 +578,7 @@ describe("setupChannels", () => {
       text: text as unknown as WizardPrompter["text"],
     });
 
-    const cfg = await runSetupChannels({} as OpenClawConfig, prompter, {
+    await runSetupChannels({} as OpenClawConfig, prompter, {
       quickstartDefaults: true,
     });
 
@@ -655,7 +591,12 @@ describe("setupChannels", () => {
       );
     });
     expect(sawHardStop).toBe(false);
-    expect(cfg.channels?.telegram?.botToken).toBe("123:token");
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        pluginId: "telegram",
+      }),
+    );
     expect(reloadChannelSetupPluginRegistry).not.toHaveBeenCalled();
   });
 
@@ -682,148 +623,6 @@ describe("setupChannels", () => {
     expect(multiselect).not.toHaveBeenCalled();
   });
 
-  it("does not render undefined primer lines for malformed external setup plugins", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "external-chat",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "external-chat",
-              label: "External Chat",
-              docsPath: "/channels/external-chat",
-            }),
-            meta: {
-              id: "external-chat",
-            },
-          },
-        },
-      ]),
-    );
-
-    const note = vi.fn(async (_message?: string, _title?: string) => {});
-    const select = vi.fn(async () => "__done__");
-    const { multiselect, text } = createUnexpectedPromptGuards();
-
-    const prompter = createPrompter({
-      note,
-      select: select as unknown as WizardPrompter["select"],
-      multiselect,
-      text,
-    });
-
-    await runSetupChannels({} as OpenClawConfig, prompter);
-
-    const primerMessage =
-      note.mock.calls.find(([, title]) => title === "How channels work")?.[0] ?? "";
-    expect(primerMessage).toContain("external-chat:");
-    expect(primerMessage).not.toContain("undefined: undefined");
-    expect(multiselect).not.toHaveBeenCalled();
-  });
-
-  it("keeps malformed external setup plugins selectable without undefined labels", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "external-chat",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "external-chat",
-              label: "External Chat",
-              docsPath: "/channels/external-chat",
-            }),
-            meta: {
-              id: "external-chat",
-            },
-          },
-        },
-      ]),
-    );
-
-    const note = vi.fn(async (_message?: string, _title?: string) => {});
-    const { multiselect, text } = createUnexpectedPromptGuards();
-    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
-      if (message === "Select a channel") {
-        const external = (options as Array<{ value: string; label?: string; hint?: string }>).find(
-          (entry) => entry.value === "external-chat",
-        );
-        expect(external?.label).toBe("external-chat");
-        expect(external?.hint ?? "").not.toContain("undefined");
-        return "__done__";
-      }
-      return "__done__";
-    });
-
-    const prompter = createPrompter({
-      note,
-      select: select as unknown as WizardPrompter["select"],
-      multiselect,
-      text,
-    });
-
-    await runSetupChannels({} as OpenClawConfig, prompter);
-
-    expectCalledWithMessage(select, "Select a channel");
-    expect(multiselect).not.toHaveBeenCalled();
-  });
-
-  it("keeps the channel picker usable when the active registry contains broken sibling diagnostics", async () => {
-    const registry = createTestRegistry([
-      {
-        pluginId: "healthy-channel",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({
-            id: "external-chat",
-            label: "Healthy Chat",
-            docsPath: "/channels/external-chat",
-          }),
-        },
-      },
-    ]);
-    registry.diagnostics.push({
-      level: "error",
-      pluginId: "broken-channel",
-      source: "/tmp/broken-channel/setup-entry.cjs",
-      message: "failed to load setup entry: boom: setup plugin missing",
-    });
-    setActivePluginRegistry(registry);
-
-    const note = vi.fn(async (_message?: string, _title?: string) => {});
-    const { multiselect, text } = createUnexpectedPromptGuards();
-    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
-      if (message === "Select a channel") {
-        const entries = options as Array<{ value: string; label?: string }>;
-        expect(entries.find((entry) => entry.value === "external-chat")?.label).toBe(
-          "Healthy Chat",
-        );
-        const entryValues = entries.map((entry) => entry.value);
-        expect(entryValues).not.toContain("broken-channel");
-        return "__done__";
-      }
-      return "__done__";
-    });
-
-    const prompter = createPrompter({
-      note,
-      select: select as unknown as WizardPrompter["select"],
-      multiselect,
-      text,
-    });
-
-    await runSetupChannels({} as OpenClawConfig, prompter);
-
-    expectCalledWithMessage(select, "Select a channel");
-    expect(
-      note.mock.calls.some((call) =>
-        (call[0] ?? "").includes("broken-channel plugin not available"),
-      ),
-    ).toBe(false);
-    expect(multiselect).not.toHaveBeenCalled();
-  });
-
   it("keeps configured external plugin channels visible when the active registry starts empty", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([createMSTeamsCatalogEntry()]);
@@ -831,12 +630,10 @@ describe("setupChannels", () => {
     const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
       if (message === "Select a channel") {
         const entries = options as Array<{ value: string; hint?: string }>;
-        const msteams = entries.find((entry) => entry.value === "external-chat");
-        if (msteams === undefined) {
-          throw new Error("expected Teams catalog entry");
-        }
-        expect(msteams.hint ?? "").not.toContain("plugin");
-        expect(msteams.hint ?? "").not.toContain("install");
+        const msteams = entries.find((entry) => entry.value === "msteams");
+        expect(msteams).toBeDefined();
+        expect(msteams?.hint ?? "").not.toContain("plugin");
+        expect(msteams?.hint ?? "").not.toContain("install");
         return "__done__";
       }
       return "__done__";
@@ -851,82 +648,47 @@ describe("setupChannels", () => {
     await runSetupChannels(
       {
         channels: {
-          "external-chat": {
+          msteams: {
             tenantId: "tenant-1",
           },
         },
         plugins: {
           entries: {
-            "@openclaw/external-chat-plugin": { enabled: true },
+            "@openclaw/msteams-plugin": { enabled: true },
           },
         },
       } as OpenClawConfig,
       prompter,
     );
 
-    expectCalledWithFields(vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel), {
-      channel: "external-chat",
-      pluginId: "@openclaw/external-chat-plugin",
-    });
-    expect(multiselect).not.toHaveBeenCalled();
-  });
-
-  it("hides channels marked hidden from setup in the picker", async () => {
-    const qaChannelBase = createChannelTestPluginBase({
-      id: "qa-channel",
-      label: "QA Channel",
-      docsPath: "/channels/qa-channel",
-    });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "qa-channel",
-          source: "test",
-          plugin: {
-            ...qaChannelBase,
-            meta: {
-              ...qaChannelBase.meta,
-              showInSetup: false,
-            },
-          },
-        },
-      ]),
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "msteams",
+        pluginId: "@openclaw/msteams-plugin",
+      }),
     );
-
-    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
-      if (message === "Select a channel") {
-        expect(
-          (options as Array<{ label?: string }>).some((option) =>
-            option.label?.includes("QA Channel"),
-          ),
-        ).toBe(false);
-      }
-      return "__done__";
-    });
-    const { multiselect, text } = createUnexpectedPromptGuards();
-    const prompter = createPrompter({
-      select: select as unknown as WizardPrompter["select"],
-      multiselect,
-      text,
-    });
-
-    await runSetupChannels({} as OpenClawConfig, prompter);
-
-    expectCalledWithMessage(select, "Select a channel");
     expect(multiselect).not.toHaveBeenCalled();
   });
 
   it("treats installed external plugin channels as installed without reinstall prompts", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([createMSTeamsPluginRegistryEntry({ includeSetupWizard: true }) as never]),
-    );
+    setActivePluginRegistry(createEmptyPluginRegistry());
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([createMSTeamsCatalogEntry()]);
+    manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "@openclaw/msteams-plugin",
+          channels: ["msteams"],
+        } as never,
+      ],
+      diagnostics: [],
+    });
+    mockMSTeamsRegistrySnapshot({ includeSetupWizard: true });
 
     let channelSelectionCount = 0;
     const select = vi.fn(async ({ message }: { message: string }) => {
       if (message === "Select a channel") {
         channelSelectionCount += 1;
-        return channelSelectionCount === 1 ? "external-chat" : "__done__";
+        return channelSelectionCount === 1 ? "msteams" : "__done__";
       }
       return "__done__";
     });
@@ -940,7 +702,12 @@ describe("setupChannels", () => {
     await runSetupChannels({} as OpenClawConfig, prompter);
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "msteams",
+        pluginId: "@openclaw/msteams-plugin",
+      }),
+    );
     expect(multiselect).not.toHaveBeenCalled();
   });
 
@@ -959,17 +726,14 @@ describe("setupChannels", () => {
         ...cfg,
         channels: {
           ...cfg.channels,
-          "external-chat": {
-            ...(cfg.channels?.["external-chat"] as Record<string, unknown> | undefined),
+          msteams: {
+            ...(cfg.channels?.msteams as Record<string, unknown> | undefined),
             accounts: {
-              ...(
-                cfg.channels?.["external-chat"] as
-                  | { accounts?: Record<string, unknown> }
-                  | undefined
-              )?.accounts,
+              ...(cfg.channels?.msteams as { accounts?: Record<string, unknown> } | undefined)
+                ?.accounts,
               [accountId]: {
                 ...(
-                  cfg.channels?.["external-chat"] as
+                  cfg.channels?.msteams as
                     | {
                         accounts?: Record<string, Record<string, unknown>>;
                       }
@@ -985,32 +749,29 @@ describe("setupChannels", () => {
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementation(
       ({ channel }: { channel: string }) => {
         const registry = createEmptyPluginRegistry();
-        if (channel === "external-chat") {
+        if (channel === "msteams") {
           registry.channels.push({
-            pluginId: "external-chat",
+            pluginId: "msteams",
             source: "test",
             plugin: {
-              id: "external-chat",
+              id: "msteams",
               meta: {
-                id: "external-chat",
-                label: "External Chat",
-                selectionLabel: "External Chat",
-                docsPath: "/channels/external-chat",
-                blurb: "external chat channel",
+                id: "msteams",
+                label: "Microsoft Teams",
+                selectionLabel: "Microsoft Teams",
+                docsPath: "/channels/msteams",
+                blurb: "teams channel",
               },
               capabilities: { chatTypes: ["direct"] },
               config: {
                 listAccountIds: (cfg: OpenClawConfig) =>
                   Object.keys(
-                    (
-                      cfg.channels?.["external-chat"] as
-                        | { accounts?: Record<string, unknown> }
-                        | undefined
-                    )?.accounts ?? {},
+                    (cfg.channels?.msteams as { accounts?: Record<string, unknown> } | undefined)
+                      ?.accounts ?? {},
                   ),
                 resolveAccount: (cfg: OpenClawConfig, accountId: string) =>
                   (
-                    cfg.channels?.["external-chat"] as
+                    cfg.channels?.msteams as
                       | {
                           accounts?: Record<string, Record<string, unknown>>;
                         }
@@ -1019,15 +780,12 @@ describe("setupChannels", () => {
                 setAccountEnabled,
               },
               setupWizard: {
-                channel: "external-chat",
+                channel: "msteams",
                 status: {
                   configuredLabel: "configured",
                   unconfiguredLabel: "needs setup",
                   resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
-                    Boolean(
-                      (cfg.channels?.["external-chat"] as { tenantId?: string } | undefined)
-                        ?.tenantId,
-                    ),
+                    Boolean((cfg.channels?.msteams as { tenantId?: string } | undefined)?.tenantId),
                   resolveStatusLines: async () => [],
                   resolveSelectionHint: async () => "configured",
                 },
@@ -1045,12 +803,12 @@ describe("setupChannels", () => {
     const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
       if (message === "Select a channel") {
         channelSelectionCount += 1;
-        return channelSelectionCount === 1 ? "external-chat" : "__done__";
+        return channelSelectionCount === 1 ? "msteams" : "__done__";
       }
       if (message.includes("already configured")) {
         return "disable";
       }
-      if (message === "External Chat account") {
+      if (message === "Microsoft Teams account") {
         const accountOptions = options as Array<{ value: string; label: string }>;
         expect(accountOptions.map((option) => option.value)).toEqual(["default", "work"]);
         return "work";
@@ -1067,7 +825,7 @@ describe("setupChannels", () => {
     const next = await runSetupChannels(
       {
         channels: {
-          "external-chat": {
+          msteams: {
             tenantId: "tenant-1",
             accounts: {
               default: { enabled: true },
@@ -1077,7 +835,7 @@ describe("setupChannels", () => {
         },
         plugins: {
           entries: {
-            "external-chat": { enabled: true },
+            msteams: { enabled: true },
           },
         },
       } as OpenClawConfig,
@@ -1085,13 +843,15 @@ describe("setupChannels", () => {
       { allowDisable: true },
     );
 
-    expectCalledWithFields(vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel), {
-      channel: "external-chat",
-    });
-    expectCalledWithFields(setAccountEnabled, { accountId: "work", enabled: false });
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "msteams" }),
+    );
+    expect(setAccountEnabled).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "work", enabled: false }),
+    );
     expect(
       (
-        next.channels?.["external-chat"] as
+        next.channels?.msteams as
           | {
               accounts?: Record<string, { enabled?: boolean }>;
             }
@@ -1114,8 +874,12 @@ describe("setupChannels", () => {
       quickstartDefaults: true,
     });
 
-    expectCalledWithMessage(select, "Select channel (QuickStart)");
-    expectCalledWithMessageContaining(select, "already configured");
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select channel (QuickStart)" }),
+    );
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("already configured") }),
+    );
     expect(multiselect).not.toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
   });
@@ -1143,7 +907,7 @@ describe("setupChannels", () => {
 
     await runSetupChannels(createTelegramCfg("token", false), prompter);
 
-    expectCalledWithMessage(select, "Select a channel");
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
     const channelSelectCall = select.mock.calls.find(
       ([params]) => (params as { message?: string }).message === "Select a channel",
     );
@@ -1160,9 +924,9 @@ describe("setupChannels", () => {
       configureInteractive,
     });
 
-    const configureInteractiveArg = callArgAt(configureInteractive, 0);
-    expect(configureInteractiveArg.configured).toBe(false);
-    expect(typeof configureInteractiveArg.label).toBe("string");
+    expect(configureInteractive).toHaveBeenCalledWith(
+      expect.objectContaining({ configured: false, label: expect.any(String) }),
+    );
     expect(selection).toHaveBeenCalledWith([]);
     expect(onAccountId).not.toHaveBeenCalled();
     expect(cfg.channels?.telegram?.botToken).toBeUndefined();
@@ -1212,9 +976,9 @@ describe("setupChannels", () => {
     });
 
     expect(configureWhenConfigured).toHaveBeenCalledTimes(1);
-    const configureWhenConfiguredArg = callArgAt(configureWhenConfigured, 0);
-    expect(configureWhenConfiguredArg.configured).toBe(true);
-    expect(typeof configureWhenConfiguredArg.label).toBe("string");
+    expect(configureWhenConfigured).toHaveBeenCalledWith(
+      expect.objectContaining({ configured: true, label: expect.any(String) }),
+    );
     expect(configure).not.toHaveBeenCalled();
     expect(selection).toHaveBeenCalledWith(["telegram"]);
     expect(onAccountId).toHaveBeenCalledWith("telegram", "acct-2");
@@ -1229,9 +993,9 @@ describe("setupChannels", () => {
       configureErrorMessage: "configure should not run when configureWhenConfigured handles skip",
     });
 
-    const configureWhenConfiguredArg = callArgAt(configureWhenConfigured, 0);
-    expect(configureWhenConfiguredArg.configured).toBe(true);
-    expect(typeof configureWhenConfiguredArg.label).toBe("string");
+    expect(configureWhenConfigured).toHaveBeenCalledWith(
+      expect.objectContaining({ configured: true, label: expect.any(String) }),
+    );
     expect(configure).not.toHaveBeenCalled();
     expect(selection).toHaveBeenCalledWith([]);
     expect(onAccountId).not.toHaveBeenCalled();
@@ -1261,9 +1025,9 @@ describe("setupChannels", () => {
         onAccountId,
       });
 
-      const configureInteractiveArg = callArgAt(configureInteractive, 0);
-      expect(configureInteractiveArg.configured).toBe(true);
-      expect(typeof configureInteractiveArg.label).toBe("string");
+      expect(configureInteractive).toHaveBeenCalledWith(
+        expect.objectContaining({ configured: true, label: expect.any(String) }),
+      );
       expect(configureWhenConfigured).not.toHaveBeenCalled();
       expect(selection).toHaveBeenCalledWith([]);
       expect(onAccountId).not.toHaveBeenCalled();

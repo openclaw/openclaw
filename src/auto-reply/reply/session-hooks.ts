@@ -1,10 +1,5 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  PluginHookSessionEndEvent,
-  PluginHookSessionEndReason,
-  PluginHookSessionStartEvent,
-} from "../../plugins/hook-types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 
 export type SessionHookContext = {
   sessionId: string;
@@ -30,7 +25,7 @@ export function buildSessionStartHookPayload(params: {
   cfg: OpenClawConfig;
   resumedFrom?: string;
 }): {
-  event: PluginHookSessionStartEvent;
+  event: { sessionId: string; sessionKey: string; resumedFrom?: string };
   context: SessionHookContext;
 } {
   return {
@@ -52,14 +47,8 @@ export function buildSessionEndHookPayload(params: {
   sessionKey: string;
   cfg: OpenClawConfig;
   messageCount?: number;
-  durationMs?: number;
-  reason?: PluginHookSessionEndReason;
-  sessionFile?: string;
-  transcriptArchived?: boolean;
-  nextSessionId?: string;
-  nextSessionKey?: string;
 }): {
-  event: PluginHookSessionEndEvent;
+  event: { sessionId: string; sessionKey: string; messageCount: number };
   context: SessionHookContext;
 } {
   return {
@@ -67,12 +56,6 @@ export function buildSessionEndHookPayload(params: {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       messageCount: params.messageCount ?? 0,
-      durationMs: params.durationMs,
-      reason: params.reason,
-      sessionFile: params.sessionFile,
-      transcriptArchived: params.transcriptArchived,
-      nextSessionId: params.nextSessionId,
-      nextSessionKey: params.nextSessionKey,
     },
     context: buildSessionHookContext({
       sessionId: params.sessionId,

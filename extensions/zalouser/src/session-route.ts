@@ -2,12 +2,8 @@ import {
   buildChannelOutboundSessionRoute,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function stripZalouserTargetPrefix(raw: string): string {
+export function stripZalouserTargetPrefix(raw: string): string {
   return raw
     .trim()
     .replace(/^(zalouser|zlu):/i, "")
@@ -20,7 +16,7 @@ export function normalizeZalouserTarget(raw: string): string | undefined {
     return undefined;
   }
 
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  const lower = trimmed.toLowerCase();
   if (lower.startsWith("group:")) {
     const id = trimmed.slice("group:".length).trim();
     return id ? `group:${id}` : undefined;
@@ -59,7 +55,7 @@ export function parseZalouserOutboundTarget(raw: string): {
   if (!normalized) {
     throw new Error("Zalouser target is required");
   }
-  const lowered = normalizeLowercaseStringOrEmpty(normalized);
+  const lowered = normalized.toLowerCase();
   if (lowered.startsWith("group:")) {
     const threadId = normalized.slice("group:".length).trim();
     if (!threadId) {
@@ -84,7 +80,7 @@ export function parseZalouserDirectoryGroupId(raw: string): string {
   if (!normalized) {
     throw new Error("Zalouser group target is required");
   }
-  const lowered = normalizeLowercaseStringOrEmpty(normalized);
+  const lowered = normalized.toLowerCase();
   if (lowered.startsWith("group:")) {
     const groupId = normalized.slice("group:".length).trim();
     if (!groupId) {
@@ -103,7 +99,7 @@ export function resolveZalouserOutboundSessionRoute(params: ChannelOutboundSessi
   if (!normalized) {
     return null;
   }
-  const isGroup = (normalizeOptionalLowercaseString(normalized) ?? "").startsWith("group:");
+  const isGroup = normalized.toLowerCase().startsWith("group:");
   const peerId = normalized.replace(/^(group|user):/i, "").trim();
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,

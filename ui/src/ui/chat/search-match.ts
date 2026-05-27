@@ -1,11 +1,10 @@
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { extractTextCached } from "./message-extract.ts";
 
 export function messageMatchesSearchQuery(message: unknown, query: string): boolean {
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+  const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) {
     return true;
   }
-  const text = normalizeLowercaseStringOrEmpty(extractTextCached(message));
+  const text = (extractTextCached(message) ?? "").toLowerCase();
   return text.includes(normalizedQuery);
 }

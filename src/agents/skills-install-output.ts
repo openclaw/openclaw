@@ -1,6 +1,4 @@
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-
-type InstallCommandResult = {
+export type InstallCommandResult = {
   code: number | null;
   stdout: string;
   stderr: string;
@@ -11,7 +9,10 @@ function summarizeInstallOutput(text: string): string | undefined {
   if (!raw) {
     return undefined;
   }
-  const lines = normalizeStringEntries(raw.split("\n"));
+  const lines = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
   if (lines.length === 0) {
     return undefined;
   }

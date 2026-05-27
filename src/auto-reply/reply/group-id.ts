@@ -1,97 +1,21 @@
-import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
-import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
-import { normalizeAnyChannelId } from "../../channels/registry.js";
-import {
-  stripTargetKindPrefix,
-  stripTargetProviderPrefix,
-  stripTargetTopicSuffix,
-} from "../../infra/outbound/channel-target-prefix.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
-import { extractSimpleExplicitGroupId } from "./group-id-simple.js";
-
-function extractInferredGroupTargetId(params: {
-  raw: string;
-  channelId: string;
-  messaging?: ChannelMessagingAdapter;
-}): string | undefined {
-  const normalized = params.messaging?.normalizeTarget?.(params.raw);
-  const candidates = uniqueStrings(
-    [normalized, params.raw].filter((candidate): candidate is string => Boolean(candidate)),
-  );
-  for (const candidate of candidates) {
-    const chatType = params.messaging?.inferTargetChatType?.({ to: candidate });
-    if (chatType === "direct" || chatType == null) {
-      continue;
-    }
-    const target = stripTargetTopicSuffix(
-      stripTargetKindPrefix(stripTargetProviderPrefix(candidate, params.channelId), [
-        "group",
-        "channel",
-        "conversation",
-        "room",
-        "thread",
-      ]),
-      { allowNumericShorthand: params.channelId === "telegram" },
-    );
-    if (target) {
-      return target;
-    }
-  }
-  return undefined;
-}
-
-function extractLegacyParsedGroupTargetId(params: {
-  raw: string;
-  channelId: string;
-  messaging?: ChannelMessagingAdapter;
-}): string | undefined {
-  const parsed = params.messaging?.parseExplicitTarget?.({ raw: params.raw });
-  if (parsed?.chatType === "direct" || parsed?.chatType == null) {
-    return undefined;
-  }
-  const target = stripTargetTopicSuffix(
-    stripTargetKindPrefix(stripTargetProviderPrefix(parsed.to, params.channelId), [
-      "group",
-      "channel",
-      "conversation",
-      "room",
-      "thread",
-    ]),
-    { allowNumericShorthand: params.channelId === "telegram" },
-  );
-  return target || undefined;
-}
-
 export function extractExplicitGroupId(raw: string | undefined | null): string | undefined {
-  const trimmed = normalizeOptionalString(raw) ?? "";
+  const trimmed = (raw ?? "").trim();
   if (!trimmed) {
     return undefined;
   }
-  const simple = extractSimpleExplicitGroupId(trimmed);
-  if (simple) {
-    return simple;
+  const parts = trimmed.split(":").filter(Boolean);
+  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
+    return parts.slice(2).join(":") || undefined;
   }
-  const firstPart = trimmed.split(":").find(Boolean);
-  const channelId =
-    normalizeAnyChannelId(firstPart ?? "") ?? normalizeOptionalLowercaseString(firstPart);
-  const messaging = channelId ? getLoadedChannelPluginForRead(channelId)?.messaging : undefined;
-  if (!channelId) {
-    return undefined;
+  if (
+    parts.length >= 2 &&
+    parts[0]?.toLowerCase() === "whatsapp" &&
+    trimmed.toLowerCase().includes("@g.us")
+  ) {
+    return parts.slice(1).join(":") || undefined;
   }
-  return (
-    extractInferredGroupTargetId({
-      raw: trimmed,
-      channelId,
-      messaging,
-    }) ??
-    extractLegacyParsedGroupTargetId({
-      raw: trimmed,
-      channelId,
-      messaging,
-    })
-  );
+  if (parts.length >= 2 && (parts[0] === "group" || parts[0] === "channel")) {
+    return parts.slice(1).join(":") || undefined;
+  }
+  return undefined;
 }

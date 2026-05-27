@@ -1,5 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-
 type PreambleResult = {
   command: string;
   chdirPath?: string;
@@ -84,7 +82,7 @@ export function binaryName(token: string | undefined): string | undefined {
   }
   const cleaned = stripOuterQuotes(token) ?? token;
   const segment = cleaned.split(/[/]/).at(-1) ?? cleaned;
-  return normalizeLowercaseStringOrEmpty(segment);
+  return segment.trim().toLowerCase();
 }
 
 export function optionValue(words: string[], names: string[]): string | undefined {
@@ -226,7 +224,7 @@ export function unwrapShellWrapper(command: string): string {
   return inner ? (stripOuterQuotes(inner) ?? command) : command;
 }
 
-function scanTopLevelChars(
+export function scanTopLevelChars(
   command: string,
   visit: (char: string, index: number) => boolean | void,
 ): void {
@@ -338,7 +336,6 @@ export function stripShellPreamble(command: string): PreambleResult {
         first = { index: idx, length: 1 };
         return false;
       }
-      return undefined;
     });
     const head = (first ? rest.slice(0, first.index) : rest).trim();
     const isChdir = (first ? !first.isOr : i > 0) && isChdirCommand(head);

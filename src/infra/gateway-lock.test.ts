@@ -3,17 +3,15 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { acquireGatewayLock, GatewayLockError, type GatewayLockOptions } from "./gateway-lock.js";
 
-type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
-
-const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-lock-" });
 let fixtureRoot = "";
+let fixtureCount = 0;
 const realNow = Date.now.bind(Date);
 
 function resolveTestLockDir() {
@@ -21,7 +19,8 @@ function resolveTestLockDir() {
 }
 
 async function makeEnv() {
-  const dir = await fixtureRootTracker.make("case");
+  const dir = path.join(fixtureRoot, `case-${fixtureCount++}`);
+  await fs.mkdir(dir, { recursive: true });
   const configPath = path.join(dir, "openclaw.json");
   await fs.writeFile(configPath, "{}", "utf8");
   return {
@@ -47,14 +46,6 @@ async function acquireForTest(
     lockDir: resolveTestLockDir(),
     ...opts,
   });
-}
-
-function expectGatewayLock(lock: Awaited<ReturnType<typeof acquireGatewayLock>>): GatewayLock {
-  if (lock === null) {
-    throw new Error("Expected gateway lock");
-  }
-  expect(typeof lock.release).toBe("function");
-  return lock;
 }
 
 function resolveLockPath(env: NodeJS.ProcessEnv) {
@@ -158,7 +149,7 @@ async function writeRecentLockFile(env: NodeJS.ProcessEnv, startTime = 111) {
 
 describe("gateway lock", () => {
   beforeAll(async () => {
-    fixtureRoot = await fixtureRootTracker.setup();
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
   });
 
   beforeEach(() => {
@@ -170,8 +161,7 @@ describe("gateway lock", () => {
   });
 
   afterAll(async () => {
-    await fixtureRootTracker.cleanup();
-    fixtureRoot = "";
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   afterEach(() => {
@@ -185,17 +175,14 @@ describe("gateway lock", () => {
     vi.useRealTimers();
     const env = await makeEnv();
     const lock = await acquireForTest(env, { timeoutMs: 50 });
-    const acquiredLock = expectGatewayLock(lock);
+    expect(lock).not.toBeNull();
 
-    const pending = acquireForTest(env, {
-      timeoutMs: 15,
-      readProcessCmdline: () => ["openclaw", "gateway", "run"],
-    });
+    const pending = acquireForTest(env, { timeoutMs: 15 });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
-    await acquiredLock.release();
+    await lock?.release();
     const lock2 = await acquireForTest(env);
-    await expectGatewayLock(lock2).release();
+    await lock2?.release();
   });
 
   it("treats recycled linux pid as stale when start time mismatches", async () => {
@@ -214,9 +201,9 @@ describe("gateway lock", () => {
       pollIntervalMs: 5,
       platform: "linux",
     });
-    const acquiredLock = expectGatewayLock(lock);
+    expect(lock).not.toBeNull();
 
-    await acquiredLock.release();
+    await lock?.release();
     spy.mockRestore();
   });
 
@@ -269,7 +256,8 @@ describe("gateway lock", () => {
       platform: "darwin",
       port: 18789,
     });
-    await expectGatewayLock(lock).release();
+    expect(lock).not.toBeNull();
+    await lock?.release();
     connectSpy.mockRestore();
   });
 
@@ -285,7 +273,6 @@ describe("gateway lock", () => {
         staleMs: 10_000,
         platform: "darwin",
         port: 18789,
-        readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run"],
       });
       await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
     } finally {
@@ -321,109 +308,5 @@ describe("gateway lock", () => {
 
     await expect(acquireForTest(env)).rejects.toBeInstanceOf(GatewayLockError);
     openSpy.mockRestore();
-  });
-
-  it("clears stale lock on win32 when process cmdline is not a gateway", async () => {
-    vi.useRealTimers();
-    const env = await makeEnv();
-    await writeRecentLockFile(env);
-
-    const connectSpy = createPortProbeConnectionSpy("connect");
-
-    const lock = await acquireForTest(env, {
-      timeoutMs: 80,
-      pollIntervalMs: 5,
-      staleMs: 10_000,
-      platform: "win32",
-      port: 18789,
-      readProcessCmdline: () => ["chrome.exe", "--no-sandbox"],
-    });
-    await expectGatewayLock(lock).release();
-
-    connectSpy.mockRestore();
-  });
-
-  it("keeps lock on win32 when process cmdline is a gateway", async () => {
-    vi.useRealTimers();
-    const env = await makeEnv();
-    await writeRecentLockFile(env);
-
-    const connectSpy = createPortProbeConnectionSpy("connect");
-
-    const pending = acquireForTest(env, {
-      timeoutMs: 20,
-      pollIntervalMs: 2,
-      staleMs: 10_000,
-      platform: "win32",
-      port: 18789,
-      readProcessCmdline: () => [
-        "C:\\Users\\me\\AppData\\Roaming\\npm\\openclaw.cmd",
-        "gateway",
-        "run",
-      ],
-    });
-    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
-
-    connectSpy.mockRestore();
-  });
-
-  it("falls back to unknown on win32 when cmdline reader returns null", async () => {
-    vi.useRealTimers();
-    const env = await makeEnv();
-    await writeRecentLockFile(env);
-
-    const connectSpy = createPortProbeConnectionSpy("connect");
-
-    const pending = acquireForTest(env, {
-      timeoutMs: 20,
-      pollIntervalMs: 2,
-      staleMs: 10_000,
-      platform: "win32",
-      port: 18789,
-      readProcessCmdline: () => null,
-    });
-    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
-
-    connectSpy.mockRestore();
-  });
-
-  it("clears stale lock on darwin when process cmdline is not a gateway", async () => {
-    vi.useRealTimers();
-    const env = await makeEnv();
-    await writeRecentLockFile(env);
-
-    const connectSpy = createPortProbeConnectionSpy("connect");
-
-    const lock = await acquireForTest(env, {
-      timeoutMs: 80,
-      pollIntervalMs: 5,
-      staleMs: 10_000,
-      platform: "darwin",
-      port: 18789,
-      readProcessCmdline: () => ["/Applications/Safari.app/Contents/MacOS/Safari"],
-    });
-    await expectGatewayLock(lock).release();
-
-    connectSpy.mockRestore();
-  });
-
-  it("keeps lock on darwin when process cmdline is a gateway", async () => {
-    vi.useRealTimers();
-    const env = await makeEnv();
-    await writeRecentLockFile(env);
-
-    const connectSpy = createPortProbeConnectionSpy("connect");
-
-    const pending = acquireForTest(env, {
-      timeoutMs: 20,
-      pollIntervalMs: 2,
-      staleMs: 10_000,
-      platform: "darwin",
-      port: 18789,
-      readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run", "--port", "18789"],
-    });
-    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
-
-    connectSpy.mockRestore();
   });
 });

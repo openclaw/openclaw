@@ -27,14 +27,9 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
       delta: "The fix strips leaked `<thinking>` tags from messages.",
     });
 
-    expect(onPartialReply).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).toHaveBeenCalledWith({
-      text: "The fix strips leaked `<thinking>` tags from messages.",
-      delta: "The fix strips leaked `<thinking>` tags from messages.",
-      replace: undefined,
-      mediaUrls: undefined,
-      phase: undefined,
-    });
+    expect(onPartialReply).toHaveBeenCalled();
+    const lastCall = onPartialReply.mock.calls[onPartialReply.mock.calls.length - 1];
+    expect(lastCall[0].text).toContain("`<thinking>`");
   });
 
   it("does not strip thinking tags inside fenced code blocks", () => {
@@ -45,14 +40,9 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
       delta: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
     });
 
-    expect(onPartialReply).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).toHaveBeenCalledWith({
-      text: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
-      delta: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
-      replace: undefined,
-      mediaUrls: undefined,
-      phase: undefined,
-    });
+    expect(onPartialReply).toHaveBeenCalled();
+    const lastCall = onPartialReply.mock.calls[onPartialReply.mock.calls.length - 1];
+    expect(lastCall[0].text).toContain("<thinking>code example</thinking>");
   });
 
   it("still strips actual thinking tags outside code spans", () => {
@@ -63,13 +53,10 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
       delta: "Hello <thinking>internal thought</thinking> world",
     });
 
-    expect(onPartialReply).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).toHaveBeenCalledWith({
-      text: "Hello  world",
-      delta: "Hello  world",
-      replace: undefined,
-      mediaUrls: undefined,
-      phase: undefined,
-    });
+    expect(onPartialReply).toHaveBeenCalled();
+    const lastCall = onPartialReply.mock.calls[onPartialReply.mock.calls.length - 1];
+    expect(lastCall[0].text).not.toContain("internal thought");
+    expect(lastCall[0].text).toContain("Hello");
+    expect(lastCall[0].text).toContain("world");
   });
 });

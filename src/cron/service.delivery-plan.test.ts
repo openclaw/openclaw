@@ -14,7 +14,7 @@ type DeliveryMode = "none" | "announce";
 
 type DeliveryOverride = {
   mode: DeliveryMode;
-  channel?: ChannelId;
+  channel?: ChannelId | "last";
   to?: string;
 };
 
@@ -25,7 +25,7 @@ async function withCronService(
   run: (context: {
     cron: CronService;
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
-    requestHeartbeat: ReturnType<typeof vi.fn>;
+    requestHeartbeatNow: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
 ) {
   await withCronServiceForTest(
@@ -44,6 +44,7 @@ async function addIsolatedAgentTurnJob(
   params: {
     name: string;
     wakeMode: "next-heartbeat" | "now";
+    payload?: { deliver?: boolean };
     delivery?: DeliveryOverride;
   },
 ) {
@@ -56,6 +57,7 @@ async function addIsolatedAgentTurnJob(
     payload: {
       kind: "agentTurn",
       message: "hello",
+      ...params.payload,
     } as unknown as { kind: "agentTurn"; message: string },
     ...(params.delivery
       ? {
@@ -70,12 +72,12 @@ async function addIsolatedAgentTurnJob(
 }
 
 describe("CronService delivery plan consistency", () => {
-  it("does not post isolated summary when delivery.mode=none", async () => {
+  it("does not post isolated summary when legacy deliver=false", async () => {
     await withCronService({}, async ({ cron, enqueueSystemEvent }) => {
       const job = await addIsolatedAgentTurnJob(cron, {
-        name: "delivery-off",
+        name: "legacy-off",
         wakeMode: "next-heartbeat",
-        delivery: { mode: "none" },
+        payload: { deliver: false },
       });
 
       const result = await cron.run(job.id, "force");
@@ -108,7 +110,7 @@ describe("CronService delivery plan consistency", () => {
           delivered: true,
         })),
       },
-      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+      async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
         const job = await addIsolatedAgentTurnJob(cron, {
           name: "announce-delivered",
           wakeMode: "now",
@@ -118,7 +120,7 @@ describe("CronService delivery plan consistency", () => {
         const result = await cron.run(job.id, "force");
         expect(result).toEqual({ ok: true, ran: true });
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeat).not.toHaveBeenCalled();
+        expect(requestHeartbeatNow).not.toHaveBeenCalled();
       },
     );
   });

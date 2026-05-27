@@ -3,6 +3,7 @@ export type MapConfig = {
   displayName?: Record<string, string>;
   nameToLogin?: Record<string, string>;
   emailToLogin?: Record<string, string>;
+  placeholderAvatar?: string;
   seedCommit?: string;
 };
 

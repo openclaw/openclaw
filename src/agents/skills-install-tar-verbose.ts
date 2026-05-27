@@ -1,5 +1,3 @@
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-
 const TAR_VERBOSE_MONTHS = new Set([
   "Jan",
   "Feb",
@@ -65,7 +63,10 @@ function parseTarVerboseSize(line: string): number {
 }
 
 export function parseTarVerboseMetadata(stdout: string): Array<{ type: string; size: number }> {
-  const lines = normalizeStringEntries(stdout.split("\n"));
+  const lines = stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
   return lines.map((line) => {
     const typeChar = line[0] ?? "";
     if (!typeChar) {

@@ -1,16 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
-  ensureModelsFileModeForModelsJson,
-  writeModelsFileAtomicForModelsJson,
-} from "./models-config.js";
+  CUSTOM_PROXY_MODELS_CONFIG,
+  installModelsConfigTestHooks,
+  withModelsTempHome as withTempHome,
+} from "./models-config.e2e-harness.js";
+import { ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } from "./models-config.js";
 
-const tempDirs = new Set<string>();
+installModelsConfigTestHooks();
 
 afterEach(() => {
-  cleanupTempDirs(tempDirs);
+  resetModelsJsonReadyCacheForTest();
 });
 
 describe("models-config file mode", () => {
@@ -18,25 +20,28 @@ describe("models-config file mode", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir(tempDirs, "models-json-mode-");
-    const modelsPath = path.join(dir, "models.json");
-    await writeModelsFileAtomicForModelsJson(modelsPath, '{"providers":{}}\n');
-    const stat = await fs.stat(modelsPath);
-    expect(stat.mode & 0o777).toBe(0o600);
+    await withTempHome(async () => {
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+      const modelsPath = path.join(resolveOpenClawAgentDir(), "models.json");
+      const stat = await fs.stat(modelsPath);
+      expect(stat.mode & 0o777).toBe(0o600);
+    });
   });
 
   it("repairs models.json mode to 0600 on no-content-change paths", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir(tempDirs, "models-json-mode-");
-    const modelsPath = path.join(dir, "models.json");
-    await writeModelsFileAtomicForModelsJson(modelsPath, '{"providers":{}}\n');
-    await fs.chmod(modelsPath, 0o644);
+    await withTempHome(async () => {
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+      const modelsPath = path.join(resolveOpenClawAgentDir(), "models.json");
+      await fs.chmod(modelsPath, 0o644);
 
-    await ensureModelsFileModeForModelsJson(modelsPath);
+      const result = await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+      expect(result.wrote).toBe(false);
 
-    const stat = await fs.stat(modelsPath);
-    expect(stat.mode & 0o777).toBe(0o600);
+      const stat = await fs.stat(modelsPath);
+      expect(stat.mode & 0o777).toBe(0o600);
+    });
   });
 });

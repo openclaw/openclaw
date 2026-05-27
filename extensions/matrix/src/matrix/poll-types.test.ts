@@ -41,13 +41,12 @@ describe("parsePollStartContent", () => {
       },
     });
 
-    expect(parsed).toEqual({
+    expect(parsed).toMatchObject({
       question: "Lunch?",
       answers: [
         { id: "a1", text: "Yes" },
         { id: "a2", text: "No" },
       ],
-      kind: "m.poll.disclosed",
       maxSelections: 1,
     });
   });

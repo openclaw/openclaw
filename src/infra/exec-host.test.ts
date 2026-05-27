@@ -8,21 +8,6 @@ vi.mock("./jsonl-socket.js", () => ({
 
 import { requestExecHostViaSocket } from "./exec-host.js";
 
-type JsonlSocketCall = {
-  socketPath: string;
-  requestLine: string;
-  timeoutMs: number;
-  accept: (msg: unknown) => unknown;
-};
-
-function requireJsonlSocketCall(): JsonlSocketCall {
-  const call = requestJsonlSocketMock.mock.calls[0]?.[0];
-  if (!call) {
-    throw new Error("expected requestJsonlSocket call");
-  }
-  return call as JsonlSocketCall;
-}
-
 describe("requestExecHostViaSocket", () => {
   beforeEach(() => {
     requestJsonlSocketMock.mockReset();
@@ -60,11 +45,21 @@ describe("requestExecHostViaSocket", () => {
       }),
     ).resolves.toEqual({ ok: true, payload: { success: true } });
 
-    const call = requireJsonlSocketCall();
+    const call = requestJsonlSocketMock.mock.calls[0]?.[0] as
+      | {
+          socketPath: string;
+          payload: string;
+          timeoutMs: number;
+          accept: (msg: unknown) => unknown;
+        }
+      | undefined;
+    if (!call) {
+      throw new Error("expected requestJsonlSocket call");
+    }
 
     expect(call.socketPath).toBe("/tmp/socket");
     expect(call.timeoutMs).toBe(20_000);
-    const payload = JSON.parse(call.requestLine) as {
+    const payload = JSON.parse(call.payload) as {
       type: string;
       id: string;
       nonce: string;
@@ -107,6 +102,8 @@ describe("requestExecHostViaSocket", () => {
       }),
     ).resolves.toBeNull();
 
-    expect(requireJsonlSocketCall().timeoutMs).toBe(123);
+    expect(
+      (requestJsonlSocketMock.mock.calls[0]?.[0] as { timeoutMs?: number } | undefined)?.timeoutMs,
+    ).toBe(123);
   });
 });

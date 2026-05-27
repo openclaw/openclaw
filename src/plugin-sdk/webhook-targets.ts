@@ -238,7 +238,7 @@ export async function resolveWebhookTargetWithAuthOrReject<T>(params: {
   ambiguousMessage?: string;
 }): Promise<T | null> {
   const match = await resolveSingleWebhookTargetAsync(params.targets, async (target) =>
-    params.isMatch(target),
+    Boolean(await params.isMatch(target)),
   );
   return resolveWebhookTargetMatchOrReject(params, match);
 }

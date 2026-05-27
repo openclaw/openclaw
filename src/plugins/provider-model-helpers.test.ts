@@ -1,8 +1,7 @@
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { cloneFirstTemplateModel, matchesExactOrPrefix } from "./provider-model-helpers.js";
-import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
-import type { ProviderResolveDynamicModelContext } from "./types.js";
+import type { ProviderResolveDynamicModelContext, ProviderRuntimeModel } from "./types.js";
 
 function createContext(models: ProviderRuntimeModel[]): ProviderResolveDynamicModelContext {
   return {
@@ -40,7 +39,7 @@ function expectClonedTemplateModel(
     expect(model).toBeUndefined();
     return;
   }
-  expect(model).toEqual(expected);
+  expect(model).toMatchObject(expected);
 }
 
 function expectPrefixMatch(params: {

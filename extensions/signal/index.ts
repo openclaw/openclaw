@@ -1,16 +1,14 @@
-import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { signalPlugin } from "./src/channel.js";
+import { setSignalRuntime } from "./src/runtime.js";
 
-export default defineBundledChannelEntry({
+export { signalPlugin } from "./src/channel.js";
+export { setSignalRuntime } from "./src/runtime.js";
+
+export default defineChannelPluginEntry({
   id: "signal",
   name: "Signal",
   description: "Signal channel plugin",
-  importMetaUrl: import.meta.url,
-  plugin: {
-    specifier: "./channel-plugin-api.js",
-    exportName: "signalPlugin",
-  },
-  runtime: {
-    specifier: "./runtime-api.js",
-    exportName: "setSignalRuntime",
-  },
+  plugin: signalPlugin,
+  setRuntime: setSignalRuntime,
 });

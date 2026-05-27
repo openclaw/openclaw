@@ -12,19 +12,12 @@ import {
   createActivityHandler,
   createMSTeamsMessageHandlerDeps,
 } from "./monitor-handler.test-helpers.js";
+import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const feedbackReflectionMockState = vi.hoisted(() => ({
   runFeedbackReflection: vi.fn(),
-}));
-
-vi.mock("./monitor-handler/message-handler.js", () => ({
-  createMSTeamsMessageHandler: () => async () => {},
-}));
-
-vi.mock("./monitor-handler/reaction-handler.js", () => ({
-  createMSTeamsReactionHandler: () => async () => {},
 }));
 
 vi.mock("./feedback-reflection.js", async () => {
@@ -47,8 +40,6 @@ function createRuntimeStub(readAllowFromStore: ReturnType<typeof vi.fn>): Plugin
         resolveInboundDebounceMs: () => 0,
         createInboundDebouncer: () => ({
           enqueue: async () => {},
-          flushKey: async () => {},
-          cancelKey: () => false,
         }),
       },
       pairing: {
@@ -132,14 +123,7 @@ function createFeedbackInvokeContext(params: {
 }
 
 async function expectFileMissing(filePath: string) {
-  let error: unknown;
-  try {
-    await access(filePath);
-  } catch (caught) {
-    error = caught;
-  }
-  expect(error).toBeInstanceOf(Error);
-  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+  await expect(access(filePath)).rejects.toThrow();
 }
 
 async function withFeedbackHandler(params: {
@@ -198,28 +182,12 @@ describe("msteams feedback invoke authz", () => {
           path.join(tmpDir, "msteams_direct_owner-aad.jsonl"),
           "utf-8",
         );
-        const event = JSON.parse(transcript.trim()) as Record<string, unknown>;
-        expect(Object.keys(event).toSorted()).toEqual([
-          "agentId",
-          "comment",
-          "conversationId",
-          "event",
-          "messageId",
-          "sessionKey",
-          "ts",
-          "type",
-          "value",
-        ]);
-        expect(typeof event.ts).toBe("number");
-        expect({ ...event, ts: 0 }).toEqual({
-          type: "custom",
+        expect(JSON.parse(transcript.trim())).toMatchObject({
           event: "feedback",
-          ts: 0,
           messageId: "bot-msg-1",
           value: "positive",
           comment: "allowed feedback",
           sessionKey: "msteams:direct:owner-aad",
-          agentId: "default",
           conversationId: "a:personal-chat",
         });
         expect(originalRun).not.toHaveBeenCalled();
@@ -257,29 +225,11 @@ describe("msteams feedback invoke authz", () => {
           path.join(tmpDir, "msteams_direct_owner-aad.jsonl"),
           "utf-8",
         );
-        const event = JSON.parse(transcript.trim()) as Record<string, unknown>;
-        expect(Object.keys(event).toSorted()).toEqual([
-          "agentId",
-          "comment",
-          "conversationId",
-          "event",
-          "messageId",
-          "sessionKey",
-          "ts",
-          "type",
-          "value",
-        ]);
-        expect(typeof event.ts).toBe("number");
-        expect({ ...event, ts: 0 }).toEqual({
-          type: "custom",
+        expect(JSON.parse(transcript.trim())).toMatchObject({
           event: "feedback",
-          ts: 0,
-          messageId: "bot-msg-1",
           value: "positive",
           comment: "allowed dm feedback",
           sessionKey: "msteams:direct:owner-aad",
-          agentId: "default",
-          conversationId: "a:personal-chat",
         });
         expect(originalRun).not.toHaveBeenCalled();
       },

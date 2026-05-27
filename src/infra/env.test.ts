@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } from "./env.js";
 
 const loggerMocks = vi.hoisted(() => ({
   info: vi.fn(),
@@ -12,8 +11,17 @@ vi.mock("../logging/subsystem.js", () => ({
   }),
 }));
 
-beforeEach(() => {
-  loggerMocks.info.mockClear();
+type EnvModule = typeof import("./env.js");
+
+let isTruthyEnvValue: EnvModule["isTruthyEnvValue"];
+let logAcceptedEnvOption: EnvModule["logAcceptedEnvOption"];
+let normalizeEnv: EnvModule["normalizeEnv"];
+let normalizeZaiEnv: EnvModule["normalizeZaiEnv"];
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } =
+    await import("./env.js"));
 });
 
 describe("normalizeZaiEnv", () => {
@@ -63,7 +71,7 @@ describe("isTruthyEnvValue", () => {
 });
 
 describe("logAcceptedEnvOption", () => {
-  it("logs accepted env options once with redaction and formatting", async () => {
+  it("logs accepted env options once with redaction and formatting", () => {
     loggerMocks.info.mockClear();
 
     withEnv(
@@ -86,9 +94,7 @@ describe("logAcceptedEnvOption", () => {
       },
     );
 
-    await vi.waitFor(() => {
-      expect(loggerMocks.info).toHaveBeenCalledTimes(1);
-    });
+    expect(loggerMocks.info).toHaveBeenCalledTimes(1);
     expect(loggerMocks.info).toHaveBeenCalledWith(
       "env: OPENCLAW_TEST_ENV=<redacted> (test option)",
     );

@@ -1,21 +1,4 @@
-import type { CompactEmbeddedPiSessionDirect } from "../agents/pi-embedded-runner/compact.runtime.types.js";
-import { normalizeStructuredPromptSection } from "../agents/prompt-cache-stability.js";
-import type { MemoryCitationsMode } from "../config/types.memory.js";
-import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "./types.js";
-
-type CompactRuntimeModule = {
-  compactEmbeddedPiSessionDirect: CompactEmbeddedPiSessionDirect;
-};
-
-let compactRuntimePromise: Promise<CompactRuntimeModule> | null = null;
-
-function loadCompactRuntime(): Promise<CompactRuntimeModule> {
-  // Use a literal specifier so the bundler rewrites the runtime chunk path
-  // instead of resolving a source-tree path at runtime.
-  compactRuntimePromise ??= import("../agents/pi-embedded-runner/compact.runtime.js");
-  return compactRuntimePromise;
-}
 
 /**
  * Delegate a context-engine compaction request to OpenClaw's built-in runtime compaction path.
@@ -33,9 +16,9 @@ function loadCompactRuntime(): Promise<CompactRuntimeModule> {
 export async function delegateCompactionToRuntime(
   params: Parameters<ContextEngine["compact"]>[0],
 ): Promise<CompactResult> {
-  // Load through the dedicated runtime boundary without introducing another
-  // source-level static edge into the embedded runner graph.
-  const { compactEmbeddedPiSessionDirect } = await loadCompactRuntime();
+  // Import through a dedicated runtime boundary so the lazy edge remains effective.
+  const { compactEmbeddedPiSessionDirect } =
+    await import("../agents/pi-embedded-runner/compact.runtime.js");
   type RuntimeCompactionParams = Parameters<typeof compactEmbeddedPiSessionDirect>[0];
 
   // runtimeContext carries the full CompactEmbeddedPiSessionParams fields set
@@ -74,30 +57,7 @@ export async function delegateCompactionToRuntime(
           tokensBefore: result.result.tokensBefore,
           tokensAfter: result.result.tokensAfter,
           details: result.result.details,
-          sessionId: result.result.sessionId,
-          sessionFile: result.result.sessionFile,
         }
       : undefined,
   };
-}
-
-/**
- * Build a context-engine-ready systemPromptAddition from the active memory
- * plugin prompt path. This lets non-legacy engines explicitly opt into the
- * same memory/wiki guidance that the legacy engine gets via system prompt
- * assembly, without reimplementing memory prompt formatting.
- */
-export function buildMemorySystemPromptAddition(params: {
-  availableTools: Set<string>;
-  citationsMode?: MemoryCitationsMode;
-}): string | undefined {
-  const lines = buildMemoryPromptSection({
-    availableTools: params.availableTools,
-    citationsMode: params.citationsMode,
-  });
-  if (lines.length === 0) {
-    return undefined;
-  }
-  const normalized = normalizeStructuredPromptSection(lines.join("\n"));
-  return normalized || undefined;
 }

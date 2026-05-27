@@ -27,14 +27,14 @@ describe("subscribeEmbeddedPiSession", () => {
       blockReplyBreak: "text_end",
     });
 
-    // Missing onBlockReplyFlush should still accept streaming events.
-    expect(
+    // This should not throw even without onBlockReplyFlush
+    expect(() => {
       handler?.({
         type: "tool_execution_start",
         toolName: "bash",
         toolCallId: "tool-no-flush",
         args: { command: "echo test" },
-      }),
-    ).toBeUndefined();
+      });
+    }).not.toThrow();
   });
 });

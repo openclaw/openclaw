@@ -1,7 +1,6 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMemberChannelEvent } from "../types.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
@@ -43,9 +42,7 @@ export function registerSlackMemberEvents(params: {
         contextKey: `slack:member:${params.verb}:${channelId ?? "unknown"}:${payload.user ?? "unknown"}`,
       });
     } catch (err) {
-      ctx.runtime.error?.(
-        danger(`slack ${params.verb} handler failed: ${formatErrorMessage(err)}`),
-      );
+      ctx.runtime.error?.(danger(`slack ${params.verb} handler failed: ${String(err)}`));
     }
   };
 

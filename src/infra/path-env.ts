@@ -1,10 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  normalizeStringEntries,
-  normalizeUniqueStringEntries,
-} from "../shared/string-normalization.js";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
 
@@ -34,44 +30,26 @@ function isDirectory(dirPath: string): boolean {
   }
 }
 
-function splitPathParts(pathEnv: string): Set<string> {
-  return new Set(normalizeStringEntries(pathEnv.split(path.delimiter)));
-}
-
-function isKnownPathDir(existingPathParts: ReadonlySet<string>, dirPath: string): boolean {
-  return existingPathParts.has(dirPath) || isDirectory(dirPath);
-}
-
-function isLinuxbrewPath(dirPath: string): boolean {
-  return dirPath.split(path.sep).includes(".linuxbrew");
-}
-
-function resolvePathBootstrapBrewDirs(params: {
-  homeDir: string;
-  platform: NodeJS.Platform;
-  existingPathParts: ReadonlySet<string>;
-}): string[] {
-  const candidates = resolveBrewPathDirs({ homeDir: params.homeDir });
-  if (params.platform !== "darwin") {
-    return candidates;
-  }
-  return candidates.filter(
-    (candidate) => !isLinuxbrewPath(candidate) || params.existingPathParts.has(candidate),
-  );
-}
-
 function mergePath(params: { existing: string; prepend?: string[]; append?: string[] }): string {
-  return normalizeUniqueStringEntries([
-    ...(params.prepend ?? []),
-    ...params.existing.split(path.delimiter),
-    ...(params.append ?? []),
-  ]).join(path.delimiter);
+  const partsExisting = params.existing
+    .split(path.delimiter)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const partsPrepend = (params.prepend ?? []).map((part) => part.trim()).filter(Boolean);
+  const partsAppend = (params.append ?? []).map((part) => part.trim()).filter(Boolean);
+
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const part of [...partsPrepend, ...partsExisting, ...partsAppend]) {
+    if (!seen.has(part)) {
+      seen.add(part);
+      merged.push(part);
+    }
+  }
+  return merged.join(path.delimiter);
 }
 
-function candidateBinDirs(
-  opts: EnsureOpenClawPathOpts,
-  existingPathParts: ReadonlySet<string>,
-): { prepend: string[]; append: string[] } {
+function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; append: string[] } {
   const execPath = opts.execPath ?? process.execPath;
   const cwd = opts.cwd ?? process.cwd();
   const homeDir = opts.homeDir ?? os.homedir();
@@ -79,17 +57,6 @@ function candidateBinDirs(
 
   const prepend: string[] = [];
   const append: string[] = [];
-
-  // Keep the active runtime directory ahead of PATH hardening so shebang-based
-  // subprocesses keep using the same Node/Bun the current OpenClaw process is on.
-  try {
-    const execDir = path.dirname(execPath);
-    if (isExecutable(execPath)) {
-      prepend.push(execDir);
-    }
-  } catch {
-    // ignore
-  }
 
   // Bundled macOS app: `openclaw` lives next to the executable (process.execPath).
   try {
@@ -122,10 +89,10 @@ function candidateBinDirs(
   // shadow trusted OS binaries.
   // This includes Brew/Homebrew dirs, which are useful for finding `openclaw`
   // in launchd/minimal environments but must not be treated as trusted.
-  append.push(...resolvePathBootstrapBrewDirs({ homeDir, platform, existingPathParts }));
+  append.push(...resolveBrewPathDirs({ homeDir }));
   const miseDataDir = process.env.MISE_DATA_DIR ?? path.join(homeDir, ".local", "share", "mise");
   const miseShims = path.join(miseDataDir, "shims");
-  if (isKnownPathDir(existingPathParts, miseShims)) {
+  if (isDirectory(miseShims)) {
     append.push(miseShims);
   }
   if (platform === "darwin") {
@@ -139,10 +106,7 @@ function candidateBinDirs(
   append.push(path.join(homeDir, ".bun", "bin"));
   append.push(path.join(homeDir, ".yarn", "bin"));
 
-  return {
-    prepend: prepend.filter((candidate) => isKnownPathDir(existingPathParts, candidate)),
-    append: append.filter((candidate) => isKnownPathDir(existingPathParts, candidate)),
-  };
+  return { prepend: prepend.filter(isDirectory), append: append.filter(isDirectory) };
 }
 
 /**
@@ -156,8 +120,7 @@ export function ensureOpenClawCliOnPath(opts: EnsureOpenClawPathOpts = {}) {
   process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
 
   const existing = opts.pathEnv ?? process.env.PATH ?? "";
-  const existingPathParts = splitPathParts(existing);
-  const { prepend, append } = candidateBinDirs(opts, existingPathParts);
+  const { prepend, append } = candidateBinDirs(opts);
   if (prepend.length === 0 && append.length === 0) {
     return;
   }

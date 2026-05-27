@@ -1,11 +1,10 @@
-import { escapeRegExp } from "../shared/regexp.js";
+import { escapeRegExp } from "../utils.js";
 
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
 
 const silentExactRegexByToken = new Map<string, RegExp>();
 const silentTrailingRegexByToken = new Map<string, RegExp>();
-const silentLeadingAttachedRegexByToken = new Map<string, RegExp>();
 
 function getSilentExactRegex(token: string): RegExp {
   const cached = silentExactRegexByToken.get(token);
@@ -13,7 +12,7 @@ function getSilentExactRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  const regex = new RegExp(`^\\s*${escaped}(?:\\s+${escaped})*\\s*$`, "i");
+  const regex = new RegExp(`^\\s*${escaped}\\s*$`);
   silentExactRegexByToken.set(token, regex);
   return regex;
 }
@@ -24,7 +23,7 @@ function getSilentTrailingRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  const regex = new RegExp(`(?:^|\\s+|\\*+)${escaped}\\s*$`, "i");
+  const regex = new RegExp(`(?:^|\\s+|\\*+)${escaped}\\s*$`);
   silentTrailingRegexByToken.set(token, regex);
   return regex;
 }
@@ -36,14 +35,14 @@ export function isSilentReplyText(
   if (!text) {
     return false;
   }
-  // Match only token-only replies, including repeated tokens separated by whitespace.
+  // Match only the exact silent token with optional surrounding whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
   return getSilentExactRegex(token).test(text);
 }
 
 type SilentReplyActionEnvelope = { action?: unknown };
 
-function isSilentReplyEnvelopeText(
+export function isSilentReplyEnvelopeText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
 ): boolean {
@@ -85,58 +84,6 @@ export function isSilentReplyPayloadText(
  */
 export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKEN): string {
   return text.replace(getSilentTrailingRegex(token), "").trim();
-}
-
-const silentLeadingRegexByToken = new Map<string, RegExp>();
-
-function getSilentLeadingAttachedRegex(token: string): RegExp {
-  const cached = silentLeadingAttachedRegexByToken.get(token);
-  if (cached) {
-    return cached;
-  }
-  const escaped = escapeRegExp(token);
-  // Match one or more leading occurrences of the token where the final token
-  // is glued directly to visible word-start content (for example
-  // `NO_REPLYhello`), without treating punctuation-start text like
-  // `NO_REPLY: explanation` as a silent prefix.
-  const regex = new RegExp(`^\\s*(?:${escaped}\\s+)*${escaped}(?=[\\p{L}\\p{N}])`, "iu");
-  silentLeadingAttachedRegexByToken.set(token, regex);
-  return regex;
-}
-
-function getSilentLeadingRegex(token: string): RegExp {
-  const cached = silentLeadingRegexByToken.get(token);
-  if (cached) {
-    return cached;
-  }
-  const escaped = escapeRegExp(token);
-  // Match one or more leading occurrences of the token, each optionally followed by whitespace
-  const regex = new RegExp(`^(?:\\s*${escaped})+\\s*`, "i");
-  silentLeadingRegexByToken.set(token, regex);
-  return regex;
-}
-
-/**
- * Strip leading silent reply tokens from text.
- * Handles cases like "NO_REPLYThe user is saying..." where the token
- * is not separated from the following text.
- */
-export function stripLeadingSilentToken(text: string, token: string = SILENT_REPLY_TOKEN): string {
-  return text.replace(getSilentLeadingRegex(token), "").trim();
-}
-
-/**
- * Check whether text starts with one or more leading silent reply tokens where
- * the final token is glued directly to visible content.
- */
-export function startsWithSilentToken(
-  text: string | undefined,
-  token: string = SILENT_REPLY_TOKEN,
-): boolean {
-  if (!text) {
-    return false;
-  }
-  return getSilentLeadingAttachedRegex(token).test(text);
 }
 
 export function isSilentReplyPrefixText(

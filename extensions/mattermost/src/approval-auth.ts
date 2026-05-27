@@ -1,8 +1,7 @@
 import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-auth-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+} from "openclaw/plugin-sdk/approval-runtime";
 import { resolveMattermostAccount } from "./mattermost/accounts.js";
 
 const MATTERMOST_USER_ID_RE = /^[a-z0-9]{26}$/;
@@ -12,9 +11,9 @@ function normalizeMattermostApproverId(value: string | number): string | undefin
     .trim()
     .replace(/^(mattermost|user):/i, "")
     .replace(/^@/, "")
-    .trim();
-  const lowered = normalizeLowercaseStringOrEmpty(normalized);
-  return MATTERMOST_USER_ID_RE.test(lowered) ? lowered : undefined;
+    .trim()
+    .toLowerCase();
+  return MATTERMOST_USER_ID_RE.test(normalized) ? normalized : undefined;
 }
 
 export const mattermostApprovalAuth = createResolvedApproverActionAuthAdapter({

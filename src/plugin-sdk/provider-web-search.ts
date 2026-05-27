@@ -5,7 +5,6 @@ import type {
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
-  WebSearchProviderToolExecutionContext,
 } from "../plugins/types.js";
 export {
   jsonResult,
@@ -33,7 +32,6 @@ export {
   resolveSiteName,
   postTrustedWebToolsJson,
   throwWebSearchApiError,
-  withSelfHostedWebSearchEndpoint,
   withTrustedWebSearchEndpoint,
   writeCachedSearchPayload,
 } from "../agents/tools/web-search-provider-common.js";
@@ -48,10 +46,7 @@ export {
 } from "../agents/tools/web-search-provider-config.js";
 export type { SearchConfigRecord } from "../agents/tools/web-search-provider-common.js";
 export { resolveWebSearchProviderCredential } from "../agents/tools/web-search-provider-credentials.js";
-export {
-  withSelfHostedWebToolsEndpoint,
-  withTrustedWebToolsEndpoint,
-} from "../agents/tools/web-guarded-fetch.js";
+export { withTrustedWebToolsEndpoint } from "../agents/tools/web-guarded-fetch.js";
 export { markdownToText, truncateText } from "../agents/tools/web-fetch-utils.js";
 export {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -71,7 +66,6 @@ export type {
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
-  WebSearchProviderToolExecutionContext,
 };
 
 /**

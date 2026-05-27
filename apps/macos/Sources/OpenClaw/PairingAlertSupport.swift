@@ -26,18 +26,6 @@ enum PairingAlertSupport {
         case rejected
     }
 
-    struct ButtonTitles {
-        var approve: String = "Approve"
-        var postpone: String = "Not Now"
-        var reject: String = "Reject"
-
-        init(approve: String = "Approve", postpone: String = "Not Now", reject: String = "Reject") {
-            self.approve = approve
-            self.postpone = postpone
-            self.reject = reject
-        }
-    }
-
     struct PairingResolvedEvent: Codable {
         let requestId: String
         let decision: String
@@ -83,17 +71,14 @@ enum PairingAlertSupport {
     static func configureDefaultPairingAlert(
         _ alert: NSAlert,
         messageText: String,
-        informativeText: String,
-        buttonTitles: ButtonTitles = ButtonTitles(),
-        accessoryView: NSView? = nil)
+        informativeText: String)
     {
-        alert.alertStyle = .informational
+        alert.alertStyle = .warning
         alert.messageText = messageText
         alert.informativeText = informativeText
-        alert.accessoryView = accessoryView
-        alert.addButton(withTitle: buttonTitles.approve)
-        alert.addButton(withTitle: buttonTitles.postpone)
-        alert.addButton(withTitle: buttonTitles.reject)
+        alert.addButton(withTitle: "Later")
+        alert.addButton(withTitle: "Approve")
+        alert.addButton(withTitle: "Reject")
         if #available(macOS 11.0, *), alert.buttons.indices.contains(2) {
             alert.buttons[2].hasDestructiveAction = true
         }
@@ -148,20 +133,13 @@ enum PairingAlertSupport {
     static func beginPairingAlert(
         messageText: String,
         informativeText: String,
-        buttonTitles: ButtonTitles = ButtonTitles(),
-        accessoryView: NSView? = nil,
         alertHostWindow: inout NSWindow?,
         completion: @escaping (NSApplication.ModalResponse, NSWindow) -> Void) -> NSAlert
     {
         NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
-        self.configureDefaultPairingAlert(
-            alert,
-            messageText: messageText,
-            informativeText: informativeText,
-            buttonTitles: buttonTitles,
-            accessoryView: accessoryView)
+        self.configureDefaultPairingAlert(alert, messageText: messageText, informativeText: informativeText)
 
         let hostWindow = self.requireAlertHostWindow(alertHostWindow: &alertHostWindow)
         self.beginCenteredSheet(alert: alert, hostWindow: hostWindow) { response in
@@ -174,8 +152,6 @@ enum PairingAlertSupport {
         requestId: String,
         messageText: String,
         informativeText: String,
-        buttonTitles: ButtonTitles = ButtonTitles(),
-        accessoryView: NSView? = nil,
         activeAlert: inout NSAlert?,
         activeRequestId: inout String?,
         alertHostWindow: inout NSWindow?,
@@ -185,8 +161,6 @@ enum PairingAlertSupport {
         activeAlert = self.beginPairingAlert(
             messageText: messageText,
             informativeText: informativeText,
-            buttonTitles: buttonTitles,
-            accessoryView: accessoryView,
             alertHostWindow: &alertHostWindow,
             completion: completion)
     }
@@ -196,8 +170,6 @@ enum PairingAlertSupport {
         requestId: String,
         messageText: String,
         informativeText: String,
-        buttonTitles: ButtonTitles = ButtonTitles(),
-        accessoryView: NSView? = nil,
         state: PairingAlertState,
         onResponse: @escaping @MainActor (NSApplication.ModalResponse, Request) async -> Void)
     {
@@ -205,8 +177,6 @@ enum PairingAlertSupport {
             requestId: requestId,
             messageText: messageText,
             informativeText: informativeText,
-            buttonTitles: buttonTitles,
-            accessoryView: accessoryView,
             activeAlert: &state.activeAlert,
             activeRequestId: &state.activeRequestId,
             alertHostWindow: &state.alertHostWindow,

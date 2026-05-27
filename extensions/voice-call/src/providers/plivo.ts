@@ -1,8 +1,4 @@
 import crypto from "node:crypto";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PlivoConfig, WebhookSecurityConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import type {
@@ -133,7 +129,7 @@ export class PlivoProvider implements VoiceCallProvider {
     ctx: WebhookContext,
     options?: WebhookParseOptions,
   ): ProviderWebhookParseResult {
-    const flow = normalizeOptionalString(ctx.query?.flow) ?? "";
+    const flow = typeof ctx.query?.flow === "string" ? ctx.query.flow.trim() : "";
 
     const parsed = this.parseBody(ctx.rawBody);
     if (!parsed) {
@@ -484,7 +480,7 @@ export class PlivoProvider implements VoiceCallProvider {
 
   private static normalizeNumber(numberOrSip: string): string {
     const trimmed = numberOrSip.trim();
-    if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("sip:")) {
+    if (trimmed.toLowerCase().startsWith("sip:")) {
       return trimmed;
     }
     return trimmed.replace(/[^\d+]/g, "");
@@ -521,7 +517,10 @@ export class PlivoProvider implements VoiceCallProvider {
   }
 
   private getCallIdFromQuery(ctx: WebhookContext): string | undefined {
-    const callId = normalizeOptionalString(ctx.query?.callId);
+    const callId =
+      typeof ctx.query?.callId === "string" && ctx.query.callId.trim()
+        ? ctx.query.callId.trim()
+        : undefined;
     return callId || undefined;
   }
 
@@ -545,13 +544,6 @@ export class PlivoProvider implements VoiceCallProvider {
 
   private baseWebhookUrlFromCtx(ctx: WebhookContext): string | null {
     try {
-      if (this.options.publicUrl) {
-        const base = new URL(this.options.publicUrl);
-        const requestUrl = new URL(ctx.url);
-        base.pathname = requestUrl.pathname;
-        return `${base.origin}${base.pathname}`;
-      }
-
       const u = new URL(
         reconstructWebhookUrl(ctx, {
           allowedHosts: this.options.webhookSecurity?.allowedHosts,

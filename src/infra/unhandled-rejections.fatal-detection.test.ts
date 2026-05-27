@@ -1,18 +1,6 @@
 import process from "node:process";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
-
-const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../terminal/restore.js", () => ({
-  restoreTerminalState: restoreTerminalStateMock,
-}));
-
-import { resetFatalErrorHooksForTest } from "./fatal-error-hooks.js";
-import {
-  installUnhandledRejectionHandler,
-  isUncaughtExceptionHandled,
-  registerUncaughtExceptionHandler,
-} from "./unhandled-rejections.js";
+import { installUnhandledRejectionHandler } from "./unhandled-rejections.js";
 
 describe("installUnhandledRejectionHandler - fatal detection", () => {
   let exitCalls: Array<string | number | null> = [];
@@ -27,7 +15,6 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
   beforeEach(() => {
     exitCalls = [];
-    resetFatalErrorHooksForTest();
 
     vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
       if (code !== undefined && code !== null) {
@@ -54,32 +41,10 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
     process.emit("unhandledRejection", reason, Promise.resolve());
   }
 
-  function expectConsoleLogWithMessage(
-    spy: ReturnType<typeof vi.spyOn>,
-    label: string,
-    message: string,
-  ): void {
-    const call = spy.mock.calls.find((entry: unknown[]) => entry[0] === label);
-    expect(call?.[0]).toBe(label);
-    expect(String(call?.[1])).toContain(message);
-  }
-
-  function expectExitCodeFromUnhandled(
-    reason: unknown,
-    expected: number[],
-    expectedRestoreReason?: string,
-  ): void {
+  function expectExitCodeFromUnhandled(reason: unknown, expected: number[]): void {
     exitCalls = [];
-    restoreTerminalStateMock.mockClear();
     emitUnhandled(reason);
     expect(exitCalls).toEqual(expected);
-    if (expectedRestoreReason) {
-      expect(restoreTerminalStateMock).toHaveBeenCalledWith(expectedRestoreReason, {
-        resumeStdinIfPaused: false,
-      });
-      return;
-    }
-    expect(restoreTerminalStateMock).not.toHaveBeenCalled();
   }
 
   describe("fatal errors", () => {
@@ -91,32 +56,13 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       ] as const;
 
       for (const { code, message } of fatalCases) {
-        expectExitCodeFromUnhandled(
-          Object.assign(new Error(message), { code }),
-          [1],
-          "fatal unhandled rejection",
-        );
+        expectExitCodeFromUnhandled(Object.assign(new Error(message), { code }), [1]);
       }
 
-      expectConsoleLogWithMessage(
-        consoleErrorSpy,
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
         "[openclaw] FATAL unhandled rejection:",
-        "Out of memory",
+        expect.stringContaining("Out of memory"),
       );
-    });
-  });
-
-  describe("scoped uncaught exception handlers", () => {
-    it("lets registered handlers suppress known dependency exceptions", () => {
-      const cleanup = registerUncaughtExceptionHandler((error) => {
-        return error instanceof Error && error.message === "known dependency assertion";
-      });
-
-      expect(isUncaughtExceptionHandled(new Error("known dependency assertion"))).toBe(true);
-      expect(isUncaughtExceptionHandled(new Error("unknown"))).toBe(false);
-
-      cleanup();
-      expect(isUncaughtExceptionHandled(new Error("known dependency assertion"))).toBe(false);
     });
   });
 
@@ -128,17 +74,12 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       ] as const;
 
       for (const { code, message } of configurationCases) {
-        expectExitCodeFromUnhandled(
-          Object.assign(new Error(message), { code }),
-          [1],
-          "configuration error",
-        );
+        expectExitCodeFromUnhandled(Object.assign(new Error(message), { code }), [1]);
       }
 
-      expectConsoleLogWithMessage(
-        consoleErrorSpy,
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
         "[openclaw] CONFIGURATION ERROR - requires fix:",
-        "Invalid config",
+        expect.stringContaining("Invalid config"),
       );
     });
   });
@@ -150,9 +91,6 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
           cause: { code: "UND_ERR_CONNECT_TIMEOUT", syscall: "connect" },
         }),
         Object.assign(new Error("DNS resolve failed"), { code: "UND_ERR_DNS_RESOLVE_FAILED" }),
-        Object.assign(new Error("connect ENETDOWN 149.154.167.220:443"), {
-          code: "ENETDOWN",
-        }),
         Object.assign(new Error("Connection reset"), { code: "ECONNRESET" }),
         Object.assign(new Error("Timeout"), { code: "ETIMEDOUT" }),
         Object.assign(
@@ -182,10 +120,9 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         expectExitCodeFromUnhandled(transientErr, []);
       }
 
-      expectConsoleLogWithMessage(
-        consoleWarnSpy,
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
-        "fetch failed",
+        expect.stringContaining("fetch failed"),
       );
     });
 
@@ -206,21 +143,19 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         expectExitCodeFromUnhandled(sqliteErr, []);
       }
 
-      expectConsoleLogWithMessage(
-        consoleWarnSpy,
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
-        "unable to open database file",
+        expect.stringContaining("unable to open database file"),
       );
     });
 
     it("exits on generic errors without code", () => {
       const genericErr = new Error("Something went wrong");
 
-      expectExitCodeFromUnhandled(genericErr, [1], "unhandled rejection");
-      expectConsoleLogWithMessage(
-        consoleErrorSpy,
+      expectExitCodeFromUnhandled(genericErr, [1]);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
         "[openclaw] Unhandled promise rejection:",
-        "Something went wrong",
+        expect.stringContaining("Something went wrong"),
       );
     });
 
@@ -232,7 +167,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         },
       );
 
-      expectExitCodeFromUnhandled(slackErr, [1], "unhandled rejection");
+      expectExitCodeFromUnhandled(slackErr, [1]);
     });
 
     it("does not exit on AbortError and logs suppression warning", () => {
@@ -240,10 +175,9 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       abortErr.name = "AbortError";
 
       expectExitCodeFromUnhandled(abortErr, []);
-      expectConsoleLogWithMessage(
-        consoleWarnSpy,
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[openclaw] Suppressed AbortError:",
-        "This operation was aborted",
+        expect.stringContaining("This operation was aborted"),
       );
     });
   });

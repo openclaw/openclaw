@@ -1,36 +1,11 @@
 import { vi } from "vitest";
+import { signalOutbound, telegramOutbound } from "../../test/channel-outbounds.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
-import type {
-  ChannelOutboundAdapter,
-  ChannelOutboundContext,
-} from "../channels/plugins/types.adapters.js";
 import { callGateway } from "../gateway/call.js";
-import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
-import { buildChannelOutboundSessionRoute } from "../plugin-sdk/core.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
-
-type TestSendFn = (
-  to: string,
-  text: string,
-  options?: Record<string, unknown>,
-) => Promise<{ messageId?: string } & Record<string, unknown>>;
-
-function withRequiredMessageId(
-  channel: "signal" | "telegram",
-  result: Awaited<ReturnType<TestSendFn>>,
-) {
-  return {
-    channel,
-    ...result,
-    messageId:
-      typeof result.messageId === "string" && result.messageId.trim()
-        ? result.messageId
-        : `${channel}-test-message`,
-  };
-}
 
 function parseTelegramTargetForTest(raw: string): {
   chatId: string;
@@ -71,84 +46,6 @@ function parseTelegramTargetForTest(raw: string): {
   };
 }
 
-function resolveRequiredTarget(label: string, raw: string | undefined) {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return { ok: false as const, error: new Error(`${label} target is required`) };
-  }
-  return { ok: true as const, to: trimmed };
-}
-
-function resolveTestSender(
-  channel: "signal" | "telegram",
-  deps: ChannelOutboundContext["deps"],
-): TestSendFn {
-  const sender = resolveOutboundSendDep<TestSendFn>(deps, channel);
-  if (!sender) {
-    throw new Error(`missing ${channel} sender`);
-  }
-  return sender;
-}
-
-const telegramOutboundForTest: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  preferFinalAssistantVisibleText: true,
-  sendText: async () => ({ channel: "telegram", messageId: "telegram-msg" }),
-  resolveTarget: ({ to }) => {
-    const resolved = resolveRequiredTarget("Telegram", to);
-    if (!resolved.ok) {
-      return resolved;
-    }
-    return { ok: true, to: parseTelegramTargetForTest(resolved.to).chatId };
-  },
-};
-
-const signalOutboundForTest: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  sendText: async ({ cfg, to, text, accountId, deps }) =>
-    withRequiredMessageId(
-      "signal",
-      await resolveTestSender("signal", deps)(to, text, {
-        cfg,
-        accountId: accountId ?? undefined,
-      }),
-    ),
-  resolveTarget: ({ to }) => resolveRequiredTarget("Signal", to),
-};
-
-telegramOutboundForTest.sendText = async ({ cfg, to, text, accountId, deps, threadId }) =>
-  withRequiredMessageId(
-    "telegram",
-    await resolveTestSender("telegram", deps)(to, text, {
-      cfg,
-      accountId: accountId ?? undefined,
-      messageThreadId: threadId ?? undefined,
-    }),
-  );
-
-telegramOutboundForTest.sendMedia = async ({
-  cfg,
-  to,
-  text,
-  mediaUrl,
-  mediaLocalRoots,
-  mediaReadFile,
-  accountId,
-  deps,
-  threadId,
-}) =>
-  withRequiredMessageId(
-    "telegram",
-    await resolveTestSender("telegram", deps)(to, text, {
-      cfg,
-      mediaUrl,
-      mediaLocalRoots,
-      mediaReadFile,
-      accountId: accountId ?? undefined,
-      messageThreadId: threadId ?? undefined,
-    }),
-  );
-
 export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
   if (params?.fast) {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
@@ -163,49 +60,15 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
         pluginId: "telegram",
         plugin: createOutboundTestPlugin({
           id: "telegram",
-          outbound: telegramOutboundForTest,
+          outbound: telegramOutbound,
           messaging: {
-            inferTargetChatType: ({ to }) => {
-              const target = parseTelegramTargetForTest(to);
-              return target.chatType === "unknown" ? undefined : target.chatType;
-            },
-            targetResolver: {
-              resolveTarget: async ({ input }) => {
-                const parsed = parseTelegramTargetForTest(input);
-                if (!parsed.chatId) {
-                  return null;
-                }
-                return {
-                  to:
-                    parsed.messageThreadId == null
-                      ? parsed.chatId
-                      : `${parsed.chatId}:topic:${parsed.messageThreadId}`,
-                  kind: parsed.chatType === "direct" ? "user" : "group",
-                  source: "normalized",
-                };
-              },
-            },
-            resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target, threadId }) => {
-              const parsed = parseTelegramTargetForTest(target);
-              const resolvedThreadId = parsed.messageThreadId ?? threadId ?? undefined;
-              const chatType = parsed.chatType === "direct" ? "direct" : "group";
-              return buildChannelOutboundSessionRoute({
-                cfg,
-                agentId,
-                channel: "telegram",
-                accountId,
-                peer: {
-                  kind: chatType,
-                  id:
-                    chatType === "group" && resolvedThreadId !== undefined
-                      ? `${parsed.chatId}:topic:${resolvedThreadId}`
-                      : parsed.chatId,
-                },
-                chatType,
-                from: `telegram:${parsed.chatId}`,
-                to: parsed.chatId,
-                ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}),
-              });
+            parseExplicitTarget: ({ raw }) => {
+              const target = parseTelegramTargetForTest(raw);
+              return {
+                to: target.chatId,
+                threadId: target.messageThreadId,
+                chatType: target.chatType === "unknown" ? undefined : target.chatType,
+              };
             },
           },
         }),
@@ -213,7 +76,7 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
       },
       {
         pluginId: "signal",
-        plugin: createOutboundTestPlugin({ id: "signal", outbound: signalOutboundForTest }),
+        plugin: createOutboundTestPlugin({ id: "signal", outbound: signalOutbound }),
         source: "test",
       },
     ]),

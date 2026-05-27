@@ -1,20 +1,12 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
-import {
-  mergePreparedUserTurnMessageForRuntime,
-  type PersistedUserTurnMessage,
-} from "../sessions/user-turn-transcript.js";
-import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
-import { redactTranscriptMessage } from "./transcript-redact.js";
 
-type GuardedSessionManager = SessionManager & {
+export type GuardedSessionManager = SessionManager & {
   /** Flush any synthetic tool results for pending tool calls. Idempotent. */
   flushPendingToolResults?: () => void;
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
@@ -30,23 +22,9 @@ export function guardSessionManager(
   opts?: {
     agentId?: string;
     sessionKey?: string;
-    config?: OpenClawConfig;
-    contextWindowTokens?: number;
     inputProvenance?: InputProvenance;
     allowSyntheticToolResults?: boolean;
-    missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
-    preparedUserTurnMessage?: PersistedUserTurnMessage;
-    suppressNextUserMessagePersistence?: boolean;
-    suppressTranscriptOnlyAssistantPersistence?: boolean;
-    suppressAssistantErrorPersistence?: boolean;
-    onUserMessagePersisted?: (
-      message: Extract<AgentMessage, { role: "user" }>,
-    ) => void | Promise<void>;
-    onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
-    onAssistantErrorMessagePersisted?: (
-      message: Extract<AgentMessage, { role: "assistant" }>,
-    ) => void | Promise<void>;
   },
 ): GuardedSessionManager {
   if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
@@ -54,38 +32,18 @@ export function guardSessionManager(
   }
 
   const hookRunner = getGlobalHookRunner();
-  let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
-  const beforeMessageWrite = (event: {
-    message: import("@earendil-works/pi-agent-core").AgentMessage;
-  }) => {
-    let message = event.message;
-    let changed = false;
-    if (hookRunner?.hasHooks("before_message_write")) {
-      const result = hookRunner.runBeforeMessageWrite(event, {
-        agentId: opts?.agentId,
-        sessionKey: opts?.sessionKey,
-      });
-      if (result?.block) {
-        return result;
+  const beforeMessageWrite = hookRunner?.hasHooks("before_message_write")
+    ? (event: { message: import("@mariozechner/pi-agent-core").AgentMessage }) => {
+        return hookRunner.runBeforeMessageWrite(event, {
+          agentId: opts?.agentId,
+          sessionKey: opts?.sessionKey,
+        });
       }
-      if (result?.message) {
-        message = result.message;
-        changed = true;
-      }
-    }
-    const redacted = redactTranscriptMessage(message, opts?.config);
-    if (redacted !== message) {
-      message = redacted;
-      changed = true;
-    }
-    return changed ? { message } : undefined;
-  };
+    : undefined;
 
   const transform = hookRunner?.hasHooks("tool_result_persist")
-    ? (
-        message: AgentMessage,
-        meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
-      ) => {
+    ? // oxlint-disable-next-line typescript/no-explicit-any
+      (message: any, meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean }) => {
         const out = hookRunner.runToolResultPersist(
           {
             toolName: meta.toolName,
@@ -106,38 +64,12 @@ export function guardSessionManager(
 
   const guard = installSessionToolResultGuard(sessionManager, {
     sessionKey: opts?.sessionKey,
-    transformMessageForPersistence: (message) => {
-      const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
-      const prepared = pendingPreparedUserTurnMessage;
-      const merged = mergePreparedUserTurnMessageForRuntime({
-        runtimeMessage: withProvenance,
-        ...(prepared ? { preparedMessage: prepared } : {}),
-      });
-      if (merged !== withProvenance) {
-        pendingPreparedUserTurnMessage = undefined;
-      }
-      return merged;
-    },
+    transformMessageForPersistence: (message) =>
+      applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
-    missingToolResultText: opts?.missingToolResultText,
     allowedToolNames: opts?.allowedToolNames,
     beforeMessageWriteHook: beforeMessageWrite,
-    redactLoggingConfig: opts?.config?.logging,
-    maxToolResultChars:
-      typeof opts?.contextWindowTokens === "number"
-        ? resolveLiveToolResultMaxChars({
-            contextWindowTokens: opts.contextWindowTokens,
-            cfg: opts.config,
-            agentId: opts.agentId,
-          })
-        : undefined,
-    suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
-    suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
-    suppressAssistantErrorPersistence: opts?.suppressAssistantErrorPersistence,
-    onMessagePersisted: opts?.onMessagePersisted,
-    onUserMessagePersisted: opts?.onUserMessagePersisted,
-    onAssistantErrorMessagePersisted: opts?.onAssistantErrorMessagePersisted,
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;

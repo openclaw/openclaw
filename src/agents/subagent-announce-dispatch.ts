@@ -1,38 +1,36 @@
-type SubagentDeliveryPath = "steered" | "direct" | "none";
+export type SubagentDeliveryPath = "queued" | "steered" | "direct" | "none";
 
-type SubagentAnnounceSteerOutcome =
-  | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
-  | { status: "none" | "dropped" };
+export type SubagentAnnounceQueueOutcome = "steered" | "queued" | "none" | "dropped";
 
 export type SubagentAnnounceDeliveryResult = {
   delivered: boolean;
   path: SubagentDeliveryPath;
-  deliveredAt?: number;
-  enqueuedAt?: number;
   error?: string;
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
 
-type SubagentAnnounceDispatchPhase = "steer-primary" | "direct-primary" | "steer-fallback";
+export type SubagentAnnounceDispatchPhase = "queue-primary" | "direct-primary" | "queue-fallback";
 
-type SubagentAnnounceDispatchPhaseResult = {
+export type SubagentAnnounceDispatchPhaseResult = {
   phase: SubagentAnnounceDispatchPhase;
   delivered: boolean;
   path: SubagentDeliveryPath;
-  deliveredAt?: number;
-  enqueuedAt?: number;
   error?: string;
 };
 
-export function mapSteerOutcomeToDeliveryResult(
-  outcome: SubagentAnnounceSteerOutcome,
+export function mapQueueOutcomeToDeliveryResult(
+  outcome: SubagentAnnounceQueueOutcome,
 ): SubagentAnnounceDeliveryResult {
-  if (outcome.status === "steered") {
+  if (outcome === "steered") {
     return {
       delivered: true,
       path: "steered",
-      deliveredAt: outcome.deliveredAt,
-      enqueuedAt: outcome.enqueuedAt,
+    };
+  }
+  if (outcome === "queued") {
+    return {
+      delivered: true,
+      path: "queued",
     };
   }
   return {
@@ -44,7 +42,7 @@ export function mapSteerOutcomeToDeliveryResult(
 export async function runSubagentAnnounceDispatch(params: {
   expectsCompletionMessage: boolean;
   signal?: AbortSignal;
-  steer: () => Promise<SubagentAnnounceSteerOutcome>;
+  queue: () => Promise<SubagentAnnounceQueueOutcome>;
   direct: () => Promise<SubagentAnnounceDeliveryResult>;
 }): Promise<SubagentAnnounceDeliveryResult> {
   const phases: SubagentAnnounceDispatchPhaseResult[] = [];
@@ -56,8 +54,6 @@ export async function runSubagentAnnounceDispatch(params: {
       phase,
       delivered: result.delivered,
       path: result.path,
-      deliveredAt: result.deliveredAt,
-      enqueuedAt: result.enqueuedAt,
       error: result.error,
     });
   };
@@ -74,14 +70,14 @@ export async function runSubagentAnnounceDispatch(params: {
   }
 
   if (!params.expectsCompletionMessage) {
-    const primarySteerOutcome = await params.steer();
-    const primarySteer = mapSteerOutcomeToDeliveryResult(primarySteerOutcome);
-    appendPhase("steer-primary", primarySteer);
-    if (primarySteer.delivered) {
-      return withPhases(primarySteer);
+    const primaryQueueOutcome = await params.queue();
+    const primaryQueue = mapQueueOutcomeToDeliveryResult(primaryQueueOutcome);
+    appendPhase("queue-primary", primaryQueue);
+    if (primaryQueue.delivered) {
+      return withPhases(primaryQueue);
     }
-    if (primarySteerOutcome.status === "dropped") {
-      return withPhases(primarySteer);
+    if (primaryQueueOutcome === "dropped") {
+      return withPhases(primaryQueue);
     }
 
     const primaryDirect = await params.direct();
@@ -99,11 +95,11 @@ export async function runSubagentAnnounceDispatch(params: {
     return withPhases(primaryDirect);
   }
 
-  const fallbackSteerOutcome = await params.steer();
-  const fallbackSteer = mapSteerOutcomeToDeliveryResult(fallbackSteerOutcome);
-  appendPhase("steer-fallback", fallbackSteer);
-  if (fallbackSteer.delivered) {
-    return withPhases(fallbackSteer);
+  const fallbackQueueOutcome = await params.queue();
+  const fallbackQueue = mapQueueOutcomeToDeliveryResult(fallbackQueueOutcome);
+  appendPhase("queue-fallback", fallbackQueue);
+  if (fallbackQueue.delivered) {
+    return withPhases(fallbackQueue);
   }
 
   return withPhases(primaryDirect);

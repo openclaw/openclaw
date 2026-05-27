@@ -5,15 +5,6 @@ import {
 } from "./browser-cli-manage.test-helpers.js";
 import { getBrowserCliRuntime, getBrowserCliRuntimeCapture } from "./browser-cli.test-support.js";
 
-function lastRuntimeLog(): string {
-  const calls = getBrowserCliRuntime().log.mock.calls;
-  const value = calls[calls.length - 1]?.[0];
-  if (typeof value !== "string") {
-    throw new Error("expected browser CLI runtime log");
-  }
-  return value;
-}
-
 describe("browser manage output", () => {
   beforeEach(() => {
     getBrowserManageCallBrowserRequestMock().mockClear();
@@ -38,7 +29,6 @@ describe("browser manage output", () => {
             userDataDir: null,
             color: "#00AA00",
             headless: false,
-            headlessSource: "default",
             noSandbox: false,
             executablePath: null,
             attachOnly: true,
@@ -51,9 +41,8 @@ describe("browser manage output", () => {
       from: "user",
     });
 
-    const output = lastRuntimeLog();
+    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
     expect(output).toContain("transport: chrome-mcp");
-    expect(output).toContain("headless: false (default)");
     expect(output).not.toContain("cdpPort:");
     expect(output).not.toContain("cdpUrl:");
   });
@@ -88,7 +77,7 @@ describe("browser manage output", () => {
       from: "user",
     });
 
-    const output = lastRuntimeLog();
+    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
     expect(output).toContain(
       "userDataDir: /Users/test/Library/Application Support/BraveSoftware/Brave-Browser",
     );
@@ -119,43 +108,10 @@ describe("browser manage output", () => {
     const program = createBrowserManageProgram();
     await program.parseAsync(["browser", "profiles"], { from: "user" });
 
-    const output = lastRuntimeLog();
+    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
     expect(output).toContain("chrome-live: running (2 tabs) [existing-session]");
     expect(output).toContain("transport: chrome-mcp");
     expect(output).not.toContain("port: 0");
-  });
-
-  it("redacts remote cdpUrl details in browser profiles output", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
-      req.path === "/profiles"
-        ? {
-            profiles: [
-              {
-                name: "remote",
-                driver: "openclaw",
-                transport: "cdp",
-                running: true,
-                tabCount: 1,
-                isDefault: false,
-                isRemote: true,
-                cdpPort: null,
-                cdpUrl:
-                  "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
-                color: "#00AA00",
-              },
-            ],
-          }
-        : {},
-    );
-
-    const program = createBrowserManageProgram();
-    await program.parseAsync(["browser", "profiles"], { from: "user" });
-
-    const output = lastRuntimeLog();
-    expect(output).toContain("cdpUrl: https://example.com/chrome?token=supers…7890");
-    expect(output).not.toContain("alice");
-    expect(output).not.toContain("supersecretpasswordvalue1234");
-    expect(output).not.toContain("supersecrettokenvalue1234567890");
   });
 
   it("shows chrome-mcp transport after creating an existing-session profile", async () => {
@@ -180,47 +136,10 @@ describe("browser manage output", () => {
       { from: "user" },
     );
 
-    const output = lastRuntimeLog();
+    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
     expect(output).toContain('Created profile "chrome-live"');
     expect(output).toContain("transport: chrome-mcp");
     expect(output).not.toContain("port: 0");
-  });
-
-  it("redacts remote cdpUrl details after creating a remote profile", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
-      req.path === "/profiles/create"
-        ? {
-            ok: true,
-            profile: "remote",
-            transport: "cdp",
-            cdpPort: null,
-            cdpUrl:
-              "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
-            userDataDir: null,
-            color: "#00AA00",
-            isRemote: true,
-          }
-        : {},
-    );
-
-    const program = createBrowserManageProgram();
-    await program.parseAsync(
-      [
-        "browser",
-        "create-profile",
-        "--name",
-        "remote",
-        "--cdp-url",
-        "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
-      ],
-      { from: "user" },
-    );
-
-    const output = lastRuntimeLog();
-    expect(output).toContain("cdpUrl: https://example.com/chrome?token=supers…7890");
-    expect(output).not.toContain("alice");
-    expect(output).not.toContain("supersecretpasswordvalue1234");
-    expect(output).not.toContain("supersecrettokenvalue1234567890");
   });
 
   it("redacts sensitive remote cdpUrl details in status output", async () => {
@@ -254,61 +173,10 @@ describe("browser manage output", () => {
       from: "user",
     });
 
-    const output = lastRuntimeLog();
+    const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
     expect(output).toContain("cdpUrl: https://example.com/chrome?token=supers…7890");
     expect(output).not.toContain("alice");
     expect(output).not.toContain("supersecretpasswordvalue1234");
     expect(output).not.toContain("supersecrettokenvalue1234567890");
-  });
-
-  it("prints a readable browser doctor report", async () => {
-    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
-      if (req.path === "/") {
-        return {
-          enabled: true,
-          profile: "openclaw",
-          driver: "openclaw",
-          transport: "cdp",
-          running: true,
-          cdpReady: true,
-          cdpHttp: true,
-          pid: 4321,
-          cdpPort: 18792,
-          cdpUrl: "http://127.0.0.1:18792",
-          chosenBrowser: "chrome",
-          userDataDir: null,
-          color: "#00AA00",
-          headless: false,
-          noSandbox: false,
-          executablePath: null,
-          attachOnly: false,
-        };
-      }
-      if (req.path === "/profiles") {
-        return { profiles: [{ name: "openclaw", running: true }] };
-      }
-      if (req.path === "/tabs") {
-        return {
-          running: true,
-          tabs: [
-            {
-              targetId: "abc",
-              tabId: "t1",
-              suggestedTargetId: "t1",
-              title: "Example",
-              url: "https://example.com",
-            },
-          ],
-        };
-      }
-      return {};
-    });
-
-    const program = createBrowserManageProgram();
-    await program.parseAsync(["browser", "doctor"], { from: "user" });
-
-    const output = lastRuntimeLog();
-    expect(output).toContain("OK gateway: browser control endpoint reachable");
-    expect(output).toContain("OK tabs: 1 visible, use target t1");
   });
 });

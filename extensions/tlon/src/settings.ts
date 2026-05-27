@@ -55,7 +55,7 @@ export type TlonSettingsStore = {
   pendingApprovals?: PendingApproval[];
 };
 
-type TlonSettingsState = {
+export type TlonSettingsState = {
   current: TlonSettingsStore;
   loaded: boolean;
 };
@@ -208,7 +208,7 @@ function parseSettingsEvent(event: unknown): { key: string; value: unknown } | n
       return null;
     }
     return {
-      key: typeof put["entry-key"] === "string" ? put["entry-key"] : "",
+      key: String(put["entry-key"] ?? ""),
       value: put.value,
     };
   }
@@ -220,7 +220,7 @@ function parseSettingsEvent(event: unknown): { key: string; value: unknown } | n
       return null;
     }
     return {
-      key: typeof del["entry-key"] === "string" ? del["entry-key"] : "",
+      key: String(del["entry-key"] ?? ""),
       value: undefined,
     };
   }
@@ -285,7 +285,7 @@ function applySettingsUpdate(
   return next;
 }
 
-type SettingsLogger = {
+export type SettingsLogger = {
   log?: (msg: string) => void;
   error?: (msg: string) => void;
 };

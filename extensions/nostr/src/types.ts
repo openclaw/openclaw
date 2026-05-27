@@ -7,18 +7,16 @@ import {
   listCombinedAccountIds,
   resolveListedDefaultAccountId,
 } from "openclaw/plugin-sdk/account-resolution";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeSecretInputString, type SecretInput } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { OpenClawConfig } from "../api.js";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import { getPublicKeyFromPrivate } from "./nostr-key-utils.js";
+import { getPublicKeyFromPrivate } from "./nostr-bus.js";
 
-interface NostrAccountConfig {
+export interface NostrAccountConfig {
   enabled?: boolean;
   name?: string;
   defaultAccount?: string;
-  privateKey?: SecretInput;
+  privateKey?: string;
   relays?: string[];
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: Array<string | number>;
@@ -51,10 +49,9 @@ export function listNostrAccountIds(cfg: OpenClawConfig): string[] {
   const nostrCfg = (cfg.channels as Record<string, unknown> | undefined)?.nostr as
     | NostrAccountConfig
     | undefined;
-  const privateKey = normalizeSecretInputString(nostrCfg?.privateKey);
   return listCombinedAccountIds({
     configuredAccountIds: [],
-    implicitAccountId: privateKey
+    implicitAccountId: nostrCfg?.privateKey
       ? (resolveConfiguredDefaultNostrAccountId(cfg) ?? DEFAULT_ACCOUNT_ID)
       : undefined,
   });
@@ -83,11 +80,11 @@ export function resolveNostrAccount(opts: {
     | undefined;
 
   const baseEnabled = nostrCfg?.enabled !== false;
-  const privateKey = normalizeSecretInputString(nostrCfg?.privateKey) ?? "";
-  const configured = Boolean(privateKey);
+  const privateKey = nostrCfg?.privateKey ?? "";
+  const configured = Boolean(privateKey.trim());
 
   let publicKey = "";
-  if (privateKey) {
+  if (configured) {
     try {
       publicKey = getPublicKeyFromPrivate(privateKey);
     } catch {
@@ -97,7 +94,7 @@ export function resolveNostrAccount(opts: {
 
   return {
     accountId,
-    name: normalizeOptionalString(nostrCfg?.name),
+    name: nostrCfg?.name?.trim() || undefined,
     enabled: baseEnabled,
     configured,
     privateKey,

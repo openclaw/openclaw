@@ -54,7 +54,7 @@ describe("executeZalouserTool", () => {
   });
 
   it("sends text message for send action", async () => {
-    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-1" } as never);
+    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-1" });
     const result = await executeZalouserTool("tool-1", {
       action: "send",
       threadId: "t-1",
@@ -70,7 +70,7 @@ describe("executeZalouserTool", () => {
   });
 
   it("defaults send routing from ambient deliveryContext target", async () => {
-    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-ambient" } as never);
+    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-ambient" });
     const tool = createZalouserTool({
       deliveryContext: {
         channel: "zalouser",
@@ -91,7 +91,7 @@ describe("executeZalouserTool", () => {
   });
 
   it("keeps explicit threadId over ambient delivery defaults", async () => {
-    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-explicit" } as never);
+    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-explicit" });
     const tool = createZalouserTool({
       deliveryContext: {
         channel: "zalouser",
@@ -133,7 +133,7 @@ describe("executeZalouserTool", () => {
   });
 
   it("returns tool error when send action fails", async () => {
-    mockSendMessage.mockResolvedValueOnce({ ok: false, error: "blocked" } as never);
+    mockSendMessage.mockResolvedValueOnce({ ok: false, error: "blocked" });
     const result = await executeZalouserTool("tool-1", {
       action: "send",
       threadId: "t-1",
@@ -143,7 +143,7 @@ describe("executeZalouserTool", () => {
   });
 
   it("routes image and link actions to correct helpers", async () => {
-    mockSendImage.mockResolvedValueOnce({ ok: true, messageId: "img-1" } as never);
+    mockSendImage.mockResolvedValueOnce({ ok: true, messageId: "img-1" });
     const imageResult = await executeZalouserTool("tool-1", {
       action: "image",
       threadId: "g-1",
@@ -158,7 +158,7 @@ describe("executeZalouserTool", () => {
     });
     expect(extractDetails(imageResult)).toEqual({ success: true, messageId: "img-1" });
 
-    mockSendLink.mockResolvedValueOnce({ ok: true, messageId: "lnk-1" } as never);
+    mockSendLink.mockResolvedValueOnce({ ok: true, messageId: "lnk-1" });
     const linkResult = await executeZalouserTool("tool-1", {
       action: "link",
       threadId: "t-2",

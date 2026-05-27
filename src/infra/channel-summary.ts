@@ -1,26 +1,28 @@
-import { resolveInspectedChannelAccount } from "../channels/account-inspection.js";
-import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
+import {
+  hasConfiguredUnavailableCredentialStatus,
+  hasResolvedCredentialValue,
+} from "../channels/account-snapshot-fields.js";
 import {
   buildChannelAccountSnapshot,
   formatChannelAllowFrom,
+  resolveChannelAccountConfigured,
+  resolveChannelAccountEnabled,
 } from "../channels/account-summary.js";
-import { formatChannelStatusState } from "../channels/plugins/status-state.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
+import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
+import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { theme } from "../terminal/theme.js";
 import { formatTimeAgo } from "./format-time/format-relative.ts";
 
 export type ChannelSummaryOptions = {
   colorize?: boolean;
   includeAllowFrom?: boolean;
-  plugins?: readonly ChannelPlugin[];
   sourceConfig?: OpenClawConfig;
 };
 
-const DEFAULT_OPTIONS: Omit<Required<ChannelSummaryOptions>, "plugins" | "sourceConfig"> = {
+const DEFAULT_OPTIONS: Omit<Required<ChannelSummaryOptions>, "sourceConfig"> = {
   colorize: false,
   includeAllowFrom: false,
 };
@@ -43,22 +45,6 @@ const formatAccountLabel = (params: { accountId: string; name?: string }) => {
 
 const accountLine = (label: string, details: string[]) =>
   `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
-
-async function loadChannelSummaryConfig(): Promise<OpenClawConfig> {
-  const { getRuntimeConfig } = await import("../config/config.js");
-  return getRuntimeConfig();
-}
-
-async function listChannelSummaryPlugins(params: {
-  cfg: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-}): Promise<ChannelPlugin[]> {
-  const { listReadOnlyChannelPluginsForConfig } = await import("../channels/plugins/read-only.js");
-  return listReadOnlyChannelPluginsForConfig(params.cfg, {
-    activationSourceConfig: params.sourceConfig,
-    includeSetupFallbackPlugins: false,
-  });
-}
 
 const buildAccountDetails = (params: {
   entry: ChannelAccountEntry;
@@ -119,20 +105,33 @@ const buildAccountDetails = (params: {
   return details;
 };
 
+async function inspectChannelAccount(
+  plugin: ChannelPlugin,
+  cfg: OpenClawConfig,
+  accountId: string,
+) {
+  return (
+    plugin.config.inspectAccount?.(cfg, accountId) ??
+    (await inspectReadOnlyChannelAccount({
+      channelId: plugin.id,
+      cfg,
+      accountId,
+    }))
+  );
+}
+
 export async function buildChannelSummary(
   cfg?: OpenClawConfig,
   options?: ChannelSummaryOptions,
 ): Promise<string[]> {
-  const effective = cfg ?? (await loadChannelSummaryConfig());
+  const effective = cfg ?? loadConfig();
   const lines: string[] = [];
   const resolved = { ...DEFAULT_OPTIONS, ...options };
   const tint = (value: string, color?: (input: string) => string) =>
     resolved.colorize && color ? color(value) : value;
   const sourceConfig = options?.sourceConfig ?? effective;
 
-  const plugins =
-    options?.plugins ?? (await listChannelSummaryPlugins({ cfg: effective, sourceConfig }));
-  for (const plugin of plugins) {
+  for (const plugin of listChannelPlugins()) {
     const accountIds = plugin.config.listAccountIds(effective);
     const defaultAccountId =
       plugin.config.defaultAccountId?.(effective) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
@@ -140,12 +139,39 @@ export async function buildChannelSummary(
     const entries: ChannelAccountEntry[] = [];
 
     for (const accountId of resolvedAccountIds) {
-      const { account, enabled, configured } = await resolveInspectedChannelAccount({
-        plugin,
-        cfg: effective,
-        sourceConfig,
-        accountId,
-      });
+      const sourceInspectedAccount = await inspectChannelAccount(plugin, sourceConfig, accountId);
+      const resolvedInspectedAccount = await inspectChannelAccount(plugin, effective, accountId);
+      const resolvedInspection = resolvedInspectedAccount as {
+        enabled?: boolean;
+        configured?: boolean;
+      } | null;
+      const sourceInspection = sourceInspectedAccount as {
+        enabled?: boolean;
+        configured?: boolean;
+      } | null;
+      const resolvedAccount =
+        resolvedInspectedAccount ?? plugin.config.resolveAccount(effective, accountId);
+      const useSourceUnavailableAccount = Boolean(
+        sourceInspectedAccount &&
+        hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
+        (!hasResolvedCredentialValue(resolvedAccount) ||
+          (sourceInspection?.configured === true && resolvedInspection?.configured === false)),
+      );
+      const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
+      const selectedInspection = useSourceUnavailableAccount
+        ? sourceInspection
+        : resolvedInspection;
+      const enabled =
+        selectedInspection?.enabled ??
+        resolveChannelAccountEnabled({ plugin, account, cfg: effective });
+      const configured =
+        selectedInspection?.configured ??
+        (await resolveChannelAccountConfigured({
+          plugin,
+          account,
+          cfg: effective,
+          readAccountConfiguredField: true,
+        }));
       const snapshot = buildChannelAccountSnapshot({
         plugin,
         account,
@@ -172,10 +198,6 @@ export async function buildChannelSummary(
       : undefined;
 
     const summaryRecord = summary;
-    const statusState =
-      summaryRecord && typeof summaryRecord.statusState === "string"
-        ? summaryRecord.statusState
-        : null;
     const linked =
       summaryRecord && typeof summaryRecord.linked === "boolean" ? summaryRecord.linked : null;
     const configured =
@@ -185,23 +207,21 @@ export async function buildChannelSummary(
 
     const status = !anyEnabled
       ? "disabled"
-      : statusState
-        ? formatChannelStatusState(statusState)
-        : linked !== null
-          ? linked
-            ? "linked"
-            : "not linked"
-          : configured
-            ? "configured"
-            : "not configured";
+      : linked !== null
+        ? linked
+          ? "linked"
+          : "not linked"
+        : configured
+          ? "configured"
+          : "not configured";
 
     const statusColor =
       status === "linked" || status === "configured"
         ? theme.success
-        : status === "not linked" || status === "auth stabilizing"
+        : status === "not linked"
           ? theme.error
           : theme.muted;
-    const baseLabel = sanitizeForLog(plugin.meta.label ?? plugin.id).trim() || plugin.id;
+    const baseLabel = plugin.meta.label ?? plugin.id;
     let line = `${baseLabel}: ${status}`;
 
     const authAgeMs =

@@ -1,8 +1,6 @@
 import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
-import { getEnvApiKey } from "@earendil-works/pi-ai";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
-import { formatCliCommand } from "../../cli/command-format.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
@@ -84,11 +82,7 @@ function compareScanMetadata(a: ModelScanResult, b: ModelScanResult): number {
 }
 
 function buildScanHint(result: ModelScanResult): string {
-  const toolLabel = result.tool.skipped
-    ? "tool skip"
-    : result.tool.ok
-      ? `tool ${formatMs(result.tool.latencyMs)}`
-      : "tool fail";
+  const toolLabel = result.tool.ok ? `tool ${formatMs(result.tool.latencyMs)}` : "tool fail";
   const imageLabel = result.image.skipped
     ? "img skip"
     : result.image.ok
@@ -109,21 +103,6 @@ function printScanSummary(results: ModelScanResult[], runtime: RuntimeEnv) {
   );
 }
 
-function printMetadataOnlyNotice(params: {
-  results: ModelScanResult[];
-  runtime: RuntimeEnv;
-  autoDowngraded: boolean;
-}) {
-  if (params.autoDowngraded) {
-    params.runtime.log(
-      "OpenRouter free models still require OPENROUTER_API_KEY for live probes and inference. Listing public catalog metadata only.",
-    );
-  }
-  params.runtime.log(
-    `Found ${params.results.length} OpenRouter free models (metadata only; configure OPENROUTER_API_KEY to test tools/images).`,
-  );
-}
-
 function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
   const header = [
     pad("Model", MODEL_PAD),
@@ -137,10 +116,7 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
 
   for (const entry of results) {
     const modelLabel = pad(truncate(entry.modelRef, MODEL_PAD), MODEL_PAD);
-    const toolLabel = pad(
-      entry.tool.skipped ? "skip" : entry.tool.ok ? formatMs(entry.tool.latencyMs) : "fail",
-      10,
-    );
+    const toolLabel = pad(entry.tool.ok ? formatMs(entry.tool.latencyMs) : "fail", 10);
     const imageLabel = pad(
       entry.image.ok ? formatMs(entry.image.latencyMs) : entry.image.skipped ? "skip" : "fail",
       10,
@@ -191,35 +167,18 @@ export async function modelsScanCommand(
     throw new Error("--concurrency must be > 0");
   }
 
-  const requestedProbe = opts.probe ?? true;
-  if (!requestedProbe && (opts.setDefault || opts.setImage)) {
-    throw new Error(
-      "Cannot apply metadata-only OpenRouter scan results. Remove --no-probe or configure OPENROUTER_API_KEY and rerun with probes before changing defaults.",
-    );
-  }
-  let probe = requestedProbe;
+  const cfg = await loadModelsConfig({ commandName: "models scan", runtime });
+  const probe = opts.probe ?? true;
   let storedKey: string | undefined;
-  if (requestedProbe) {
-    storedKey = getEnvApiKey("openrouter")?.trim() || undefined;
-    if (!storedKey) {
-      try {
-        const cfg = await loadModelsConfig({ commandName: "models scan" });
-        const resolved = await resolveApiKeyForProvider({
-          provider: "openrouter",
-          cfg,
-        });
-        storedKey = resolved.apiKey?.trim() || undefined;
-      } catch {
-        storedKey = undefined;
-      }
-    }
-    if (!storedKey) {
-      if (opts.setDefault || opts.setImage) {
-        throw new Error(
-          "Cannot apply metadata-only OpenRouter scan results. Configure OPENROUTER_API_KEY and rerun with probes before changing defaults.",
-        );
-      }
-      probe = false;
+  if (probe) {
+    try {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "openrouter",
+        cfg,
+      });
+      storedKey = resolved.apiKey;
+    } catch {
+      storedKey = undefined;
     }
   }
   const results = await withProgressTotals(
@@ -253,11 +212,9 @@ export async function modelsScanCommand(
 
   if (!probe) {
     if (!opts.json) {
-      printMetadataOnlyNotice({
-        results,
-        runtime,
-        autoDowngraded: requestedProbe,
-      });
+      runtime.log(
+        `Found ${results.length} OpenRouter free models (metadata only; pass --probe to test tools/images).`,
+      );
       printScanTable(sortScanResults(results), runtime);
     } else {
       writeRuntimeJson(runtime, results);
@@ -267,9 +224,7 @@ export async function modelsScanCommand(
 
   const toolOk = results.filter((entry) => entry.tool.ok);
   if (toolOk.length === 0) {
-    throw new Error(
-      `No tool-capable OpenRouter free models found. Try ${formatCliCommand("openclaw models scan --no-probe")} to inspect metadata-only candidates, or configure OPENROUTER_API_KEY before probing.`,
-    );
+    throw new Error("No tool-capable OpenRouter free models found.");
   }
 
   const sorted = sortScanResults(results);
@@ -331,7 +286,7 @@ export async function modelsScanCommand(
     throw new Error("No image-capable models selected for image model.");
   }
 
-  await updateConfig((cfg) => {
+  const _updated = await updateConfig((cfg) => {
     const nextModels = { ...cfg.agents?.defaults?.models };
     for (const entry of selected) {
       if (!nextModels[entry]) {

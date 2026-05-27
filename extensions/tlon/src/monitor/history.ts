@@ -1,5 +1,5 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { asRecord, extractMessageText, formatErrorMessage } from "./utils.js";
+import type { RuntimeEnv } from "../../api.js";
+import { extractMessageText } from "./utils.js";
 
 /**
  * Format a number as @ud (with dots every 3 digits from the right)
@@ -20,31 +20,12 @@ function formatUd(id: string | number): string {
   return chunks.toReversed().join(".");
 }
 
-type TlonHistoryEntry = {
+export type TlonHistoryEntry = {
   author: string;
   content: string;
   timestamp: number;
   id?: string;
 };
-
-function createHistoryEntryFromMemo(params: {
-  memo?: Record<string, unknown> | null;
-  seal?: Record<string, unknown> | null;
-  fallbackId?: unknown;
-}): TlonHistoryEntry {
-  const { memo, seal, fallbackId } = params;
-  return {
-    author: typeof memo?.author === "string" ? memo.author : "unknown",
-    content: extractMessageText(memo?.content || []),
-    timestamp: typeof memo?.sent === "number" ? memo.sent : Date.now(),
-    id:
-      typeof seal?.id === "string"
-        ? seal.id
-        : typeof fallbackId === "string"
-          ? fallbackId
-          : undefined,
-  };
-}
 
 const messageCache = new Map<string, TlonHistoryEntry[]>();
 const MAX_CACHED_MESSAGES = 100;
@@ -63,7 +44,7 @@ export function cacheMessage(channelNest: string, message: TlonHistoryEntry) {
   }
 }
 
-async function fetchChannelHistory(
+export async function fetchChannelHistory(
   api: { scry: (path: string) => Promise<unknown> },
   channelNest: string,
   count = 50,
@@ -73,45 +54,38 @@ async function fetchChannelHistory(
     const scryPath = `/channels/v4/${channelNest}/posts/newest/${count}/outline.json`;
     runtime?.log?.(`[tlon] Fetching history: ${scryPath}`);
 
-    const data: unknown = await api.scry(scryPath);
+    const data: any = await api.scry(scryPath);
     if (!data) {
       return [];
     }
 
-    let posts: unknown[] = [];
+    let posts: any[] = [];
     if (Array.isArray(data)) {
       posts = data;
-    } else {
-      const dataRecord = asRecord(data);
-      const postMap = asRecord(dataRecord?.posts);
-      if (postMap) {
-        posts = Object.values(postMap);
-      } else if (dataRecord) {
-        posts = Object.values(dataRecord);
-      }
+    } else if (data.posts && typeof data.posts === "object") {
+      posts = Object.values(data.posts);
+    } else if (typeof data === "object") {
+      posts = Object.values(data);
     }
 
     const messages = posts
       .map((item) => {
-        const itemRecord = asRecord(item);
-        const replyPost = asRecord(itemRecord?.["r-post"]);
-        const replyPostSet = asRecord(replyPost?.set);
-        const essay = asRecord(itemRecord?.essay) ?? asRecord(replyPostSet?.essay);
-        const seal = asRecord(itemRecord?.seal) ?? asRecord(replyPostSet?.seal);
+        const essay = item.essay || item["r-post"]?.set?.essay;
+        const seal = item.seal || item["r-post"]?.set?.seal;
 
         return {
-          author: typeof essay?.author === "string" ? essay.author : "unknown",
+          author: essay?.author || "unknown",
           content: extractMessageText(essay?.content || []),
-          timestamp: typeof essay?.sent === "number" ? essay.sent : Date.now(),
-          id: typeof seal?.id === "string" ? seal.id : undefined,
+          timestamp: essay?.sent || Date.now(),
+          id: seal?.id,
         } as TlonHistoryEntry;
       })
       .filter((msg) => msg.content);
 
     runtime?.log?.(`[tlon] Extracted ${messages.length} messages from history`);
     return messages;
-  } catch (error: unknown) {
-    runtime?.log?.(`[tlon] Error fetching channel history: ${formatErrorMessage(error)}`);
+  } catch (error: any) {
+    runtime?.log?.(`[tlon] Error fetching channel history: ${error?.message ?? String(error)}`);
     return [];
   }
 }
@@ -155,71 +129,62 @@ export async function fetchThreadHistory(
     const scryPath = `/channels/v4/${channelNest}/posts/post/id/${formattedParentId}/replies/newest/${count}.json`;
     runtime?.log?.(`[tlon] Fetching thread history: ${scryPath}`);
 
-    const data: unknown = await api.scry(scryPath);
+    const data: any = await api.scry(scryPath);
     if (!data) {
       runtime?.log?.(`[tlon] No thread history data returned`);
       return [];
     }
 
-    let replies: unknown[] = [];
+    let replies: any[] = [];
     if (Array.isArray(data)) {
       replies = data;
-    } else {
-      const dataRecord = asRecord(data);
-      const replyValue = dataRecord?.replies;
-      if (Array.isArray(replyValue)) {
-        replies = replyValue;
-      } else if (typeof replyValue === "object" && replyValue) {
-        replies = Object.values(replyValue as Record<string, unknown>);
-      } else if (dataRecord) {
-        replies = Object.values(dataRecord);
-      }
+    } else if (data.replies && Array.isArray(data.replies)) {
+      replies = data.replies;
+    } else if (typeof data === "object") {
+      replies = Object.values(data);
     }
 
     const messages = replies
       .map((item) => {
         // Thread replies use 'memo' structure
-        const itemRecord = asRecord(item);
-        const replyRecord = asRecord(itemRecord?.["r-reply"]);
-        const replySet = asRecord(replyRecord?.set);
-        const memo = asRecord(itemRecord?.memo) ?? asRecord(replySet?.memo) ?? itemRecord;
-        const seal = asRecord(itemRecord?.seal) ?? asRecord(replySet?.seal);
+        const memo = item.memo || item["r-reply"]?.set?.memo || item;
+        const seal = item.seal || item["r-reply"]?.set?.seal;
 
-        return createHistoryEntryFromMemo({ memo, seal, fallbackId: itemRecord?.id });
+        return {
+          author: memo?.author || "unknown",
+          content: extractMessageText(memo?.content || []),
+          timestamp: memo?.sent || Date.now(),
+          id: seal?.id || item.id,
+        } as TlonHistoryEntry;
       })
       .filter((msg) => msg.content);
 
     runtime?.log?.(`[tlon] Extracted ${messages.length} thread replies from history`);
     return messages;
-  } catch (error: unknown) {
-    runtime?.log?.(`[tlon] Error fetching thread history: ${formatErrorMessage(error)}`);
+  } catch (error: any) {
+    runtime?.log?.(`[tlon] Error fetching thread history: ${error?.message ?? String(error)}`);
     // Fall back to trying alternate path structure
     try {
       const altPath = `/channels/v4/${channelNest}/posts/post/id/${formatUd(parentId)}.json`;
       runtime?.log?.(`[tlon] Trying alternate path: ${altPath}`);
-      const data = asRecord(await api.scry(altPath));
-      const dataSeal = asRecord(data?.seal);
-      const dataMeta = asRecord(dataSeal?.meta);
-      const repliesValue = data?.replies;
+      const data: any = await api.scry(altPath);
 
-      if (typeof dataMeta?.replyCount === "number" && dataMeta.replyCount > 0 && repliesValue) {
-        const replies = Array.isArray(repliesValue)
-          ? repliesValue
-          : Object.values(repliesValue as Record<string, unknown>);
+      if (data?.seal?.meta?.replyCount > 0 && data?.replies) {
+        const replies = Array.isArray(data.replies) ? data.replies : Object.values(data.replies);
         const messages = replies
-          .map((reply: unknown) => {
-            const replyRecord = asRecord(reply);
-            const memo = asRecord(replyRecord?.memo);
-            const seal = asRecord(replyRecord?.seal);
-            return createHistoryEntryFromMemo({ memo, seal });
-          })
+          .map((reply: any) => ({
+            author: reply.memo?.author || "unknown",
+            content: extractMessageText(reply.memo?.content || []),
+            timestamp: reply.memo?.sent || Date.now(),
+            id: reply.seal?.id,
+          }))
           .filter((msg: TlonHistoryEntry) => msg.content);
 
         runtime?.log?.(`[tlon] Extracted ${messages.length} replies from post data`);
         return messages;
       }
-    } catch (altError: unknown) {
-      runtime?.log?.(`[tlon] Alternate path also failed: ${formatErrorMessage(altError)}`);
+    } catch (altError: any) {
+      runtime?.log?.(`[tlon] Alternate path also failed: ${altError?.message ?? String(altError)}`);
     }
     return [];
   }

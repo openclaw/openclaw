@@ -1,10 +1,10 @@
+import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
-import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
-import type { ZaloRuntimeEnv } from "./monitor.types.js";
+import type { ZaloRuntimeEnv } from "./monitor.js";
 import {
+  createDedupeCache,
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
   readJsonWebhookBodyOrReject,
@@ -31,10 +31,7 @@ export type ZaloWebhookTarget = {
   core: unknown;
   secret: string;
   path: string;
-  webhookUrl: string;
-  webhookPath: string;
   mediaMaxMb: number;
-  canHostMedia: boolean;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   fetcher?: ZaloFetch;
 };
@@ -50,9 +47,9 @@ const webhookRateLimiter = createFixedWindowRateLimiter({
   maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
   maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
 });
-const recentWebhookEvents = createClaimableDedupe({
+const recentWebhookEvents = createDedupeCache({
   ttlMs: ZALO_WEBHOOK_REPLAY_WINDOW_MS,
-  memoryMaxSize: 5000,
+  maxSize: 5000,
 });
 const webhookAnomalyTracker = createWebhookAnomalyTracker({
   maxTrackedKeys: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys,
@@ -62,7 +59,6 @@ const webhookAnomalyTracker = createWebhookAnomalyTracker({
 
 export function clearZaloWebhookSecurityStateForTest(): void {
   webhookRateLimiter.clear();
-  recentWebhookEvents.clearMemory();
   webhookAnomalyTracker.clear();
 }
 
@@ -75,64 +71,29 @@ export function getZaloWebhookStatusCounterSizeForTest(): number {
 }
 
 function timingSafeEquals(left: string, right: string): boolean {
-  return safeEqualSecret(left, right);
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  if (leftBuffer.length !== rightBuffer.length) {
+    const length = Math.max(1, leftBuffer.length, rightBuffer.length);
+    const paddedLeft = Buffer.alloc(length);
+    const paddedRight = Buffer.alloc(length);
+    leftBuffer.copy(paddedLeft);
+    rightBuffer.copy(paddedRight);
+    timingSafeEqual(paddedLeft, paddedRight);
+    return false;
+  }
+
+  return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function buildReplayEventCacheKey(target: ZaloWebhookTarget, update: ZaloUpdate): string | null {
+function isReplayEvent(update: ZaloUpdate, nowMs: number): boolean {
   const messageId = update.message?.message_id;
   if (!messageId) {
-    return null;
+    return false;
   }
-  const chatId = update.message?.chat?.id ?? "";
-  const senderId = update.message?.from?.id ?? "";
-  return JSON.stringify([
-    target.path,
-    target.account.accountId,
-    update.event_name,
-    chatId,
-    senderId,
-    messageId,
-  ]);
-}
-
-export class ZaloRetryableWebhookError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "ZaloRetryableWebhookError";
-  }
-}
-
-export async function processZaloReplayGuardedUpdate(params: {
-  target: ZaloWebhookTarget;
-  update: ZaloUpdate;
-  processUpdate: ZaloWebhookProcessUpdate;
-  nowMs?: number;
-}): Promise<"processed" | "duplicate"> {
-  const replayEventKey = buildReplayEventCacheKey(params.target, params.update);
-  if (replayEventKey) {
-    const replayClaim = await recentWebhookEvents.claim(replayEventKey, { now: params.nowMs });
-    if (replayClaim.kind !== "claimed") {
-      return "duplicate";
-    }
-  }
-
-  params.target.statusSink?.({ lastInboundAt: Date.now() });
-  try {
-    await params.processUpdate({ update: params.update, target: params.target });
-    if (replayEventKey) {
-      await recentWebhookEvents.commit(replayEventKey);
-    }
-    return "processed";
-  } catch (error) {
-    if (replayEventKey) {
-      if (error instanceof ZaloRetryableWebhookError) {
-        recentWebhookEvents.release(replayEventKey, { error });
-      } else {
-        await recentWebhookEvents.commit(replayEventKey);
-      }
-    }
-    throw error;
-  }
+  const key = `${update.event_name}:${messageId}`;
+  return recentWebhookEvents.check(key, nowMs);
 }
 
 function recordWebhookStatus(
@@ -261,12 +222,14 @@ export async function handleZaloWebhookRequest(
         return true;
       }
 
-      void processZaloReplayGuardedUpdate({
-        target,
-        update,
-        processUpdate,
-        nowMs,
-      }).catch((err) => {
+      if (isReplayEvent(update, nowMs)) {
+        res.statusCode = 200;
+        res.end("ok");
+        return true;
+      }
+
+      target.statusSink?.({ lastInboundAt: Date.now() });
+      processUpdate({ update, target }).catch((err) => {
         target.runtime.error?.(`[${target.account.accountId}] Zalo webhook failed: ${String(err)}`);
       });
 

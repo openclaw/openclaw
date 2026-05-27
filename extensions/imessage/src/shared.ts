@@ -6,21 +6,17 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+import { getChatChannelMeta, type ChannelPlugin } from "../runtime-api.js";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
   type ResolvedIMessageAccount,
 } from "./accounts.js";
-import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
 import { IMessageChannelConfigSchema } from "./config-schema.js";
-import {
-  resolveIMessageAttachmentRoots,
-  resolveIMessageRemoteAttachmentRoots,
-} from "./media-contract.js";
 import { createIMessageSetupWizardProxy } from "./setup-core.js";
 
-const IMESSAGE_CHANNEL = "imessage" as const;
+export const IMESSAGE_CHANNEL = "imessage" as const;
 
 async function loadIMessageChannelRuntime() {
   return await import("./channel.runtime.js");
@@ -30,7 +26,7 @@ export const imessageSetupWizard = createIMessageSetupWizardProxy(
   async () => (await loadIMessageChannelRuntime()).imessageSetupWizard,
 );
 
-const imessageConfigAdapter = createScopedChannelConfigAdapter<ResolvedIMessageAccount>({
+export const imessageConfigAdapter = createScopedChannelConfigAdapter<ResolvedIMessageAccount>({
   sectionKey: IMESSAGE_CHANNEL,
   listAccountIds: listIMessageAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveIMessageAccount),
@@ -69,9 +65,8 @@ export function createIMessagePluginBase(params: {
   | "config"
   | "security"
   | "setup"
-  | "messaging"
 > {
-  const base = createChannelPluginBase({
+  return createChannelPluginBase({
     id: IMESSAGE_CHANNEL,
     meta: {
       ...getChatChannelMeta(IMESSAGE_CHANNEL),
@@ -82,12 +77,6 @@ export function createIMessagePluginBase(params: {
     capabilities: {
       chatTypes: ["direct", "group"],
       media: true,
-      reactions: true,
-      edit: true,
-      unsend: true,
-      reply: true,
-      effects: true,
-      groupManagement: true,
     },
     reload: { configPrefixes: ["channels.imessage"] },
     configSchema: IMessageChannelConfigSchema,
@@ -102,16 +91,7 @@ export function createIMessagePluginBase(params: {
     },
     security: imessageSecurityAdapter,
     setup: params.setup,
-  });
-  return {
-    ...base,
-    messaging: {
-      resolveInboundAttachmentRoots: (params) =>
-        resolveIMessageAttachmentRoots({ accountId: params.accountId, cfg: params.cfg }),
-      resolveRemoteInboundAttachmentRoots: (params) =>
-        resolveIMessageRemoteAttachmentRoots({ accountId: params.accountId, cfg: params.cfg }),
-    },
-  } as Pick<
+  }) as Pick<
     ChannelPlugin<ResolvedIMessageAccount>,
     | "id"
     | "meta"
@@ -122,6 +102,5 @@ export function createIMessagePluginBase(params: {
     | "config"
     | "security"
     | "setup"
-    | "messaging"
   >;
 }

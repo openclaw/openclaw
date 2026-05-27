@@ -1,8 +1,7 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import {
-  createIdentityFromHandleEvent,
   createIdentityFromStatus,
   identityEquals,
   mergeSessionIdentity,
@@ -64,25 +63,15 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
 
   const now = Date.now();
   const currentIdentity = resolveSessionIdentityFromMeta(params.meta);
-  const eventIdentity = createIdentityFromHandleEvent({
-    handle: params.handle,
-    now,
-  });
-  const identityAfterEvent =
-    mergeSessionIdentity({
-      current: currentIdentity,
-      incoming: eventIdentity,
-      now,
-    }) ?? currentIdentity;
   const nextIdentity =
     mergeSessionIdentity({
-      current: identityAfterEvent,
+      current: currentIdentity,
       incoming: createIdentityFromStatus({
         status: runtimeStatus,
         now,
       }),
       now,
-    }) ?? identityAfterEvent;
+    }) ?? currentIdentity;
   const handleIdentifiers = resolveRuntimeHandleIdentifiersFromIdentity(nextIdentity);
   const handleChanged =
     handleIdentifiers.backendSessionId !== params.handle.backendSessionId ||

@@ -1,10 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { formatUnknownText } from "../format.ts";
 import { icons as sharedIcons } from "../icons.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../string-coerce.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
   defaultValue,
@@ -33,27 +28,6 @@ function jsonValue(value: unknown): string {
   } catch {
     return "";
   }
-}
-
-function formatComparablePrimitive(value: unknown): string | null {
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint"
-  ) {
-    return String(value);
-  }
-  return null;
-}
-
-function matchesComparablePrimitiveValue(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) {
-    return true;
-  }
-  const leftComparable = formatComparablePrimitive(left);
-  const rightComparable = formatComparablePrimitive(right);
-  return leftComparable !== null && leftComparable === rightComparable;
 }
 
 // SVG Icons as template literals
@@ -131,21 +105,6 @@ type FieldMeta = {
   tags: string[];
 };
 
-function isSecretRefObject(value: unknown): value is {
-  source: string;
-  id: string;
-  provider?: string;
-} {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  if (typeof candidate.source !== "string" || typeof candidate.id !== "string") {
-    return false;
-  }
-  return candidate.provider === undefined || typeof candidate.provider === "string";
-}
-
 type SensitiveRenderParams = {
   path: Array<string | number>;
   value: unknown;
@@ -222,7 +181,7 @@ export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
   const seen = new Set<string>();
   const raw = query.trim();
   const stripped = raw.replace(/(^|\s)tag:([^\s]+)/gi, (_, leading: string, token: string) => {
-    const normalized = normalizeLowercaseStringOrEmpty(token);
+    const normalized = token.trim().toLowerCase();
     if (normalized && !seen.has(normalized)) {
       seen.add(normalized);
       tags.push(normalized);
@@ -230,7 +189,7 @@ export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
     return leading;
   });
   return {
-    text: normalizeLowercaseStringOrEmpty(stripped),
+    text: stripped.trim().toLowerCase(),
     tags,
   };
 }
@@ -249,7 +208,7 @@ function normalizeTags(raw: unknown): string[] {
     if (!tag) {
       continue;
     }
-    const key = normalizeLowercaseStringOrEmpty(tag);
+    const key = tag.toLowerCase();
     if (seen.has(key)) {
       continue;
     }
@@ -281,7 +240,7 @@ function matchesText(text: string, candidates: Array<string | undefined>): boole
     return true;
   }
   for (const candidate of candidates) {
-    if (normalizeOptionalLowercaseString(candidate)?.includes(text)) {
+    if (candidate && candidate.toLowerCase().includes(text)) {
       return true;
     }
   }
@@ -292,7 +251,7 @@ function matchesTags(filterTags: string[], fieldTags: string[]): boolean {
   if (filterTags.length === 0) {
     return true;
   }
-  const normalized = new Set(fieldTags.map((tag) => normalizeLowercaseStringOrEmpty(tag)));
+  const normalized = new Set(fieldTags.map((tag) => tag.toLowerCase()));
   return filterTags.every((tag) => normalized.has(tag));
 }
 
@@ -433,7 +392,6 @@ export function renderNode(params: {
   value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
-  rawAvailable?: boolean;
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
@@ -500,13 +458,17 @@ export function renderNode(params: {
               (lit) => html`
                 <button
                   type="button"
-                  class="cfg-segmented__btn ${matchesComparablePrimitiveValue(lit, resolvedValue)
-                    ? "active"
-                    : ""}"
+                  class="cfg-segmented__btn ${
+                    // oxlint-disable typescript/no-base-to-string
+                    lit === resolvedValue || String(lit) === String(resolvedValue) ? "active" : ""
+                  }"
                   ?disabled=${disabled}
                   @click=${() => onPatch(path, lit)}
                 >
-                  ${formatUnknownText(lit)}
+                  ${
+                    // oxlint-disable typescript/no-base-to-string
+                    String(lit)
+                  }
                 </button>
               `,
             )}
@@ -575,13 +537,14 @@ export function renderNode(params: {
               (opt) => html`
                 <button
                   type="button"
-                  class="cfg-segmented__btn ${matchesComparablePrimitiveValue(opt, resolvedValue)
+                  class="cfg-segmented__btn ${opt === resolvedValue ||
+                  String(opt) === String(resolvedValue)
                     ? "active"
                     : ""}"
                   ?disabled=${disabled}
                   @click=${() => onPatch(path, opt)}
                 >
-                  ${formatUnknownText(opt)}
+                  ${String(opt)}
                 </button>
               `,
             )}
@@ -654,7 +617,6 @@ function renderTextInput(params: {
   value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
-  rawAvailable?: boolean;
   disabled: boolean;
   showLabel?: boolean;
   searchCriteria?: ConfigSearchCriteria;
@@ -675,25 +637,14 @@ function renderTextInput(params: {
     revealSensitive: params.revealSensitive ?? false,
     isSensitivePathRevealed: params.isSensitivePathRevealed,
   });
-  const isStructuredValue =
-    value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value);
-  const isStructuredSecretRef = isSecretRefObject(value);
-  const rawAvailable = params.rawAvailable ?? true;
-  const effectiveRedacted = sensitiveState.isRedacted || isStructuredSecretRef;
-  const placeholder = effectiveRedacted
-    ? isStructuredSecretRef
-      ? rawAvailable
-        ? "Structured value (SecretRef) - use Raw mode to edit"
-        : "Structured value (SecretRef) - edit the config file directly"
-      : REDACTED_PLACEHOLDER
+  const placeholder = sensitiveState.isRedacted
+    ? REDACTED_PLACEHOLDER
     : (hint?.placeholder ??
-      (schema.default !== undefined ? `Default: ${formatUnknownText(schema.default)}` : ""));
-  const displayValue = effectiveRedacted
-    ? ""
-    : isStructuredValue
-      ? jsonValue(value)
-      : (value ?? "");
-  const effectiveInputType = sensitiveState.isSensitive && !effectiveRedacted ? "text" : inputType;
+      // oxlint-disable typescript/no-base-to-string
+      (schema.default !== undefined ? `Default: ${String(schema.default)}` : ""));
+  const displayValue = sensitiveState.isRedacted ? "" : (value ?? "");
+  const effectiveInputType =
+    sensitiveState.isSensitive && !sensitiveState.isRedacted ? "text" : inputType;
 
   return html`
     <div class="cfg-field">
@@ -702,22 +653,18 @@ function renderTextInput(params: {
       <div class="cfg-input-wrap">
         <input
           type=${effectiveInputType}
-          class="cfg-input${effectiveRedacted ? " cfg-input--redacted" : ""}"
+          class="cfg-input${sensitiveState.isRedacted ? " cfg-input--redacted" : ""}"
           placeholder=${placeholder}
-          .value=${formatUnknownText(displayValue)}
+          .value=${displayValue == null ? "" : String(displayValue)}
           ?disabled=${disabled}
-          ?readonly=${effectiveRedacted}
+          ?readonly=${sensitiveState.isRedacted}
           @click=${() => {
-            if (
-              sensitiveState.isRedacted &&
-              !isStructuredSecretRef &&
-              params.onToggleSensitivePath
-            ) {
+            if (sensitiveState.isRedacted && params.onToggleSensitivePath) {
               params.onToggleSensitivePath(path);
             }
           }}
           @input=${(e: Event) => {
-            if (effectiveRedacted) {
+            if (sensitiveState.isRedacted) {
               return;
             }
             const raw = (e.target as HTMLInputElement).value;
@@ -733,28 +680,26 @@ function renderTextInput(params: {
             onPatch(path, raw);
           }}
           @change=${(e: Event) => {
-            if (inputType === "number" || effectiveRedacted) {
+            if (inputType === "number" || sensitiveState.isRedacted) {
               return;
             }
             const raw = (e.target as HTMLInputElement).value;
             onPatch(path, raw.trim());
           }}
         />
-        ${isStructuredSecretRef
-          ? nothing
-          : renderSensitiveToggleButton({
-              path,
-              state: sensitiveState,
-              disabled,
-              onToggleSensitivePath: params.onToggleSensitivePath,
-            })}
+        ${renderSensitiveToggleButton({
+          path,
+          state: sensitiveState,
+          disabled,
+          onToggleSensitivePath: params.onToggleSensitivePath,
+        })}
         ${schema.default !== undefined
           ? html`
               <button
                 type="button"
                 class="cfg-input__reset"
                 title="Reset to default"
-                ?disabled=${disabled || effectiveRedacted}
+                ?disabled=${disabled || sensitiveState.isRedacted}
                 @click=${() => onPatch(path, schema.default)}
               >
                 ↺
@@ -798,7 +743,7 @@ function renderNumberInput(params: {
         <input
           type="number"
           class="cfg-number__input"
-          .value=${formatUnknownText(displayValue)}
+          .value=${displayValue == null ? "" : String(displayValue)}
           ?disabled=${disabled}
           @input=${(e: Event) => {
             const raw = (e.target as HTMLInputElement).value;
@@ -852,13 +797,8 @@ function renderSelect(params: {
           onPatch(path, val === unset ? undefined : options[Number(val)]);
         }}
       >
-        <option value=${unset} ?selected=${currentIndex < 0}>Select...</option>
-        ${options.map(
-          (opt, idx) =>
-            html` <option value=${String(idx)} ?selected=${idx === currentIndex}>
-              ${String(opt)}
-            </option>`,
-        )}
+        <option value=${unset}>Select...</option>
+        ${options.map((opt, idx) => html` <option value=${String(idx)}>${String(opt)}</option> `)}
       </select>
     </div>
   `;
@@ -939,7 +879,6 @@ function renderObject(params: {
   value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
-  rawAvailable?: boolean;
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
@@ -958,7 +897,6 @@ function renderObject(params: {
     disabled,
     onPatch,
     searchCriteria,
-    rawAvailable,
     revealSensitive,
     isSensitivePathRevealed,
     onToggleSensitivePath,
@@ -1000,7 +938,6 @@ function renderObject(params: {
         value: obj[propKey],
         path: [...path, propKey],
         hints,
-        rawAvailable,
         unsupported,
         disabled,
         searchCriteria: childSearchCriteria,
@@ -1016,7 +953,6 @@ function renderObject(params: {
           value: obj,
           path,
           hints,
-          rawAvailable,
           unsupported,
           disabled,
           reservedKeys: reserved,
@@ -1059,7 +995,6 @@ function renderArray(params: {
   value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
-  rawAvailable?: boolean;
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
@@ -1078,7 +1013,6 @@ function renderArray(params: {
     disabled,
     onPatch,
     searchCriteria,
-    rawAvailable,
     revealSensitive,
     isSensitivePathRevealed,
     onToggleSensitivePath,
@@ -1154,7 +1088,6 @@ function renderArray(params: {
                         value: item,
                         path: [...path, idx],
                         hints,
-                        rawAvailable,
                         unsupported,
                         disabled,
                         searchCriteria: childSearchCriteria,
@@ -1179,7 +1112,6 @@ function renderMapField(params: {
   value: Record<string, unknown>;
   path: Array<string | number>;
   hints: ConfigUiHints;
-  rawAvailable?: boolean;
   unsupported: Set<string>;
   disabled: boolean;
   reservedKeys: Set<string>;
@@ -1194,7 +1126,6 @@ function renderMapField(params: {
     value,
     path,
     hints,
-    rawAvailable,
     unsupported,
     disabled,
     reservedKeys,
@@ -1347,7 +1278,6 @@ function renderMapField(params: {
                             value: entryValue,
                             path: valuePath,
                             hints,
-                            rawAvailable,
                             unsupported,
                             disabled,
                             searchCriteria,

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelAccountSnapshot } from "../api.js";
-import { lineStatusAdapter } from "./status.js";
+import { linePlugin } from "./channel.js";
 
 function collectIssues(accounts: ChannelAccountSnapshot[]) {
-  const collect = lineStatusAdapter.collectStatusIssues;
+  const collect = linePlugin.status?.collectStatusIssues;
   if (!collect) {
     throw new Error("LINE plugin status collector is unavailable");
   }
@@ -20,7 +20,7 @@ describe("linePlugin status.collectStatusIssues", () => {
           tokenSource: "env",
         },
       ]),
-    ).toStrictEqual([]);
+    ).toEqual([]);
   });
 
   it("reports missing access token when the snapshot is unconfigured and tokenSource is none", () => {

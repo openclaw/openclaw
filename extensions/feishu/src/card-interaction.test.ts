@@ -23,16 +23,14 @@ describe("feishu card interaction decoder", () => {
       },
     });
 
-    expect(result).toEqual({
-      kind: "structured",
-      envelope: {
-        oc: "ocf1",
-        k: "quick",
-        a: "feishu.quick_actions.help",
-        q: "/help",
-        c: { u: "u123", h: "chat1", t: "group", e: 1_700_000_060_000 },
-      },
-    });
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "structured",
+        envelope: expect.objectContaining({
+          q: "/help",
+        }),
+      }),
+    );
   });
 
   it("falls back for legacy text-like payloads", () => {

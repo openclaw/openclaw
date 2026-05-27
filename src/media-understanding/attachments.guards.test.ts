@@ -3,28 +3,32 @@ import { selectAttachments } from "./attachments.js";
 import type { MediaAttachment } from "./types.js";
 
 describe("media-understanding selectAttachments guards", () => {
-  it("returns no selections when attachments is undefined", () => {
-    expect(
+  it("does not throw when attachments is undefined", () => {
+    const run = () =>
       selectAttachments({
         capability: "image",
         attachments: undefined as unknown as MediaAttachment[],
         policy: { prefer: "path" },
-      }),
-    ).toStrictEqual([]);
+      });
+
+    expect(run).not.toThrow();
+    expect(run()).toEqual([]);
   });
 
-  it("returns no selections when attachments is not an array", () => {
-    expect(
+  it("does not throw when attachments is not an array", () => {
+    const run = () =>
       selectAttachments({
         capability: "audio",
         attachments: { malformed: true } as unknown as MediaAttachment[],
         policy: { prefer: "url" },
-      }),
-    ).toStrictEqual([]);
+      });
+
+    expect(run).not.toThrow();
+    expect(run()).toEqual([]);
   });
 
-  it("returns no selections for malformed attachment entries", () => {
-    expect(
+  it("ignores malformed attachment entries inside an array", () => {
+    const run = () =>
       selectAttachments({
         capability: "audio",
         attachments: [
@@ -34,7 +38,9 @@ describe("media-understanding selectAttachments guards", () => {
           { index: 3, mime: { nope: true } },
         ] as unknown as MediaAttachment[],
         policy: { prefer: "path" },
-      }),
-    ).toStrictEqual([]);
+      });
+
+    expect(run).not.toThrow();
+    expect(run()).toEqual([]);
   });
 });

@@ -20,7 +20,7 @@ export function createGeneratedPluginTempRoot(prefix: string): string {
 
 export function installGeneratedPluginTempRootCleanup() {
   afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
+    for (const dir of tempDirs.splice(0, tempDirs.length)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

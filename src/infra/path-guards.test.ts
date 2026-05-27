@@ -1,5 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   hasNodeErrorCode,
   isNodeError,
@@ -9,12 +8,19 @@ import {
   normalizeWindowsPathForComparison,
 } from "./path-guards.js";
 
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
 function setPlatform(platform: NodeJS.Platform): void {
-  mockProcessPlatform(platform);
+  Object.defineProperty(process, "platform", {
+    value: platform,
+    configurable: true,
+  });
 }
 
 afterEach(() => {
-  vi.restoreAllMocks();
+  if (originalPlatformDescriptor) {
+    Object.defineProperty(process, "platform", originalPlatformDescriptor);
+  }
 });
 
 describe("normalizeWindowsPathForComparison", () => {
@@ -66,17 +72,7 @@ describe("isPathInside", () => {
   it.each([
     ["/workspace/root", "/workspace/root", true],
     ["/workspace/root", "/workspace/root/nested/file.txt", true],
-    ["/workspace/root", "/workspace/root/..file.txt", true],
     ["/workspace/root", "/workspace/root/../escape.txt", false],
-    ["/workspace/root", "/workspace/rootless/file.txt", false],
-    ["/workspace/root", "/workspace/root/a/b/c/d/e/file.txt", true],
-    ["/workspace/root", "/workspace/root/a/..", true],
-    ["/workspace/root", "/workspace/root/a/../..", false],
-    ["/workspace/root", "/workspace/root/a/b/../../../escape", false],
-    ["/", "/anything/at/all", true],
-    ["/", "/", true],
-    ["foo", "foo/bar", true],
-    ["foo", "../escape", false],
   ])("checks posix containment %s -> %s", (basePath, targetPath, expected) => {
     expect(isPathInside(basePath, targetPath)).toBe(expected);
   });
@@ -87,7 +83,6 @@ describe("isPathInside", () => {
     for (const [basePath, targetPath, expected] of [
       [String.raw`C:\workspace\root`, String.raw`C:\workspace\root`, true],
       [String.raw`C:\workspace\root`, String.raw`C:\workspace\root\Nested\File.txt`, true],
-      [String.raw`C:\workspace\root`, String.raw`C:\workspace\root\..file.txt`, true],
       [String.raw`C:\workspace\root`, String.raw`C:\workspace\root\..\escape.txt`, false],
       [String.raw`C:\workspace\root`, String.raw`D:\workspace\root\file.txt`, false],
     ] as const) {

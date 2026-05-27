@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { findGoogleChatDirectMessage } from "./api.js";
 
@@ -13,23 +12,23 @@ export function normalizeGoogleChatTarget(raw?: string | null): string | undefin
     .replace(/^space:(spaces\/)?/i, "spaces/");
   if (isGoogleChatUserTarget(normalized)) {
     const suffix = normalized.slice("users/".length);
-    return suffix.includes("@") ? `users/${normalizeLowercaseStringOrEmpty(suffix)}` : normalized;
+    return suffix.includes("@") ? `users/${suffix.toLowerCase()}` : normalized;
   }
   if (isGoogleChatSpaceTarget(normalized)) {
     return normalized;
   }
   if (normalized.includes("@")) {
-    return `users/${normalizeLowercaseStringOrEmpty(normalized)}`;
+    return `users/${normalized.toLowerCase()}`;
   }
   return normalized;
 }
 
 export function isGoogleChatUserTarget(value: string): boolean {
-  return normalizeLowercaseStringOrEmpty(value).startsWith("users/");
+  return value.toLowerCase().startsWith("users/");
 }
 
 export function isGoogleChatSpaceTarget(value: string): boolean {
-  return normalizeLowercaseStringOrEmpty(value).startsWith("spaces/");
+  return value.toLowerCase().startsWith("spaces/");
 }
 
 function stripMessageSuffix(target: string): string {

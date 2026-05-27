@@ -9,7 +9,7 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-function normalizePath(filePath: string): string {
+export function normalizePath(filePath: string): string {
   return filePath.split(path.sep).join(path.posix.sep);
 }
 
@@ -41,7 +41,7 @@ export function createProgramContext(
   };
 }
 
-function comparableSymbol(
+export function comparableSymbol(
   checker: ts.TypeChecker,
   symbol: ts.Symbol | undefined,
 ): ts.Symbol | undefined {

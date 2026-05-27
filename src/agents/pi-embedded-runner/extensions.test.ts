@@ -1,22 +1,12 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import type { Api, Model } from "@mariozechner/pi-ai";
+import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-hooks/compaction-safeguard.js";
-import contextPruningExtension from "../pi-hooks/context-pruning.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 
-vi.mock("../../plugins/provider-runtime.js", () => ({
-  resolveProviderCacheTtlEligibility: () => undefined,
-  resolveProviderRuntimePlugin: () => undefined,
-}));
-
-vi.mock("../../plugins/provider-hook-runtime.js", () => ({
-  resolveProviderRuntimePlugin: () => undefined,
-}));
-
-function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
+function buildSafeguardFactories(cfg: OpenClawConfig) {
   const sessionManager = {} as SessionManager;
   const model = {
     id: "claude-sonnet-4-20250514",
@@ -26,7 +16,6 @@ function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
   const factories = buildEmbeddedExtensionFactories({
     cfg,
     sessionManager,
-    workspaceDir,
     provider: "anthropic",
     modelId: "claude-sonnet-4-20250514",
     model,
@@ -42,37 +31,16 @@ function expectSafeguardRuntime(
   const { factories, sessionManager } = buildSafeguardFactories(cfg);
 
   expect(factories).toContain(compactionSafeguardExtension);
-  const runtime = getCompactionSafeguardRuntime(sessionManager);
-  expect(runtime?.contextWindowTokens).toBe(200_000);
-  expect(runtime?.qualityGuardEnabled).toBe(expectedRuntime.qualityGuardEnabled);
-  expect(runtime?.qualityGuardMaxRetries).toBe(expectedRuntime.qualityGuardMaxRetries);
+  expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject(expectedRuntime);
 }
 
 describe("buildEmbeddedExtensionFactories", () => {
-  it("enables quality-guard retries by default in safeguard mode", () => {
+  it("does not opt safeguard mode into quality-guard retries", () => {
     const cfg = {
       agents: {
         defaults: {
           compaction: {
             mode: "safeguard",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    expectSafeguardRuntime(cfg, {
-      qualityGuardEnabled: true,
-    });
-  });
-
-  it("honors explicit safeguard quality-guard disablement", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          compaction: {
-            mode: "safeguard",
-            qualityGuard: {
-              enabled: false,
-            },
           },
         },
       },
@@ -100,44 +68,5 @@ describe("buildEmbeddedExtensionFactories", () => {
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 2,
     });
-  });
-
-  it("wires the run workspace into safeguard runtime", () => {
-    const { sessionManager } = buildSafeguardFactories(
-      {
-        agents: {
-          defaults: {
-            compaction: {
-              mode: "safeguard",
-            },
-          },
-        },
-      } as OpenClawConfig,
-      "/tmp/openclaw-workspace",
-    );
-
-    expect(getCompactionSafeguardRuntime(sessionManager)?.workspaceDir).toBe(
-      "/tmp/openclaw-workspace",
-    );
-  });
-
-  it("enables cache-ttl pruning for custom anthropic-messages providers", () => {
-    const factories = buildEmbeddedExtensionFactories({
-      cfg: {
-        agents: {
-          defaults: {
-            contextPruning: {
-              mode: "cache-ttl",
-            },
-          },
-        },
-      } as OpenClawConfig,
-      sessionManager: {} as SessionManager,
-      provider: "litellm",
-      modelId: "claude-sonnet-4-6",
-      model: { api: "anthropic-messages", contextWindow: 200_000 } as Model<Api>,
-    });
-
-    expect(factories).toContain(contextPruningExtension);
   });
 });

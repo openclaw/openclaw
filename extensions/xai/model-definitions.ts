@@ -1,18 +1,14 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const XAI_BASE_URL = "https://api.x.ai/v1";
-export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image";
-export const XAI_IMAGE_MODELS = ["grok-imagine-image", "grok-imagine-image-quality"] as const;
-export const XAI_DEFAULT_CONTEXT_WINDOW = 1_000_000;
-const XAI_LARGE_CONTEXT_WINDOW = 2_000_000;
-const XAI_GROK_4_CONTEXT_WINDOW = 256_000;
-const XAI_CODE_CONTEXT_WINDOW = 256_000;
-export const XAI_DEFAULT_MAX_TOKENS = 64_000;
-const XAI_LEGACY_CONTEXT_WINDOW = 131_072;
-const XAI_LEGACY_MAX_TOKENS = 8_192;
-export const XAI_DEFAULT_MODEL_ID = "grok-4.3";
+export const XAI_DEFAULT_MODEL_ID = "grok-4";
 export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
+export const XAI_DEFAULT_CONTEXT_WINDOW = 256_000;
+export const XAI_LARGE_CONTEXT_WINDOW = 2_000_000;
+export const XAI_CODE_CONTEXT_WINDOW = 256_000;
+export const XAI_DEFAULT_MAX_TOKENS = 64_000;
+export const XAI_LEGACY_CONTEXT_WINDOW = 131_072;
+export const XAI_LEGACY_MAX_TOKENS = 8_192;
 
 type XaiCost = ModelDefinitionConfig["cost"];
 
@@ -41,22 +37,8 @@ const XAI_FAST_COST = {
 } satisfies XaiCost;
 
 const XAI_GROK_420_COST = {
-  input: 1.25,
-  output: 2.5,
-  cacheRead: 0.2,
-  cacheWrite: 0,
-} satisfies XaiCost;
-
-const XAI_GROK_43_COST = {
-  input: 1.25,
-  output: 2.5,
-  cacheRead: 0.2,
-  cacheWrite: 0,
-} satisfies XaiCost;
-
-const XAI_GROK_BUILD_COST = {
-  input: 1,
-  output: 2,
+  input: 2,
+  output: 6,
   cacheRead: 0.2,
   cacheWrite: 0,
 } satisfies XaiCost;
@@ -69,14 +51,6 @@ const XAI_CODE_FAST_COST = {
 } satisfies XaiCost;
 
 const XAI_MODEL_CATALOG = [
-  {
-    id: "grok-build-0.1",
-    name: "Grok Build 0.1",
-    reasoning: true,
-    input: ["text", "image"],
-    contextWindow: XAI_CODE_CONTEXT_WINDOW,
-    cost: XAI_GROK_BUILD_COST,
-  },
   {
     id: "grok-3",
     name: "Grok 3",
@@ -114,20 +88,11 @@ const XAI_MODEL_CATALOG = [
     cost: { input: 0.6, output: 4, cacheRead: 0.15, cacheWrite: 0 },
   },
   {
-    id: "grok-4.3",
-    name: "Grok 4.3",
-    reasoning: true,
-    input: ["text", "image"],
-    contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: XAI_DEFAULT_MAX_TOKENS,
-    cost: XAI_GROK_43_COST,
-  },
-  {
     id: "grok-4",
     name: "Grok 4",
     reasoning: true,
     input: ["text"],
-    contextWindow: XAI_GROK_4_CONTEXT_WINDOW,
+    contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
     maxTokens: XAI_DEFAULT_MAX_TOKENS,
     cost: XAI_GROK_4_COST,
   },
@@ -136,7 +101,7 @@ const XAI_MODEL_CATALOG = [
     name: "Grok 4 0709",
     reasoning: false,
     input: ["text"],
-    contextWindow: XAI_GROK_4_CONTEXT_WINDOW,
+    contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
     maxTokens: XAI_DEFAULT_MAX_TOKENS,
     cost: XAI_GROK_4_COST,
   },
@@ -194,42 +159,16 @@ const XAI_MODEL_CATALOG = [
     maxTokens: 30_000,
     cost: XAI_GROK_420_COST,
   },
+  {
+    id: "grok-code-fast-1",
+    name: "Grok Code Fast 1",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: XAI_CODE_CONTEXT_WINDOW,
+    maxTokens: 10_000,
+    cost: XAI_CODE_FAST_COST,
+  },
 ] as const satisfies readonly XaiCatalogEntry[];
-
-const XAI_SELECTABLE_MODEL_IDS = new Set<string>([
-  "grok-build-0.1",
-  "grok-4.3",
-  "grok-4.20-beta-latest-reasoning",
-  "grok-4.20-beta-latest-non-reasoning",
-]);
-
-const XAI_GROK_BUILD_ALIASES = new Set<string>([
-  "grok-code-fast-1",
-  "grok-code-fast",
-  "grok-code-fast-1-0825",
-]);
-
-const XAI_RETIRED_BUILTIN_MODEL_IDS = new Set<string>(
-  XAI_MODEL_CATALOG.map((entry) => entry.id).filter((id) => !XAI_SELECTABLE_MODEL_IDS.has(id)),
-);
-
-function normalizeXaiCatalogModelId(modelId: string): string {
-  const lower = normalizeOptionalLowercaseString(modelId) ?? "";
-  const unprefixed = lower.startsWith("xai/") ? lower.slice("xai/".length) : lower;
-  if (XAI_GROK_BUILD_ALIASES.has(unprefixed)) {
-    return "grok-build-0.1";
-  }
-  return unprefixed;
-}
-
-export function isRetiredXaiBuiltinModelId(modelId: string): boolean {
-  const lower = normalizeOptionalLowercaseString(modelId) ?? "";
-  const unprefixed = lower.startsWith("xai/") ? lower.slice("xai/".length) : lower;
-  if (XAI_GROK_BUILD_ALIASES.has(unprefixed)) {
-    return true;
-  }
-  return XAI_RETIRED_BUILTIN_MODEL_IDS.has(normalizeXaiCatalogModelId(modelId));
-}
 
 function toModelDefinition(entry: XaiCatalogEntry): ModelDefinitionConfig {
   return {
@@ -247,28 +186,23 @@ export function buildXaiModelDefinition(): ModelDefinitionConfig {
   return toModelDefinition(
     XAI_MODEL_CATALOG.find((entry) => entry.id === XAI_DEFAULT_MODEL_ID) ?? {
       id: XAI_DEFAULT_MODEL_ID,
-      name: "Grok 4.3",
-      reasoning: true,
-      input: ["text", "image"],
+      name: "Grok 4",
+      reasoning: false,
+      input: ["text"],
       contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
       maxTokens: XAI_DEFAULT_MAX_TOKENS,
-      cost: XAI_GROK_43_COST,
+      cost: XAI_GROK_4_COST,
     },
   );
 }
 
 export function buildXaiCatalogModels(): ModelDefinitionConfig[] {
-  return XAI_MODEL_CATALOG.filter((entry) => XAI_SELECTABLE_MODEL_IDS.has(entry.id)).map((entry) =>
-    toModelDefinition(entry),
-  );
+  return XAI_MODEL_CATALOG.map((entry) => toModelDefinition(entry));
 }
 
-export function resolveXaiCatalogEntry(modelId: string) {
-  const trimmed = modelId.trim();
-  const lower = normalizeXaiCatalogModelId(modelId);
-  const exact = XAI_MODEL_CATALOG.find(
-    (entry) => normalizeOptionalLowercaseString(entry.id) === lower,
-  );
+export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig | undefined {
+  const lower = modelId.trim().toLowerCase();
+  const exact = XAI_MODEL_CATALOG.find((entry) => entry.id.toLowerCase() === lower);
   if (exact) {
     return toModelDefinition(exact);
   }
@@ -277,8 +211,8 @@ export function resolveXaiCatalogEntry(modelId: string) {
   }
   if (lower.startsWith("grok-code-fast")) {
     return toModelDefinition({
-      id: trimmed,
-      name: trimmed,
+      id: modelId.trim(),
+      name: modelId.trim(),
       reasoning: true,
       input: ["text"],
       contextWindow: XAI_CODE_CONTEXT_WINDOW,
@@ -300,8 +234,8 @@ export function resolveXaiCatalogEntry(modelId: string) {
           ? { input: 5, output: 25, cacheRead: 1.25, cacheWrite: 0 }
           : XAI_GROK_4_COST;
     return toModelDefinition({
-      id: trimmed,
-      name: trimmed,
+      id: modelId.trim(),
+      name: modelId.trim(),
       reasoning: lower.includes("mini"),
       input: ["text"],
       contextWindow: XAI_LEGACY_CONTEXT_WINDOW,
@@ -310,25 +244,18 @@ export function resolveXaiCatalogEntry(modelId: string) {
     });
   }
   if (
-    lower.startsWith("grok-4.3") ||
     lower.startsWith("grok-4.20") ||
     lower.startsWith("grok-4-1") ||
     lower.startsWith("grok-4-fast")
   ) {
     return toModelDefinition({
-      id: trimmed,
-      name: trimmed,
+      id: modelId.trim(),
+      name: modelId.trim(),
       reasoning: !lower.includes("non-reasoning"),
       input: ["text", "image"],
-      contextWindow: lower.startsWith("grok-4.3")
-        ? XAI_DEFAULT_CONTEXT_WINDOW
-        : XAI_LARGE_CONTEXT_WINDOW,
-      maxTokens: lower.startsWith("grok-4.3") ? XAI_DEFAULT_MAX_TOKENS : 30_000,
-      cost: lower.startsWith("grok-4.3")
-        ? XAI_GROK_43_COST
-        : lower.startsWith("grok-4.20")
-          ? XAI_GROK_420_COST
-          : XAI_FAST_COST,
+      contextWindow: XAI_LARGE_CONTEXT_WINDOW,
+      maxTokens: 30_000,
+      cost: lower.startsWith("grok-4.20") ? XAI_GROK_420_COST : XAI_FAST_COST,
     });
   }
   if (lower.startsWith("grok-4")) {
@@ -337,7 +264,7 @@ export function resolveXaiCatalogEntry(modelId: string) {
       name: modelId.trim(),
       reasoning: lower.includes("reasoning"),
       input: ["text"],
-      contextWindow: XAI_GROK_4_CONTEXT_WINDOW,
+      contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
       maxTokens: XAI_DEFAULT_MAX_TOKENS,
       cost: XAI_GROK_4_COST,
     });

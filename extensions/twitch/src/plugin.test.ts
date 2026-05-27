@@ -44,34 +44,3 @@ describe("twitchPlugin.status.buildAccountSnapshot", () => {
     expect(snapshot?.accountId).toBe("secondary");
   });
 });
-
-describe("twitchPlugin.config", () => {
-  it("uses configured defaultAccount for omitted-account plugin resolution", () => {
-    const cfg = {
-      channels: {
-        twitch: {
-          defaultAccount: "secondary",
-          accounts: {
-            default: {
-              channel: "default-channel",
-              username: "default",
-              accessToken: "oauth:default-token",
-              clientId: "default-client",
-              enabled: true,
-            },
-            secondary: {
-              channel: "secondary-channel",
-              username: "secondary",
-              accessToken: "oauth:secondary-token",
-              clientId: "secondary-client",
-              enabled: true,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(twitchPlugin.config.defaultAccountId?.(cfg)).toBe("secondary");
-    expect(twitchPlugin.config.resolveAccount(cfg).accountId).toBe("secondary");
-  });
-});

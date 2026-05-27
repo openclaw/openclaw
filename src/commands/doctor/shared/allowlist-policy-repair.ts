@@ -1,10 +1,7 @@
-import { normalizeChatChannelId } from "../../../channels/ids.js";
-import { setCanonicalDmAllowFrom } from "../../../channels/plugins/dm-access.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { normalizeChatChannelId } from "../../../channels/registry.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
-import { normalizeUniqueStringEntries } from "../../../shared/string-normalization.js";
 import { resolveAllowFromMode, type AllowFromMode } from "./allow-from-mode.js";
 import { hasAllowFromEntries } from "./allowlist.js";
 import { asObjectRecord } from "./object.js";
@@ -29,14 +26,41 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
   }) => {
     const count = params.allowFrom.length;
     const noun = count === 1 ? "entry" : "entries";
-    setCanonicalDmAllowFrom({
-      entry: params.account,
-      mode: params.mode,
-      allowFrom: params.allowFrom,
-      pathPrefix: params.prefix,
-      changes,
-      reason: `restored ${count} sender ${noun} from pairing store (dmPolicy="allowlist").`,
-    });
+
+    if (params.mode === "nestedOnly") {
+      const dmEntry = params.account.dm;
+      const dm =
+        dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
+          ? (dmEntry as Record<string, unknown>)
+          : {};
+      dm.allowFrom = params.allowFrom;
+      params.account.dm = dm;
+      changes.push(
+        `- ${params.prefix}.dm.allowFrom: restored ${count} sender ${noun} from pairing store (dmPolicy="allowlist").`,
+      );
+      return;
+    }
+
+    if (params.mode === "topOrNested") {
+      const dmEntry = params.account.dm;
+      const dm =
+        dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
+          ? (dmEntry as Record<string, unknown>)
+          : undefined;
+      const nestedAllowFrom = dm?.allowFrom as Array<string | number> | undefined;
+      if (dm && !Array.isArray(params.account.allowFrom) && Array.isArray(nestedAllowFrom)) {
+        dm.allowFrom = params.allowFrom;
+        changes.push(
+          `- ${params.prefix}.dm.allowFrom: restored ${count} sender ${noun} from pairing store (dmPolicy="allowlist").`,
+        );
+        return;
+      }
+    }
+
+    params.account.allowFrom = params.allowFrom;
+    changes.push(
+      `- ${params.prefix}.allowFrom: restored ${count} sender ${noun} from pairing store (dmPolicy="allowlist").`,
+    );
   };
 
   const recoverAllowFromForAccount = async (params: {
@@ -62,9 +86,9 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
       return;
     }
 
-    const normalizedChannelId = normalizeOptionalLowercaseString(
-      normalizeChatChannelId(params.channelName) ?? params.channelName,
-    );
+    const normalizedChannelId = (normalizeChatChannelId(params.channelName) ?? params.channelName)
+      .trim()
+      .toLowerCase();
     if (!normalizedChannelId) {
       return;
     }
@@ -74,7 +98,9 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
       process.env,
       normalizedAccountId,
     ).catch(() => []);
-    const recovered = normalizeUniqueStringEntries(fromStore);
+    const recovered = Array.from(new Set(fromStore.map((entry) => String(entry).trim()))).filter(
+      Boolean,
+    );
     if (recovered.length === 0) {
       return;
     }
@@ -92,9 +118,6 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     if (!channelConfig || typeof channelConfig !== "object") {
       continue;
     }
-    if (channelConfig.enabled === false) {
-      continue;
-    }
     await recoverAllowFromForAccount({
       channelName,
       account: channelConfig,
@@ -107,9 +130,6 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     }
     for (const [accountId, accountConfig] of Object.entries(accounts)) {
       if (!accountConfig || typeof accountConfig !== "object") {
-        continue;
-      }
-      if ((accountConfig as { enabled?: unknown }).enabled === false) {
         continue;
       }
       await recoverAllowFromForAccount({

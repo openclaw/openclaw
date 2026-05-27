@@ -3,7 +3,7 @@ import {
   normalizeBatchBaseUrl,
   type BatchHttpClientConfig,
 } from "./batch-utils.js";
-import { hashText } from "./hash.js";
+import { hashText } from "./internal.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 
 export async function uploadBatchJsonlFile(params: {
@@ -34,11 +34,7 @@ export async function uploadBatchJsonlFile(params: {
         const text = await fileRes.text();
         throw new Error(`${params.errorPrefix}: ${fileRes.status} ${text}`);
       }
-      try {
-        return (await fileRes.json()) as { id?: string };
-      } catch (cause) {
-        throw new Error(`${params.errorPrefix}: malformed JSON response`, { cause });
-      }
+      return (await fileRes.json()) as { id?: string };
     },
   });
   if (!filePayload.id) {

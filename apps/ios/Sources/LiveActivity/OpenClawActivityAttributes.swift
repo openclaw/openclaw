@@ -41,12 +41,5 @@ extension OpenClawActivityAttributes.ContentState {
         isDisconnected: true,
         isConnecting: false,
         startedAt: .now)
-
-    static let attention = OpenClawActivityAttributes.ContentState(
-        statusText: "Approval needed",
-        isIdle: false,
-        isDisconnected: false,
-        isConnecting: false,
-        startedAt: .now)
 }
 #endif

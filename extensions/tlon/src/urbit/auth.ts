@@ -1,8 +1,8 @@
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { LookupFn, SsrFPolicy } from "../../api.js";
 import { UrbitAuthError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
-type UrbitAuthenticateOptions = {
+export type UrbitAuthenticateOptions = {
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;

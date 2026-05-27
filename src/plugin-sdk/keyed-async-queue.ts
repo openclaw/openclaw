@@ -23,12 +23,11 @@ export function enqueueKeyedTask<T>(params: {
     () => undefined,
   );
   params.tails.set(params.key, tail);
-  const cleanup = () => {
+  void tail.finally(() => {
     if (params.tails.get(params.key) === tail) {
       params.tails.delete(params.key);
     }
-  };
-  tail.then(cleanup, cleanup);
+  });
   return current;
 }
 

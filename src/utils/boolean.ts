@@ -1,5 +1,3 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-
 export type BooleanParseOptions = {
   truthy?: string[];
   falsy?: string[];
@@ -10,22 +8,17 @@ const DEFAULT_FALSY = ["false", "0", "no", "off"] as const;
 const DEFAULT_TRUTHY_SET = new Set<string>(DEFAULT_TRUTHY);
 const DEFAULT_FALSY_SET = new Set<string>(DEFAULT_FALSY);
 
-export function asBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
 export function parseBooleanValue(
   value: unknown,
   options: BooleanParseOptions = {},
 ): boolean | undefined {
-  const booleanValue = asBoolean(value);
-  if (booleanValue !== undefined) {
-    return booleanValue;
+  if (typeof value === "boolean") {
+    return value;
   }
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = normalizeOptionalLowercaseString(value);
+  const normalized = value.trim().toLowerCase();
   if (!normalized) {
     return undefined;
   }

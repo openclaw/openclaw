@@ -1,8 +1,7 @@
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
+import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
@@ -17,7 +16,6 @@ export function normalizeReplyPayloadDirectives(params: {
   silentToken?: string;
   trimLeadingWhitespace?: boolean;
   parseMode?: ReplyDirectiveParseMode;
-  extractMarkdownImages?: boolean;
 }): { payload: ReplyPayload; isSilent: boolean } {
   const parseMode = params.parseMode ?? "always";
   const silentToken = params.silentToken ?? SILENT_REPLY_TOKEN;
@@ -27,15 +25,13 @@ export function normalizeReplyPayloadDirectives(params: {
     parseMode === "always" ||
     (parseMode === "auto" &&
       (sourceText.includes("[[") ||
-        /media:/i.test(sourceText) ||
-        (params.extractMarkdownImages === true && /!\[[^\]]*]\(/.test(sourceText)) ||
+        sourceText.includes("MEDIA:") ||
         sourceText.includes(silentToken)));
 
   const parsed = shouldParse
     ? parseReplyDirectives(sourceText, {
         currentMessageId: params.currentMessageId,
         silentToken,
-        extractMarkdownImages: params.extractMarkdownImages,
       })
     : undefined;
 
@@ -48,7 +44,7 @@ export function normalizeReplyPayloadDirectives(params: {
   const mediaUrl = params.payload.mediaUrl ?? parsed?.mediaUrl ?? mediaUrls?.[0];
 
   return {
-    payload: copyReplyPayloadMetadata(params.payload, {
+    payload: {
       ...params.payload,
       text,
       mediaUrls,
@@ -57,25 +53,14 @@ export function normalizeReplyPayloadDirectives(params: {
       replyToTag: params.payload.replyToTag || parsed?.replyToTag,
       replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
       audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
-    }),
+    },
     isSilent: parsed?.isSilent ?? false,
   };
-}
-
-async function sendDirectBlockReply(params: {
-  onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
-  directlySentBlockKeys: Set<string>;
-  trackingPayload: ReplyPayload;
-  payload: ReplyPayload;
-}) {
-  params.directlySentBlockKeys.add(createBlockReplyContentKey(params.trackingPayload));
-  await params.onBlockReply(params.payload);
 }
 
 export function createBlockReplyDeliveryHandler(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   currentMessageId?: string;
-  replyThreading?: ReplyThreadingPolicy;
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
@@ -86,16 +71,9 @@ export function createBlockReplyDeliveryHandler(params: {
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
     const { text, skip } = params.normalizeStreamingText(payload);
-    if (skip && !hasOutboundReplyContent({ ...payload, text: undefined })) {
+    if (skip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
       return;
     }
-
-    const implicitCurrentMessageAllowed =
-      payload.replyToCurrent === true
-        ? true
-        : payload.replyToCurrent === false
-          ? false
-          : params.replyThreading?.implicitCurrentMessage !== "deny";
 
     const taggedPayload = applyReplyTagsToPayload(
       {
@@ -104,7 +82,7 @@ export function createBlockReplyDeliveryHandler(params: {
         mediaUrl: payload.mediaUrl ?? payload.mediaUrls?.[0],
         replyToId:
           payload.replyToId ??
-          (implicitCurrentMessageAllowed ? params.currentMessageId : undefined),
+          (payload.replyToCurrent === false ? undefined : params.currentMessageId),
       },
       params.currentMessageId,
     );
@@ -125,20 +103,14 @@ export function createBlockReplyDeliveryHandler(params: {
     const mediaNormalizedPayload = params.normalizeMediaPaths
       ? await params.normalizeMediaPaths(normalized.payload)
       : normalized.payload;
-    if (normalized.isSilent) {
-      mediaNormalizedPayload.text = undefined;
-    }
-    const blockPayload = copyReplyPayloadMetadata(
-      payload,
-      params.applyReplyToMode(mediaNormalizedPayload),
-    );
-    const blockHasNonTextContent = hasOutboundReplyContent({ ...blockPayload, text: undefined });
+    const blockPayload = params.applyReplyToMode(mediaNormalizedPayload);
+    const blockHasMedia = resolveSendableOutboundReplyParts(blockPayload).hasMedia;
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).
-    if (!blockPayload.text && !blockHasNonTextContent && !blockPayload.audioAsVoice) {
+    if (!blockPayload.text && !blockHasMedia && !blockPayload.audioAsVoice) {
       return;
     }
-    if (normalized.isSilent && !blockHasNonTextContent) {
+    if (normalized.isSilent && !blockHasMedia) {
       return;
     }
 
@@ -154,19 +126,14 @@ export function createBlockReplyDeliveryHandler(params: {
     } else if (params.blockStreamingEnabled) {
       // Send directly when flushing before tool execution (no pipeline but streaming enabled).
       // Track sent key to avoid duplicate in final payloads.
-      await sendDirectBlockReply({
-        onBlockReply: params.onBlockReply,
-        directlySentBlockKeys: params.directlySentBlockKeys,
-        trackingPayload: blockPayload,
-        payload: blockPayload,
-      });
-    } else if (blockHasNonTextContent) {
-      await sendDirectBlockReply({
-        onBlockReply: params.onBlockReply,
-        directlySentBlockKeys: params.directlySentBlockKeys,
-        trackingPayload: blockPayload,
-        payload: blockPayload,
-      });
+      params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
+      await params.onBlockReply(blockPayload);
+    } else if (blockHasMedia) {
+      // When block streaming is disabled, text-only block replies are accumulated into the
+      // final response. Media cannot be reconstructed later, so send it immediately and let
+      // the assistant's final text arrive through the normal final-reply path.
+      params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
+      await params.onBlockReply({ ...blockPayload, text: undefined });
     }
     // When streaming is disabled entirely, text-only blocks are accumulated in final text.
   };

@@ -1,14 +1,11 @@
-import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { RequestClient } from "@buape/carbon";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
-import type { RequestClient } from "./internal/discord.js";
 
 export class DiscordSendError extends Error {
   kind?: "missing-permissions" | "dm-blocked";
   channelId?: string;
   missingPermissions?: string[];
-  discordCode?: number;
-  status?: number;
 
   constructor(message: string, opts?: Partial<DiscordSendError>) {
     super(message);
@@ -25,30 +22,19 @@ export class DiscordSendError extends Error {
 
 export const DISCORD_MAX_EMOJI_BYTES = 256 * 1024;
 export const DISCORD_MAX_STICKER_BYTES = 512 * 1024;
-export const DISCORD_MAX_EVENT_COVER_BYTES = 8 * 1024 * 1024;
 
 export type DiscordSendResult = {
   messageId: string;
   channelId: string;
-  receipt: MessageReceipt;
-};
-
-export type DiscordRuntimeAccountContext = {
-  cfg: OpenClawConfig;
-  accountId: string;
 };
 
 export type DiscordReactOpts = {
-  cfg: OpenClawConfig;
-  accountId?: string;
+  cfg?: OpenClawConfig;
   token?: string;
+  accountId?: string;
   rest?: RequestClient;
   verbose?: boolean;
   retry?: RetryConfig;
-};
-
-export type DiscordReactionRuntimeContext = DiscordRuntimeAccountContext & {
-  rest: RequestClient;
 };
 
 export type DiscordReactionUser = {
@@ -81,7 +67,6 @@ export type DiscordMessageQuery = {
 
 export type DiscordMessageEdit = {
   content?: string;
-  flags?: number;
 };
 
 export type DiscordThreadCreate = {
@@ -153,7 +138,7 @@ export type DiscordChannelCreate = {
   nsfw?: boolean;
 };
 
-type DiscordForumTag = {
+export type DiscordForumTag = {
   id?: string;
   name: string;
   moderated?: boolean;

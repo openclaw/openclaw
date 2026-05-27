@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
@@ -6,9 +6,14 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-const mod = await import("./pw-tools-core.js");
+let mod: typeof import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    mod = await import("./pw-tools-core.js");
+  });
+
   it("clamps timeoutMs for scrollIntoView", async () => {
     const scrollIntoViewIfNeeded = vi.fn(async () => {});
     setPwToolsCoreCurrentRefLocator({ scrollIntoViewIfNeeded });
@@ -60,18 +65,12 @@ describe("pw-tools-core", () => {
       errorMessage: 'Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible',
       expectedMessage: /not found or not visible/i,
     },
-    {
-      name: "bare locator timeouts into snapshot hints",
-      errorMessage:
-        "locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator('aria-ref=ax13')",
-      expectedMessage: /not found or not visible/i,
-    },
   ])("rewrites $name", async ({ errorMessage, expectedMessage }) => {
     const click = vi.fn(async () => {
       throw new Error(errorMessage);
     });
     setPwToolsCoreCurrentRefLocator({ click });
-    setPwToolsCoreCurrentPage({ url: vi.fn(() => "https://example.com") });
+    setPwToolsCoreCurrentPage({});
 
     await expect(
       mod.clickViaPlaywright({
@@ -88,7 +87,7 @@ describe("pw-tools-core", () => {
       );
     });
     setPwToolsCoreCurrentRefLocator({ click });
-    setPwToolsCoreCurrentPage({ url: vi.fn(() => "https://example.com") });
+    setPwToolsCoreCurrentPage({});
 
     await expect(
       mod.clickViaPlaywright({

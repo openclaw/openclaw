@@ -1,4 +1,4 @@
-type CompiledGlobPattern =
+export type CompiledGlobPattern =
   | { kind: "all" }
   | { kind: "exact"; value: string }
   | { kind: "regex"; value: RegExp };
@@ -8,7 +8,7 @@ function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function compileGlobPattern(params: {
+export function compileGlobPattern(params: {
   raw: string;
   normalize: (value: string) => string;
 }): CompiledGlobPattern {

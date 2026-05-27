@@ -1,13 +1,11 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
   clearAgentRunContext,
   emitAgentEvent,
   getAgentRunContext,
   onAgentEvent,
   registerAgentRunContext,
-  resetAgentEventsForTest,
   resetAgentRunContextForTest,
-  sweepStaleRunContexts,
 } from "./agent-events.js";
 
 type AgentEventsModule = typeof import("./agent-events.js");
@@ -19,18 +17,15 @@ async function importAgentEventsModule(cacheBust: string): Promise<AgentEventsMo
 }
 
 describe("agent-events sequencing", () => {
-  beforeEach(() => {
-    resetAgentEventsForTest();
-  });
-
-  test("stores and clears run context", () => {
+  test("stores and clears run context", async () => {
+    resetAgentRunContextForTest();
     registerAgentRunContext("run-1", { sessionKey: "main" });
     expect(getAgentRunContext("run-1")?.sessionKey).toBe("main");
     clearAgentRunContext("run-1");
     expect(getAgentRunContext("run-1")).toBeUndefined();
   });
 
-  test("maintains monotonic seq per runId", () => {
+  test("maintains monotonic seq per runId", async () => {
     const seen: Record<string, number[]> = {};
     const stop = onAgentEvent((evt) => {
       const list = seen[evt.runId] ?? [];
@@ -49,7 +44,7 @@ describe("agent-events sequencing", () => {
     expect(seen["run-2"]).toEqual([1]);
   });
 
-  test("preserves compaction ordering on the event bus", () => {
+  test("preserves compaction ordering on the event bus", async () => {
     const phases: Array<string> = [];
     const stop = onAgentEvent((evt) => {
       if (evt.runId !== "run-1") {
@@ -75,10 +70,10 @@ describe("agent-events sequencing", () => {
     expect(phases).toEqual(["start", "end"]);
   });
 
-  test("omits sessionKey for non-lifecycle runs hidden from Control UI", () => {
+  test("omits sessionKey for runs hidden from Control UI", async () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden", {
-      sessionKey: "session-quietchat",
+      sessionKey: "session-imessage",
       isControlUiVisible: false,
     });
 
@@ -90,57 +85,14 @@ describe("agent-events sequencing", () => {
       runId: "run-hidden",
       stream: "assistant",
       data: { text: "hi" },
-      sessionKey: "session-quietchat",
+      sessionKey: "session-imessage",
     });
     stop();
 
     expect(receivedSessionKey).toBeUndefined();
   });
 
-  test("preserves sessionKey for lifecycle events hidden from Control UI", () => {
-    resetAgentRunContextForTest();
-    registerAgentRunContext("run-hidden-lifecycle", {
-      sessionKey: "session-quietchat",
-      isControlUiVisible: false,
-    });
-
-    let receivedSessionKey: string | undefined;
-    const stop = onAgentEvent((evt) => {
-      receivedSessionKey = evt.sessionKey;
-    });
-    emitAgentEvent({
-      runId: "run-hidden-lifecycle",
-      stream: "lifecycle",
-      data: { phase: "end" },
-      sessionKey: "session-quietchat",
-    });
-    stop();
-
-    expect(receivedSessionKey).toBe("session-quietchat");
-  });
-
-  test("falls back to registered sessionKey for hidden lifecycle events", () => {
-    resetAgentRunContextForTest();
-    registerAgentRunContext("run-hidden-lifecycle-context", {
-      sessionKey: "session-quietchat-context",
-      isControlUiVisible: false,
-    });
-
-    let receivedSessionKey: string | undefined;
-    const stop = onAgentEvent((evt) => {
-      receivedSessionKey = evt.sessionKey;
-    });
-    emitAgentEvent({
-      runId: "run-hidden-lifecycle-context",
-      stream: "lifecycle",
-      data: { phase: "error", error: "boom" },
-    });
-    stop();
-
-    expect(receivedSessionKey).toBe("session-quietchat-context");
-  });
-
-  test("merges later run context updates into existing runs", () => {
+  test("merges later run context updates into existing runs", async () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", {
       sessionKey: "session-main",
@@ -149,18 +101,17 @@ describe("agent-events sequencing", () => {
     registerAgentRunContext("run-ctx", {
       verboseLevel: "full",
       isHeartbeat: true,
-      lastActiveAt: 12_345,
     });
 
-    const context = getAgentRunContext("run-ctx");
-    expect(context?.sessionKey).toBe("session-main");
-    expect(context?.verboseLevel).toBe("full");
-    expect(context?.isHeartbeat).toBe(true);
-    expect(context?.isControlUiVisible).toBe(true);
-    expect(context?.lastActiveAt).toBe(12_345);
+    expect(getAgentRunContext("run-ctx")).toEqual({
+      sessionKey: "session-main",
+      verboseLevel: "full",
+      isHeartbeat: true,
+      isControlUiVisible: true,
+    });
   });
 
-  test("falls back to registered sessionKey when event sessionKey is blank", () => {
+  test("falls back to registered sessionKey when event sessionKey is blank", async () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", { sessionKey: "session-main" });
 
@@ -179,7 +130,7 @@ describe("agent-events sequencing", () => {
     expect(receivedSessionKey).toBe("session-main");
   });
 
-  test("keeps notifying later listeners when one throws", () => {
+  test("keeps notifying later listeners when one throws", async () => {
     const seen: string[] = [];
     const stopBad = onAgentEvent(() => {
       throw new Error("boom");
@@ -188,13 +139,13 @@ describe("agent-events sequencing", () => {
       seen.push(evt.runId);
     });
 
-    expect(
+    expect(() =>
       emitAgentEvent({
         runId: "run-safe",
         stream: "assistant",
         data: { text: "hi" },
       }),
-    ).toBeUndefined();
+    ).not.toThrow();
 
     stopGood();
     stopBad();
@@ -231,7 +182,7 @@ describe("agent-events sequencing", () => {
 
     stop();
 
-    expect(second.getAgentRunContext("run-dup")?.sessionKey).toBe("session-dup");
+    expect(second.getAgentRunContext("run-dup")).toEqual({ sessionKey: "session-dup" });
     expect(seen).toEqual([
       { seq: 1, sessionKey: "session-dup" },
       { seq: 2, sessionKey: "session-dup" },
@@ -239,64 +190,4 @@ describe("agent-events sequencing", () => {
 
     first.resetAgentEventsForTest();
   });
-
-  test("sweeps stale run contexts and clears their sequence state", () => {
-    const stop = vi.spyOn(Date, "now");
-    stop.mockReturnValue(100);
-    registerAgentRunContext("run-stale", { sessionKey: "session-stale", registeredAt: 100 });
-    registerAgentRunContext("run-active", { sessionKey: "session-active", registeredAt: 100 });
-
-    stop.mockReturnValue(200);
-    emitAgentEvent({ runId: "run-stale", stream: "assistant", data: { text: "stale" } });
-
-    stop.mockReturnValue(900);
-    emitAgentEvent({ runId: "run-active", stream: "assistant", data: { text: "active" } });
-
-    stop.mockReturnValue(1_000);
-    expect(sweepStaleRunContexts(500)).toBe(1);
-    expect(getAgentRunContext("run-stale")).toBeUndefined();
-    expect(getAgentRunContext("run-active")?.sessionKey).toBe("session-active");
-
-    const seen: Array<{ runId: string; seq: number }> = [];
-    const unsubscribe = onAgentEvent((evt) => {
-      if (evt.runId === "run-stale" || evt.runId === "run-active") {
-        seen.push({ runId: evt.runId, seq: evt.seq });
-      }
-    });
-
-    emitAgentEvent({ runId: "run-stale", stream: "assistant", data: { text: "restarted" } });
-    emitAgentEvent({ runId: "run-active", stream: "assistant", data: { text: "continued" } });
-
-    unsubscribe();
-    stop.mockRestore();
-
-    expect(seen).toEqual([
-      { runId: "run-stale", seq: 1 },
-      { runId: "run-active", seq: 2 },
-    ]);
-  });
-});
-
-test("clearAgentRunContext also cleans up seqByRun to prevent memory leak (#63643)", () => {
-  // Regression test: seqByRun entries were never deleted when a run ended,
-  // causing unbounded growth over time.
-  registerAgentRunContext("run-leak", { sessionKey: "main" });
-  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
-  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
-
-  // After clearing run context, the sequence counter should also be removed.
-  clearAgentRunContext("run-leak");
-
-  // Emitting a new event on the same runId should start seq from 1 again,
-  // proving the old entry was deleted.
-  const seqs: number[] = [];
-  const stop = onAgentEvent((evt) => {
-    if (evt.runId === "run-leak") {
-      seqs.push(evt.seq);
-    }
-  });
-  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
-  stop();
-
-  expect(seqs).toEqual([1]);
 });

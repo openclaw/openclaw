@@ -1,14 +1,12 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   buildTokenChannelStatusSummary,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
   createDependentCredentialStatusIssueCollector,
 } from "openclaw/plugin-sdk/status-helpers";
+import { DEFAULT_ACCOUNT_ID, type ChannelPlugin, type ResolvedLineAccount } from "../api.js";
 import { hasLineCredentials } from "./account-helpers.js";
-import { DEFAULT_ACCOUNT_ID, type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
-
-const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
+import { probeLineBot } from "./probe.js";
 
 const collectLineStatusIssues = createDependentCredentialStatusIssueCollector({
   channel: "line",
@@ -23,7 +21,7 @@ export const lineStatusAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["
     collectStatusIssues: collectLineStatusIssues,
     buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
-      await (await loadLineProbeRuntime()).probeLineBot(account.channelAccessToken, timeoutMs),
+      await probeLineBot(account.channelAccessToken, timeoutMs),
     resolveAccountSnapshot: ({ account }) => ({
       accountId: account.accountId,
       name: account.name,

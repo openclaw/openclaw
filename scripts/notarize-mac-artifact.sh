@@ -23,10 +23,6 @@ if [[ ! -e "$ARTIFACT" ]]; then
   echo "Error: artifact not found: $ARTIFACT" >&2
   exit 1
 fi
-if [[ -n "$STAPLE_APP_PATH" && ! -d "$STAPLE_APP_PATH" ]]; then
-  echo "Error: STAPLE_APP_PATH not found: $STAPLE_APP_PATH" >&2
-  exit 1
-fi
 
 if ! command -v xcrun >/dev/null 2>&1; then
   echo "Error: xcrun not found; install Xcode command line tools." >&2
@@ -44,7 +40,7 @@ else
 fi
 
 echo "🧾 Notarizing: $ARTIFACT"
-xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --wait --no-s3-acceleration
+xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --wait
 
 case "$ARTIFACT" in
   *.dmg|*.pkg)
@@ -57,9 +53,13 @@ case "$ARTIFACT" in
 esac
 
 if [[ -n "$STAPLE_APP_PATH" ]]; then
-  echo "📌 Stapling app: $STAPLE_APP_PATH"
-  xcrun stapler staple "$STAPLE_APP_PATH"
-  xcrun stapler validate "$STAPLE_APP_PATH"
+  if [[ -d "$STAPLE_APP_PATH" ]]; then
+    echo "📌 Stapling app: $STAPLE_APP_PATH"
+    xcrun stapler staple "$STAPLE_APP_PATH"
+    xcrun stapler validate "$STAPLE_APP_PATH"
+  else
+    echo "Warn: STAPLE_APP_PATH not found: $STAPLE_APP_PATH" >&2
+  fi
 fi
 
 echo "✅ Notarization complete"

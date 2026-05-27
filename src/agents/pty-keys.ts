@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
 
 const ESC = "\x1b";
@@ -102,13 +101,13 @@ const modifiableNamedKeys = new Set([
   "dc",
 ]);
 
-type KeyEncodingRequest = {
+export type KeyEncodingRequest = {
   keys?: string[];
   hex?: string[];
   literal?: string;
 };
 
-type KeyEncodingResult = {
+export type KeyEncodingResult = {
   data: string;
   warnings: string[];
 };
@@ -124,7 +123,7 @@ export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean
       if (hasAnyModifier(parsed.mods)) {
         return false;
       }
-      return normalizeLowercaseStringOrEmpty(parsed.base) in DECCKM_SS3_KEYS;
+      return parsed.base.toLowerCase() in DECCKM_SS3_KEYS;
     }) ?? false
   );
 }
@@ -186,7 +185,7 @@ function encodeKeyToken(
 
   const parsed = parseModifiers(token);
   const base = parsed.base;
-  const baseLower = normalizeLowercaseStringOrEmpty(base);
+  const baseLower = base.toLowerCase();
 
   if (baseLower === "tab" && parsed.mods.shift) {
     return `${ESC}[Z`;
@@ -240,7 +239,7 @@ function parseModifiers(token: string) {
   let sawModifiers = false;
 
   while (rest.length > 2 && rest[1] === "-") {
-    const mod = normalizeLowercaseStringOrEmpty(rest[0]);
+    const mod = rest[0].toLowerCase();
     if (mod === "c") {
       mods.ctrl = true;
     } else if (mod === "m") {
@@ -325,8 +324,8 @@ function hasAnyModifier(mods: Modifiers): boolean {
 }
 
 function parseHexByte(raw: string): number | null {
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  const normalized = lower.startsWith("0x") ? lower.slice(2) : lower;
+  const trimmed = raw.trim().toLowerCase();
+  const normalized = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
   if (!/^[0-9a-f]{1,2}$/.test(normalized)) {
     return null;
   }

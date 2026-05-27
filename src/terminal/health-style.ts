@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { theme } from "./theme.js";
 
 export function styleHealthChannelLine(line: string, rich: boolean): string {
@@ -13,7 +12,7 @@ export function styleHealthChannelLine(line: string, rich: boolean): string {
 
   const label = line.slice(0, colon + 1);
   const detail = line.slice(colon + 1).trimStart();
-  const normalized = normalizeLowercaseStringOrEmpty(detail);
+  const normalized = detail.toLowerCase();
 
   const applyPrefix = (prefix: string, color: (value: string) => string) =>
     `${label} ${color(detail.slice(0, prefix.length))}${detail.slice(prefix.length)}`;

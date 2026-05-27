@@ -1,18 +1,9 @@
-import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
-
-type AcpStatefulTargetDriverModule = typeof import("./acp-stateful-target-driver.js");
+import {
+  registerStatefulBindingTargetDriver,
+  unregisterStatefulBindingTargetDriver,
+} from "./stateful-target-drivers.js";
 
 let builtinsRegisteredPromise: Promise<void> | null = null;
-let acpDriverModulePromise: Promise<AcpStatefulTargetDriverModule> | undefined;
-
-function loadAcpStatefulTargetDriverModule(): Promise<AcpStatefulTargetDriverModule> {
-  acpDriverModulePromise ??= import("./acp-stateful-target-driver.js");
-  return acpDriverModulePromise;
-}
-
-export function isStatefulTargetBuiltinDriverId(id: string): boolean {
-  return id.trim() === "acp";
-}
 
 export async function ensureStatefulTargetBuiltinsRegistered(): Promise<void> {
   if (builtinsRegisteredPromise) {
@@ -20,7 +11,7 @@ export async function ensureStatefulTargetBuiltinsRegistered(): Promise<void> {
     return;
   }
   builtinsRegisteredPromise = (async () => {
-    const { acpStatefulBindingTargetDriver } = await loadAcpStatefulTargetDriverModule();
+    const { acpStatefulBindingTargetDriver } = await import("./acp-stateful-target-driver.js");
     registerStatefulBindingTargetDriver(acpStatefulBindingTargetDriver);
   })();
   try {
@@ -29,4 +20,10 @@ export async function ensureStatefulTargetBuiltinsRegistered(): Promise<void> {
     builtinsRegisteredPromise = null;
     throw error;
   }
+}
+
+export async function resetStatefulTargetBuiltinsForTesting(): Promise<void> {
+  builtinsRegisteredPromise = null;
+  const { acpStatefulBindingTargetDriver } = await import("./acp-stateful-target-driver.js");
+  unregisterStatefulBindingTargetDriver(acpStatefulBindingTargetDriver.id);
 }

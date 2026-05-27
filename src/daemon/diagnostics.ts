@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
+import { resolveGatewayLogPaths } from "./launchd.js";
 
 const GATEWAY_LOG_ERROR_PATTERNS = [
   /refusing to bind gateway/i,
@@ -24,17 +24,9 @@ async function readLastLogLine(filePath: string): Promise<string | null> {
   }
 }
 
-export async function readLastGatewayErrorLine(
-  env: NodeJS.ProcessEnv,
-  options?: { platform?: NodeJS.Platform },
-): Promise<string | null> {
-  const platform = options?.platform ?? process.platform;
-  const readStderr = platform !== "darwin";
-  const { stdoutPath, stderrPath } =
-    platform === "darwin"
-      ? resolveGatewaySupervisorLogPaths(env, { platform })
-      : resolveGatewayLogPaths(env);
-  const stderrRaw = readStderr ? await fs.readFile(stderrPath, "utf8").catch(() => "") : "";
+export async function readLastGatewayErrorLine(env: NodeJS.ProcessEnv): Promise<string | null> {
+  const { stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
+  const stderrRaw = await fs.readFile(stderrPath, "utf8").catch(() => "");
   const stdoutRaw = await fs.readFile(stdoutPath, "utf8").catch(() => "");
   const lines = [...stderrRaw.split(/\r?\n/), ...stdoutRaw.split(/\r?\n/)].map((line) =>
     line.trim(),
@@ -48,7 +40,5 @@ export async function readLastGatewayErrorLine(
       return line;
     }
   }
-  return readStderr
-    ? ((await readLastLogLine(stderrPath)) ?? (await readLastLogLine(stdoutPath)))
-    : await readLastLogLine(stdoutPath);
+  return (await readLastLogLine(stderrPath)) ?? (await readLastLogLine(stdoutPath));
 }

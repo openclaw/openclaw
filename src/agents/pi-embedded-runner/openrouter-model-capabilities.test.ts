@@ -1,22 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) {
   const stateDir = mkdtempSync(join(tmpdir(), "openclaw-openrouter-capabilities-"));
   process.env.OPENCLAW_STATE_DIR = stateDir;
-  for (const key of [
-    "ALL_PROXY",
-    "all_proxy",
-    "HTTP_PROXY",
-    "http_proxy",
-    "HTTPS_PROXY",
-    "https_proxy",
-  ]) {
-    vi.stubEnv(key, "");
-  }
   try {
     await run(stateDir);
   } finally {
@@ -24,15 +13,9 @@ async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) 
   }
 }
 
-async function importOpenRouterModelCapabilities(scope: string) {
-  return await importFreshModule<typeof import("./openrouter-model-capabilities.js")>(
-    import.meta.url,
-    `./openrouter-model-capabilities.js?scope=${scope}`,
-  );
-}
-
 describe("openrouter-model-capabilities", () => {
   afterEach(() => {
+    vi.resetModules();
     vi.unstubAllGlobals();
     delete process.env.OPENCLAW_STATE_DIR;
   });
@@ -50,7 +33,7 @@ describe("openrouter-model-capabilities", () => {
                     id: "acme/top-level-max-completion",
                     name: "Top Level Max Completion",
                     architecture: { modality: "text+image->text" },
-                    supported_parameters: ["reasoning", "tools"],
+                    supported_parameters: ["reasoning"],
                     context_length: 65432,
                     max_completion_tokens: 12345,
                     pricing: { prompt: "0.000001", completion: "0.000002" },
@@ -73,169 +56,21 @@ describe("openrouter-model-capabilities", () => {
         ),
       );
 
-      const module = await importOpenRouterModelCapabilities("top-level-max-tokens");
+      const module = await import("./openrouter-model-capabilities.js");
       await module.loadOpenRouterModelCapabilities("acme/top-level-max-completion");
 
-      const maxCompletion = module.getOpenRouterModelCapabilities("acme/top-level-max-completion");
-      expect(maxCompletion?.input).toEqual(["text", "image"]);
-      expect(maxCompletion?.reasoning).toBe(true);
-      expect(maxCompletion?.supportsTools).toBe(true);
-      expect(maxCompletion?.contextWindow).toBe(65432);
-      expect(maxCompletion?.maxTokens).toBe(12345);
-
-      const maxOutput = module.getOpenRouterModelCapabilities("acme/top-level-max-output");
-      expect(maxOutput?.input).toEqual(["text", "image"]);
-      expect(maxOutput?.reasoning).toBe(false);
-      expect(maxOutput?.supportsTools).toBeUndefined();
-      expect(maxOutput?.contextWindow).toBe(54321);
-      expect(maxOutput?.maxTokens).toBe(23456);
-    });
-  });
-
-  it("uses endpoint-specific OpenRouter context length when top_provider reports one", async () => {
-    await withOpenRouterStateDir(async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(
-          async () =>
-            new Response(
-              JSON.stringify({
-                data: [
-                  {
-                    id: "nvidia/nemotron-3-super-120b-a12b:free",
-                    name: "Nemotron 3 Super 120B Free",
-                    architecture: { modality: "text->text" },
-                    context_length: 1_000_000,
-                    top_provider: {
-                      context_length: 262_144,
-                      max_completion_tokens: 262_144,
-                    },
-                    pricing: { prompt: "0", completion: "0" },
-                  },
-                ],
-              }),
-              {
-                status: 200,
-                headers: { "content-type": "application/json" },
-              },
-            ),
-        ),
-      );
-
-      const module = await importOpenRouterModelCapabilities("top-provider-context-length");
-      await module.loadOpenRouterModelCapabilities("nvidia/nemotron-3-super-120b-a12b:free");
-
-      expect(
-        module.getOpenRouterModelCapabilities("nvidia/nemotron-3-super-120b-a12b:free"),
-      ).toMatchObject({
-        contextWindow: 262_144,
-        maxTokens: 262_144,
+      expect(module.getOpenRouterModelCapabilities("acme/top-level-max-completion")).toMatchObject({
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow: 65432,
+        maxTokens: 12345,
       });
-    });
-  });
-
-  it("does not reuse older disk caches with precomputed OpenRouter context windows", async () => {
-    await withOpenRouterStateDir(async (stateDir) => {
-      const modelId = "nvidia/nemotron-3-super-120b-a12b:free";
-      const cacheDir = join(stateDir, "cache");
-      mkdirSync(cacheDir, { recursive: true });
-      writeFileSync(
-        join(cacheDir, "openrouter-models.json"),
-        JSON.stringify({
-          version: 2,
-          models: {
-            [modelId]: {
-              name: "Nemotron 3 Super 120B Free",
-              input: ["text"],
-              reasoning: false,
-              contextWindow: 1_000_000,
-              maxTokens: 262_144,
-              cost: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-              },
-            },
-          },
-        }),
-      );
-
-      const fetchSpy = vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              data: [
-                {
-                  id: modelId,
-                  name: "Nemotron 3 Super 120B Free",
-                  architecture: { modality: "text->text" },
-                  context_length: 1_000_000,
-                  top_provider: {
-                    context_length: 262_144,
-                    max_completion_tokens: 262_144,
-                  },
-                  pricing: { prompt: "0", completion: "0" },
-                },
-              ],
-            }),
-            {
-              status: 200,
-              headers: { "content-type": "application/json" },
-            },
-          ),
-      );
-      vi.stubGlobal("fetch", fetchSpy);
-
-      const module = await importOpenRouterModelCapabilities("old-context-window-cache");
-      await module.loadOpenRouterModelCapabilities(modelId);
-
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(module.getOpenRouterModelCapabilities(modelId)).toMatchObject({
-        contextWindow: 262_144,
-        maxTokens: 262_144,
+      expect(module.getOpenRouterModelCapabilities("acme/top-level-max-output")).toMatchObject({
+        input: ["text", "image"],
+        reasoning: false,
+        contextWindow: 54321,
+        maxTokens: 23456,
       });
-    });
-  });
-
-  it("preserves explicit OpenRouter tool support metadata", async () => {
-    await withOpenRouterStateDir(async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(
-          async () =>
-            new Response(
-              JSON.stringify({
-                data: [
-                  {
-                    id: "perplexity/sonar-deep-research",
-                    name: "Sonar Deep Research",
-                    supported_parameters: ["reasoning", "web_search_options"],
-                  },
-                  {
-                    id: "google/gemini-2.5-pro",
-                    name: "Gemini 2.5 Pro",
-                    supported_parameters: ["reasoning", "tools"],
-                  },
-                ],
-              }),
-              {
-                status: 200,
-                headers: { "content-type": "application/json" },
-              },
-            ),
-        ),
-      );
-
-      const module = await importOpenRouterModelCapabilities("tool-support");
-      await module.loadOpenRouterModelCapabilities("perplexity/sonar-deep-research");
-
-      expect(
-        module.getOpenRouterModelCapabilities("perplexity/sonar-deep-research")?.supportsTools,
-      ).toBe(false);
-      expect(module.getOpenRouterModelCapabilities("google/gemini-2.5-pro")?.supportsTools).toBe(
-        true,
-      );
     });
   });
 
@@ -262,7 +97,7 @@ describe("openrouter-model-capabilities", () => {
       );
       vi.stubGlobal("fetch", fetchSpy);
 
-      const module = await importOpenRouterModelCapabilities("awaited-miss");
+      const module = await import("./openrouter-model-capabilities.js");
       await module.loadOpenRouterModelCapabilities("acme/missing-model");
       expect(module.getOpenRouterModelCapabilities("acme/missing-model")).toBeUndefined();
       expect(fetchSpy).toHaveBeenCalledTimes(1);

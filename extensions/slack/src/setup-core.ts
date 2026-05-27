@@ -1,38 +1,32 @@
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
+  createAllowlistSetupWizardProxy,
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
-  createAllowlistSetupWizardProxy,
-  createEnvPatchedAccountSetupAdapter,
   createLegacyCompatChannelDmPolicy,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
+  createEnvPatchedAccountSetupAdapter,
+  hasConfiguredSecretInput,
+  type OpenClawConfig,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
-  createSetupTranslator,
+} from "openclaw/plugin-sdk/setup";
+import {
   type ChannelSetupAdapter,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/setup-runtime";
+  type ChannelSetupWizardAllowFromEntry,
+} from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  uniqueStrings,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectSlackAccount } from "./account-inspect.js";
-import { resolveSlackAccount } from "./accounts.js";
+import { listSlackAccountIds, resolveSlackAccount, type ResolvedSlackAccount } from "./accounts.js";
 import {
-  buildSlackManifest,
   buildSlackSetupLines,
   isSlackSetupAccountConfigured,
-  SLACK_CHANNEL as channel,
   setSlackChannelAllowlist,
-} from "./setup-shared.js";
-
-const t = createSetupTranslator();
+  SLACK_CHANNEL as channel,
+} from "./shared.js";
 
 function enableSlackAccount(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
   return patchChannelConfigForAccount({
@@ -47,7 +41,7 @@ function hasSlackInteractiveRepliesConfig(cfg: OpenClawConfig, accountId: string
   const capabilities = resolveSlackAccount({ cfg, accountId }).config.capabilities;
   if (Array.isArray(capabilities)) {
     return capabilities.some(
-      (entry) => normalizeLowercaseStringOrEmpty(entry) === "interactivereplies",
+      (entry) => String(entry).trim().toLowerCase() === "interactivereplies",
     );
   }
   if (!capabilities || typeof capabilities !== "object") {
@@ -64,10 +58,8 @@ function setSlackInteractiveReplies(
   const capabilities = resolveSlackAccount({ cfg, accountId }).config.capabilities;
   const nextCapabilities = Array.isArray(capabilities)
     ? interactiveReplies
-      ? uniqueStrings([...capabilities, "interactiveReplies"])
-      : capabilities.filter(
-          (entry) => normalizeLowercaseStringOrEmpty(entry) !== "interactivereplies",
-        )
+      ? [...new Set([...capabilities, "interactiveReplies"])]
+      : capabilities.filter((entry) => String(entry).trim().toLowerCase() !== "interactivereplies")
     : {
         ...((capabilities && typeof capabilities === "object" ? capabilities : {}) as Record<
           string,
@@ -108,10 +100,10 @@ function createSlackTokenCredential(params: {
       return {
         accountConfigured: Boolean(resolvedValue) || hasConfiguredSecretInput(configuredValue),
         hasConfiguredValue: hasConfiguredSecretInput(configuredValue),
-        resolvedValue: normalizeOptionalString(resolvedValue),
+        resolvedValue: resolvedValue?.trim() || undefined,
         envValue:
           accountId === DEFAULT_ACCOUNT_ID
-            ? normalizeOptionalString(process.env[params.preferredEnvVar])
+            ? process.env[params.preferredEnvVar]?.trim()
             : undefined,
       };
     },
@@ -168,33 +160,26 @@ export function createSlackSetupWizardBase(handlers: {
     channel,
     status: createStandardChannelSetupStatus({
       channelLabel: "Slack",
-      configuredLabel: t("wizard.channels.statusConfigured"),
-      unconfiguredLabel: t("wizard.channels.statusNeedsTokens"),
-      configuredHint: t("wizard.channels.statusConfigured"),
-      unconfiguredHint: t("wizard.channels.statusNeedsTokens"),
+      configuredLabel: "configured",
+      unconfiguredLabel: "needs tokens",
+      configuredHint: "configured",
+      unconfiguredHint: "needs tokens",
       configuredScore: 2,
       unconfiguredScore: 1,
-      resolveConfigured: ({ cfg, accountId }) => inspectSlackAccount({ cfg, accountId }).configured,
+      resolveConfigured: ({ cfg }) =>
+        listSlackAccountIds(cfg).some((accountId) => {
+          const account = inspectSlackAccount({ cfg, accountId });
+          return account.configured;
+        }),
     }),
     introNote: {
-      title: t("wizard.slack.socketModeTokensTitle"),
+      title: "Slack socket mode tokens",
       lines: buildSlackSetupLines(),
       shouldShow: ({ cfg, accountId }) =>
         !isSlackSetupAccountConfigured(resolveSlackAccount({ cfg, accountId })),
     },
-    prepare: async ({ cfg, accountId, prompter }) => {
-      if (isSlackSetupAccountConfigured(resolveSlackAccount({ cfg, accountId }))) {
-        return;
-      }
-      const manifest = buildSlackManifest();
-      if (prompter.plain) {
-        await prompter.plain(manifest);
-      } else {
-        await prompter.note(manifest, "Slack manifest JSON");
-      }
-    },
     envShortcut: {
-      prompt: t("wizard.slack.envPrompt"),
+      prompt: "SLACK_BOT_TOKEN + SLACK_APP_TOKEN detected. Use env vars?",
       preferredEnvVar: "SLACK_BOT_TOKEN",
       isAvailable: ({ cfg, accountId }) =>
         accountId === DEFAULT_ACCOUNT_ID &&
@@ -207,36 +192,36 @@ export function createSlackSetupWizardBase(handlers: {
       createSlackTokenCredential({
         inputKey: "botToken",
         providerHint: "slack-bot",
-        credentialLabel: t("wizard.slack.botToken"),
+        credentialLabel: "Slack bot token",
         preferredEnvVar: "SLACK_BOT_TOKEN",
-        keepPrompt: t("wizard.slack.botTokenKeep"),
-        inputPrompt: t("wizard.slack.botTokenInput"),
+        keepPrompt: "Slack bot token already configured. Keep it?",
+        inputPrompt: "Enter Slack bot token (xoxb-...)",
       }),
       createSlackTokenCredential({
         inputKey: "appToken",
         providerHint: "slack-app",
-        credentialLabel: t("wizard.slack.appToken"),
+        credentialLabel: "Slack app token",
         preferredEnvVar: "SLACK_APP_TOKEN",
-        keepPrompt: t("wizard.slack.appTokenKeep"),
-        inputPrompt: t("wizard.slack.appTokenInput"),
+        keepPrompt: "Slack app token already configured. Keep it?",
+        inputPrompt: "Enter Slack app token (xapp-...)",
       }),
     ],
     dmPolicy: slackDmPolicy,
     allowFrom: createAccountScopedAllowFromSection({
       channel,
       credentialInputKey: "botToken",
-      helpTitle: t("wizard.slack.allowlistTitle"),
+      helpTitle: "Slack allowlist",
       helpLines: [
-        t("wizard.slack.allowlistIntro"),
-        t("wizard.slack.examples"),
+        "Allowlist Slack DMs by username (we resolve to user ids).",
+        "Examples:",
         "- U12345678",
         "- @alice",
-        t("wizard.slack.multipleEntries"),
-        t("wizard.channels.docs", { link: formatDocsLink("/slack", "slack") }),
+        "Multiple entries: comma-separated.",
+        `Docs: ${formatDocsLink("/slack", "slack")}`,
       ],
-      message: t("wizard.slack.allowFromPrompt"),
+      message: "Slack allowFrom (usernames or ids)",
       placeholder: "@alice, U12345678",
-      invalidWithoutCredentialNote: t("wizard.slack.allowFromInvalidWithoutToken"),
+      invalidWithoutCredentialNote: "Slack token missing; use user ids (or mention form) only.",
       parseId: (value: string) =>
         parseMentionOrPrefixedId({
           value,
@@ -249,13 +234,13 @@ export function createSlackSetupWizardBase(handlers: {
     }),
     groupAccess: createAccountScopedGroupAccessSection({
       channel,
-      label: t("wizard.slack.channelsLabel"),
+      label: "Slack channels",
       placeholder: "#general, #private, C123",
       currentPolicy: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
         resolveSlackAccount({ cfg, accountId }).config.groupPolicy ?? "allowlist",
       currentEntries: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
         Object.entries(resolveSlackAccount({ cfg, accountId }).config.channels ?? {})
-          .filter(([, value]) => value?.enabled !== false)
+          .filter(([, value]) => value?.allow !== false && value?.enabled !== false)
           .map(([key]) => key),
       updatePrompt: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
         Boolean(resolveSlackAccount({ cfg, accountId }).config.channels),
@@ -273,7 +258,7 @@ export function createSlackSetupWizardBase(handlers: {
     }),
     finalize: async ({ cfg, accountId, options, prompter }) => {
       if (hasSlackInteractiveRepliesConfig(cfg, accountId)) {
-        return undefined;
+        return;
       }
       if (options?.quickstartDefaults) {
         return {
@@ -281,7 +266,7 @@ export function createSlackSetupWizardBase(handlers: {
         };
       }
       const enableInteractiveReplies = await prompter.confirm({
-        message: t("wizard.slack.interactiveRepliesPrompt"),
+        message: "Enable Slack interactive replies (buttons/selects) for agent responses?",
         initialValue: true,
       });
       return {

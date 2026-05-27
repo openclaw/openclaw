@@ -1,8 +1,7 @@
 import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
-} from "../../channels/plugins/types.public.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+} from "../../channels/plugins/types.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -17,16 +16,18 @@ export function normalizeMessageActionInput(params: {
 }): Record<string, unknown> {
   const normalizedArgs = { ...params.args };
   const { action, toolContext } = params;
-  const explicitChannel = normalizeOptionalString(normalizedArgs.channel) ?? "";
+  const explicitChannel =
+    typeof normalizedArgs.channel === "string" ? normalizedArgs.channel.trim() : "";
   const inferredChannel =
     explicitChannel || normalizeMessageChannel(toolContext?.currentChannelProvider) || "";
 
-  const explicitTarget = normalizeOptionalString(normalizedArgs.target) ?? "";
+  const explicitTarget =
+    typeof normalizedArgs.target === "string" ? normalizedArgs.target.trim() : "";
   const hasLegacyTargetFields =
     typeof normalizedArgs.to === "string" || typeof normalizedArgs.channelId === "string";
   const hasLegacyTarget =
-    (normalizeOptionalString(normalizedArgs.to) ?? "").length > 0 ||
-    (normalizeOptionalString(normalizedArgs.channelId) ?? "").length > 0;
+    (typeof normalizedArgs.to === "string" && normalizedArgs.to.trim().length > 0) ||
+    (typeof normalizedArgs.channelId === "string" && normalizedArgs.channelId.trim().length > 0);
 
   if (explicitTarget && hasLegacyTargetFields) {
     delete normalizedArgs.to;
@@ -39,15 +40,16 @@ export function normalizeMessageActionInput(params: {
     actionRequiresTarget(action) &&
     !actionHasTarget(action, normalizedArgs, { channel: inferredChannel })
   ) {
-    const inferredTarget = normalizeOptionalString(toolContext?.currentChannelId);
+    const inferredTarget = toolContext?.currentChannelId?.trim();
     if (inferredTarget) {
       normalizedArgs.target = inferredTarget;
     }
   }
 
   if (!explicitTarget && actionRequiresTarget(action) && hasLegacyTarget) {
-    const legacyTo = normalizeOptionalString(normalizedArgs.to) ?? "";
-    const legacyChannelId = normalizeOptionalString(normalizedArgs.channelId) ?? "";
+    const legacyTo = typeof normalizedArgs.to === "string" ? normalizedArgs.to.trim() : "";
+    const legacyChannelId =
+      typeof normalizedArgs.channelId === "string" ? normalizedArgs.channelId.trim() : "";
     const legacyTarget = legacyTo || legacyChannelId;
     if (legacyTarget) {
       normalizedArgs.target = legacyTarget;

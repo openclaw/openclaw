@@ -1,4 +1,4 @@
-import { completeSimple, getModel, type Api, type Model } from "@earendil-works/pi-ai";
+import { completeSimple, getModel, type Model } from "@mariozechner/pi-ai";
 
 type Usage = {
   input?: number;
@@ -49,7 +49,8 @@ function median(values: number[]): number {
 
 async function runModel(opts: {
   label: string;
-  model: Model<Api>;
+  // oxlint-disable-next-line typescript/no-explicit-any
+  model: Model<any>;
   apiKey: string;
   runs: number;
   prompt: string;

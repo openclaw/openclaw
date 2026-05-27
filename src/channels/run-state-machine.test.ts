@@ -16,11 +16,13 @@ describe("createRunStateMachine", () => {
     });
     machine.onRunStart();
     machine.onRunEnd();
-    expect(setStatus.mock.calls).toEqual([
-      [{ activeRuns: 0, busy: false }],
-      [{ activeRuns: 1, busy: true, lastRunActivityAt: 123 }],
-      [{ activeRuns: 0, busy: false, lastRunActivityAt: 123 }],
-    ]);
+    expect(setStatus).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ activeRuns: 1, busy: true, lastRunActivityAt: 123 }),
+    );
+    expect(setStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ activeRuns: 0, busy: false, lastRunActivityAt: 123 }),
+    );
   });
 
   it("stops publishing after lifecycle abort", () => {

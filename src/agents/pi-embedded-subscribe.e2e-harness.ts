@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { expect } from "vitest";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
@@ -13,7 +13,6 @@ export const THINKING_TAG_CASES = [
   { tag: "thinking", open: "<thinking>", close: "</thinking>" },
   { tag: "thought", open: "<thought>", close: "</thought>" },
   { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
-  { tag: "antml:thinking", open: "<antml:thinking>", close: "</antml:thinking>" },
 ] as const;
 
 export function createStubSessionHarness(): {
@@ -45,8 +44,6 @@ export function createSubscribedSessionHarness(
   const mergedSession = Object.assign(session, sessionExtras ?? {});
   const subscription = subscribeEmbeddedPiSession({
     ...subscribeParams,
-    trustedLocalMediaToolNames:
-      subscribeParams.trustedLocalMediaToolNames ?? subscribeParams.builtinToolNames,
     session: mergedSession,
   });
   return { emit, session: mergedSession, subscription };

@@ -1,4 +1,4 @@
-import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
+import type { SecretInput } from "./runtime-api.js";
 
 export type ZaloAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
@@ -38,7 +38,7 @@ export type ZaloConfig = {
   defaultAccount?: string;
 } & ZaloAccountConfig;
 
-type ZaloTokenSource = "env" | "config" | "configFile" | "none";
+export type ZaloTokenSource = "env" | "config" | "configFile" | "none";
 
 export type ResolvedZaloAccount = {
   accountId: string;

@@ -1,9 +1,4 @@
-export {
-  adaptMessagePresentationForChannel,
-  applyPresentationActionLimits,
-  presentationPageSize,
-  reduceInteractiveReply,
-} from "../channels/plugins/outbound/interactive.js";
+export { reduceInteractiveReply } from "../channels/plugins/outbound/interactive.js";
 export type {
   InteractiveButtonStyle,
   InteractiveReply,
@@ -12,32 +7,11 @@ export type {
   InteractiveReplyOption,
   InteractiveReplySelectBlock,
   InteractiveReplyTextBlock,
-  MessagePresentation,
-  MessagePresentationBlock,
-  MessagePresentationButton,
-  MessagePresentationButtonStyle,
-  MessagePresentationButtonsBlock,
-  MessagePresentationContextBlock,
-  MessagePresentationDividerBlock,
-  MessagePresentationInteractiveBlock,
-  MessagePresentationOption,
-  MessagePresentationSelectBlock,
-  MessagePresentationTextBlock,
-  MessagePresentationTone,
-  ReplyPayloadDelivery,
-  ReplyPayloadDeliveryPin,
 } from "../interactive/payload.js";
 export {
   hasInteractiveReplyBlocks,
-  hasMessagePresentationBlocks,
   hasReplyChannelData,
   hasReplyContent,
-  interactiveReplyToPresentation,
-  isMessagePresentationInteractiveBlock,
-  normalizeMessagePresentation,
   normalizeInteractiveReply,
-  presentationToInteractiveControlsReply,
-  presentationToInteractiveReply,
-  renderMessagePresentationFallbackText,
   resolveInteractiveTextFallback,
 } from "../interactive/payload.js";

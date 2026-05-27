@@ -1,16 +1,10 @@
-import { Type } from "typebox";
-import { getRuntimeConfig } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { Type } from "@sinclair/typebox";
+import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { redactToolPayloadText } from "../../logging/redact.js";
-import { readStringValue } from "../../shared/string-coerce.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import {
-  describeSessionsHistoryTool,
-  SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
-} from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -40,9 +34,9 @@ function truncateHistoryText(text: string): {
   truncated: boolean;
   redacted: boolean;
 } {
-  // sessions_history is a tool surface, not a log sink. Keep it redacted even
-  // when operators disable general-purpose log redaction.
-  const sanitized = redactToolPayloadText(text);
+  // Redact credentials, API keys, tokens before returning session history.
+  // Prevents sensitive data leakage via sessions_history tool (OC-07).
+  const sanitized = redactSensitiveText(text);
   const redacted = sanitized !== text;
   if (sanitized.length <= SESSIONS_HISTORY_TEXT_MAX_CHARS) {
     return { text: sanitized, truncated: false, redacted };
@@ -81,10 +75,6 @@ function sanitizeHistoryContentBlock(block: unknown): {
       delete entry.thinkingSignature;
       truncated = true;
     }
-    if ("openclawReasoningReplay" in entry) {
-      delete entry.openclawReasoningReplay;
-      truncated = true;
-    }
   }
   if (typeof entry.partialJson === "string") {
     const res = truncateHistoryText(entry.partialJson);
@@ -93,7 +83,7 @@ function sanitizeHistoryContentBlock(block: unknown): {
     redacted ||= res.redacted;
   }
   if (type === "image") {
-    const data = readStringValue(entry.data);
+    const data = typeof entry.data === "string" ? entry.data : undefined;
     const bytes = data ? data.length : undefined;
     if ("data" in entry) {
       delete entry.data;
@@ -186,8 +176,7 @@ export function createSessionsHistoryTool(opts?: {
   return {
     label: "Session History",
     name: "sessions_history",
-    displaySummary: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsHistoryTool(),
+    description: "Fetch message history for a session.",
     parameters: SessionsHistoryToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -195,7 +184,7 @@ export function createSessionsHistoryTool(opts?: {
       const sessionKeyParam = readStringParam(params, "sessionKey", {
         required: true,
       });
-      const cfg = opts?.config ?? getRuntimeConfig();
+      const cfg = opts?.config ?? loadConfig();
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
