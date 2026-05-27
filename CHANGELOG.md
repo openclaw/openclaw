@@ -6,9 +6,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Performance/models-config: add a targetProvider short-circuit to ensureOpenClawModelsJson so callers that already know the selected provider/model can skip full implicit-provider discovery when the on-disk provider entry structurally matches config. (#73261)
-- Agents/config: allow `agents.list[].experimental.localModelLean` so lean local-model mode can be enabled for one configured agent instead of globally.
-- Providers/xAI: add device-code OAuth login so remote and headless setups can authorize xAI without a localhost browser callback. (#84005) Thanks @fuller-stack-dev.
 - Voice: share activation-name matching and consult-transcript screening through the realtime voice SDK so Discord, browser voice, and meeting surfaces can reuse one implementation.
 - Cron: default `cron.maxConcurrentRuns` to 8 so scheduled automations and their isolated agent turns can make progress in parallel without explicit configuration.
 - QA-Lab: add `qa coverage --match <query>` so focused proof selection can discover matching scenarios from existing metadata before running live or remote lanes.
