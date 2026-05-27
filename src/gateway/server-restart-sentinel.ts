@@ -10,6 +10,7 @@ import { dispatchAssembledChannelTurn } from "../channels/turn/kernel.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
+import { hasTerminalSessionLifecycle } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
@@ -550,6 +551,7 @@ async function loadRestartSentinelStartupTask(params: {
     const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
 
     const { cfg, entry, canonicalKey } = loadSessionEntry(sessionKey);
+    const terminalSessionEntry = hasTerminalSessionLifecycle(entry);
 
     const sentinelContext = payload.deliveryContext;
     let sessionDeliveryContext = deliveryContextFromSession(entry);
@@ -608,7 +610,7 @@ async function loadRestartSentinelStartupTask(params: {
       }
     }
 
-    if (payload.continuation) {
+    if (payload.continuation && !terminalSessionEntry) {
       continuationRoute = resolveRestartContinuationRoute({
         channel: channel ?? undefined,
         to: resolvedTo,
@@ -634,6 +636,13 @@ async function loadRestartSentinelStartupTask(params: {
               : wakeDeliveryContext,
         }),
       );
+    } else if (payload.continuation) {
+      log.warn(`${summary}: continuation skipped: session is terminal`, {
+        sessionKey: canonicalKey,
+        continuationKind: payload.continuation.kind,
+        status: entry?.status ?? null,
+        endedAt: entry?.endedAt ?? null,
+      });
     }
 
     await removeRestartSentinelFile(sentinelPath);

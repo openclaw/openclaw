@@ -19,7 +19,7 @@ import {
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { hasTerminalSessionLifecycle, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
@@ -332,18 +332,19 @@ export function resolveSession(opts: {
     resetType,
     resetOverride: channelReset,
   });
-  const fresh = sessionEntry
-    ? evaluateSessionFreshness({
-        updatedAt: sessionEntry.updatedAt,
-        ...resolveSessionLifecycleTimestamps({
-          entry: sessionEntry,
-          agentId: opts.agentId,
-          storePath,
-        }),
-        now,
-        policy: resetPolicy,
-      }).fresh
-    : false;
+  const fresh =
+    sessionEntry && !hasTerminalSessionLifecycle(sessionEntry)
+      ? evaluateSessionFreshness({
+          updatedAt: sessionEntry.updatedAt,
+          ...resolveSessionLifecycleTimestamps({
+            entry: sessionEntry,
+            agentId: opts.agentId,
+            storePath,
+          }),
+          now,
+          policy: resetPolicy,
+        }).fresh
+      : false;
   const sessionId =
     opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !opts.sessionId;

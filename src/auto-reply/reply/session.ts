@@ -28,6 +28,7 @@ import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js
 import {
   DEFAULT_RESET_TRIGGERS,
   type GroupKeyResolution,
+  hasTerminalSessionLifecycle,
   type SessionEntry,
   type SessionScope,
 } from "../../config/sessions/types.js";
@@ -432,7 +433,8 @@ export async function initSessionState(params: {
   const canReuseExistingEntry =
     Boolean(entry?.sessionId) &&
     typeof entry?.updatedAt === "number" &&
-    Number.isFinite(entry.updatedAt);
+    Number.isFinite(entry.updatedAt) &&
+    !hasTerminalSessionLifecycle(entry);
   const skipImplicitExpiry = hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
@@ -440,15 +442,17 @@ export async function initSessionState(params: {
     storePath,
   });
   const entryFreshness = entry
-    ? skipImplicitExpiry
-      ? ({ fresh: true } satisfies SessionFreshness)
-      : evaluateSessionFreshness({
-          updatedAt: entry.updatedAt,
-          sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
-          lastInteractionAt: lifecycleTimestamps.lastInteractionAt,
-          now,
-          policy: resetPolicy,
-        })
+    ? hasTerminalSessionLifecycle(entry)
+      ? undefined
+      : skipImplicitExpiry
+        ? ({ fresh: true } satisfies SessionFreshness)
+        : evaluateSessionFreshness({
+            updatedAt: entry.updatedAt,
+            sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
+            lastInteractionAt: lifecycleTimestamps.lastInteractionAt,
+            now,
+            policy: resetPolicy,
+          })
     : undefined;
   const softResetAllowed =
     softReset.matched &&
@@ -782,6 +786,10 @@ export async function initSessionState(params: {
     // Clear stale context hash so the first flush in the new session is not
     // incorrectly skipped due to a hash match with the old transcript (#30115).
     sessionEntry.memoryFlushContextHash = undefined;
+    sessionEntry.startedAt = undefined;
+    sessionEntry.endedAt = undefined;
+    sessionEntry.runtimeMs = undefined;
+    sessionEntry.status = undefined;
     // Clear stale token metrics from previous session so /status doesn't
     // display the old session's context usage after /new or /reset.
     sessionEntry.totalTokens = undefined;

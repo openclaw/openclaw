@@ -396,6 +396,22 @@ export type SessionEntry = {
   acp?: SessionAcpMeta;
 };
 
+export function isTerminalSessionStatus(
+  status: unknown,
+): status is Exclude<NonNullable<SessionEntry["status"]>, "running"> {
+  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
+}
+
+export function hasTerminalSessionLifecycle(entry: SessionEntry | undefined): boolean {
+  if (!entry) {
+    return false;
+  }
+  return (
+    isTerminalSessionStatus(entry.status) ||
+    (typeof entry.endedAt === "number" && Number.isFinite(entry.endedAt))
+  );
+}
+
 function isSessionPluginTraceLine(line: string): boolean {
   const trimmed = line.trim();
   return trimmed.startsWith("🔎 ") || /(?:^|\s)(?:Debug|Trace):/.test(trimmed);
