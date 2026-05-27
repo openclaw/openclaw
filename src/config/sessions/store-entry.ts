@@ -163,7 +163,6 @@ export function resolveSessionStoreEntry(params: {
     ? undefined
     : exactEntry;
   const exactKeyWins = requiresFoldedSessionKeyAliasProof(normalizedKey);
-  const hasExactEntry = exactKeyWins && usableExactEntry !== undefined;
   const fallbackLegacyEntry =
     legacyKeySet.size > 0 &&
     !hasMismatchedCaseSensitiveDeliveryProof(params.store[trimmedKey], normalizedKey)
@@ -196,11 +195,6 @@ export function resolveSessionStoreEntry(params: {
       continue;
     }
     legacyKeySet.add(candidateKey);
-    if (hasExactEntry) {
-      // Matrix/tail-preserved exact entries keep their case-sensitive room state.
-      // Ordinary lowercase-canonical channels still use freshest alias ordering.
-      continue;
-    }
     const candidateUpdatedAt = candidateEntry?.updatedAt ?? 0;
     if (!existing || candidateUpdatedAt > existingUpdatedAt) {
       existing = candidateEntry;

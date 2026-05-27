@@ -215,6 +215,21 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
     expect(r.existing?.deliveryContext?.to).toBe("room:!MixedRoomAbCdEf:example.org");
   });
 
+  it("keeps fresher Matrix aliases that normalize to the same opaque key", () => {
+    const staleExact = entry("room:!MixedRoomAbCdEf:example.org", 100);
+    const freshStructuralAlias = entry("room:!MixedRoomAbCdEf:example.org", 200);
+    const structuralAliasKey = "Agent:Main:Matrix:Channel:!MixedRoomAbCdEf:example.org";
+    const store: Record<string, SessionEntry> = {
+      [ROOM_MIXED_KEY]: staleExact,
+      [structuralAliasKey]: freshStructuralAlias,
+    };
+
+    const r = resolveSessionStoreEntry({ store, sessionKey: ROOM_MIXED_KEY });
+
+    expect(r.legacyKeys).toContain(structuralAliasKey);
+    expect(r.existing).toBe(freshStructuralAlias);
+  });
+
   it("does NOT return a case-distinct sibling as `existing` when the exact mixed-case key is absent", () => {
     // codex #87366 follow-up: the read fallback must also be gated, not just the
     // delete set — a distinct lowercase room must not leak into the mixed-case lookup.
