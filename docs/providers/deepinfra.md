@@ -55,7 +55,7 @@ static defaults below.
 | Media understanding      | `moonshotai/Kimi-K2.5` for images                                                                     | inbound image understanding                              |
 | Speech-to-text           | `openai/whisper-large-v3-turbo`                                                                       | inbound audio transcription                              |
 | Text-to-speech           | `hexgrad/Kokoro-82M`                                                                                  | `messages.tts.provider: "deepinfra"`                     |
-| Video generation         | first `video-gen`-tagged entry from live catalog (static fallback `Wan-AI/Wan2.6-T2V`)                | `video_generate`, `agents.defaults.videoGenerationModel` |
+| Video generation         | first `video-gen`-tagged entry from live catalog (static fallback `Pixverse/Pixverse-T2V`)            | `video_generate`, `agents.defaults.videoGenerationModel` |
 | Memory embeddings        | `BAAI/bge-m3`                                                                                         | `agents.defaults.memorySearch.provider: "deepinfra"`     |
 
 DeepInfra also exposes reranking, classification, object-detection, and other
