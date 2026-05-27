@@ -99,6 +99,22 @@ function listPayloadMediaUrls(params: {
   return [...new Set(urls)];
 }
 
+function isRemoteMediaUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url);
+}
+
+async function buildBrokerMediaAttachment(params: {
+  mediaUrl: string;
+  mediaType: string;
+  mediaAccess?: ChannelOutboundContext["mediaAccess"];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+}): Promise<BrokerMessageAttachment> {
+  return isRemoteMediaUrl(params.mediaUrl)
+    ? { url: params.mediaUrl, mediaType: params.mediaType }
+    : await createInlineBrokerMediaAttachment(params);
+}
+
 function buildPayloadChannelData(payload: ReplyPayload): Record<string, unknown> | undefined {
   const channelData = isRecord(payload.channelData) ? { ...payload.channelData } : {};
   const openclaw = isRecord(channelData.openclaw) ? { ...channelData.openclaw } : {};
@@ -114,18 +130,29 @@ function buildPayloadChannelData(payload: ReplyPayload): Record<string, unknown>
   return Object.keys(channelData).length > 0 ? channelData : undefined;
 }
 
-function buildBrokerPayloadsFromReplyPayload(params: {
+async function buildBrokerPayloadsFromReplyPayload(params: {
   payload: ReplyPayload;
   text?: string | null;
   mediaUrl?: string | null;
   audioAsVoice?: boolean;
-}): BrokerOutboundPayload[] {
+  mediaAccess?: ChannelOutboundContext["mediaAccess"];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+}): Promise<BrokerOutboundPayload[]> {
   const text = normalizeMaybeString(params.payload.text) ?? normalizeMaybeString(params.text);
   const mediaUrls = listPayloadMediaUrls({ payload: params.payload, mediaUrl: params.mediaUrl });
-  const attachments: BrokerMessageAttachment[] = mediaUrls.map((url) => ({
-    url,
-    mediaType: params.audioAsVoice === true ? "voice" : "media",
-  }));
+  const mediaType = params.audioAsVoice === true ? "voice" : "media";
+  const attachments = await Promise.all(
+    mediaUrls.map((mediaUrl) =>
+      buildBrokerMediaAttachment({
+        mediaUrl,
+        mediaType,
+        mediaAccess: params.mediaAccess,
+        mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
+      }),
+    ),
+  );
   const channelData = buildPayloadChannelData(params.payload);
   return [
     {
@@ -376,12 +403,15 @@ export async function sendChannelBrokerPayload(params: {
   payload: ReplyPayload;
   mediaUrl?: string | null;
   audioAsVoice?: boolean;
+  mediaAccess?: ChannelOutboundContext["mediaAccess"];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   threadId?: string | number | null;
   replyToId?: string | number | null;
   silent?: boolean;
   signal?: AbortSignal;
 }): Promise<ChannelMessageSendResult> {
-  const payloads = buildBrokerPayloadsFromReplyPayload(params);
+  const payloads = await buildBrokerPayloadsFromReplyPayload(params);
   const payload = payloads[0] ?? {};
   const hasMedia = Boolean(payload.attachments?.length);
   const hasChannelData = Boolean(payload.channelData);
@@ -407,12 +437,15 @@ export async function sendChannelBrokerPreviewUpdate(params: {
   payload: ReplyPayload;
   mediaUrl?: string | null;
   audioAsVoice?: boolean;
+  mediaAccess?: ChannelOutboundContext["mediaAccess"];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   threadId?: string | number | null;
   replyToId?: string | number | null;
   silent?: boolean;
   signal?: AbortSignal;
 }): Promise<ChannelMessageSendResult> {
-  const payloads = buildBrokerPayloadsFromReplyPayload(params);
+  const payloads = await buildBrokerPayloadsFromReplyPayload(params);
   const payload = payloads[0] ?? {};
   return await sendChannelBrokerFinal({
     ...params,
@@ -434,12 +467,15 @@ export async function sendChannelBrokerPreviewFinalization(params: {
   previewReceipt: MessageReceipt;
   mediaUrl?: string | null;
   audioAsVoice?: boolean;
+  mediaAccess?: ChannelOutboundContext["mediaAccess"];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   threadId?: string | number | null;
   replyToId?: string | number | null;
   silent?: boolean;
   signal?: AbortSignal;
 }): Promise<ChannelMessageSendResult> {
-  const payloads = buildBrokerPayloadsFromReplyPayload(params);
+  const payloads = await buildBrokerPayloadsFromReplyPayload(params);
   const payload = payloads[0] ?? {};
   return await sendChannelBrokerFinal({
     ...params,
@@ -491,15 +527,13 @@ export async function sendChannelBrokerMedia(params: {
     throw new Error("Channel broker media send requires a media URL.");
   }
   const mediaType = params.audioAsVoice ? "voice" : "media";
-  const attachment: BrokerMessageAttachment = /^https?:\/\//i.test(url)
-    ? { url, mediaType }
-    : await createInlineBrokerMediaAttachment({
-        mediaUrl: url,
-        mediaType,
-        mediaAccess: params.mediaAccess,
-        mediaLocalRoots: params.mediaLocalRoots,
-        mediaReadFile: params.mediaReadFile,
-      });
+  const attachment = await buildBrokerMediaAttachment({
+    mediaUrl: url,
+    mediaType,
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
+  });
   const text = params.text?.trim();
   return await sendChannelBrokerFinal({
     ...params,

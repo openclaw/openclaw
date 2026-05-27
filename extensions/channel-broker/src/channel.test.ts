@@ -614,6 +614,83 @@ describe("channel-broker plugin", () => {
     expect(attachment).not.toHaveProperty("url");
   });
 
+  it("inlines local payload media instead of forwarding host paths", async () => {
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const mediaReadFile = vi.fn(async () => png);
+    const sendOutboundRequest: NonNullable<ChannelBrokerRuntime["sendOutboundRequest"]> = vi.fn(
+      async () =>
+        createBrokerReceipt({
+          requestId: "broker-local-payload-media-1",
+          providerId: "acme",
+          platform: "Slack",
+          status: "sent",
+          messageIds: ["native-local-payload-media-1"],
+        }),
+    );
+    setChannelBrokerRuntime({
+      sendOutboundRequest,
+      createRequestId: () => "broker-local-payload-media-1",
+    });
+
+    await channelBrokerPlugin.message?.send?.payload?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["slack"],
+              },
+            },
+          },
+        },
+      },
+      to: "slack:C123",
+      payload: {
+        text: "see attached",
+        mediaUrl: "file:///private/tmp/openclaw-media/photo.png",
+        channelData: { kind: "card" },
+      },
+      mediaLocalRoots: ["/private/tmp/openclaw-media"],
+      mediaReadFile,
+      accountId: "acme",
+    } as never);
+
+    expect(mediaReadFile).toHaveBeenCalledWith("/private/tmp/openclaw-media/photo.png");
+    expect(sendOutboundRequest).toHaveBeenCalledWith({
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        requestId: "broker-local-payload-media-1",
+        platform: "slack",
+        payloads: [
+          {
+            text: "see attached",
+            attachments: [
+              expect.objectContaining({
+                mediaType: "media",
+                contentBase64: png.toString("base64"),
+                mimeType: "image/png",
+                name: "photo.png",
+                sizeBytes: png.length,
+              }),
+            ],
+            channelData: {
+              kind: "card",
+            },
+          },
+        ],
+        requirements: expect.objectContaining({ media: true, payload: true }),
+      }),
+    });
+    const attachment =
+      vi.mocked(sendOutboundRequest).mock.calls[0]?.[0]?.request.payloads[0]?.attachments?.[0];
+    expect(attachment).not.toHaveProperty("url");
+  });
+
   it("treats explicit thread targets as channels even when the account defaults to direct", async () => {
     const sendOutboundRequest = vi.fn(async () =>
       createBrokerReceipt({
