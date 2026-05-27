@@ -21,6 +21,7 @@ const LOCALE_LABELS: Record<string, string> = {
   nl: "Dutch",
   pl: "Polish",
   "pt-BR": "Brazilian Portuguese",
+  sv: "Swedish",
   th: "Thai",
   tr: "Turkish",
   uk: "Ukrainian",
