@@ -691,10 +691,10 @@ describe("applySkillEnvOverrides", () => {
 
   it("blocks dangerous host env overrides even when declared", () => {
     const entries = envSkillEntries("dangerous-env-skill", {
-      requires: { env: ["BASH_ENV", "SHELL"] },
+      requires: { env: ["BASH_ENV", "SHELL", "NODE_REPL_EXTERNAL_MODULE", "NODE_V8_COVERAGE"] },
     });
 
-    withClearedEnv(["BASH_ENV", "SHELL"], () => {
+    withClearedEnv(["BASH_ENV", "SHELL", "NODE_REPL_EXTERNAL_MODULE", "NODE_V8_COVERAGE"], () => {
       const restore = applySkillEnvOverrides({
         skills: entries,
         config: {
@@ -704,6 +704,8 @@ describe("applySkillEnvOverrides", () => {
                 env: {
                   BASH_ENV: "/tmp/pwn.sh",
                   SHELL: "/tmp/evil-shell",
+                  NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
+                  NODE_V8_COVERAGE: "/tmp/coverage",
                 },
               },
             },
@@ -714,10 +716,14 @@ describe("applySkillEnvOverrides", () => {
       try {
         expect(process.env.BASH_ENV).toBeUndefined();
         expect(process.env.SHELL).toBeUndefined();
+        expect(process.env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+        expect(process.env.NODE_V8_COVERAGE).toBeUndefined();
       } finally {
         restore();
         expect(process.env.BASH_ENV).toBeUndefined();
         expect(process.env.SHELL).toBeUndefined();
+        expect(process.env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+        expect(process.env.NODE_V8_COVERAGE).toBeUndefined();
       }
     });
   });
