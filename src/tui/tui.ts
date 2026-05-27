@@ -666,7 +666,16 @@ export async function runTui(opts: TuiOptions) {
         ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
         : sessionInfo.model
       : "unknown";
-    const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
+    // Use per-turn context tokens (input + output) instead of cumulative totalTokens.
+    // totalTokens is a lifetime billing metric that grows linearly with turn count
+    // due to cacheRead accumulation, causing the footer to show inflated values.
+    // inputTokens + outputTokens represents the actual current context window usage,
+    // matching what /context reports as "Session tokens (cached)".
+    const currentContextTokens =
+      typeof sessionInfo.inputTokens === "number" || typeof sessionInfo.outputTokens === "number"
+        ? (sessionInfo.inputTokens ?? 0) + (sessionInfo.outputTokens ?? 0)
+        : null;
+    const tokens = formatTokens(currentContextTokens, sessionInfo.contextTokens ?? null);
     const think = sessionInfo.thinkingLevel ?? "off";
     const fast = sessionInfo.fastMode === true;
     const verbose = sessionInfo.verboseLevel ?? "off";
