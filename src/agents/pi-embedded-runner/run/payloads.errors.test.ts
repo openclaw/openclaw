@@ -652,6 +652,23 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadSummary(payloads, { text: warningText ?? "" });
   });
 
+  it("wraps markdown-capable mutating tool warnings so mention-looking names stay inert", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "bash",
+        meta: "show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt (workspace)",
+        error: "file missing",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ 🛠️ `show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt (workspace)` failed",
+      isError: true,
+    });
+  });
+
   it("keeps non-recoverable tool errors compact when verbose mode is on", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "connection timeout" },
