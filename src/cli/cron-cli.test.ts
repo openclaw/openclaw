@@ -81,6 +81,7 @@ type CronUpdatePatch = {
 type CronAddParams = {
   schedule?: { kind?: string; at?: string; staggerMs?: number };
   payload?: {
+    kind?: string;
     model?: string;
     thinking?: string;
     lightContext?: boolean;
@@ -620,6 +621,91 @@ describe("cron cli", () => {
       "--channel",
       "WebChat",
     ]);
+  });
+
+  it("rejects implicit announce --channel webchat on cron add (no --announce flag)", async () => {
+    // Regression for ClawSweeper finding 1: isolated agent-turn jobs default
+    // delivery.mode to "announce" when neither --announce nor --no-deliver is
+    // passed. The guard must therefore check the EFFECTIVE delivery mode
+    // (post-defaults), not just the explicit --announce flag.
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "implicit-announce-to-webchat",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--channel",
+      "webchat",
+    ]);
+    expectRuntimeErrorContaining("Webchat is not a deliverable channel");
+  });
+
+  it("accepts the documented default-agent main-session reminder example (no --no-deliver)", async () => {
+    // Regression for ClawSweeper finding 4: the previous docs example combined
+    // --session main --system-event with --no-deliver, which the CLI rejects
+    // (`--announce/--no-deliver require a non-main agentTurn session target`).
+    // The docs were corrected to drop --no-deliver from the main-session
+    // example; this test pins the documented shape so the docs example stays
+    // runnable.
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "morning standup reminder",
+      "--cron",
+      "0 9 * * 1-5",
+      "--tz",
+      "Asia/Dubai",
+      "--session",
+      "main",
+      "--system-event",
+      "Morning standup at 9:30. Slides on the team drive.",
+    ]);
+    expect(params.payload?.kind).toBe("systemEvent");
+    // Main-session systemEvent jobs do not carry delivery (no announce path).
+    expect(params.delivery).toBeUndefined();
+  });
+
+  it("rejects the previously-documented main-session --no-deliver shape", async () => {
+    // Asserts the CLI guard that motivated finding 4. --no-deliver requires a
+    // non-main agentTurn session target, so the old docs example never ran.
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "morning standup reminder",
+      "--cron",
+      "0 9 * * 1-5",
+      "--tz",
+      "Asia/Dubai",
+      "--session",
+      "main",
+      "--system-event",
+      "Morning standup at 9:30. Slides on the team drive.",
+      "--no-deliver",
+    ]);
+  });
+
+  it("accepts --channel webchat on cron add when --no-deliver opts the job out of announce", async () => {
+    // Confirms the new effective-mode guard does not over-fire on jobs that
+    // explicitly disable announce delivery.
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "no-deliver-webchat",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--no-deliver",
+      "--channel",
+      "webchat",
+    ]);
+    expect(params.delivery?.mode).toBe("none");
   });
 
   it.each([
