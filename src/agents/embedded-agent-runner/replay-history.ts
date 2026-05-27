@@ -239,10 +239,6 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
 // content and, on Bedrock or strict OpenAI-compatible providers, can also
 // trigger turn-ordering rejections.
 const TRANSCRIPT_ONLY_OPENCLAW_MODELS = new Set<string>(["delivery-mirror", "gateway-injected"]);
-const REPLY_TO_CURRENT_MARKER_RE = /\[\[reply_to_current\]\]/gu;
-const BRACKETED_TOOL_CALL_HEADER_RE = /^\s*\[tool:[A-Za-z0-9_.-]+\](.*)$/iu;
-const XML_TOOL_PARAMETER_RE = /<\s*parameter\b/iu;
-const XML_TOOL_CALL_END_RE = /<\/\s*(?:tool_call|function)\s*>/iu;
 
 function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   if (!message || message.role !== "user") {
@@ -290,121 +286,8 @@ function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function isLikelySerializedToolResultText(text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-    return false;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return false;
-  }
-  if (!isRecord(parsed)) {
-    return false;
-  }
-
-  if (Array.isArray(parsed.results) && typeof parsed.provider === "string") {
-    return true;
-  }
-  if (
-    Array.isArray(parsed.results) &&
-    (isRecord(parsed.filtering) || Array.isArray(parsed.content))
-  ) {
-    return true;
-  }
-  if (typeof parsed.tool === "string" && ("result" in parsed || "status" in parsed)) {
-    return true;
-  }
-  const content = parsed.content;
-  return (
-    Array.isArray(content) &&
-    content.some(
-      (block) =>
-        isRecord(block) &&
-        typeof block.text === "string" &&
-        block.text.includes("<external-content"),
-    )
-  );
-}
-
-function splitLinesKeepingNewlines(text: string): string[] {
-  return text.match(/[^\n]*(?:\n|$)/gu)?.filter((line) => line.length > 0) ?? [];
-}
-
-function stripLeakedPlainTextToolCalls(text: string): string {
-  const lines = splitLinesKeepingNewlines(text);
-  if (lines.length === 0) {
-    return text;
-  }
-
-  let touched = false;
-  const kept: string[] = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? "";
-    const lineText = line.replace(/\r?\n$/u, "");
-    const headerMatch = BRACKETED_TOOL_CALL_HEADER_RE.exec(lineText);
-    if (!headerMatch) {
-      kept.push(line);
-      continue;
-    }
-
-    const rest = (headerMatch[1] ?? "").trim();
-    const nextLine = lines[i + 1] ?? "";
-    if (
-      rest === "" ||
-      rest.startsWith("{") ||
-      rest.startsWith("<") ||
-      XML_TOOL_PARAMETER_RE.test(rest) ||
-      XML_TOOL_PARAMETER_RE.test(nextLine)
-    ) {
-      touched = true;
-      if (XML_TOOL_PARAMETER_RE.test(rest) || XML_TOOL_PARAMETER_RE.test(nextLine)) {
-        while (i + 1 < lines.length) {
-          i += 1;
-          if (XML_TOOL_CALL_END_RE.test(lines[i] ?? "")) {
-            if (/^\s*<\/\s*function\s*>\s*$/iu.test(lines[i] ?? "")) {
-              const maybeToolCallEnd = lines[i + 1] ?? "";
-              if (/^\s*<\/\s*tool_call\s*>\s*$/iu.test(maybeToolCallEnd)) {
-                i += 1;
-              }
-            }
-            break;
-          }
-        }
-      }
-      continue;
-    }
-
-    kept.push(line);
-  }
-
-  return touched
-    ? kept
-        .join("")
-        .replace(/\n{3,}/gu, "\n\n")
-        .trim()
-    : text;
-}
-
-function sanitizeAssistantReplayText(text: string): string {
-  const withoutInternalMetadata = stripInternalMetadataForDisplay(text);
-  const withoutReplayMarkers = withoutInternalMetadata.replace(REPLY_TO_CURRENT_MARKER_RE, "");
-  if (isLikelySerializedToolResultText(withoutReplayMarkers)) {
-    return "";
-  }
-  const withoutLeakedToolCalls = stripLeakedPlainTextToolCalls(withoutReplayMarkers);
-  return withoutLeakedToolCalls === text ? withoutLeakedToolCalls : withoutLeakedToolCalls.trim();
-}
-
 function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
-  const strippedText = sanitizeAssistantReplayText(replayContent);
+  const strippedText = stripInternalMetadataForDisplay(replayContent);
   const trimmed = strippedText.trim();
   if (!trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
     return null;
@@ -428,7 +311,7 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
       sanitizedContent.push(block);
       continue;
     }
-    const strippedText = sanitizeAssistantReplayText(text);
+    const strippedText = stripInternalMetadataForDisplay(text);
     if (strippedText === text) {
       if (!isSilentReplyPayloadText(text.trim(), SILENT_REPLY_TOKEN)) {
         sanitizedContent.push(block);
