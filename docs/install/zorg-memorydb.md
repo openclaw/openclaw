@@ -40,7 +40,7 @@ curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush
 
 Install order is intentional: OpenClaw is installed first from the normal OpenClaw package, then the Zorg MemoryDB add-on and LAN command chat are applied from this repository. This is the supported first-run path for hosts with missing or old software.
 
-Direct npm installs the OpenClaw package only. Use it only on systems that already have Node >=22.19.0 and working global npm permissions, then run the packaged Zorg add-on script as a separate step. Do not use direct npm as the first command on old hosts such as Node v12 systems; use the first-run installer above so Node is repaired before npm evaluates OpenClaw's dependency tree.
+Direct npm installs the OpenClaw package only unless the explicit existing-upgrade guard is set. Use direct npm only on systems that already have Node >=22.19.0 and working global npm permissions. For first-run installs, run the packaged Zorg add-on script as a separate step. Do not use direct npm as the first command on old hosts such as Node v12 systems; use the first-run installer above so Node is repaired before npm evaluates OpenClaw's dependency tree.
 
 ```bash
 node --version
@@ -56,7 +56,7 @@ For an intentional direct GitHub npm upgrade over an existing host OpenClaw inst
 ZORG_INSTALL_MODE=existing ZORG_ALLOW_EXISTING_UPGRADE=1 npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```
 
-This preserves the first-run safety gate while allowing a deliberate additive overlay refresh on a host that already has OpenClaw installed.
+This preserves the first-run safety gate while allowing a deliberate additive overlay refresh on a host that already has OpenClaw installed. In this mode, package postinstall runs `zorg/install-zorg-memorydb.sh --from-openclaw-install --install-mode existing` after the OpenClaw package postinstall completes, so the Zorg MemoryDB add-on is applied automatically instead of requiring a second manual command. Set `ZORG_MEMORYDB_SKIP_BOOTSTRAP=1` only for special-purpose package installs where the add-on bootstrap must be skipped.
 
 If direct GitHub npm is rerun over an existing global install, npm may fail during its git-dependency preparation before package lifecycle scripts can print the clearer guard. The common signature is:
 

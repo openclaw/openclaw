@@ -38,6 +38,7 @@ const taskRuntimePath = path.join(
 );
 const harnessRuntime = fs.readFileSync(harnessRuntimePath, "utf8");
 const taskRuntime = fs.readFileSync(taskRuntimePath, "utf8");
+const postinstallUpgradePath = path.join(root, "zorg/postinstall-existing-upgrade.cjs");
 
 if (!/hasBeforeToolCallPolicy/.test(harnessRuntime)) {
   fail("openclaw/plugin-sdk/agent-harness-runtime does not expose hasBeforeToolCallPolicy");
@@ -47,6 +48,31 @@ if (!/createAgentHarnessTaskRuntime/.test(taskRuntime)) {
   fail(
     "openclaw/plugin-sdk/agent-harness-task-runtime does not expose createAgentHarnessTaskRuntime",
   );
+}
+
+if (!fs.existsSync(postinstallUpgradePath)) {
+  fail(
+    "missing existing-upgrade postinstall bootstrap wrapper: zorg/postinstall-existing-upgrade.cjs",
+  );
+} else {
+  const postinstallUpgrade = fs.readFileSync(postinstallUpgradePath, "utf8");
+  if (
+    !/ZORG_INSTALL_MODE/.test(postinstallUpgrade) ||
+    !/ZORG_ALLOW_EXISTING_UPGRADE/.test(postinstallUpgrade)
+  ) {
+    fail(
+      "existing-upgrade postinstall wrapper is not gated by ZORG_INSTALL_MODE and ZORG_ALLOW_EXISTING_UPGRADE",
+    );
+  }
+  if (!/install-zorg-memorydb\.sh/.test(postinstallUpgrade)) {
+    fail("existing-upgrade postinstall wrapper does not invoke install-zorg-memorydb.sh");
+  }
+}
+
+if (
+  !/zorg\/postinstall-existing-upgrade\.cjs/.test((pkg.scripts && pkg.scripts.postinstall) || "")
+) {
+  fail("package postinstall does not run zorg/postinstall-existing-upgrade.cjs");
 }
 
 if (process.exitCode) {
