@@ -12,6 +12,7 @@ export type EmbeddedAgentSessionOptions = {
   sessionManager: unknown;
   settingsManager: unknown;
   resourceLoader: unknown;
+  withSessionWriteLock?: CreateAgentSessionOptions["withSessionWriteLock"];
 };
 
 export async function createEmbeddedAgentSessionWithResourceLoader<Result>(params: {

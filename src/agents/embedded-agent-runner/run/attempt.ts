@@ -346,8 +346,6 @@ import {
   type EmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
   installPromptSubmissionLockRelease,
-  installSessionExternalHookWriteLock,
-  installSessionEventWriteLock,
 } from "./attempt.session-lock.js";
 import {
   createYieldAbortedResponse,
@@ -2703,6 +2701,8 @@ export async function runEmbeddedAttempt(
           sessionManager,
           settingsManager,
           resourceLoader,
+          withSessionWriteLock: (operation) =>
+            sessionLockController.withSessionWriteLock(operation),
         },
       });
       session = createdSession.session;
@@ -2712,14 +2712,6 @@ export async function runEmbeddedAttempt(
       }
       session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
-      installSessionEventWriteLock({
-        session: activeSession,
-        withSessionWriteLock: (operation) => sessionLockController.withSessionWriteLock(operation),
-      });
-      installSessionExternalHookWriteLock({
-        session: activeSession,
-        withSessionWriteLock: (operation) => sessionLockController.withSessionWriteLock(operation),
-      });
       installMessageToolOnlyTerminalHook({
         agent: activeSession.agent,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

@@ -188,6 +188,7 @@ export type AgentSessionEvent =
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
+export type AgentSessionWriteLockRunner = <T>(run: () => Promise<T> | T) => Promise<T>;
 
 // ============================================================================
 // Types
@@ -223,6 +224,8 @@ export interface AgentSessionConfig {
   extensionRunnerRef?: { current?: ExtensionRunner };
   /** Session start event metadata emitted when extensions bind to this runtime. */
   sessionStartEvent?: SessionStartEvent;
+  /** Optional lock used by embedded runs before session-file writes or write-capable hooks. */
+  withSessionWriteLock?: AgentSessionWriteLockRunner;
 }
 
 export interface ExtensionBindings {
@@ -346,6 +349,7 @@ export class AgentSession {
   private disableBuiltInTools: boolean;
   private baseToolsOverride?: Record<string, AgentTool>;
   private sessionStartEvent: SessionStartEvent;
+  private withExternalSessionWriteLock?: AgentSessionWriteLockRunner;
   private extensionUIContext?: ExtensionUIContext;
   private extensionCommandContextActions?: ExtensionCommandContextActions;
   private extensionAbortHandler?: () => void;
@@ -384,6 +388,7 @@ export class AgentSession {
       type: "session_start",
       reason: "startup",
     };
+    this.withExternalSessionWriteLock = config.withSessionWriteLock;
 
     // Always subscribe to agent events for internal handling
     // (session persistence, extensions, auto-compaction, retry logic)
@@ -439,6 +444,16 @@ export class AgentSession {
     return result.ok ? { apiKey: result.apiKey, headers: result.headers } : {};
   }
 
+  private async runWithSessionWriteLock<T>(run: () => Promise<T> | T): Promise<T> {
+    return this.withExternalSessionWriteLock
+      ? await this.withExternalSessionWriteLock(run)
+      : await run();
+  }
+
+  private eventMayWriteSession(event: AgentEvent): boolean {
+    return event.type === "message_end" || this.currentExtensionRunner.hasHandlers(event.type);
+  }
+
   /**
    * Install tool hooks once on the Agent instance.
    *
@@ -450,23 +465,25 @@ export class AgentSession {
   private installAgentToolHooks(): void {
     this.agent.beforeToolCall = async ({ toolCall, args }) => {
       const runner = this.currentExtensionRunner;
-      if (!runner.hasHandlers("tool_call")) {
-        return undefined;
-      }
-
-      try {
-        return await runner.emitToolCall({
-          type: "tool_call",
-          toolName: toolCall.name,
-          toolCallId: toolCall.id,
-          input: args as Record<string, unknown>,
-        });
-      } catch (err) {
-        if (err instanceof Error) {
-          throw err;
+      return await this.runWithSessionWriteLock(async () => {
+        if (!runner.hasHandlers("tool_call")) {
+          return undefined;
         }
-        throw new Error(`Extension failed, blocking execution: ${String(err)}`, { cause: err });
-      }
+
+        try {
+          return await runner.emitToolCall({
+            type: "tool_call",
+            toolName: toolCall.name,
+            toolCallId: toolCall.id,
+            input: args as Record<string, unknown>,
+          });
+        } catch (err) {
+          if (err instanceof Error) {
+            throw err;
+          }
+          throw new Error(`Extension failed, blocking execution: ${String(err)}`, { cause: err });
+        }
+      });
     };
 
     this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
@@ -475,15 +492,18 @@ export class AgentSession {
         return undefined;
       }
 
-      const hookResult = await runner.emitToolResult({
-        type: "tool_result",
-        toolName: toolCall.name,
-        toolCallId: toolCall.id,
-        input: args as Record<string, unknown>,
-        content: result.content,
-        details: result.details,
-        isError,
-      });
+      const hookResult = await this.runWithSessionWriteLock(
+        async () =>
+          await runner.emitToolResult({
+            type: "tool_result",
+            toolName: toolCall.name,
+            toolCallId: toolCall.id,
+            input: args as Record<string, unknown>,
+            content: result.content,
+            details: result.details,
+            isError,
+          }),
+      );
 
       if (!hookResult) {
         return undefined;
@@ -521,6 +541,14 @@ export class AgentSession {
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
   private handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+    if (this.eventMayWriteSession(event)) {
+      await this.runWithSessionWriteLock(async () => await this.handleAgentEventUnlocked(event));
+      return;
+    }
+    await this.handleAgentEventUnlocked(event);
+  };
+
+  private async handleAgentEventUnlocked(event: AgentEvent): Promise<void> {
     // When a user message starts, check if it's from either queue and remove it BEFORE emitting
     // This ensures the UI sees the updated queue state
     if (event.type === "message_start" && event.message.role === "user") {
@@ -595,7 +623,7 @@ export class AgentSession {
         }
       }
     }
-  };
+  }
 
   private willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
     const settings = this.settingsManager.getRetrySettings();
@@ -1707,6 +1735,14 @@ export class AgentSession {
    * @param customInstructions Optional instructions for the compaction summary
    */
   async compact(customInstructions?: string): Promise<CompactionResult> {
+    return await this.runWithSessionWriteLock(
+      async () => await this.compactWithSessionWriteLock(customInstructions),
+    );
+  }
+
+  private async compactWithSessionWriteLock(
+    customInstructions?: string,
+  ): Promise<CompactionResult> {
     this.disconnectFromAgent();
     await this.abort();
     this.compactionAbortController = new AbortController();
