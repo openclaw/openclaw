@@ -886,6 +886,62 @@ function isStablePatchDrift(generatedVersion, currentVersion) {
   );
 }
 
+function compareStableVersions(leftVersion, rightVersion) {
+  const left = stableVersionParts(leftVersion);
+  const right = stableVersionParts(rightVersion);
+  if (!left || !right) {
+    return null;
+  }
+  return left.major - right.major || left.minor - right.minor || left.patch - right.patch;
+}
+
+function versionSatisfiesSimpleSpec(version, spec) {
+  const normalized = typeof spec === "string" ? spec.trim() : "";
+  if (normalized === "" || normalized === "*") {
+    return true;
+  }
+  const match = normalized.match(/^(?<operator>\^|~|>=)?(?<version>\d+\.\d+\.\d+)$/u);
+  if (!match?.groups) {
+    return normalized === version;
+  }
+  const minimumVersion = match.groups.version;
+  const comparison = compareStableVersions(version, minimumVersion);
+  if (comparison === null || comparison < 0) {
+    return false;
+  }
+  const candidate = stableVersionParts(version);
+  const minimum = stableVersionParts(minimumVersion);
+  if (!candidate || !minimum) {
+    return false;
+  }
+  switch (match.groups.operator) {
+    case "^":
+      return minimum.major > 0
+        ? candidate.major === minimum.major
+        : minimum.minor > 0
+          ? candidate.major === 0 && candidate.minor === minimum.minor
+          : candidate.major === 0 && candidate.minor === 0 && candidate.patch === minimum.patch;
+    case "~":
+      return candidate.major === minimum.major && candidate.minor === minimum.minor;
+    case ">=":
+      return true;
+    default:
+      return comparison === 0;
+  }
+}
+
+function dependencySpecForLockPath(packages, lockPath, dependencyName) {
+  const packagePath = parseLockPackagePath(lockPath);
+  const parentPath = packagePath.at(-2)?.path ?? "";
+  const parent = packages[parentPath];
+  return (
+    parent?.dependencies?.[dependencyName] ??
+    parent?.optionalDependencies?.[dependencyName] ??
+    parent?.peerDependencies?.[dependencyName] ??
+    null
+  );
+}
+
 function restoreCurrentPnpmLockedPackages(
   generated,
   current,
@@ -922,6 +978,10 @@ function restoreCurrentPnpmLockedPackages(
       !currentMetadata.version ||
       currentPackageName !== packageName ||
       !isStablePatchDrift(metadata.version, currentMetadata.version) ||
+      !versionSatisfiesSimpleSpec(
+        currentMetadata.version,
+        dependencySpecForLockPath(generatedPackages, lockPath, packageName),
+      ) ||
       !pnpmLockPackages.has(`${packageName}@${currentMetadata.version}`)
     ) {
       continue;

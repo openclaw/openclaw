@@ -88,7 +88,11 @@ describe("generate-npm-shrinkwrap", () => {
   it("disables embedded shrinkwraps that hide workspace overrides", () => {
     const lockfile = {
       packages: {
-        "": {},
+        "": {
+          dependencies: {
+            "lru-cache": "^11.5.0",
+          },
+        },
         "node_modules/@earendil-works/pi-coding-agent": {
           version: "0.75.4",
           hasShrinkwrap: true,
@@ -147,7 +151,11 @@ describe("generate-npm-shrinkwrap", () => {
   it("restores current shrinkwrap entries when npm floats past pnpm's lock", () => {
     const generated = {
       packages: {
-        "": {},
+        "": {
+          dependencies: {
+            "lru-cache": "^11.5.0",
+          },
+        },
         "node_modules/lru-cache": {
           version: "11.5.1",
           resolved: "https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.1.tgz",
@@ -177,7 +185,45 @@ describe("generate-npm-shrinkwrap", () => {
     };
     const pnpmPackages = new Set(["lru-cache@11.5.0", "lru-cache@6.0.0"]);
 
-    expect(restoreCurrentPnpmLockedPackages(generated, current, pnpmPackages)).toEqual(current);
+    expect(restoreCurrentPnpmLockedPackages(generated, current, pnpmPackages)).toEqual({
+      packages: {
+        "": {
+          dependencies: {
+            "lru-cache": "^11.5.0",
+          },
+        },
+        "node_modules/lru-cache": current.packages["node_modules/lru-cache"],
+        "node_modules/lru-memoizer/node_modules/lru-cache":
+          current.packages["node_modules/lru-memoizer/node_modules/lru-cache"],
+      },
+    });
+  });
+
+  it("does not restore versions that no longer satisfy the dependency edge", () => {
+    const generated = {
+      packages: {
+        "": {
+          dependencies: {
+            "lru-cache": "^11.5.1",
+          },
+        },
+        "node_modules/lru-cache": {
+          version: "11.5.1",
+        },
+      },
+    };
+    const current = {
+      packages: {
+        "": {},
+        "node_modules/lru-cache": {
+          version: "11.5.0",
+        },
+      },
+    };
+
+    expect(
+      restoreCurrentPnpmLockedPackages(generated, current, new Set(["lru-cache@11.5.0"])),
+    ).toEqual(generated);
   });
 
   it("does not restore incompatible generated shrinkwrap versions", () => {
