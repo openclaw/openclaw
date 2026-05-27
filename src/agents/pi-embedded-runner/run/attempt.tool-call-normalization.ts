@@ -123,6 +123,73 @@ function resolveStructuredAllowedToolName(
     }
   }
 
+  // Some models occasionally emit malformed tool names by stripping underscores,
+  // prepending dots, appending random hex suffixes, or dropping leading characters.
+  // We perform a reverse lookup against allowed names to recover the correct tool
+  // without failing the entire turn.
+
+  const exactMatches: string[] = [];
+  const prefixMatches: string[] = [];
+
+  for (const allowedName of allowedToolNames) {
+    const noUnderscore = allowedName.replace(/_/g, "");
+
+    const allVariants = [
+      allowedName,
+      noUnderscore,
+      `.${allowedName}`,
+      `.${noUnderscore}`,
+    ];
+
+    if (allowedName.length > 2) {
+      const tail1 = allowedName.substring(1);
+      const tail2 = noUnderscore.substring(1);
+      if (tail1.length >= 3) {
+        allVariants.push(tail1);
+      }
+      if (tail2.length >= 3 && tail2 !== tail1) {
+        allVariants.push(tail2);
+      }
+    }
+
+    for (const variant of allVariants) {
+      // 1. Exact match
+      if (rawName === variant) {
+        exactMatches.push(allowedName);
+        break;
+      }
+
+      // 2. Prefix match (only using safe variants to avoid dropped-char ambiguity)
+      const safePrefixVariants = [
+        allowedName,
+        noUnderscore,
+        `.${allowedName}`,
+        `.${noUnderscore}`,
+      ];
+
+      if (safePrefixVariants.includes(variant)) {
+        if (rawName.length > variant.length && rawName.startsWith(variant)) {
+          const suffix = rawName.substring(variant.length);
+          if (/^(?=.*\d)[a-f0-9]{8,}$/.test(suffix)) {
+            prefixMatches.push(allowedName);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Fail-closed for exact matches: must match exactly ONE allowed tool
+  if (exactMatches.length === 1) {
+    return exactMatches[0];
+  }
+
+  // Fail-closed for prefix matches: must match exactly ONE allowed tool
+  if (exactMatches.length === 0 && prefixMatches.length === 1) {
+    return prefixMatches[0];
+  }
+
+  // In all ambiguous or unmatched cases, return undefined to fail closed.  
   return null;
 }
 
