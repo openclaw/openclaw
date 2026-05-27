@@ -4689,10 +4689,10 @@ describe("openai transport stream", () => {
     const shortRetention = buildOpenAICompletionsParams(model, context, {
       sessionId: "session-123",
       cacheRetention: "short",
-    }) as Record<string, unknown>;
+    });
     const defaultRetention = buildOpenAICompletionsParams(model, context, {
       sessionId: "session-123",
-    }) as Record<string, unknown>;
+    });
 
     expect(shortRetention).not.toHaveProperty("prompt_cache_retention");
     expect(defaultRetention).not.toHaveProperty("prompt_cache_retention");
