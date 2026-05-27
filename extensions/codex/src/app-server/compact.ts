@@ -116,11 +116,12 @@ export async function reconcileContextEngineCompactedCodexBinding({
       config: params.config,
     });
     const successorBinding = sanitizePreservedCodexBinding(rawSuccessorBinding);
-    if (isPreservableContextEngineThreadBootstrapBinding(successorBinding)) {
-      const equivalentToOriginal = originalBinding?.threadId
-        ? areCodexBindingsEquivalentForCompactionPreservation(successorBinding, originalBinding)
-        : true;
-      if (!equivalentToOriginal && originalBinding) {
+    if (originalBinding && isPreservableContextEngineThreadBootstrapBinding(successorBinding)) {
+      const equivalentToOriginal = areCodexBindingsEquivalentForCompactionPreservation(
+        successorBinding,
+        originalBinding,
+      );
+      if (!equivalentToOriginal) {
         preInvalidatedSuccessorBinding = true;
         emitCodexNativeThreadCompactionDiagnostic(params, {
           action: "invalidated",

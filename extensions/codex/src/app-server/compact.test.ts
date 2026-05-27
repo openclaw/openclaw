@@ -465,6 +465,60 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(serializedBinding).not.toContain("/workspace/private-project");
   });
 
+  it("clears rollover successor bootstrap bindings when no original binding exists", async () => {
+    const sessionFile = path.join(tempDir, "thread-bootstrap-missing-source.jsonl");
+    const successorFile = path.join(tempDir, "thread-bootstrap-successor.jsonl");
+    await writeCodexAppServerBinding(successorFile, {
+      threadId: "thread-stale-successor",
+      cwd: tempDir,
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-fingerprint",
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+          fingerprint: "projection-fingerprint",
+        },
+      },
+    });
+    const lifecycleDiagnostics = collectCodexNativeThreadLifecycleEvents();
+
+    const result = await reconcileContextEngineCompactedCodexBinding({
+      params: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+      },
+      contextEngineId: "lossless-claw",
+      compactedSessionId: "session-1-compacted",
+      compactedSessionFile: successorFile,
+      originalBinding: null,
+    });
+    await waitForDiagnosticEventsDrained();
+    lifecycleDiagnostics.unsubscribe();
+
+    expect(result).toEqual({
+      invalidated: true,
+      preserved: false,
+      successorInvalidated: true,
+    });
+    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+    expect(await readCodexAppServerBinding(successorFile)).toBeUndefined();
+    expect(lifecycleDiagnostics.events).toContainEqual(
+      expect.objectContaining({
+        type: "codex.native_thread.lifecycle",
+        action: "invalidated",
+        reason: "context-engine-compaction-invalidated-binding",
+        threadId: "thread-stale-successor",
+        sessionId: "session-1-compacted",
+        previousSessionId: "session-1",
+      }),
+    );
+  });
+
   it("does not impose an OpenClaw timeout after Codex accepts native compaction", async () => {
     const fake = createFakeCodexClient();
     const factory = vi.fn(async () => fake.client);
