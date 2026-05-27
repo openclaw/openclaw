@@ -22,6 +22,7 @@ import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
+  normalizeOpenAIResponsesToolCallIds,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
   validateAnthropicTurns,
@@ -766,9 +767,11 @@ export async function sanitizeSessionHistory(params: {
       : sanitizedToolCalls;
   const openAISafeToolCalls = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
-        downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
-          dropReplayableReasoning: modelChanged,
-        }),
+        normalizeOpenAIResponsesToolCallIds(
+          downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
+            dropReplayableReasoning: modelChanged,
+          }),
+        ),
       )
     : sanitizedToolCalls;
   const sanitizedToolIds =

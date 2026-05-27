@@ -15,6 +15,11 @@ import {
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeProviderId } from "./provider-id.js";
+
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+
 export function resolveLiveSessionModelSelection(params: {
   cfg?: { session?: { store?: string } } | undefined;
   sessionKey?: string;
@@ -86,6 +91,19 @@ export function consumeLiveSessionModelSwitch(
   return consumeEmbeddedRunModelSwitch(sessionId);
 }
 
+function isAlreadyAppliedOpenAICodexRuntimePromotion(
+  current: { provider: string; model: string },
+  next: LiveSessionModelSelection,
+): boolean {
+  // The embedded Codex runtime reports openai-codex after applying a canonical
+  // openai selection. Other runtime aliases remain real live-switch targets.
+  return (
+    normalizeProviderId(current.provider) === OPENAI_CODEX_PROVIDER_ID &&
+    normalizeProviderId(next.provider) === OPENAI_PROVIDER_ID &&
+    current.model === next.model
+  );
+}
+
 export function hasDifferentLiveSessionModelSelection(
   current: {
     provider: string;
@@ -98,9 +116,11 @@ export function hasDifferentLiveSessionModelSelection(
   if (!next) {
     return false;
   }
+  const modelSelectionDiffers =
+    (current.provider !== next.provider || current.model !== next.model) &&
+    !isAlreadyAppliedOpenAICodexRuntimePromotion(current, next);
   return (
-    current.provider !== next.provider ||
-    current.model !== next.model ||
+    modelSelectionDiffers ||
     normalizeOptionalString(current.authProfileId) !== next.authProfileId ||
     (normalizeOptionalString(current.authProfileId) ? current.authProfileIdSource : undefined) !==
       next.authProfileIdSource

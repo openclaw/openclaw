@@ -111,7 +111,7 @@ also be listed in `contracts.embeddingProviders` in the plugin manifest. This
 is the generic embedding surface for reusable vector generation. Memory search
 can consume this generic provider surface. The older
 `api.registerMemoryEmbeddingProvider(...)` and
-`contracts.memoryEmbeddingProviders` seam remains as compatibility while
+`contracts.memoryEmbeddingProviders` seam is deprecated compatibility while
 existing memory-specific providers migrate.
 
 ### Tools and commands
@@ -378,7 +378,7 @@ For an end-to-end authoring guide, see
 | `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                |
 | `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                    |
 
-### Memory embedding adapters
+### Deprecated memory embedding adapters
 
 | Method                                         | What it registers                              |
 | ---------------------------------------------- | ---------------------------------------------- |
@@ -394,12 +394,12 @@ For an end-to-end authoring guide, see
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.
-- `registerMemoryEmbeddingProvider` lets the active memory plugin register one
-  or more embedding adapter ids (for example `openai`, `gemini`, or a custom
-  plugin-defined id).
-- User config such as `agents.defaults.memorySearch.provider` and
-  `agents.defaults.memorySearch.fallback` resolves against those registered
-  adapter ids.
+- `registerMemoryEmbeddingProvider` is deprecated. New embedding providers
+  should use `api.registerEmbeddingProvider(...)` and
+  `contracts.embeddingProviders`.
+- Existing memory-specific providers continue to work during the migration
+  window, but plugin inspection reports this as compatibility debt for
+  non-bundled plugins.
 
 ### Events and lifecycle
 

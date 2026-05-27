@@ -7,10 +7,13 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Memory: add a core OpenAI-compatible embedding provider for local and hosted OpenAI-style endpoints, with config, doctor, and docs support. (#85269) Thanks @dutifulbob.
+- Plugin SDK: mark memory-specific embedding provider registration as deprecated compatibility and surface non-bundled usage in plugin compatibility diagnostics. (#85072) Thanks @mbelinky.
 
 ### Fixes
 
+- Block unsafe Node runtime env overrides [AI]. (#87308) Thanks @pgondhi987.
 - Telegram: route `sendMessage` action replies through durable outbound delivery so completed agent responses remain retryable when the gateway send path times out. (#87261) Thanks @mbelinky.
+- Gateway/security: require `operator.admin` for node and other non-operator device-role pairing approvals, including trusted-proxy sessions, while keeping pairing-only approvals available for operator-role requests. (#87146)
 
 ## 2026.5.26
 

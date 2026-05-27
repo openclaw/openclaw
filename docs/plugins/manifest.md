@@ -647,7 +647,7 @@ Each list is optional:
 | `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                |
 | `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                                |
 | `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                        |
-| `memoryEmbeddingProviders`       | `string[]` | Legacy memory embedding provider ids this plugin owns.                                               |
+| `memoryEmbeddingProviders`       | `string[]` | Deprecated memory-specific embedding provider ids this plugin owns.                                  |
 | `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                   |
 | `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                     |
 | `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                      |
@@ -677,9 +677,9 @@ will be removed after the migration window.
 General embedding providers should declare `contracts.embeddingProviders` for
 each adapter registered with `api.registerEmbeddingProvider(...)`. Use the
 general contract for reusable vector generation, including providers consumed by
-memory search. `contracts.memoryEmbeddingProviders` is the older
-memory-specific compatibility contract and remains while existing providers
-migrate to the generic embedding provider seam.
+memory search. `contracts.memoryEmbeddingProviders` is deprecated
+memory-specific compatibility and remains only while existing providers migrate
+to the generic embedding provider seam.
 
 `contracts.gatewayMethodDispatch` currently accepts
 `"authenticated-request"`. It is an API hygiene gate for native plugin HTTP

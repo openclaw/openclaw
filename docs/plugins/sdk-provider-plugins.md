@@ -685,9 +685,9 @@ API key auth, and dynamic model resolution.
         ```
 
         Declare the same id in `contracts.embeddingProviders`. This is the
-        general embedding contract for reusable vector generation. Use
-        `registerMemoryEmbeddingProvider(...)` only for memory-engine-specific
-        adapters.
+        general embedding contract for reusable vector generation, including
+        memory search. `registerMemoryEmbeddingProvider(...)` is deprecated
+        compatibility for existing memory-specific adapters.
       </Tab>
       <Tab title="Image and video generation">
         Video capabilities use a **mode-aware** shape: `generate`,

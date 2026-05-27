@@ -158,6 +158,11 @@ const knownDeprecatedSurfaceMarkers = [
     marker: "@deprecated Use gateway_stop",
   },
   {
+    code: "deprecated-memory-embedding-provider-api",
+    file: "src/plugins/types.ts",
+    marker: "registerMemoryEmbeddingProvider",
+  },
+  {
     code: "channel-route-key-aliases",
     file: "src/plugin-sdk/channel-route.ts",
     marker: "channelRouteIdentityKey",
