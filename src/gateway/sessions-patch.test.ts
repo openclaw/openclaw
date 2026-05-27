@@ -822,6 +822,33 @@ describe("gateway sessions patch", () => {
     expect(entry.liveModelSwitchPending).toBe(true);
   });
 
+  test("marks same-model @profile patches as pending live model switches", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "sess-live-profile-only",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        authProfileOverride: "oldprofile",
+        authProfileOverrideSource: "user",
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6@newprofile" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.authProfileOverride).toBe("newprofile");
+    expect(entry.liveModelSwitchPending).toBe(true);
+  });
+
   test("does not set authProfileOverride when profile suffix is missing", async () => {
     const entry = expectPatchOk(
       await runPatch({
