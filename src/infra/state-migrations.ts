@@ -381,9 +381,9 @@ function canonicalizeSessionKeyForAgent(params: {
     return normalizeLowercaseStringOrEmpty(`agent:${agentId}:unknown:${raw}`);
   }
   if (isSurfaceGroupKey(raw)) {
-    return normalizeLowercaseStringOrEmpty(`agent:${agentId}:${raw}`);
+    return `agent:${agentId}:${normalized}`;
   }
-  return normalizeLowercaseStringOrEmpty(`agent:${agentId}:${raw}`);
+  return normalizeSessionKeyPreservingOpaquePeerIds(`agent:${agentId}:${raw}`);
 }
 
 function pickLatestLegacyDirectEntry(
