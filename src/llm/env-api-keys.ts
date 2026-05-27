@@ -145,6 +145,14 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
     return ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
   }
 
+  if (provider === "moonshot") {
+    return ["MOONSHOT_API_KEY", "KIMI_API_KEY"];
+  }
+
+  if (provider === "kimi" || provider === "kimi-coding") {
+    return ["KIMI_API_KEY", "KIMICODE_API_KEY"];
+  }
+
   const envMap: Record<string, string> = {
     openai: "OPENAI_API_KEY",
     "azure-openai-responses": "AZURE_OPENAI_API_KEY",
@@ -167,7 +175,6 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
     together: "TOGETHER_API_KEY",
     opencode: "OPENCODE_API_KEY",
     "opencode-go": "OPENCODE_API_KEY",
-    "kimi-coding": "KIMI_API_KEY",
     "cloudflare-workers-ai": "CLOUDFLARE_API_KEY",
     "cloudflare-ai-gateway": "CLOUDFLARE_API_KEY",
     xiaomi: "XIAOMI_API_KEY",
