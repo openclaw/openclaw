@@ -43,6 +43,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI: pass the selected Usage page `agent:` filter to usage session and cost requests, and seed the agent filter from configured agents so non-main agent usage can be loaded again. (#87132) Thanks @hpfan.
 - Memory/security: reject prompt-like text submitted through the explicit `memory_store` tool before embedding or storage, matching the existing auto-capture prompt-injection filter. (#87142)
 - Gateway/security: enable the default auth rate limiter for remote non-browser and HTTP gateway auth failures when `gateway.auth.rateLimit` is unset, while preserving the loopback exemption. (#87148)
 - Prompt hardening: route untrusted group prompt metadata through sanitized untrusted structured context while preserving trusted operator-configured group system prompts and aligning the plugin SDK docs/test helpers. (#87144)

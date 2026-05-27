@@ -161,4 +161,31 @@ describe("gateway usage helpers", () => {
       "background",
     );
   });
+
+  it("loadCostUsageSummaryCached keeps agent-scoped summaries in separate cache entries", async () => {
+    const config = {} as OpenClawConfig;
+
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config,
+      agentId: "main",
+    });
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config,
+      agentId: "ops",
+    });
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config,
+      agentId: "ops",
+    });
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBe("main");
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[1]?.[0]?.agentId).toBe("ops");
+  });
 });

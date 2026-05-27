@@ -50,6 +50,7 @@ export function renderUsageTab(state: AppViewState) {
       loading: state.usageLoading,
       error: state.usageError,
       sessions: state.usageResult?.sessions ?? [],
+      configuredAgentIds: state.agentsList?.agents.map((agent) => agent.id) ?? [],
       sessionsLimitReached: (state.usageResult?.sessions?.length ?? 0) >= 1000,
       totals: state.usageResult?.totals ?? null,
       aggregates: state.usageResult?.aggregates ?? null,
@@ -167,6 +168,7 @@ export function renderUsageTab(state: AppViewState) {
             state.usageQueryDebounceTimer = null;
           }
           state.usageQuery = state.usageQueryDraft;
+          void loadUsage(state);
         },
         onClearQuery: () => {
           if (state.usageQueryDebounceTimer) {
@@ -175,6 +177,7 @@ export function renderUsageTab(state: AppViewState) {
           }
           state.usageQueryDraft = "";
           state.usageQuery = "";
+          void loadUsage(state);
         },
         onSelectDay: (day, shiftKey) => {
           if (shiftKey && state.usageSelectedDays.length > 0) {

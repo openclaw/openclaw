@@ -29,6 +29,7 @@ function createState(request: RequestFn, overrides: Partial<UsageState> = {}): U
     usageTimeSeriesCursorEnd: null,
     usageSessionLogs: null,
     usageSessionLogsLoading: false,
+    usageQuery: "",
     usageTimeZone: "local",
     ...overrides,
   };
@@ -98,6 +99,39 @@ describe("usage controller date interpretation params", () => {
       endDate: "2026-02-16",
       mode: "utc",
     });
+  });
+
+  it("passes a single exact agent query token to sessions.usage", async () => {
+    const request = vi.fn(async () => ({}));
+    const state = createState(request, {
+      usageQuery: "agent:Ops label:build",
+      usageTimeZone: "utc",
+    });
+
+    await loadUsage(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      agentId: "ops",
+      mode: "utc",
+      groupBy: "family",
+      includeHistorical: true,
+      limit: 1000,
+      includeContextWeight: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "usage.cost", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      agentId: "ops",
+      mode: "utc",
+    });
+  });
+
+  it("does not send agentId for wildcard or ambiguous agent query tokens", () => {
+    expect(testApi.resolveUsageAgentIdFromQuery("agent:ops")).toBe("ops");
+    expect(testApi.resolveUsageAgentIdFromQuery("agent:op*")).toBeUndefined();
+    expect(testApi.resolveUsageAgentIdFromQuery("agent:ops agent:main")).toBeUndefined();
   });
 
   it("captures useful error strings in loadUsage", async () => {

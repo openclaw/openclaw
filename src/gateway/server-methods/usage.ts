@@ -720,8 +720,9 @@ async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
   config: OpenClawConfig;
+  agentId?: string;
 }): Promise<CostUsageSummary> {
-  const cacheKey = `${params.startMs}-${params.endMs}`;
+  const cacheKey = `${params.agentId ?? "__default__"}:${params.startMs}-${params.endMs}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (
@@ -745,6 +746,7 @@ async function loadCostUsageSummaryCached(params: {
     startMs: params.startMs,
     endMs: params.endMs,
     config: params.config,
+    agentId: params.agentId,
     requestRefresh: true,
     refreshMode: "background",
   })
@@ -832,7 +834,13 @@ export const usageHandlers: GatewayRequestHandlers = {
       mode: params?.mode,
       utcOffset: params?.utcOffset,
     });
-    const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
+    const requestedAgentId = normalizeOptionalString(params?.agentId);
+    const summary = await loadCostUsageSummaryCached({
+      startMs,
+      endMs,
+      config,
+      agentId: requestedAgentId ? normalizeAgentId(requestedAgentId) : undefined,
+    });
     respond(true, summary, undefined);
   },
   "sessions.usage": async ({ respond, params, context }) => {
