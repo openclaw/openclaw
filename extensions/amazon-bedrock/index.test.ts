@@ -478,6 +478,36 @@ describe("amazon-bedrock provider plugin", () => {
     expect(result).not.toHaveProperty("temperature");
   });
 
+  it("uses plugin discovery region when provider URLs do not encode one", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: NON_ANTHROPIC_MODEL,
+      model: {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: NON_ANTHROPIC_MODEL,
+        baseUrl: "https://bedrock-runtime.internal.example",
+      },
+      config: {
+        plugins: {
+          entries: {
+            "amazon-bedrock": {
+              config: { discovery: { region: "eu-central-1" } },
+            },
+          },
+        },
+      },
+      streamFn: spyStreamFn,
+    } as never);
+
+    const result = wrapped?.(MODEL_DESCRIPTOR, { messages: [] } as never, {}) as
+      | Record<string, unknown>
+      | undefined;
+
+    expectWrappedResultFields(result, { region: "eu-central-1" });
+  });
+
   it("omits temperature for non-US Bedrock Opus 4.7 regional profiles", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
     const wrapped = provider.wrapStreamFn?.({

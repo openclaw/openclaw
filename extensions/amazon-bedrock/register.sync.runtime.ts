@@ -493,7 +493,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     ...anthropicByModelReplayHooks,
     wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel, extraParams }) => {
-      const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;
+      const currentPluginConfig = resolveCurrentPluginConfig(config);
+      const currentGuardrail = currentPluginConfig?.guardrail;
       let wrapped =
         (currentGuardrail?.guardrailIdentifier && currentGuardrail?.guardrailVersion
           ? createGuardrailWrapStreamFn(baseWrapStreamFn, currentGuardrail)({ modelId, streamFn })
@@ -506,7 +507,10 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         wrapped = createBedrockServiceTierWrapper(wrapped, serviceTier);
       }
 
-      const region = resolveBedrockRegion(config) ?? extractRegionFromBaseUrl(model?.baseUrl);
+      const region =
+        resolveBedrockRegion(config) ??
+        extractRegionFromBaseUrl(model?.baseUrl) ??
+        currentPluginConfig?.discovery?.region;
       const mayNeedCacheInjection =
         isBedrockAppInferenceProfile(modelId) && !sharedRuntimeWouldInjectCachePoints(modelId);
       const shouldOmitTemperature = isOpus47BedrockModelRef(modelId);
