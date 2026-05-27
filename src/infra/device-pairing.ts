@@ -449,7 +449,7 @@ function buildDeviceAuthToken(params: {
     token: newToken(),
     role: params.role,
     scopes: params.scopes,
-    issuer: params.issuer,
+    issuer: params.issuer ?? params.existing?.issuer,
     createdAtMs: params.existing?.createdAtMs ?? params.now,
     rotatedAtMs: params.rotatedAtMs,
     revokedAtMs: undefined,
@@ -927,7 +927,7 @@ export async function verifyDeviceToken(params: {
   scopes: string[];
   requiredSharedGatewaySessionGeneration?: string;
   baseDir?: string;
-}): Promise<{ ok: boolean; reason?: string }> {
+}): Promise<{ ok: boolean; reason?: string; issuer?: DeviceAuthToken["issuer"] }> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const device = getPairedDeviceFromState(state, params.deviceId);
@@ -980,7 +980,7 @@ export async function verifyDeviceToken(params: {
     device.tokens[role] = entry;
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, params.baseDir, "paired");
-    return { ok: true };
+    return entry.issuer ? { ok: true, issuer: entry.issuer } : { ok: true };
   });
 }
 

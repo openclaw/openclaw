@@ -1066,7 +1066,10 @@ describe("device pairing tokens", () => {
         requiredSharedGatewaySessionGeneration: "old-generation",
         baseDir,
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({
+      ok: true,
+      issuer: { kind: "shared-gateway-auth", generation: "old-generation" },
+    });
     await expect(
       verifyDeviceToken({
         deviceId: "browser-device-1",
@@ -1099,7 +1102,35 @@ describe("device pairing tokens", () => {
         requiredSharedGatewaySessionGeneration: "new-generation",
         baseDir,
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({
+      ok: true,
+      issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
+    });
+
+    const rotated = await rotateDeviceToken({
+      deviceId: "browser-device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      baseDir,
+    });
+    const rotatedEntry = requireRotatedEntry(rotated);
+    expect(rotatedEntry.issuer).toEqual({
+      kind: "shared-gateway-auth",
+      generation: "new-generation",
+    });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-device-1",
+        token: rotatedEntry.token,
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
+    });
   });
 
   test("keeps ambiguous legacy device tokens valid across shared gateway auth rotation", async () => {
@@ -1140,7 +1171,10 @@ describe("device pairing tokens", () => {
         requiredSharedGatewaySessionGeneration: "new-generation",
         baseDir,
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({
+      ok: true,
+      issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
+    });
   });
 
   test("normalizes legacy node token scopes back to [] on re-approval", async () => {
