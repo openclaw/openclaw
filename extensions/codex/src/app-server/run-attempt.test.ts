@@ -5653,7 +5653,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
-  it("keeps waiting after raw reasoning completes before a visible message call", async () => {
+  it("keeps waiting after reasoning and its raw mirror complete before a visible message call", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
@@ -5670,6 +5670,22 @@ describe("runCodexAppServerAttempt", () => {
       settled = true;
     });
     await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "reasoning-1", type: "reasoning" },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "reasoning-1", type: "reasoning" },
+      },
+    });
     await harness.notify({
       method: "rawResponseItem/completed",
       params: {
