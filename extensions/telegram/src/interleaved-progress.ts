@@ -74,21 +74,35 @@ export function renderInterleavedMessage(params: {
 }
 
 /**
- * Append the newly-arrived portion of the reasoning stream to the body. The
- * checkpoint tracks how much of the (header-stripped) formatted reasoning has
- * already been consumed so re-delivered cumulative text is not duplicated.
+ * Append the newly-arrived portion of the reasoning stream to the body,
+ * handling both reasoning producers:
+ * - Cumulative snapshots (e.g. Claude): each chunk is the full reasoning so
+ *   far, so the new chunk prefix-extends the previous one — append only the
+ *   suffix, and skip identical re-deliveries.
+ * - Deltas (e.g. Codex app-server's `onReasoningStream({ text: delta })`):
+ *   each chunk is a fresh fragment that does NOT prefix-extend the previous
+ *   one — append it whole. (Slicing by a length checkpoint would drop a
+ *   same-size-or-shorter later delta entirely.)
+ *
+ * `previousBodyOnly` carries the last chunk's header-stripped text so the next
+ * call can tell the two modes apart.
  */
 export function appendReasoningBody(params: {
   body: string;
-  checkpoint: number;
+  previousBodyOnly: string;
   formattedReasoning: string;
-}): { body: string; checkpoint: number } {
+}): { body: string; previousBodyOnly: string } {
   const bodyOnly = stripReasoningHeader(params.formattedReasoning);
-  const newPart = bodyOnly.slice(params.checkpoint);
-  if (!newPart) {
-    return { body: params.body, checkpoint: params.checkpoint };
+  if (!bodyOnly) {
+    return { body: params.body, previousBodyOnly: params.previousBodyOnly };
   }
-  return { body: params.body + newPart, checkpoint: bodyOnly.length };
+  const isCumulative =
+    params.previousBodyOnly !== "" && bodyOnly.startsWith(params.previousBodyOnly);
+  const newPart = isCumulative ? bodyOnly.slice(params.previousBodyOnly.length) : bodyOnly;
+  if (!newPart) {
+    return { body: params.body, previousBodyOnly: bodyOnly };
+  }
+  return { body: params.body + newPart, previousBodyOnly: bodyOnly };
 }
 
 /**

@@ -1207,7 +1207,7 @@ export const dispatchTelegramMessage = async ({
     hasReasoningLane: Boolean(reasoningLane.stream),
   });
   let interleavedBody = "";
-  let interleavedReasoningCheckpoint = 0;
+  let interleavedReasoningPrev = "";
   let interleavedTimer: ReturnType<typeof setInterval> | undefined;
   let interleavedTimerStartedAt: number | undefined;
   const clearInterleavedTimer = (): void => {
@@ -1264,11 +1264,11 @@ export const dispatchTelegramMessage = async ({
     clearInterleavedTimer();
     const next = appendReasoningBody({
       body: interleavedBody,
-      checkpoint: interleavedReasoningCheckpoint,
+      previousBodyOnly: interleavedReasoningPrev,
       formattedReasoning: splitTelegramReasoningText(rawText, true).reasoningText ?? "",
     });
     interleavedBody = next.body;
-    interleavedReasoningCheckpoint = next.checkpoint;
+    interleavedReasoningPrev = next.previousBodyOnly;
     return updateInterleavedLane();
   };
 

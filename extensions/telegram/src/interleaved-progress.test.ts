@@ -95,32 +95,57 @@ describe("renderInterleavedMessage", () => {
 });
 
 describe("appendReasoningBody", () => {
-  it("appends only the newly-arrived (header-stripped) portion via the checkpoint", () => {
+  it("appends only the new suffix for cumulative-snapshot producers", () => {
     const first = appendReasoningBody({
       body: "",
-      checkpoint: 0,
+      previousBodyOnly: "",
       formattedReasoning: "Thinking\n\n_step one_",
     });
     expect(first.body).toBe("_step one_");
-    expect(first.checkpoint).toBe("_step one_".length);
+    expect(first.previousBodyOnly).toBe("_step one_");
 
     // Cumulative re-delivery of the same prefix plus new text must not duplicate.
     const second = appendReasoningBody({
       body: first.body,
-      checkpoint: first.checkpoint,
+      previousBodyOnly: first.previousBodyOnly,
       formattedReasoning: "Thinking\n\n_step one__step two_",
     });
     expect(second.body).toBe("_step one__step two_");
   });
 
-  it("is a no-op when no new text has arrived", () => {
+  // Codex app-server sends onReasoningStream({ text: delta }); each chunk is a
+  // fresh fragment, not a cumulative snapshot. A same-size/shorter later delta
+  // must NOT vanish (the bug a length checkpoint caused).
+  it("appends each fragment whole for delta producers", () => {
+    const first = appendReasoningBody({
+      body: "",
+      previousBodyOnly: "",
+      formattedReasoning: "Thinking\n\n_alpha_",
+    });
+    const second = appendReasoningBody({
+      body: first.body,
+      previousBodyOnly: first.previousBodyOnly,
+      formattedReasoning: "Thinking\n\n_beta_",
+    });
+    expect(second.body).toBe("_alpha__beta_");
+
+    // A shorter follow-up delta still survives.
+    const third = appendReasoningBody({
+      body: second.body,
+      previousBodyOnly: second.previousBodyOnly,
+      formattedReasoning: "Thinking\n\n_c_",
+    });
+    expect(third.body).toBe("_alpha__beta__c_");
+  });
+
+  it("is a no-op when an identical cumulative snapshot is re-delivered", () => {
     const out = appendReasoningBody({
       body: "_step one_",
-      checkpoint: "_step one_".length,
+      previousBodyOnly: "_step one_",
       formattedReasoning: "Thinking\n\n_step one_",
     });
     expect(out.body).toBe("_step one_");
-    expect(out.checkpoint).toBe("_step one_".length);
+    expect(out.previousBodyOnly).toBe("_step one_");
   });
 });
 
