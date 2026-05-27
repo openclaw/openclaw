@@ -2009,6 +2009,7 @@ describe("oversized transcript line guards", () => {
   test("oversized line metadata extraction preserves id and parentId", async () => {
     const sessionId = "test-oversized-metadata-extract";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const timestamp = "2026-05-16T16:00:33.000Z";
     const oversizedContent = "w".repeat(300 * 1024);
     const lines = [
       JSON.stringify({ type: "session", version: 3, id: sessionId }),
@@ -2020,6 +2021,7 @@ describe("oversized transcript line guards", () => {
       }),
       JSON.stringify({
         type: "message",
+        timestamp,
         id: "oversized-child",
         parentId: "root-msg",
         message: { role: "assistant", content: oversizedContent },
@@ -2041,6 +2043,7 @@ describe("oversized transcript line guards", () => {
     // id is preserved in __openclaw transcript metadata
     const meta = (oversized as Record<string, Record<string, unknown>>)["__openclaw"];
     expect(meta?.id).toBe("oversized-child");
+    expect(meta?.recordTimestampMs).toBe(Date.parse(timestamp));
     // parentId extraction is proven by the record being included:
     // if parentId was not extracted, the tree would orphan this node.
 

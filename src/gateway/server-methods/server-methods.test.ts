@@ -1133,6 +1133,42 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
     expect(out).toEqual(messages);
   });
 
+  it("keeps an adjacent assistant reply when only the announce user predates the cutoff", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "fresh-session reply" }],
+        __openclaw: { seq: 2, recordTimestampMs: cutoff + 1_000 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual([messages[1]]);
+  });
+
+  it("keeps an adjacent assistant reply when its record timestamp is missing", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "timestampless reply" }],
+        __openclaw: { seq: 2 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual([messages[1]]);
+  });
+
   it("returns the input unchanged when sessionStartedAt is undefined", () => {
     const messages = [
       {

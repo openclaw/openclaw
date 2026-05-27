@@ -2084,9 +2084,14 @@ export function dropPreSessionStartAnnouncePairs(
       const ts = readChatHistoryRecordTimestampMs(current);
       if (typeof ts === "number" && ts < sessionStartedAt) {
         const next = messages[i + 1];
-        if (isChatHistoryAssistantMessage(next)) {
-          // Skip the assistant reply paired with the pre-session-start announce
-          // so the contaminating turn is dropped as a unit (#85648).
+        const nextTs = readChatHistoryRecordTimestampMs(next);
+        if (
+          isChatHistoryAssistantMessage(next) &&
+          typeof nextTs === "number" &&
+          nextTs < sessionStartedAt
+        ) {
+          // Skip only an assistant reply that is also pre-session-start; recent
+          // or timestampless assistants may be real fresh-session context.
           i++;
         }
         changed = true;
