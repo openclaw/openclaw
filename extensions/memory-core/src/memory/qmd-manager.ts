@@ -1929,7 +1929,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.isUnsupportedQmdOptionError(err) ||
       this.isSqliteBusyError(err) ||
       !isQmdNativeAbortAfterOutput(err) ||
-      !hasQmdJsonArrayPayload(err.stdout)
+      !err.stdout.trim().startsWith("[")
     ) {
       return null;
     }
@@ -3241,9 +3241,4 @@ function isQmdNativeAbortAfterOutput(err: {
     stderr.includes("abort trap") ||
     stderr.includes("assertion failed")
   );
-}
-
-function hasQmdJsonArrayPayload(raw: string): boolean {
-  const trimmed = raw.trim();
-  return trimmed.startsWith("[]") || trimmed.startsWith("[{") || /\n\s*\[(?:\]|\{)/.test(trimmed);
 }

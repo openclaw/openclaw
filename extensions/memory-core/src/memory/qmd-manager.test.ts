@@ -1849,13 +1849,17 @@ describe("QmdMemoryManager", () => {
         queueMicrotask(() => {
           child.stdout.emit(
             "data",
-            JSON.stringify([
-              {
-                file: "qmd://workspace-main/notes/welcome.md",
-                score: 0.93,
-                snippet: "@@ -7,1\nrouter glacier backup",
-              },
-            ]),
+            JSON.stringify(
+              [
+                {
+                  file: "qmd://workspace-main/notes/welcome.md",
+                  score: 0.93,
+                  snippet: "@@ -7,1\nrouter glacier backup",
+                },
+              ],
+              null,
+              2,
+            ),
           );
           child.stderr.emit("data", "ggml-metal-device.m:612 assertion failed");
           child.closeWith(134);
