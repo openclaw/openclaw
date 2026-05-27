@@ -2454,6 +2454,7 @@ export async function runCodexAppServerAttempt(
       notification.method === "rawResponseItem/completed" &&
       activeTurnItemIds.size === 0 &&
       activeAppServerTurnRequests === 0 &&
+      !assistantCompletionCanRelease &&
       !postToolRawAssistantCompletionNeedsTerminalGuard;
     const shouldArmPostReasoningSourceReplyWatch =
       isCurrentTurnNotification &&

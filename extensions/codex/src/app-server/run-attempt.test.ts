@@ -6303,8 +6303,9 @@ describe("runCodexAppServerAttempt", () => {
     params.timeoutMs = 200;
 
     const run = runCodexAppServerAttempt(params, {
-      turnAssistantCompletionIdleTimeoutMs: 5,
-      turnTerminalIdleTimeoutMs: 15,
+      turnCompletionIdleTimeoutMs: 5,
+      turnAssistantCompletionIdleTimeoutMs: 30,
+      turnTerminalIdleTimeoutMs: 500,
     });
     await vi.waitFor(
       () =>
