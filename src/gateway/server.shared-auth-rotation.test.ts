@@ -43,7 +43,9 @@ async function openDeviceTokenWsWithDetails(
 ): Promise<{
   ws: WebSocket;
   deviceId: string;
-  hello: Awaited<ReturnType<typeof connectOk>>;
+  hello: Awaited<ReturnType<typeof connectOk>> & {
+    auth?: { deviceToken?: unknown };
+  };
 }> {
   const identityPath = path.join(os.tmpdir(), `openclaw-shared-auth-${process.pid}-${port}.json`);
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
@@ -105,13 +107,15 @@ async function openDeviceTokenWsWithDetails(
   );
   trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve) => ws.once("open", resolve));
-  const hello = await connectOk(ws, {
+  const hello = (await connectOk(ws, {
     skipDefaultAuth: true,
     client,
     deviceIdentityPath: identityPath,
     deviceToken: issuedDeviceToken,
     scopes: ["operator.admin"],
-  });
+  })) as Awaited<ReturnType<typeof connectOk>> & {
+    auth?: { deviceToken?: unknown };
+  };
   return { ws, deviceId: identity.deviceId, hello };
 }
 
@@ -258,7 +262,9 @@ describe("gateway shared auth rotation", () => {
     });
     try {
       const helloDeviceToken = hello.auth?.deviceToken;
-      expect(helloDeviceToken).toBeTypeOf("string");
+      if (typeof helloDeviceToken !== "string") {
+        throw new Error("expected hello device token");
+      }
       const paired = await getPairedDevice(deviceId);
       expect(paired?.tokens?.operator?.issuer).toEqual({
         kind: "shared-gateway-auth",
@@ -267,7 +273,7 @@ describe("gateway shared auth rotation", () => {
       await expect(
         verifyDeviceToken({
           deviceId,
-          token: helloDeviceToken ?? "",
+          token: helloDeviceToken,
           role: "operator",
           scopes: ["operator.admin"],
           requiredSharedGatewaySessionGeneration: issuerGeneration,
