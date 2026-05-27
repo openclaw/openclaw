@@ -1566,7 +1566,11 @@ describe("runCodexAppServerAttempt", () => {
     expect(hookContext.sessionId).toBe("session-1");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
-    expect(threadStartParams?.developerInstructions).toContain("pre system\n\ncustom codex system");
+    const wrappedPluginSystemContext = (text: string) =>
+      `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
+    expect(threadStartParams?.developerInstructions).toContain(
+      `${wrappedPluginSystemContext("pre system")}\n\ncustom codex system\n\n${wrappedPluginSystemContext("post system")}`,
+    );
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as
       | { input?: Array<{ text?: string; text_elements?: unknown[]; type?: string }> }
