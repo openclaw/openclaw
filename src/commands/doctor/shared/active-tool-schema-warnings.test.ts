@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { createOpenClawCodingTools } from "../../../agents/pi-tools.js";
+import type { createOpenClawCodingTools } from "../../../agents/agent-tools.js";
 import type { AnyAgentTool } from "../../../agents/tools/common.js";
 
 const toolState = vi.hoisted(() => ({
@@ -9,7 +9,7 @@ const toolState = vi.hoisted(() => ({
   createTools: vi.fn<typeof createOpenClawCodingTools>(),
 }));
 
-vi.mock("../../../agents/pi-tools.js", () => ({
+vi.mock("../../../agents/agent-tools.js", () => ({
   createOpenClawCodingTools: (options?: Parameters<typeof createOpenClawCodingTools>[0]) => {
     toolState.createTools(options);
     if (toolState.throwError) {
