@@ -44,6 +44,7 @@ const OPENCLAW_OAUTH_ANTHROPIC_BETAS = [
 ] as const;
 
 type AnthropicServiceTier = "auto" | "standard_only";
+type DynamicFastMode = boolean | (() => boolean | undefined);
 
 function isAnthropic1MModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
@@ -157,9 +158,20 @@ export function createAnthropicBetaHeadersWrapper(
 /** Wrap a stream function with the Anthropic fast-mode service tier. */
 export function createAnthropicFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
-  enabled: boolean,
+  enabled: DynamicFastMode,
 ): StreamFn {
-  return createAnthropicServiceTierWrapper(baseStreamFn, resolveAnthropicFastServiceTier(enabled));
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const resolved = typeof enabled === "function" ? enabled() : enabled;
+    if (resolved === undefined) {
+      return underlying(model, context, options);
+    }
+    return createAnthropicServiceTierWrapper(underlying, resolveAnthropicFastServiceTier(resolved))(
+      model,
+      context,
+      options,
+    );
+  };
 }
 
 /** Wrap a stream function with an explicit Anthropic service tier when allowed. */
@@ -204,9 +216,12 @@ export function createAnthropicThinkingPrefillWrapper(
 export function resolveAnthropicFastMode(
   extraParams: Record<string, unknown> | undefined,
 ): boolean | undefined {
-  return normalizeFastMode(
-    (extraParams?.fastMode ?? extraParams?.fast_mode) as string | boolean | null | undefined,
-  );
+  const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
+  const fastMode =
+    typeof raw === "function"
+      ? normalizeFastMode((raw as () => unknown)() as string | boolean | null | undefined)
+      : normalizeFastMode(raw as string | boolean | null | undefined);
+  return fastMode === "auto" ? undefined : fastMode;
 }
 
 /** Resolve Anthropic service tier from model extra params. */
@@ -232,7 +247,9 @@ export function wrapAnthropicProviderStream(
     hasConfiguredAnthropicBeta(ctx.extraParams) ||
     (ctx.extraParams?.context1m === true && isAnthropic1MModel(ctx.modelId));
   const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
-  const fastMode = resolveAnthropicFastMode(ctx.extraParams);
+  const hasFastModeParam =
+    ctx.extraParams !== undefined &&
+    (Object.hasOwn(ctx.extraParams, "fastMode") || Object.hasOwn(ctx.extraParams, "fast_mode"));
   return composeProviderStreamWrappers(
     ctx.streamFn,
     needsAnthropicBetaWrapper
@@ -241,8 +258,9 @@ export function wrapAnthropicProviderStream(
     serviceTier
       ? (streamFn) => createAnthropicServiceTierWrapper(streamFn, serviceTier)
       : undefined,
-    fastMode !== undefined
-      ? (streamFn) => createAnthropicFastModeWrapper(streamFn, fastMode)
+    hasFastModeParam
+      ? (streamFn) =>
+          createAnthropicFastModeWrapper(streamFn, () => resolveAnthropicFastMode(ctx.extraParams))
       : undefined,
     (streamFn) => createAnthropicThinkingPrefillWrapper(streamFn),
   );

@@ -201,6 +201,7 @@ export const vi: TranslationMap = {
     inherit: "kế thừa",
     defaultOption: "Mặc định ({value})",
     offExplicit: "tắt (rõ ràng)",
+    auto: "auto",
     on: "bật",
     off: "tắt",
     full: "đầy đủ",

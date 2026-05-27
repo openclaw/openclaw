@@ -204,6 +204,7 @@ export const ja_JP: TranslationMap = {
     inherit: "継承",
     defaultOption: "デフォルト（{value}）",
     offExplicit: "オフ（明示）",
+    auto: "auto",
     on: "オン",
     off: "オフ",
     full: "フル",

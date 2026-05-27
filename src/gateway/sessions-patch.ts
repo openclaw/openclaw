@@ -395,7 +395,7 @@ export async function applySessionsPatchToStore(params: {
     } else if (raw !== undefined) {
       const normalized = normalizeFastMode(raw);
       if (normalized === undefined) {
-        return invalid("invalid fastMode (use true or false)");
+        return invalid('invalid fastMode (use true, false, or "auto")');
       }
       next.fastMode = normalized;
     }

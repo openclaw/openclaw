@@ -1950,7 +1950,9 @@ export async function runAgentTurnWithFallback(params: {
       const sourceRepliesAreToolOnly =
         params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only";
       const shouldSuppressProgressAfterMessageToolDelivery = () =>
-        sourceRepliesAreToolOnly && messageToolOnlyDeliveryCompleted;
+        sourceRepliesAreToolOnly &&
+        messageToolOnlyDeliveryCompleted &&
+        params.opts?.allowProgressCallbacksWhenSourceDeliverySuppressed !== true;
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
       const runLane = CommandLane.Main;

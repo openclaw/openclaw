@@ -15,10 +15,12 @@ import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SkillSnapshot } from "../../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { BlockReplyPayload } from "../../embedded-agent-payloads.js";
+import type { FastModeAutoProgressState } from "../../fast-mode.js";
 import type {
   BlockReplyChunking,
   ToolProgressDetailMode,
@@ -136,7 +138,13 @@ export type RunEmbeddedAgentParams = {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;
-  fastMode?: boolean;
+  fastMode?: FastMode;
+  /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */
+  fastModeStartedAtMs?: number;
+  /** Effective auto fast-mode cutoff for this run, in seconds. */
+  fastModeAutoOnSeconds?: number;
+  /** Shared notification state for nested harnesses that can observe the same tool boundary. */
+  fastModeAutoProgressState?: FastModeAutoProgressState;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;

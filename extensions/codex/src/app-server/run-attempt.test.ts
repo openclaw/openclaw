@@ -4668,4 +4668,161 @@ describe("runCodexAppServerAttempt", () => {
     expect(seenAgentDirs).toEqual([path.join(tempDir, "agent")]);
     expect(requests.map((entry) => entry.method)).toContain("turn/start");
   });
+
+  it("announces Codex app-server fast auto progress after the crossing tool result", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const onToolResult = vi.fn();
+    const onAgentEvent = vi.fn();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.verboseLevel = "full";
+    params.fastModeStartedAtMs = 1_000;
+    params.fastModeAutoOnSeconds = 30;
+    params.onToolResult = onToolResult;
+    params.onAgentEvent = onAgentEvent;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const notifyCommand = async (id: string, output: string, nowMs: number) => {
+      await harness.notify({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id,
+            command: `echo ${id}`,
+            cwd: workspaceDir,
+            status: "inProgress",
+          },
+        },
+      });
+      now.mockReturnValue(nowMs);
+      await harness.notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id,
+            command: `echo ${id}`,
+            cwd: workspaceDir,
+            status: "completed",
+            aggregatedOutput: output,
+            exitCode: 0,
+            durationMs: 1,
+          },
+        },
+      });
+    };
+
+    await notifyCommand("tool-before", "before", 20_000);
+    await notifyCommand("tool-crossing", "crossing", 35_500);
+    await notifyCommand("tool-after", "after", 42_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const payloads = onToolResult.mock.calls.map(([payload]) => payload) as Array<{
+      channelData?: Record<string, unknown>;
+      text?: string;
+    }>;
+    const texts = payloads.map((payload) => payload.text ?? "");
+    expect(texts.filter((text) => text.startsWith("💨Fast: auto-off"))).toEqual([
+      "💨Fast: auto-off(34s>=30s)",
+    ]);
+    expect(texts.filter((text) => text === "💨Fast: auto-on")).toHaveLength(1);
+    const offIndex = texts.indexOf("💨Fast: auto-off(34s>=30s)");
+    const onIndex = texts.indexOf("💨Fast: auto-on");
+    expect(offIndex).toBeGreaterThan(0);
+    expect(onIndex).toBeGreaterThan(offIndex + 1);
+    expect(texts.slice(offIndex + 1, onIndex).some((text) => !text.startsWith("💨Fast:"))).toBe(
+      true,
+    );
+    expect(payloads[offIndex]?.channelData).toEqual({
+      openclawProgressKind: "fast-mode-auto",
+    });
+    expect(payloads[onIndex]?.channelData).toEqual({
+      openclawProgressKind: "fast-mode-auto",
+    });
+    const fastEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "item" && event.data?.title === "Fast");
+    expect(fastEvents.map((event) => event.data?.summary)).toEqual([
+      "💨Fast: auto-off(34s>=30s)",
+      "💨Fast: auto-on",
+    ]);
+  });
+
+  it("does not duplicate Codex app-server fast auto progress already announced by the outer runner", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const onToolResult = vi.fn();
+    const onAgentEvent = vi.fn();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.verboseLevel = "full";
+    params.fastModeStartedAtMs = 1_000;
+    params.fastModeAutoOnSeconds = 30;
+    params.fastModeAutoProgressState = {
+      offAnnounced: true,
+      resetAnnounced: false,
+    };
+    params.onToolResult = onToolResult;
+    params.onAgentEvent = onAgentEvent;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "commandExecution",
+          id: "tool-1",
+          command: "echo tool-1",
+          cwd: workspaceDir,
+          status: "inProgress",
+        },
+      },
+    });
+    now.mockReturnValue(35_500);
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "commandExecution",
+          id: "tool-1",
+          command: "echo tool-1",
+          cwd: workspaceDir,
+          status: "completed",
+          aggregatedOutput: "tool output",
+          exitCode: 0,
+          durationMs: 1,
+        },
+      },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const texts = onToolResult.mock.calls.map(([payload]) => payload.text ?? "");
+    expect(texts.filter((text) => text.startsWith("💨Fast: auto-off"))).toEqual([]);
+    expect(texts.filter((text) => text === "💨Fast: auto-on")).toHaveLength(1);
+    expect(params.fastModeAutoProgressState).toEqual({
+      offAnnounced: true,
+      resetAnnounced: true,
+    });
+    const fastEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "item" && event.data?.title === "Fast");
+    expect(fastEvents.map((event) => event.data?.summary)).toEqual(["💨Fast: auto-on"]);
+  });
 });

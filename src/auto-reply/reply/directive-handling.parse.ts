@@ -1,5 +1,6 @@
 // Parses inline reply directives into typed execution and routing options.
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { extractModelDirective } from "../model.js";
 import { isSessionDefaultDirectiveValue } from "../thinking.js";
 import type {
@@ -36,7 +37,7 @@ export type InlineDirectives = {
   traceLevel?: TraceLevel;
   rawTraceLevel?: string;
   hasFastDirective: boolean;
-  fastMode?: boolean;
+  fastMode?: FastMode;
   rawFastMode?: string;
   clearFastMode: boolean;
   hasReasoningDirective: boolean;

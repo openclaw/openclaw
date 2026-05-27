@@ -201,6 +201,7 @@ export const id: TranslationMap = {
     inherit: "warisi",
     defaultOption: "Default ({value})",
     offExplicit: "nonaktif (eksplisit)",
+    auto: "auto",
     on: "aktif",
     off: "nonaktif",
     full: "penuh",

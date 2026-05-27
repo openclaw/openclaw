@@ -1,6 +1,7 @@
 // Status message helpers read and format stored status messages.
 import fs from "node:fs";
 import {
+  type FastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -94,7 +95,7 @@ export type StatusArgs = {
   sessionStorePath?: string;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
-  resolvedFast?: boolean;
+  resolvedFast?: FastMode;
   resolvedHarness?: string;
   resolvedVerbose?: VerboseLevel;
   resolvedReasoning?: ReasoningLevel;

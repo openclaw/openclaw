@@ -18,6 +18,7 @@ import type {
   GatewaySessionRow,
   SessionRunStatus,
   GatewayThinkingLevelOption,
+  FastMode,
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../types.ts";
@@ -65,7 +66,7 @@ export type SessionsProps = {
     patch: {
       label?: string | null;
       thinkingLevel?: string | null;
-      fastMode?: boolean | null;
+      fastMode?: FastMode | null;
       verboseLevel?: string | null;
       reasoningLevel?: string | null;
     },
@@ -86,7 +87,7 @@ export type SessionsProps = {
 
 const DEFAULT_THINK_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
-const FAST_LEVEL_VALUES = ["", "on", "off"] as const;
+const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
@@ -804,7 +805,14 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     resolveThinkLevelOptions(row, props.result?.defaults),
     thinking,
   );
-  const fastMode = row.fastMode === true ? "on" : row.fastMode === false ? "off" : "";
+  const fastMode =
+    row.fastMode === "auto"
+      ? "auto"
+      : row.fastMode === true
+        ? "on"
+        : row.fastMode === false
+          ? "off"
+          : "";
   const fastLevels = withCurrentLabeledOption(buildFastLevelOptions(), fastMode);
   const verbose = row.verboseLevel ?? "";
   const verboseLevels = withCurrentLabeledOption(buildVerboseLevelOptions(), verbose);
@@ -1005,7 +1013,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
-            props.onPatch(row.key, { fastMode: value === "" ? null : value === "on" });
+            props.onPatch(row.key, {
+              fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
+            });
           }}
         >
           ${fastLevels.map(

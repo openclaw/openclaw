@@ -199,6 +199,7 @@ export const zh_CN: TranslationMap = {
     inherit: "继承",
     defaultOption: "默认（{value}）",
     offExplicit: "关闭（显式）",
+    auto: "auto",
     on: "开启",
     off: "关闭",
     full: "完整",

@@ -199,6 +199,7 @@ export const th: TranslationMap = {
     inherit: "สืบทอด",
     defaultOption: "ค่าเริ่มต้น ({value})",
     offExplicit: "ปิด (ระบุชัดเจน)",
+    auto: "auto",
     on: "เปิด",
     off: "ปิด",
     full: "เต็ม",

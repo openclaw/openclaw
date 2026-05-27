@@ -17,6 +17,7 @@ import {
   injectTimestamp,
   timestampOptsFromConfig,
 } from "../../gateway/server-methods/agent-timestamp.js";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { readErrorName } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -442,7 +443,9 @@ export function runAgentAttempt(params: {
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
-  fastMode?: boolean;
+  fastMode?: FastMode;
+  fastModeStartedAtMs?: number;
+  fastModeAutoOnSeconds?: number;
   timeoutMs: number;
   runId: string;
   opts: AgentCommandOpts;
@@ -723,6 +726,8 @@ export function runAgentAttempt(params: {
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
     fastMode: params.fastMode,
+    fastModeStartedAtMs: params.fastModeStartedAtMs,
+    fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
     verboseLevel: params.resolvedVerboseLevel,
     bashElevated: params.opts.bashElevated,
     timeoutMs: params.timeoutMs,

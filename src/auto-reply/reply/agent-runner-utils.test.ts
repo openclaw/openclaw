@@ -127,7 +127,11 @@ describe("agent-runner-utils", () => {
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
-    const run = makeRun({ enforceFinalTag: true, cwd: "/tmp/task-repo" });
+    const run = makeRun({
+      enforceFinalTag: true,
+      cwd: "/tmp/task-repo",
+      fastMode: "auto",
+    });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
@@ -157,6 +161,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.authProfileId).toBe("profile-openai");
     expect(resolved.authProfileIdSource).toBe("user");
     expect(resolved.thinkLevel).toBe(run.thinkLevel);
+    expect(resolved.fastMode).toBe("auto");
     expect(resolved.verboseLevel).toBe(run.verboseLevel);
     expect(resolved.reasoningLevel).toBe(run.reasoningLevel);
     expect(resolved.execOverrides).toBe(run.execOverrides);

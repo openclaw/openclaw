@@ -200,6 +200,7 @@ export const ko: TranslationMap = {
     inherit: "상속",
     defaultOption: "기본값({value})",
     offExplicit: "꺼짐(명시적)",
+    auto: "auto",
     on: "켜짐",
     off: "꺼짐",
     full: "전체",

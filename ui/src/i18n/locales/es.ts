@@ -201,6 +201,7 @@ export const es: TranslationMap = {
     inherit: "heredar",
     defaultOption: "Predeterminado ({value})",
     offExplicit: "desactivado (explícito)",
+    auto: "auto",
     on: "activado",
     off: "apagado",
     full: "completo",
