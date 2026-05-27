@@ -81,7 +81,6 @@ function isSenderAllowed(params: {
   }
   const candidates = new Set([
     params.event.sender.id,
-    params.event.sender.handle ?? "",
     `${params.event.platform}:${params.event.sender.id}`,
     params.event.message.nativeIds?.from ?? "",
   ]);

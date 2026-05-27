@@ -1684,6 +1684,23 @@ describe("channel-broker HTTP routes", () => {
     expect(receiveInboundEvent).not.toHaveBeenCalled();
   });
 
+  it("does not authorize broker senders by mutable handles", async () => {
+    const body = inboundBody("blocked-user", { sender: { id: "blocked-user", handle: "lume" } });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig("broker-secret", { allowFrom: ["lume"] }),
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "sender_not_allowed" });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
   it("fails closed when no inbound sender allowlist is configured", async () => {
     const body = inboundBody();
     const receiveInboundEvent = vi.fn();

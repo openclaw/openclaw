@@ -76,7 +76,6 @@ const brokerIngressIdentity = defineStableChannelIngressIdentity({
   kind: "stable-id",
   normalize: normalizeBrokerIngressIdentifier,
   aliases: [
-    { key: "handle", kind: "username", normalize: normalizeBrokerIngressIdentifier },
     {
       key: "platformScopedSender",
       kind: "stable-id",
@@ -477,7 +476,6 @@ function createRuntimeFromPluginRuntime(pluginRuntime: PluginRuntime): ChannelBr
             subject: {
               stableId: event.sender.id,
               aliases: {
-                ...(event.sender.handle ? { handle: event.sender.handle } : {}),
                 platformScopedSender: `${event.platform}:${event.sender.id}`,
                 ...(event.message.nativeIds?.from
                   ? { nativeFrom: event.message.nativeIds.from }
