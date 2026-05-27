@@ -214,11 +214,25 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   return server;
 }
 
-export async function ensureMcpLoopbackServer(port = 0): Promise<McpLoopbackServer> {
+export type EnsureMcpLoopbackServerResult = {
+  server: McpLoopbackServer;
+  /**
+   * True only for the caller whose `ensure` actually started the shared server
+   * (or joined the in-flight start it triggered). Reusers that find an existing
+   * server get `false`. Callers must propagate this so that only a creating run
+   * later closes the server; a reusing run must never close a server it shares
+   * with the run that created it.
+   */
+  created: boolean;
+};
+
+export async function ensureMcpLoopbackServer(port = 0): Promise<EnsureMcpLoopbackServerResult> {
   if (activeMcpLoopbackServer) {
-    return activeMcpLoopbackServer;
+    return { server: activeMcpLoopbackServer, created: false };
   }
+  let createdHere = false;
   if (!activeMcpLoopbackServerPromise) {
+    createdHere = true;
     activeMcpLoopbackServerPromise = startMcpLoopbackServer(port)
       .then((server) => {
         activeMcpLoopbackServer = server;
@@ -228,7 +242,8 @@ export async function ensureMcpLoopbackServer(port = 0): Promise<McpLoopbackServ
         activeMcpLoopbackServerPromise = null;
       });
   }
-  return activeMcpLoopbackServerPromise;
+  const server = await activeMcpLoopbackServerPromise;
+  return { server, created: createdHere };
 }
 
 export async function closeMcpLoopbackServer(): Promise<void> {

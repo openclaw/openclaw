@@ -572,9 +572,34 @@ describe("mcp loopback server", () => {
     const first = await ensureMcpLoopbackServer(0);
     const second = await ensureMcpLoopbackServer(0);
 
-    expect(second).toBe(first);
-    expect(getActiveMcpLoopbackRuntime()?.port).toBe(first.port);
+    expect(second.server).toBe(first.server);
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(getActiveMcpLoopbackRuntime()?.port).toBe(first.server.port);
 
+    await closeMcpLoopbackServer();
+    expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
+  });
+
+  it("reports created=true only for the caller that started the server", async () => {
+    expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
+
+    // The creating caller (e.g. a parent session) owns the server; a later
+    // reusing caller (e.g. a one-shot child) must learn it did NOT create it so
+    // it never closes a server still held by the run that created it.
+    const owner = await ensureMcpLoopbackServer(0);
+    const reuser = await ensureMcpLoopbackServer(0);
+
+    expect(owner.created).toBe(true);
+    expect(reuser.created).toBe(false);
+    expect(reuser.server).toBe(owner.server);
+
+    await closeMcpLoopbackServer();
+    expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
+
+    // After a full close, the next caller becomes the new creating owner.
+    const next = await ensureMcpLoopbackServer(0);
+    expect(next.created).toBe(true);
     await closeMcpLoopbackServer();
     expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
   });

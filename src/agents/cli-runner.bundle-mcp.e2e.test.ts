@@ -251,4 +251,87 @@ describe("runCliAgent bundle MCP e2e", () => {
       }
     },
   );
+
+  it(
+    "leaves a reused MCP loopback server running when a child run cleans up",
+    { timeout: E2E_TIMEOUT_MS },
+    async () => {
+      // Regression for the shared-singleton teardown bug: a run that reuses an
+      // existing loopback server (created by a parent session) must not close
+      // it on run end even when cleanupBundleMcpOnRunEnd is true, otherwise it
+      // tears down a server still in use by the run that created it.
+      const { runCliAgent } = await import("./cli-runner.js");
+      const { ensureMcpLoopbackServer, closeMcpLoopbackServer, getActiveMcpLoopbackRuntime } =
+        await import("../gateway/mcp-http.js");
+      const { resetGlobalHookRunner } = await import("../plugins/hook-runner-global.js");
+      await resetBundleMcpPluginState();
+      const envSnapshot = captureEnv([
+        "HOME",
+        "USERPROFILE",
+        "OPENCLAW_HOME",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY",
+      ]);
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-reuse-keep-"));
+      process.env.HOME = tempHome;
+      process.env.USERPROFILE = tempHome;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY = "1";
+      resetGlobalHookRunner();
+      await closeMcpLoopbackServer();
+
+      const workspaceDir = path.join(tempHome, "workspace");
+      const sessionFile = path.join(tempHome, "session.jsonl");
+      const binDir = path.join(tempHome, "bin");
+      const serverScriptPath = path.join(tempHome, "mcp", "bundle-probe.mjs");
+      const fakeClaudePath = path.join(binDir, "fake-live-claude.mjs");
+      const fakeClaudePidPath = path.join(tempHome, "fake-live-claude.pid");
+      const pluginRoot = path.join(tempHome, ".openclaw", "extensions", "bundle-probe");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await writeBundleProbeMcpServer(serverScriptPath);
+      await writeFakeClaudeLiveCli({ filePath: fakeClaudePath, pidPath: fakeClaudePidPath });
+      await writeClaudeBundle({ pluginRoot, serverScriptPath });
+      installTestClaudeBackend({ commandPath: fakeClaudePath, liveSession: "claude-stdio" });
+
+      const config: OpenClawConfig = {
+        agents: { defaults: { workspace: workspaceDir } },
+        plugins: {
+          load: { paths: [pluginRoot] },
+          entries: { "bundle-probe": { enabled: true } },
+        },
+      };
+
+      try {
+        // Simulate a parent session that created and still owns the server.
+        const parent = await ensureMcpLoopbackServer(0);
+        expect(parent.created).toBe(true);
+        const parentPort = getActiveMcpLoopbackRuntime()?.port;
+        expect(parentPort).toBeGreaterThan(0);
+
+        const result = await runCliAgent({
+          sessionId: "session:test-reuse-keep",
+          sessionFile,
+          workspaceDir,
+          config,
+          prompt: "Use your configured MCP tools and report the bundle probe text.",
+          provider: "claude-cli",
+          model: "test-live-bundle",
+          timeoutMs: 20_000,
+          runId: "bundle-mcp-reuse-keep-e2e",
+          cleanupBundleMcpOnRunEnd: true,
+          cleanupCliLiveSessionOnRunEnd: true,
+        });
+
+        expect(result.payloads?.[0]?.text).toContain("LIVE BUNDLE MCP OK FROM-BUNDLE");
+        // The child reused the parent's server and must NOT have closed it.
+        expect(getActiveMcpLoopbackRuntime()?.port).toBe(parentPort);
+      } finally {
+        await closeMcpLoopbackServer();
+        resetGlobalHookRunner();
+        await fs.rm(tempHome, { recursive: true, force: true });
+        envSnapshot.restore();
+      }
+    },
+  );
 });

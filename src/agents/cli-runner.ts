@@ -269,7 +269,11 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
         await import("./cli-runner/claude-live-session.js");
       await closeClaudeLiveSessionForContext(context);
     }
-    if (params.cleanupBundleMcpOnRunEnd === true) {
+    // Only the run that actually created the shared loopback server may close
+    // it. A run that reused an existing server (e.g. a one-shot child reusing a
+    // parent session's server) must leave it alone, otherwise it tears down a
+    // server still in use by the run that created it.
+    if (params.cleanupBundleMcpOnRunEnd === true && context.ownsBundleMcpLoopbackServer === true) {
       const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
       await closeMcpLoopbackServer();
     }

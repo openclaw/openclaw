@@ -246,9 +246,11 @@ export async function prepareCliRunContext(
   });
   const bundleMcpEnabled = backendResolved.bundleMcp && params.disableTools !== true;
   let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
+  let ownsBundleMcpLoopbackServer = false;
   if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {
-      await prepareDeps.ensureMcpLoopbackServer();
+      const ensured = await prepareDeps.ensureMcpLoopbackServer();
+      ownsBundleMcpLoopbackServer = ensured.created;
     } catch (error) {
       cliBackendLog.warn(`mcp loopback server failed to start: ${String(error)}`);
     }
@@ -620,6 +622,7 @@ export async function prepareCliRunContext(
       authEpochVersion: CLI_AUTH_EPOCH_VERSION,
       extraSystemPromptHash,
       promptToolNamesHash,
+      ownsBundleMcpLoopbackServer,
     };
   } catch (err) {
     try {

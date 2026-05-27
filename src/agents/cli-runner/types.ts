@@ -143,4 +143,11 @@ export type PreparedCliRunContext = {
   authEpochVersion: number;
   extraSystemPromptHash?: string;
   promptToolNamesHash?: string;
+  /**
+   * True only when this run actually started the shared bundle MCP loopback
+   * server. Used to ensure that only the creating run closes it on run end; a
+   * run that merely reused an existing server must never close it (otherwise it
+   * would tear down a server still in use by the run that created it).
+   */
+  ownsBundleMcpLoopbackServer?: boolean;
 };
