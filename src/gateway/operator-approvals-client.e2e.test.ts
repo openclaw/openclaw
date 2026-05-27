@@ -19,7 +19,9 @@ const TEST_ENV_KEYS = [
   "HOME",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_GATEWAY_URL",
   "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_PASSWORD",
   "OPENCLAW_GATEWAY_PORT",
 ];
 
@@ -60,6 +62,10 @@ describe("operator approval gateway client runtime token source", () => {
   it("uses runtime authority only for generated local gateway URLs", async () => {
     const envSnapshot = captureEnv(TEST_ENV_KEYS);
     cleanup.push(() => envSnapshot.restore());
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-approval-client-e2e-"));
     cleanup.push(() => fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5 }));
