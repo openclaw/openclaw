@@ -236,11 +236,7 @@ public struct OpenClawChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if self.composerChrome == .clean,
-           self.visibleEmptyAssistantIntro == nil,
-           self.viewModel.isLoading,
-           !self.hasVisibleMessageListContent
-        {
+        if self.showsCleanLoadingPlaceholder {
             ChatLoadingBubble()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -322,6 +318,8 @@ public struct OpenClawChatView: View {
             EmptyView()
         } else if self.composerChrome == .clean, self.visibleEmptyAssistantIntro != nil {
             EmptyView()
+        } else if self.showsCleanLoadingPlaceholder {
+            EmptyView()
         } else if let error = self.activeErrorText {
             let presentation = self.errorPresentation(for: error)
             if self.hasVisibleMessageListContent {
@@ -388,6 +386,14 @@ public struct OpenClawChatView: View {
             return true
         }
         return false
+    }
+
+    private var showsCleanLoadingPlaceholder: Bool {
+        self.composerChrome == .clean &&
+            self.viewModel.isLoading &&
+            self.visibleEmptyAssistantIntro == nil &&
+            self.activeErrorText == nil &&
+            !self.hasVisibleMessageListContent
     }
 
     private var visibleEmptyAssistantIntro: String? {

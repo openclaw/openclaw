@@ -25,7 +25,6 @@ struct ChatProTab: View {
                             showsAssistantAvatars: false,
                             composerChrome: .clean,
                             messagePlaceholder: "Message \(self.agentDisplayName)...",
-                            emptyAssistantIntro: self.emptyAssistantIntro,
                             talkControl: self.talkControl)
                     } else {
                         ProCard {
@@ -156,16 +155,6 @@ struct ChatProTab: View {
 
     private var chatUserAccent: Color {
         self.colorScheme == .light ? Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0) : OpenClawBrand.accent
-    }
-
-    private var emptyAssistantIntro: String {
-        """
-        Hi Colin! I'm \(self.agentDisplayName).
-
-        I can help you orchestrate agents, review system status, and run operations.
-
-        What would you like to work on?
-        """
     }
 
     private var activeAgent: AgentSummary? {
