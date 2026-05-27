@@ -53,13 +53,13 @@ import { resolveAttemptPrependSystemContext } from "../pi-embedded-runner/run/at
 import { composeSystemPromptWithHookContext } from "../pi-embedded-runner/run/attempt.thread-helpers.js";
 import { buildCurrentInboundPrompt } from "../pi-embedded-runner/run/runtime-context-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { resolveSkillsPromptForRun, type SkillSnapshot } from "../skills.js";
+import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
-import { isClaudeCliSkillFileAccessible } from "./claude-skills-plugin.js";
+import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import {
@@ -82,6 +82,7 @@ const prepareDeps = {
   resolveOpenClawReferencePaths: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
+  prepareClaudeCliSkillsPlugin,
   // Surfaced as a dep so tests can stub the on-disk Claude CLI transcript probe
   // without touching ~/.claude/projects.
   claudeCliSessionTranscriptHasContent,
@@ -119,24 +120,6 @@ export function shouldSkipLocalCliCredentialEpoch(params: {
     params.authProfileId &&
     params.authCredential &&
     params.preparedExecution,
-  );
-}
-
-function claudeCliSkillsPluginCanCarryPrompt(params: {
-  provider: string;
-  skillsSnapshot?: SkillSnapshot;
-}): boolean {
-  if (!isClaudeCliProvider(params.provider)) {
-    return false;
-  }
-  return (
-    params.skillsSnapshot?.resolvedSkills?.some((skill) => {
-      const skillFilePath = skill.filePath?.trim();
-      if (!skill.name?.trim() || !skillFilePath) {
-        return false;
-      }
-      return isClaudeCliSkillFileAccessible(skillFilePath);
-    }) ?? false
   );
 }
 
@@ -329,6 +312,20 @@ export async function prepareCliRunContext(
           }
         }
       : undefined;
+  const claudeSkillsPlugin = await prepareDeps.prepareClaudeCliSkillsPlugin({
+    backendId: backendResolved.id,
+    skillsSnapshot: params.skillsSnapshot,
+  });
+  const preparedCleanup =
+    preparedBackendCleanup || claudeSkillsPlugin.args.length > 0
+      ? async () => {
+          try {
+            await claudeSkillsPlugin.cleanup();
+          } finally {
+            await preparedBackendCleanup?.();
+          }
+        }
+      : undefined;
   const preparedBackendClearEnv = [
     ...(preparedBackend.backend.clearEnv ?? []),
     ...(preparedExecution?.clearEnv ?? []),
@@ -342,7 +339,7 @@ export async function prepareCliRunContext(
         : {}),
     },
     ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
-    ...(preparedBackendCleanup ? { cleanup: preparedBackendCleanup } : {}),
+    ...(preparedCleanup ? { cleanup: preparedCleanup } : {}),
   };
   const promptTools =
     bundleMcpEnabled && mcpLoopbackRuntime
@@ -424,12 +421,7 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: sessionAgentId,
   });
-  const systemPromptSkillsPrompt = claudeCliSkillsPluginCanCarryPrompt({
-    provider: params.provider,
-    skillsSnapshot: params.skillsSnapshot,
-  })
-    ? ""
-    : skillsPrompt;
+  const systemPromptSkillsPrompt = claudeSkillsPlugin.args.length > 0 ? "" : skillsPrompt;
   const builtSystemPrompt =
     resolveSystemPromptOverride({
       config: params.config,
@@ -620,6 +612,7 @@ export async function prepareCliRunContext(
       contextWindowInfo,
       systemPrompt,
       systemPromptReport,
+      claudeSkillsPluginArgs: claudeSkillsPlugin.args,
       bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
       heartbeatPrompt,
