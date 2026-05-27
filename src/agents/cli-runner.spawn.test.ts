@@ -62,6 +62,7 @@ function buildPreparedCliRunContext(params: {
   model: string;
   runId: string;
   prompt?: string;
+  systemPrompt?: string;
   sessionId?: string;
   sessionKey?: string;
   sessionEntry?: PreparedCliRunContext["params"]["sessionEntry"];
@@ -139,7 +140,7 @@ function buildPreparedCliRunContext(params: {
     contextEngineConfig: {},
     modelId: params.model,
     normalizedModel: params.model,
-    systemPrompt: "You are a helpful assistant.",
+    systemPrompt: params.systemPrompt ?? "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
     authEpochVersion: 2,
@@ -493,6 +494,8 @@ describe("runCliAgent spawn path", () => {
       const systemPromptFile = requireArgAfter(input.argv, "--append-system-prompt-file");
       const systemPrompt = await fs.readFile(systemPromptFile, "utf-8");
       expect(systemPrompt).toContain("You are a helpful assistant.");
+      expect(systemPrompt).toContain("## Memory");
+      expect(systemPrompt).toContain("Keep memories.");
       expect(systemPrompt).not.toContain("## Skills");
       expect(systemPrompt).not.toContain("<available_skills>");
       expect(systemPrompt).not.toContain("Use weather tools for forecasts.");
@@ -523,6 +526,21 @@ describe("runCliAgent spawn path", () => {
           model: "sonnet",
           runId: "run-claude-skills-plugin",
           workspaceDir,
+          systemPrompt: [
+            "You are a helpful assistant.",
+            "",
+            "## Skills",
+            "Scan <available_skills> before replying.",
+            "<available_skills>",
+            "  <skill>",
+            "    <name>weather</name>",
+            "    <description>Use weather tools for forecasts.</description>",
+            "  </skill>",
+            "</available_skills>",
+            "",
+            "## Memory",
+            "Keep memories.",
+          ].join("\n"),
           backend: {
             systemPromptFileArg: "--append-system-prompt-file",
           },
