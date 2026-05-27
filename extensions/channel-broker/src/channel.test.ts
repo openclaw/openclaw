@@ -2,7 +2,11 @@ import { createBrokerReceipt } from "openclaw/plugin-sdk/channel-broker";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import channelBrokerEntry from "../index.js";
 import { channelBrokerPlugin } from "./channel.js";
-import { resetChannelBrokerRuntimeForTest, setChannelBrokerRuntime } from "./runtime.js";
+import {
+  resetChannelBrokerRuntimeForTest,
+  setChannelBrokerRuntime,
+  type ChannelBrokerRuntime,
+} from "./runtime.js";
 
 describe("channel-broker plugin", () => {
   beforeEach(() => {
@@ -419,14 +423,15 @@ describe("channel-broker plugin", () => {
       "base64",
     );
     const mediaReadFile = vi.fn(async () => png);
-    const sendOutboundRequest = vi.fn(async () =>
-      createBrokerReceipt({
-        requestId: "broker-local-media-1",
-        providerId: "acme",
-        platform: "Slack",
-        status: "sent",
-        messageIds: ["native-local-media-1"],
-      }),
+    const sendOutboundRequest: NonNullable<ChannelBrokerRuntime["sendOutboundRequest"]> = vi.fn(
+      async () =>
+        createBrokerReceipt({
+          requestId: "broker-local-media-1",
+          providerId: "acme",
+          platform: "Slack",
+          status: "sent",
+          messageIds: ["native-local-media-1"],
+        }),
     );
     setChannelBrokerRuntime({
       sendOutboundRequest,
@@ -476,7 +481,7 @@ describe("channel-broker plugin", () => {
       }),
     });
     const attachment =
-      sendOutboundRequest.mock.calls[0]?.[0]?.request.payloads[0]?.attachments?.[0];
+      vi.mocked(sendOutboundRequest).mock.calls[0]?.[0]?.request.payloads[0]?.attachments?.[0];
     expect(attachment).not.toHaveProperty("url");
   });
 

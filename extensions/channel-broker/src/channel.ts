@@ -4,7 +4,7 @@ import {
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
-import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-message";
+import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import { parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.js";

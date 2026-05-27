@@ -15,7 +15,7 @@ import {
   createMessageReceiptFromOutboundResults,
   type ChannelMessageSendResult,
   type MessageReceiptSourceResult,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { resolveChannelBrokerAccount } from "./accounts.js";
 import { createBrokerRequestId, sendBrokerOutboundRequest } from "./runtime.js";
