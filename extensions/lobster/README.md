@@ -69,7 +69,6 @@ Notes:
 
 ## Security
 
-- Runs the `lobster` executable as a local subprocess.
+- Runs Lobster in process via the published `@clawdbot/lobster/core` runtime.
 - Does not manage OAuth/tokens.
 - Uses timeouts, stdout caps, and strict JSON envelope parsing.
-- Prefer an absolute `lobsterPath` in production to avoid PATH hijack.

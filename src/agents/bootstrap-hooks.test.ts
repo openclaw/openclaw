@@ -7,7 +7,9 @@ import {
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import { DEFAULT_SOUL_FILENAME, type WorkspaceBootstrapFile } from "./workspace.js";
 
-function makeFile(name = DEFAULT_SOUL_FILENAME): WorkspaceBootstrapFile {
+function makeFile(
+  name: WorkspaceBootstrapFile["name"] = DEFAULT_SOUL_FILENAME,
+): WorkspaceBootstrapFile {
   return {
     name,
     path: `/tmp/${name}`,
@@ -25,7 +27,12 @@ describe("applyBootstrapHookOverrides", () => {
       const context = event.context as AgentBootstrapHookContext;
       context.bootstrapFiles = [
         ...context.bootstrapFiles,
-        { name: "EXTRA.md", path: "/tmp/EXTRA.md", content: "extra", missing: false },
+        {
+          name: "EXTRA.md",
+          path: "/tmp/EXTRA.md",
+          content: "extra",
+          missing: false,
+        } as unknown as WorkspaceBootstrapFile,
       ];
     });
 
@@ -35,6 +42,6 @@ describe("applyBootstrapHookOverrides", () => {
     });
 
     expect(updated).toHaveLength(2);
-    expect(updated[1]?.name).toBe("EXTRA.md");
+    expect(updated[1]?.path).toBe("/tmp/EXTRA.md");
   });
 });

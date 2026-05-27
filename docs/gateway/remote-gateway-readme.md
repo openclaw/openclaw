@@ -1,8 +1,10 @@
 ---
 summary: "SSH tunnel setup for OpenClaw.app connecting to a remote gateway"
 read_when: "Connecting the macOS app to a remote gateway over SSH"
-title: "Remote Gateway Setup"
+title: "Remote gateway setup"
 ---
+
+> This content has been merged into [Remote Access](/gateway/remote#macos-persistent-ssh-tunnel-via-launchagent). See that page for the current guide.
 
 # Running OpenClaw.app with a Remote Gateway
 
@@ -10,27 +12,28 @@ OpenClaw.app uses SSH tunneling to connect to a remote gateway. This guide shows
 
 ## Overview
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Client Machine                          │
-│                                                              │
-│  OpenClaw.app ──► ws://127.0.0.1:18789 (local port)           │
-│                     │                                        │
-│                     ▼                                        │
-│  SSH Tunnel ────────────────────────────────────────────────│
-│                     │                                        │
-└─────────────────────┼──────────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────────┐
-│                         Remote Machine                        │
-│                                                              │
-│  Gateway WebSocket ──► ws://127.0.0.1:18789 ──►              │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Client["Client Machine"]
+        direction TB
+        A["OpenClaw.app"]
+        B["ws://127.0.0.1:18789\n(local port)"]
+        T["SSH Tunnel"]
+
+        A --> B
+        B --> T
+    end
+    subgraph Remote["Remote Machine"]
+        direction TB
+        C["Gateway WebSocket"]
+        D["ws://127.0.0.1:18789"]
+
+        C --> D
+    end
+    T --> C
 ```
 
-## Quick Setup
+## Quick setup
 
 ### Step 1: Add SSH Config
 
@@ -54,11 +57,15 @@ Copy your public key to the remote machine (enter password once):
 ssh-copy-id -i ~/.ssh/id_rsa <REMOTE_USER>@<REMOTE_IP>
 ```
 
-### Step 3: Set Gateway Token
+### Step 3: Configure Remote Gateway Auth
 
 ```bash
-launchctl setenv OPENCLAW_GATEWAY_TOKEN "<your-token>"
+openclaw config set gateway.remote.token "<your-token>"
 ```
+
+Use `gateway.remote.password` instead if your remote gateway uses password auth.
+`OPENCLAW_GATEWAY_TOKEN` is still valid as a shell-level override, but the durable
+remote-client setup is `gateway.remote.token` / `gateway.remote.password`.
 
 ### Step 4: Start SSH Tunnel
 
@@ -83,7 +90,7 @@ To have the SSH tunnel start automatically when you log in, create a Launch Agen
 
 ### Create the PLIST file
 
-Save this as `~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist`:
+Save this as `~/Library/LaunchAgents/ai.openclaw.ssh-tunnel.plist`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -91,7 +98,7 @@ Save this as `~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist`:
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>bot.molt.ssh-tunnel</string>
+    <string>ai.openclaw.ssh-tunnel</string>
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/ssh</string>
@@ -109,7 +116,7 @@ Save this as `~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist`:
 ### Load the Launch Agent
 
 ```bash
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.ssh-tunnel.plist
 ```
 
 The tunnel will now:
@@ -134,18 +141,18 @@ lsof -i :18789
 **Restart the tunnel:**
 
 ```bash
-launchctl kickstart -k gui/$UID/bot.molt.ssh-tunnel
+launchctl kickstart -k gui/$UID/ai.openclaw.ssh-tunnel
 ```
 
 **Stop the tunnel:**
 
 ```bash
-launchctl bootout gui/$UID/bot.molt.ssh-tunnel
+launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 ```
 
 ---
 
-## How It Works
+## How it works
 
 | Component                            | What It Does                                                 |
 | ------------------------------------ | ------------------------------------------------------------ |
@@ -155,3 +162,8 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 | `RunAtLoad`                          | Starts tunnel when the agent loads                           |
 
 OpenClaw.app connects to `ws://127.0.0.1:18789` on your client machine. The SSH tunnel forwards that connection to port 18789 on the remote machine where the Gateway is running.
+
+## Related
+
+- [Remote access](/gateway/remote)
+- [Tailscale](/gateway/tailscale)

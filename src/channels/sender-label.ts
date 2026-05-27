@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 export type SenderLabelParams = {
   name?: string;
   username?: string;
@@ -6,17 +8,18 @@ export type SenderLabelParams = {
   id?: string;
 };
 
-function normalize(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+function normalizeSenderLabelParams(params: SenderLabelParams) {
+  return {
+    name: normalizeOptionalString(params.name),
+    username: normalizeOptionalString(params.username),
+    tag: normalizeOptionalString(params.tag),
+    e164: normalizeOptionalString(params.e164),
+    id: normalizeOptionalString(params.id),
+  };
 }
 
 export function resolveSenderLabel(params: SenderLabelParams): string | null {
-  const name = normalize(params.name);
-  const username = normalize(params.username);
-  const tag = normalize(params.tag);
-  const e164 = normalize(params.e164);
-  const id = normalize(params.id);
+  const { name, username, tag, e164, id } = normalizeSenderLabelParams(params);
 
   const display = name ?? username ?? tag ?? "";
   const idPart = e164 ?? id ?? "";
@@ -28,11 +31,7 @@ export function resolveSenderLabel(params: SenderLabelParams): string | null {
 
 export function listSenderLabelCandidates(params: SenderLabelParams): string[] {
   const candidates = new Set<string>();
-  const name = normalize(params.name);
-  const username = normalize(params.username);
-  const tag = normalize(params.tag);
-  const e164 = normalize(params.e164);
-  const id = normalize(params.id);
+  const { name, username, tag, e164, id } = normalizeSenderLabelParams(params);
 
   if (name) {
     candidates.add(name);

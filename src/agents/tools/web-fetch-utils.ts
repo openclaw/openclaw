@@ -1,3 +1,5 @@
+import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
+
 export type ExtractMode = "markdown" | "text";
 
 function decodeEntities(value: string): string {
@@ -16,7 +18,7 @@ function stripTags(value: string): string {
   return decodeEntities(value.replace(/<[^>]+>/g, ""));
 }
 
-function normalizeWhitespace(value: string): string {
+export function normalizeWhitespace(value: string): string {
   return value
     .replace(/\r/g, "")
     .replace(/[ \t]+\n/g, "\n")
@@ -80,43 +82,18 @@ export function truncateText(
   return { text: value.slice(0, maxChars), truncated: true };
 }
 
-export async function extractReadableContent(params: {
+export async function extractBasicHtmlContent(params: {
   html: string;
-  url: string;
   extractMode: ExtractMode;
 }): Promise<{ text: string; title?: string } | null> {
-  const fallback = (): { text: string; title?: string } => {
-    const rendered = htmlToMarkdown(params.html);
-    if (params.extractMode === "text") {
-      const text = markdownToText(rendered.text) || normalizeWhitespace(stripTags(params.html));
-      return { text, title: rendered.title };
-    }
-    return rendered;
-  };
-  try {
-    const [{ Readability }, { parseHTML }] = await Promise.all([
-      import("@mozilla/readability"),
-      import("linkedom"),
-    ]);
-    const { document } = parseHTML(params.html);
-    try {
-      (document as { baseURI?: string }).baseURI = params.url;
-    } catch {
-      // Best-effort base URI for relative links.
-    }
-    const reader = new Readability(document, { charThreshold: 0 });
-    const parsed = reader.parse();
-    if (!parsed?.content) {
-      return fallback();
-    }
-    const title = parsed.title || undefined;
-    if (params.extractMode === "text") {
-      const text = normalizeWhitespace(parsed.textContent ?? "");
-      return text ? { text, title } : fallback();
-    }
-    const rendered = htmlToMarkdown(parsed.content);
-    return { text: rendered.text, title: title ?? rendered.title };
-  } catch {
-    return fallback();
+  const cleanHtml = await sanitizeHtml(params.html);
+  const rendered = htmlToMarkdown(cleanHtml);
+  if (params.extractMode === "text") {
+    const text =
+      stripInvisibleUnicode(markdownToText(rendered.text)) ||
+      stripInvisibleUnicode(normalizeWhitespace(stripTags(cleanHtml)));
+    return text ? { text, title: rendered.title } : null;
   }
+  const text = stripInvisibleUnicode(rendered.text);
+  return text ? { text, title: rendered.title } : null;
 }

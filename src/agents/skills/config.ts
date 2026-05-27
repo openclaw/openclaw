@@ -1,48 +1,26 @@
-import fs from "node:fs";
-import path from "node:path";
-import type { OpenClawConfig, SkillConfig } from "../../config/config.js";
-import type { SkillEligibilityContext, SkillEntry } from "./types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SkillConfig } from "../../config/types.skills.js";
+import {
+  evaluateRuntimeEligibility,
+  hasBinary,
+  isConfigPathTruthyWithDefaults,
+  resolveConfigPath,
+  resolveRuntimePlatform,
+} from "../../shared/config-eval.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSkillKey } from "./frontmatter.js";
+import { resolveSkillSource } from "./source.js";
+import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
   "browser.evaluateEnabled": true,
 };
 
-function isTruthy(value: unknown): boolean {
-  if (value === undefined || value === null) {
-    return false;
-  }
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return value !== 0;
-  }
-  if (typeof value === "string") {
-    return value.trim().length > 0;
-  }
-  return true;
-}
-
-export function resolveConfigPath(config: OpenClawConfig | undefined, pathStr: string) {
-  const parts = pathStr.split(".").filter(Boolean);
-  let current: unknown = config;
-  for (const part of parts) {
-    if (typeof current !== "object" || current === null) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
-}
+export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
 
 export function isConfigPathTruthy(config: OpenClawConfig | undefined, pathStr: string): boolean {
-  const value = resolveConfigPath(config, pathStr);
-  if (value === undefined && pathStr in DEFAULT_CONFIG_VALUES) {
-    return DEFAULT_CONFIG_VALUES[pathStr];
-  }
-  return isTruthy(value);
+  return isConfigPathTruthyWithDefaults(config, pathStr, DEFAULT_CONFIG_VALUES);
 }
 
 export function resolveSkillConfig(
@@ -60,10 +38,6 @@ export function resolveSkillConfig(
   return entry;
 }
 
-export function resolveRuntimePlatform(): string {
-  return process.platform;
-}
-
 function normalizeAllowlist(input: unknown): string[] | undefined {
   if (!input) {
     return undefined;
@@ -71,14 +45,14 @@ function normalizeAllowlist(input: unknown): string[] | undefined {
   if (!Array.isArray(input)) {
     return undefined;
   }
-  const normalized = input.map((entry) => String(entry).trim()).filter(Boolean);
+  const normalized = normalizeStringEntries(input);
   return normalized.length > 0 ? normalized : undefined;
 }
 
 const BUNDLED_SOURCES = new Set(["openclaw-bundled"]);
 
 function isBundledSkill(entry: SkillEntry): boolean {
-  return BUNDLED_SOURCES.has(entry.skill.source);
+  return BUNDLED_SOURCES.has(resolveSkillSource(entry.skill));
 }
 
 export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | undefined {
@@ -96,21 +70,6 @@ export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): 
   return allowlist.includes(key) || allowlist.includes(entry.skill.name);
 }
 
-export function hasBinary(bin: string): boolean {
-  const pathEnv = process.env.PATH ?? "";
-  const parts = pathEnv.split(path.delimiter).filter(Boolean);
-  for (const part of parts) {
-    const candidate = path.join(part, bin);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return true;
-    } catch {
-      // keep scanning
-    }
-  }
-  return false;
-}
-
 export function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: OpenClawConfig;
@@ -120,8 +79,6 @@ export function shouldIncludeSkill(params: {
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
   const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
-  const osList = entry.metadata?.os ?? [];
-  const remotePlatforms = eligibility?.remote?.platforms ?? [];
 
   if (skillConfig?.enabled === false) {
     return false;
@@ -129,63 +86,20 @@ export function shouldIncludeSkill(params: {
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;
   }
-  if (
-    osList.length > 0 &&
-    !osList.includes(resolveRuntimePlatform()) &&
-    !remotePlatforms.some((platform) => osList.includes(platform))
-  ) {
-    return false;
-  }
-  if (entry.metadata?.always === true) {
-    return true;
-  }
-
-  const requiredBins = entry.metadata?.requires?.bins ?? [];
-  if (requiredBins.length > 0) {
-    for (const bin of requiredBins) {
-      if (hasBinary(bin)) {
-        continue;
-      }
-      if (eligibility?.remote?.hasBin?.(bin)) {
-        continue;
-      }
-      return false;
-    }
-  }
-  const requiredAnyBins = entry.metadata?.requires?.anyBins ?? [];
-  if (requiredAnyBins.length > 0) {
-    const anyFound =
-      requiredAnyBins.some((bin) => hasBinary(bin)) ||
-      eligibility?.remote?.hasAnyBin?.(requiredAnyBins);
-    if (!anyFound) {
-      return false;
-    }
-  }
-
-  const requiredEnv = entry.metadata?.requires?.env ?? [];
-  if (requiredEnv.length > 0) {
-    for (const envName of requiredEnv) {
-      if (process.env[envName]) {
-        continue;
-      }
-      if (skillConfig?.env?.[envName]) {
-        continue;
-      }
-      if (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName) {
-        continue;
-      }
-      return false;
-    }
-  }
-
-  const requiredConfig = entry.metadata?.requires?.config ?? [];
-  if (requiredConfig.length > 0) {
-    for (const configPath of requiredConfig) {
-      if (!isConfigPathTruthy(config, configPath)) {
-        return false;
-      }
-    }
-  }
-
-  return true;
+  return evaluateRuntimeEligibility({
+    os: entry.metadata?.os,
+    remotePlatforms: eligibility?.remote?.platforms,
+    always: entry.metadata?.always,
+    requires: entry.metadata?.requires,
+    hasBin: hasBinary,
+    hasRemoteBin: eligibility?.remote?.hasBin,
+    hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
+    hasEnv: (envName) =>
+      Boolean(
+        process.env[envName] ||
+        skillConfig?.env?.[envName] ||
+        (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
+      ),
+    isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
+  });
 }

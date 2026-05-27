@@ -1,22 +1,57 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HealthSummary } from "./health.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { stripAnsi } from "../terminal/ansi.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import type { HealthSummary } from "./health.js";
 import { healthCommand } from "./health.js";
 
 const callGatewayMock = vi.fn();
+const buildGatewayConnectionDetailsMock = vi.fn(() => ({
+  message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
+}));
 const logWebSelfIdMock = vi.fn();
 
+function createRecentSessionRows(now = Date.now()) {
+  return [
+    { key: "main", updatedAt: now - 60_000, age: 60_000 },
+    { key: "foo", updatedAt: null, age: null },
+  ];
+}
+
 vi.mock("../gateway/call.js", () => ({
-  callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  callGateway: (...args: [unknown, ...unknown[]]) =>
+    Reflect.apply(callGatewayMock, undefined, args),
+  buildGatewayConnectionDetails: (...args: [unknown, ...unknown[]]) =>
+    Reflect.apply(buildGatewayConnectionDetailsMock, undefined, args),
 }));
 
-vi.mock("../web/auth-store.js", () => ({
-  webAuthExists: vi.fn(async () => true),
-  getWebAuthAgeMs: vi.fn(() => 0),
-  logWebSelfId: (...args: unknown[]) => logWebSelfIdMock(...args),
+vi.mock("../config/config.js", () => ({
+  readBestEffortConfig: vi.fn(async () => ({})),
 }));
+
+vi.mock("../channels/plugins/index.js", () => {
+  const whatsappPlugin = {
+    id: "whatsapp",
+    meta: {
+      id: "whatsapp",
+      label: "WhatsApp",
+      selectionLabel: "WhatsApp",
+      docsPath: "/channels/whatsapp",
+      blurb: "WhatsApp test stub.",
+    },
+    capabilities: { chatTypes: ["direct", "group"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({}),
+    },
+    status: {
+      logSelfId: () => logWebSelfIdMock(),
+    },
+  };
+
+  return {
+    getChannelPlugin: (channelId: string) => (channelId === "whatsapp" ? whatsappPlugin : null),
+    listChannelPlugins: () => [whatsappPlugin],
+  };
+});
 
 describe("healthCommand (coverage)", () => {
   const runtime = {
@@ -27,35 +62,13 @@ describe("healthCommand (coverage)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "whatsapp",
-          source: "test",
-          plugin: {
-            id: "whatsapp",
-            meta: {
-              id: "whatsapp",
-              label: "WhatsApp",
-              selectionLabel: "WhatsApp",
-              docsPath: "/channels/whatsapp",
-              blurb: "WhatsApp test stub.",
-            },
-            capabilities: { chatTypes: ["direct", "group"] },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-            },
-            status: {
-              logSelfId: () => logWebSelfIdMock(),
-            },
-          },
-        },
-      ]),
-    );
+    buildGatewayConnectionDetailsMock.mockReturnValue({
+      message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
+    });
   });
 
-  it("prints the rich text summary when linked and configured", async () => {
+  it("prints the rich text summary and verbose gateway details", async () => {
+    const recent = createRecentSessionRows();
     callGatewayMock.mockResolvedValueOnce({
       ok: true,
       ts: Date.now(),
@@ -104,29 +117,28 @@ describe("healthCommand (coverage)", () => {
           sessions: {
             path: "/tmp/sessions.json",
             count: 2,
-            recent: [
-              { key: "main", updatedAt: Date.now() - 60_000, age: 60_000 },
-              { key: "foo", updatedAt: null, age: null },
-            ],
+            recent,
           },
         },
       ],
       sessions: {
         path: "/tmp/sessions.json",
         count: 2,
-        recent: [
-          { key: "main", updatedAt: Date.now() - 60_000, age: 60_000 },
-          { key: "foo", updatedAt: null, age: null },
-        ],
+        recent,
       },
     } satisfies HealthSummary);
 
-    await healthCommand({ json: false, timeoutMs: 1000 }, runtime as never);
+    await healthCommand({ json: false, verbose: true, timeoutMs: 1000 }, runtime as never);
 
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"))).toMatch(
-      /WhatsApp: linked/i,
-    );
-    expect(logWebSelfIdMock).toHaveBeenCalled();
+    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
+    expect(output).toMatch(/WhatsApp: linked/i);
+    expect(runtime.log.mock.calls.slice(0, 3)).toEqual([
+      ["Gateway connection:"],
+      ["  Gateway mode: local"],
+      ["  Gateway target: ws://127.0.0.1:18789"],
+    ]);
+    expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
+    expect(logWebSelfIdMock).not.toHaveBeenCalled();
   });
 });

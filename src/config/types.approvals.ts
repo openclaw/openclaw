@@ -1,3 +1,5 @@
+export type NativeExecApprovalEnableMode = boolean | "auto";
+
 export type ExecApprovalForwardingMode = "session" | "targets" | "both";
 
 export type ExecApprovalForwardTarget = {
@@ -26,4 +28,5 @@ export type ExecApprovalForwardingConfig = {
 
 export type ApprovalsConfig = {
   exec?: ExecApprovalForwardingConfig;
+  plugin?: ExecApprovalForwardingConfig;
 };

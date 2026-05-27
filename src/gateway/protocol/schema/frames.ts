@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 
@@ -47,7 +47,7 @@ export const ConnectParamsSchema = Type.Object(
           publicKey: NonEmptyString,
           signature: NonEmptyString,
           signedAt: Type.Integer({ minimum: 0 }),
-          nonce: Type.Optional(NonEmptyString),
+          nonce: NonEmptyString,
         },
         { additionalProperties: false },
       ),
@@ -56,7 +56,10 @@ export const ConnectParamsSchema = Type.Object(
       Type.Object(
         {
           token: Type.Optional(Type.String()),
+          bootstrapToken: Type.Optional(Type.String()),
+          deviceToken: Type.Optional(Type.String()),
           password: Type.Optional(Type.String()),
+          approvalRuntimeToken: Type.Optional(Type.String()),
         },
         { additionalProperties: false },
       ),
@@ -74,8 +77,6 @@ export const HelloOkSchema = Type.Object(
     server: Type.Object(
       {
         version: NonEmptyString,
-        commit: Type.Optional(NonEmptyString),
-        host: Type.Optional(NonEmptyString),
         connId: NonEmptyString,
       },
       { additionalProperties: false },
@@ -88,17 +89,28 @@ export const HelloOkSchema = Type.Object(
       { additionalProperties: false },
     ),
     snapshot: SnapshotSchema,
-    canvasHostUrl: Type.Optional(NonEmptyString),
-    auth: Type.Optional(
-      Type.Object(
-        {
-          deviceToken: NonEmptyString,
-          role: NonEmptyString,
-          scopes: Type.Array(NonEmptyString),
-          issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
-        },
-        { additionalProperties: false },
-      ),
+    pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
+    auth: Type.Object(
+      {
+        deviceToken: Type.Optional(NonEmptyString),
+        role: NonEmptyString,
+        scopes: Type.Array(NonEmptyString),
+        issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+        deviceTokens: Type.Optional(
+          Type.Array(
+            Type.Object(
+              {
+                deviceToken: NonEmptyString,
+                role: NonEmptyString,
+                scopes: Type.Array(NonEmptyString),
+                issuedAtMs: Type.Integer({ minimum: 0 }),
+              },
+              { additionalProperties: false },
+            ),
+          ),
+        ),
+      },
+      { additionalProperties: false },
     ),
     policy: Type.Object(
       {

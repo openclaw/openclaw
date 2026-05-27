@@ -1,133 +1,239 @@
 import { describe, expect, it, vi } from "vitest";
-import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
-
-type StubSession = {
-  subscribe: (fn: (evt: unknown) => void) => () => void;
-};
+import {
+  createTextEndBlockReplyHarness,
+  extractTextPayloads,
+  emitAssistantTextDelta,
+  emitAssistantTextEnd,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  const _THINKING_TAG_CASES = [
-    { tag: "think", open: "<think>", close: "</think>" },
-    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
-    { tag: "thought", open: "<thought>", close: "</thought>" },
-    { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
-  ] as const;
+  function setupTextEndSubscription() {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
-  it("does not append when text_end content is a prefix of deltas", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
+    const emitDelta = (delta: string) => {
+      emitAssistantTextDelta({ emit, delta });
     };
 
-    const onBlockReply = vi.fn();
+    const emitTextEnd = (content: string) => {
+      emitAssistantTextEnd({ emit, content });
+    };
 
-    const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "text_end",
+    return { onBlockReply, subscription, emitDelta, emitTextEnd };
+  }
+
+  it.each([
+    {
+      name: "does not append when text_end content is a prefix of deltas",
+      delta: "Hello world",
+      content: "Hello",
+      expected: "Hello world",
+    },
+    {
+      name: "does not append when text_end content is already contained",
+      delta: "Hello world",
+      content: "world",
+      expected: "Hello world",
+    },
+    {
+      name: "appends suffix when text_end content extends deltas",
+      delta: "Hello",
+      content: "Hello world",
+      expected: "Hello world",
+    },
+  ])("$name", async ({ delta, content, expected }) => {
+    const { onBlockReply, subscription, emitDelta, emitTextEnd } = setupTextEndSubscription();
+
+    emitDelta(delta);
+    emitTextEnd(content);
+    await Promise.resolve();
+
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
     });
-
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello world",
-      },
-    });
-
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-        content: "Hello",
-      },
-    });
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(subscription.assistantTexts).toEqual(["Hello world"]);
+    expect(subscription.assistantTexts).toEqual([expected]);
   });
-  it("does not append when text_end content is already contained", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
+
+  it("sends only the suffix when text_end block replies grow across assistant messages", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    const emitAssistantSnapshot = (content: string) => {
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextEnd({ emit, content });
+    };
+    const emitToolStart = (toolCallId: string) => {
+      emit({
+        type: "tool_execution_start",
+        toolName: "browser",
+        toolCallId,
+        args: {},
+      });
     };
 
-    const onBlockReply = vi.fn();
-
-    const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "text_end",
+    emitAssistantSnapshot("Let me grab actual eBay prices:");
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
     });
 
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello world",
-      },
+    emitToolStart("tool-1");
+    await Promise.resolve();
+    emitAssistantSnapshot("Let me grab actual eBay prices:Let me grab actual prices from eBay:");
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(2);
     });
 
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-        content: "world",
-      },
+    emitToolStart("tool-2");
+    await Promise.resolve();
+    emitAssistantSnapshot(
+      "Let me grab actual eBay prices:Let me grab actual prices from eBay:eBay blocks live pricing:",
+    );
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(3);
     });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(subscription.assistantTexts).toEqual(["Hello world"]);
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
+      "Let me grab actual eBay prices:",
+      "Let me grab actual prices from eBay:",
+      "eBay blocks live pricing:",
+    ]);
+    expect(subscription.assistantTexts).toEqual([
+      "Let me grab actual eBay prices:",
+      "Let me grab actual prices from eBay:",
+      "eBay blocks live pricing:",
+    ]);
   });
-  it("appends suffix when text_end content extends deltas", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
+
+  it("keeps a full later reply that shares a prefix without an intervening tool call", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    const emitAssistantSnapshot = (content: string) => {
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextEnd({ emit, content });
     };
 
+    emitAssistantSnapshot("OK");
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
+
+    emitAssistantSnapshot("OK, here's the detail");
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(2);
+    });
+
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["OK", "OK, here's the detail"]);
+    expect(subscription.assistantTexts).toEqual(["OK", "OK, here's the detail"]);
+  });
+
+  it("keeps a full post-tool reply when the prior block is not a preamble", async () => {
     const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
-    const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "text_end",
+    const emitAssistantSnapshot = (content: string) => {
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextEnd({ emit, content });
+    };
+
+    emitAssistantSnapshot("Checking...");
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
     });
 
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello",
+    emit({
+      type: "tool_execution_start",
+      toolName: "browser",
+      toolCallId: "tool-post-check",
+      args: {},
+    });
+    await Promise.resolve();
+
+    emitAssistantSnapshot("Checking... found X");
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(2);
+    });
+
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
+      "Checking...",
+      "Checking... found X",
+    ]);
+    expect(subscription.assistantTexts).toEqual(["Checking...", "Checking... found X"]);
+  });
+
+  it("keeps a full post-tool reply when the shared prefix is whitespace-separated", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    const emitAssistantSnapshot = (content: string) => {
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextEnd({ emit, content });
+    };
+
+    emitAssistantSnapshot("Checking:");
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "browser",
+      toolCallId: "tool-post-check-colon",
+      args: {},
+    });
+    await Promise.resolve();
+
+    emitAssistantSnapshot("Checking: found X");
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(2);
+    });
+
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
+      "Checking:",
+      "Checking: found X",
+    ]);
+    expect(subscription.assistantTexts).toEqual(["Checking:", "Checking: found X"]);
+  });
+
+  it("does not safety-send a cumulative text_end reply when the suffix was sent by a messaging tool", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextEnd({ emit, content: "Checking:" });
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "message-tool-1",
+      args: { action: "send", to: "+1555", message: "Fetched prices" },
+    });
+    await Promise.resolve();
+    emit({
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "message-tool-1",
+      isError: false,
+      result: "ok",
+    });
+    await Promise.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextEnd({ emit, content: "Checking: Fetched prices" });
+    await Promise.resolve();
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Checking: Fetched prices" }],
       },
     });
+    await Promise.resolve();
 
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-        content: "Hello world",
-      },
-    });
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(subscription.assistantTexts).toEqual(["Hello world"]);
+    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["Checking:"]);
   });
 });

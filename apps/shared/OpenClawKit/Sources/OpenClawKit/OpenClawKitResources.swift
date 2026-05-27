@@ -18,7 +18,7 @@ public enum OpenClawKitResources {
     private static func locateBundle() -> Bundle {
         // 1. Check inside Bundle.main (packaged apps copy resources here)
         if let mainResourceURL = Bundle.main.resourceURL {
-            let bundleURL = mainResourceURL.appendingPathComponent("\(bundleName).bundle")
+            let bundleURL = mainResourceURL.appendingPathComponent("\(self.bundleName).bundle")
             if let bundle = Bundle(url: bundleURL) {
                 return bundle
             }
@@ -52,18 +52,26 @@ public enum OpenClawKitResources {
         for candidate in candidates {
             guard let baseURL = candidate else { continue }
 
-            // Direct path
-            let directURL = baseURL.appendingPathComponent("\(bundleName).bundle")
-            if let bundle = Bundle(url: directURL) {
-                return bundle
+            // SwiftPM often places the resource bundle next to (or near) the test runner bundle,
+            // not inside it. Walk up a few levels and check common container paths.
+            var roots: [URL] = []
+            roots.append(baseURL)
+            roots.append(baseURL.appendingPathComponent("Resources"))
+            roots.append(baseURL.appendingPathComponent("Contents/Resources"))
+
+            var current = baseURL
+            for _ in 0..<5 {
+                current = current.deletingLastPathComponent()
+                roots.append(current)
+                roots.append(current.appendingPathComponent("Resources"))
+                roots.append(current.appendingPathComponent("Contents/Resources"))
             }
 
-            // Inside Resources/
-            let resourcesURL = baseURL
-                .appendingPathComponent("Resources")
-                .appendingPathComponent("\(bundleName).bundle")
-            if let bundle = Bundle(url: resourcesURL) {
-                return bundle
+            for root in roots {
+                let bundleURL = root.appendingPathComponent("\(self.bundleName).bundle")
+                if let bundle = Bundle(url: bundleURL) {
+                    return bundle
+                }
             }
         }
 
@@ -71,5 +79,5 @@ public enum OpenClawKitResources {
     }
 }
 
-// Helper class for bundle lookup via Bundle(for:)
+/// Helper class for bundle lookup via Bundle(for:)
 private final class BundleLocator {}

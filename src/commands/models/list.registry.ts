@@ -1,111 +1,148 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { ModelRow } from "./list.types.js";
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
-import { listProfilesForProvider } from "../../agents/auth-profiles.js";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 import {
-  getCustomProviderApiKey,
-  resolveAwsSdkEnvVarName,
-  resolveEnvApiKey,
-} from "../../agents/model-auth.js";
-import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
+  shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelFromManifest,
+} from "../../agents/model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  formatErrorWithStack,
+  MODEL_AVAILABILITY_UNAVAILABLE_CODE,
+  shouldFallbackToAuthHeuristics,
+} from "./list.errors.js";
+import { toModelRow as toModelRowBase } from "./list.model-row.js";
+import type { ModelRow } from "./list.types.js";
 import { modelKey } from "./shared.js";
 
-const isLocalBaseUrl = (baseUrl: string) => {
-  try {
-    const url = new URL(baseUrl);
-    const host = url.hostname.toLowerCase();
-    return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "0.0.0.0" ||
-      host === "::1" ||
-      host.endsWith(".local")
-    );
-  } catch {
-    return false;
-  }
-};
-
-const hasAuthForProvider = (provider: string, cfg: OpenClawConfig, authStore: AuthProfileStore) => {
-  if (listProfilesForProvider(authStore, provider).length > 0) {
-    return true;
-  }
-  if (provider === "amazon-bedrock" && resolveAwsSdkEnvVarName()) {
-    return true;
-  }
-  if (resolveEnvApiKey(provider)) {
-    return true;
-  }
-  if (getCustomProviderApiKey(cfg, provider)) {
-    return true;
-  }
-  return false;
-};
-
-export async function loadModelRegistry(cfg: OpenClawConfig) {
-  await ensureOpenClawModelsJson(cfg);
-  const agentDir = resolveOpenClawAgentDir();
-  const authStorage = discoverAuthStorage(agentDir);
-  const registry = discoverModels(authStorage, agentDir);
-  const models = registry.getAll();
-  const availableModels = registry.getAvailable();
-  const availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
-  return { registry, models, availableKeys };
+function createAvailabilityUnavailableError(message: string): Error {
+  const err = new Error(message);
+  (err as { code?: string }).code = MODEL_AVAILABILITY_UNAVAILABLE_CODE;
+  return err;
 }
 
-export function toModelRow(params: {
-  model?: Model<Api>;
-  key: string;
-  tags: string[];
-  aliases?: string[];
-  availableKeys?: Set<string>;
-  cfg?: OpenClawConfig;
-  authStore?: AuthProfileStore;
-}): ModelRow {
-  const { model, key, tags, aliases = [], availableKeys, cfg, authStore } = params;
-  if (!model) {
-    return {
-      key,
-      name: key,
-      input: "-",
-      contextWindow: null,
-      local: null,
-      available: null,
-      tags: [...tags, "missing"],
-      missing: true,
-    };
+function normalizeAvailabilityError(err: unknown): Error {
+  if (shouldFallbackToAuthHeuristics(err) && err instanceof Error) {
+    return err;
+  }
+  return createAvailabilityUnavailableError(
+    `Model availability unavailable: getAvailable() failed.\n${formatErrorWithStack(err)}`,
+  );
+}
+
+function validateAvailableModels(availableModels: unknown): Model<Api>[] {
+  if (!Array.isArray(availableModels)) {
+    throw createAvailabilityUnavailableError(
+      "Model availability unavailable: getAvailable() returned a non-array value.",
+    );
   }
 
-  const input = model.input.join("+") || "text";
-  const local = isLocalBaseUrl(model.baseUrl);
-  const available =
-    cfg && authStore
-      ? hasAuthForProvider(model.provider, cfg, authStore)
-      : (availableKeys?.has(modelKey(model.provider, model.id)) ?? false);
-  const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
-  const mergedTags = new Set(tags);
-  if (aliasTags.length > 0) {
-    for (const tag of mergedTags) {
-      if (tag === "alias" || tag.startsWith("alias:")) {
-        mergedTags.delete(tag);
+  for (const model of availableModels) {
+    if (
+      !model ||
+      typeof model !== "object" ||
+      typeof (model as { provider?: unknown }).provider !== "string" ||
+      typeof (model as { id?: unknown }).id !== "string"
+    ) {
+      throw createAvailabilityUnavailableError(
+        "Model availability unavailable: getAvailable() returned invalid model entries.",
+      );
+    }
+  }
+
+  return availableModels as Model<Api>[];
+}
+
+function loadAvailableModels(
+  registry: ModelRegistry,
+  cfg: OpenClawConfig,
+  opts?: { runtimeSuppression?: boolean },
+): Model<Api>[] {
+  let availableModels: unknown;
+  try {
+    availableModels = registry.getAvailable();
+  } catch (err) {
+    throw normalizeAvailabilityError(err);
+  }
+  try {
+    return validateAvailableModels(availableModels).filter((model) =>
+      opts?.runtimeSuppression === false
+        ? !shouldSuppressBuiltInModelFromManifest({
+            provider: model.provider,
+            id: model.id,
+            config: cfg,
+          })
+        : !shouldSuppressBuiltInModel({
+            provider: model.provider,
+            id: model.id,
+            baseUrl: model.baseUrl,
+            config: cfg,
+          }),
+    );
+  } catch (err) {
+    throw normalizeAvailabilityError(err);
+  }
+}
+
+export async function loadModelRegistry(
+  cfg: OpenClawConfig,
+  opts?: {
+    providerFilter?: string;
+    normalizeModels?: boolean;
+    loadAvailability?: boolean;
+    workspaceDir?: string;
+  },
+) {
+  const runtimeSuppression = opts?.normalizeModels !== false;
+  const agentDir = resolveDefaultAgentDir(cfg);
+  const authStorage = discoverAuthStorage(agentDir, {
+    readOnly: true,
+    skipCredentials: opts?.loadAvailability === false,
+    config: cfg,
+    workspaceDir: opts?.workspaceDir,
+  });
+  const registry = discoverModels(authStorage, agentDir, {
+    providerFilter: opts?.providerFilter,
+    normalizeModels: opts?.normalizeModels,
+  });
+  const models = registry.getAll().filter((model) =>
+    runtimeSuppression
+      ? !shouldSuppressBuiltInModel({
+          provider: model.provider,
+          id: model.id,
+          baseUrl: model.baseUrl,
+          config: cfg,
+        })
+      : !shouldSuppressBuiltInModelFromManifest({
+          provider: model.provider,
+          id: model.id,
+          config: cfg,
+        }),
+  );
+  let availableKeys: Set<string> | undefined;
+  let availabilityErrorMessage: string | undefined;
+
+  if (opts?.loadAvailability !== false) {
+    try {
+      const availableModels = loadAvailableModels(registry, cfg, { runtimeSuppression });
+      availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
+    } catch (err) {
+      if (!shouldFallbackToAuthHeuristics(err)) {
+        throw err;
+      }
+
+      // Some providers can report model-level availability as unavailable.
+      // Fall back to provider-level auth heuristics when availability is undefined.
+      availableKeys = undefined;
+      if (!availabilityErrorMessage) {
+        availabilityErrorMessage = formatErrorWithStack(err);
       }
     }
-    for (const tag of aliasTags) {
-      mergedTags.add(tag);
-    }
   }
+  return { registry, models, availableKeys, availabilityErrorMessage };
+}
 
-  return {
-    key,
-    name: model.name || model.id,
-    input,
-    contextWindow: model.contextWindow ?? null,
-    local,
-    available,
-    tags: Array.from(mergedTags),
-    missing: false,
-  };
+export function toModelRow(params: Parameters<typeof toModelRowBase>[0]): ModelRow {
+  return toModelRowBase(params);
 }

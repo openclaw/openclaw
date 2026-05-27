@@ -4,13 +4,13 @@ import OpenClawProtocol
 import OSLog
 import SwiftUI
 
-struct SessionPreviewItem: Identifiable, Sendable {
+struct SessionPreviewItem: Identifiable {
     let id: String
     let role: PreviewRole
     let text: String
 }
 
-enum PreviewRole: String, Sendable {
+enum PreviewRole: String {
     case user
     case assistant
     case tool
@@ -114,7 +114,7 @@ extension SessionPreviewCache {
 }
 #endif
 
-struct SessionMenuPreviewSnapshot: Sendable {
+struct SessionMenuPreviewSnapshot {
     let items: [SessionPreviewItem]
     let status: SessionMenuPreviewView.LoadStatus
 }
@@ -183,7 +183,6 @@ struct SessionMenuPreviewView: View {
         .frame(width: max(1, self.width), alignment: .leading)
     }
 
-    @ViewBuilder
     private func previewRow(_ item: SessionPreviewItem) -> some View {
         HStack(alignment: .top, spacing: 4) {
             Text(item.role.label)
@@ -212,7 +211,6 @@ struct SessionMenuPreviewView: View {
         }
     }
 
-    @ViewBuilder
     private func placeholder(_ text: String) -> some View {
         Text(text)
             .font(.caption)
@@ -227,7 +225,9 @@ enum SessionMenuPreviewLoader {
     private static let previewMaxChars = 240
 
     private struct PreviewTimeoutError: LocalizedError {
-        var errorDescription: String? { "preview timeout" }
+        var errorDescription: String? {
+            "preview timeout"
+        }
     }
 
     static func prewarm(sessionKeys: [String], maxItems: Int) async {

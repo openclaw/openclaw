@@ -1,16 +1,17 @@
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { createHash, randomBytes } from "node:crypto";
+import type { OAuthCredentials } from "@earendil-works/pi-ai";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
+const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
 export const CHUTES_AUTHORIZE_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/authorize`;
 export const CHUTES_TOKEN_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/token`;
 export const CHUTES_USERINFO_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/userinfo`;
 
 const DEFAULT_EXPIRES_BUFFER_MS = 5 * 60 * 1000;
 
-export type ChutesPkce = { verifier: string; challenge: string };
+type ChutesPkce = { verifier: string; challenge: string };
 
-export type ChutesUserInfo = {
+type ChutesUserInfo = {
   sub?: string;
   username?: string;
   created_at?: string;
@@ -23,7 +24,7 @@ export type ChutesOAuthAppConfig = {
   scopes: string[];
 };
 
-export type ChutesStoredOAuth = OAuthCredentials & {
+type ChutesStoredOAuth = OAuthCredentials & {
   clientId?: string;
 };
 
@@ -42,23 +43,42 @@ export function parseOAuthCallbackInput(
     return { error: "No input provided" };
   }
 
+  // Manual flow must validate CSRF state; require URL (or querystring) that includes `state`.
+  let url: URL;
   try {
-    const url = new URL(trimmed);
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state");
-    if (!code) {
-      return { error: "Missing 'code' parameter in URL" };
-    }
-    if (!state) {
-      return { error: "Missing 'state' parameter. Paste the full URL." };
-    }
-    return { code, state };
+    url = new URL(trimmed);
   } catch {
-    if (!expectedState) {
-      return { error: "Paste the full redirect URL, not just the code." };
+    // Code-only paste (common) is no longer accepted because it defeats state validation.
+    if (
+      !/\s/.test(trimmed) &&
+      !trimmed.includes("://") &&
+      !trimmed.includes("?") &&
+      !trimmed.includes("=")
+    ) {
+      return { error: "Paste the full redirect URL (must include code + state)." };
     }
-    return { code: trimmed, state: expectedState };
+
+    // Users sometimes paste only the query string: `?code=...&state=...` or `code=...&state=...`
+    const qs = trimmed.startsWith("?") ? trimmed : `?${trimmed}`;
+    try {
+      url = new URL(`http://localhost/${qs}`);
+    } catch {
+      return { error: "Paste the full redirect URL (must include code + state)." };
+    }
   }
+
+  const code = normalizeOptionalString(url.searchParams.get("code"));
+  const state = normalizeOptionalString(url.searchParams.get("state"));
+  if (!code) {
+    return { error: "Missing 'code' parameter in URL" };
+  }
+  if (!state) {
+    return { error: "Missing 'state' parameter. Paste the full redirect URL." };
+  }
+  if (state !== expectedState) {
+    return { error: "OAuth state mismatch - possible CSRF attack. Please retry login." };
+  }
+  return { code, state };
 }
 
 function coerceExpiresAt(expiresInSeconds: number, now: number): number {
@@ -66,7 +86,7 @@ function coerceExpiresAt(expiresInSeconds: number, now: number): number {
   return Math.max(value, now + 30_000);
 }
 
-export async function fetchChutesUserInfo(params: {
+async function fetchChutesUserInfo(params: {
   accessToken: string;
   fetchFn?: typeof fetch;
 }): Promise<ChutesUserInfo | null> {
@@ -162,7 +182,7 @@ export async function refreshChutesTokens(params: {
   if (!clientId) {
     throw new Error("Missing CHUTES_CLIENT_ID for Chutes OAuth refresh (set env var or re-auth).");
   }
-  const clientSecret = process.env.CHUTES_CLIENT_SECRET?.trim() || undefined;
+  const clientSecret = normalizeOptionalString(process.env.CHUTES_CLIENT_SECRET);
 
   const body = new URLSearchParams({
     grant_type: "refresh_token",
@@ -199,6 +219,7 @@ export async function refreshChutesTokens(params: {
   return {
     ...params.credential,
     access,
+    // RFC 6749 section 6: new refresh token is optional; if present, replace old.
     refresh: newRefresh || refreshToken,
     expires: coerceExpiresAt(expiresIn, now),
     clientId,

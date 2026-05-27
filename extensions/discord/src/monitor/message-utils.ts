@@ -1,0 +1,34 @@
+export {
+  resetDiscordChannelInfoCacheForTest,
+  resolveDiscordChannelInfo,
+  resolveDiscordMessageChannelId,
+  type DiscordChannelInfo,
+  type DiscordChannelInfoClient,
+} from "./message-channel-info.js";
+export {
+  hasDiscordMessageStickers,
+  normalizeDiscordMessageSnapshots,
+  normalizeDiscordStickerItems,
+  resolveDiscordMessageSnapshots,
+  resolveDiscordMessageStickers,
+  resolveDiscordReferencedForwardMessage,
+  resolveDiscordReferencedReplyMessage,
+  resolveDiscordSnapshotStickers,
+  type DiscordMessageSnapshot,
+  type DiscordSnapshotAuthor,
+  type DiscordSnapshotMessage,
+} from "./message-forwarded.js";
+export {
+  buildDiscordMediaPayload,
+  buildDiscordMediaPlaceholder,
+  resolveForwardedMediaList,
+  resolveMediaList,
+  resolveReferencedReplyMediaList,
+  type DiscordMediaInfo,
+  type DiscordMediaResolveOptions,
+} from "./message-media.js";
+export {
+  resolveDiscordEmbedText,
+  resolveDiscordForwardedMessagesTextFromSnapshots,
+  resolveDiscordMessageText,
+} from "./message-text.js";

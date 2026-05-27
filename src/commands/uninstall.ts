@@ -1,17 +1,14 @@
-import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
 import path from "node:path";
-import type { RuntimeEnv } from "../runtime.js";
-import {
-  isNixMode,
-  loadConfig,
-  resolveConfigPath,
-  resolveOAuthDir,
-  resolveStateDir,
-} from "../config/config.js";
+import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
+import { formatCliCommand } from "../cli/command-format.js";
+import { isNixMode } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveHomeDir } from "../utils.js";
-import { collectWorkspaceDirs, isPathWithin, removePath } from "./cleanup-utils.js";
+import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
+import { removePath, removeStateAndLinkedPaths, removeWorkspaceDirs } from "./cleanup-utils.js";
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
 
@@ -58,7 +55,9 @@ function buildScopeSelection(opts: UninstallOptions): {
 
 async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
   if (isNixMode) {
-    runtime.error("Nix mode detected; service uninstall is disabled.");
+    runtime.error(
+      `Nix mode detected; service uninstall is disabled. Manage the service through your Nix profile instead, then run ${formatCliCommand("openclaw status")} to verify.`,
+    );
     return false;
   }
   const service = resolveGatewayService();
@@ -66,7 +65,9 @@ async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    runtime.error(`Gateway service check failed: ${String(err)}`);
+    runtime.error(
+      `Gateway service check failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for service diagnostics.`,
+    );
     return false;
   }
   if (!loaded) {
@@ -76,13 +77,17 @@ async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
   try {
     await service.stop({ env: process.env, stdout: process.stdout });
   } catch (err) {
-    runtime.error(`Gateway stop failed: ${String(err)}`);
+    runtime.error(
+      `Gateway stop failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} before retrying uninstall.`,
+    );
   }
   try {
     await service.uninstall({ env: process.env, stdout: process.stdout });
     return true;
   } catch (err) {
-    runtime.error(`Gateway uninstall failed: ${String(err)}`);
+    runtime.error(
+      `Gateway uninstall failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for the service state.`,
+    );
     return false;
   }
 }
@@ -97,18 +102,26 @@ async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean) {
   });
 }
 
+function logBackupRecommendation(runtime: RuntimeEnv) {
+  runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
+}
+
 export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptions) {
   const { scopes, hadExplicit } = buildScopeSelection(opts);
   const interactive = !opts.nonInteractive;
   if (!interactive && !opts.yes) {
-    runtime.error("Non-interactive mode requires --yes.");
+    runtime.error(
+      `Non-interactive uninstall requires --yes. Preview first with ${formatCliCommand("openclaw uninstall --dry-run --all")}.`,
+    );
     runtime.exit(1);
     return;
   }
 
   if (!hadExplicit) {
     if (!interactive) {
-      runtime.error("Non-interactive mode requires explicit scopes (use --all).");
+      runtime.error(
+        `Non-interactive uninstall requires explicit scopes. Use --all, or choose scopes such as --service --state.`,
+      );
       runtime.exit(1);
       return;
     }
@@ -157,13 +170,12 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   }
 
   const dryRun = Boolean(opts.dryRun);
-  const cfg = loadConfig();
-  const stateDir = resolveStateDir();
-  const configPath = resolveConfigPath();
-  const oauthDir = resolveOAuthDir();
-  const configInsideState = isPathWithin(configPath, stateDir);
-  const oauthInsideState = isPathWithin(oauthDir, stateDir);
-  const workspaceDirs = collectWorkspaceDirs(cfg);
+  const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
+    resolveCleanupPlanFromDisk();
+
+  if (scopes.has("state") || scopes.has("workspace")) {
+    logBackupRecommendation(runtime);
+  }
 
   if (scopes.has("service")) {
     if (dryRun) {
@@ -174,19 +186,15 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   }
 
   if (scopes.has("state")) {
-    await removePath(stateDir, runtime, { dryRun, label: stateDir });
-    if (!configInsideState) {
-      await removePath(configPath, runtime, { dryRun, label: configPath });
-    }
-    if (!oauthInsideState) {
-      await removePath(oauthDir, runtime, { dryRun, label: oauthDir });
-    }
+    await removeStateAndLinkedPaths(
+      { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
+      runtime,
+      { dryRun },
+    );
   }
 
   if (scopes.has("workspace")) {
-    for (const workspace of workspaceDirs) {
-      await removePath(workspace, runtime, { dryRun, label: workspace });
-    }
+    await removeWorkspaceDirs(workspaceDirs, runtime, { dryRun });
   }
 
   if (scopes.has("app")) {

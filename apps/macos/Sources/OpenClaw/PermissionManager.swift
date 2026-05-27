@@ -1,11 +1,11 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
-import OpenClawIPC
 import CoreGraphics
 import CoreLocation
 import Foundation
 import Observation
+import OpenClawIPC
 import Speech
 import UserNotifications
 
@@ -229,61 +229,37 @@ enum PermissionManager {
 
 enum NotificationPermissionHelper {
     static func openSettings() {
-        let candidates = [
+        SystemSettingsURLSupport.openFirst([
             "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
             "x-apple.systempreferences:com.apple.preference.notifications",
-        ]
-
-        for candidate in candidates {
-            if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
-                return
-            }
-        }
+        ])
     }
 }
 
 enum MicrophonePermissionHelper {
     static func openSettings() {
-        let candidates = [
+        SystemSettingsURLSupport.openFirst([
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
             "x-apple.systempreferences:com.apple.preference.security",
-        ]
-
-        for candidate in candidates {
-            if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
-                return
-            }
-        }
+        ])
     }
 }
 
 enum CameraPermissionHelper {
     static func openSettings() {
-        let candidates = [
+        SystemSettingsURLSupport.openFirst([
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
             "x-apple.systempreferences:com.apple.preference.security",
-        ]
-
-        for candidate in candidates {
-            if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
-                return
-            }
-        }
+        ])
     }
 }
 
 enum LocationPermissionHelper {
     static func openSettings() {
-        let candidates = [
+        SystemSettingsURLSupport.openFirst([
             "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices",
             "x-apple.systempreferences:com.apple.preference.security",
-        ]
-
-        for candidate in candidates {
-            if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
-                return
-            }
-        }
+        ])
     }
 }
 
@@ -336,7 +312,7 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
         cont.resume(returning: status)
     }
 
-    // nonisolated for Swift 6 strict concurrency compatibility
+    /// nonisolated for Swift 6 strict concurrency compatibility
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
         Task { @MainActor in
@@ -344,7 +320,7 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    // Legacy callback (still used on some macOS versions / configurations).
+    /// Legacy callback (still used on some macOS versions / configurations).
     nonisolated func locationManager(
         _ manager: CLLocationManager,
         didChangeAuthorization status: CLAuthorizationStatus)

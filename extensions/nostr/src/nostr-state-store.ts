@@ -1,19 +1,12 @@
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+import { z } from "zod";
 import { getNostrRuntime } from "./runtime.js";
 
 const STORE_VERSION = 2;
 const PROFILE_STATE_VERSION = 1;
-
-type NostrBusStateV1 = {
-  version: 1;
-  /** Unix timestamp (seconds) of the last processed event */
-  lastProcessedAt: number | null;
-  /** Gateway startup timestamp (seconds) - events before this are old */
-  gatewayStartedAt: number | null;
-};
 
 type NostrBusState = {
   version: 2;
@@ -26,7 +19,7 @@ type NostrBusState = {
 };
 
 /** Profile publish state (separate from bus state) */
-export type NostrProfileState = {
+type NostrProfileState = {
   version: 1;
   /** Unix timestamp (seconds) of last successful profile publish */
   lastPublishedAt: number | null;
@@ -35,6 +28,33 @@ export type NostrProfileState = {
   /** Per-relay publish results from last attempt */
   lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
 };
+
+const NullableFiniteNumberSchema = z.number().finite().nullable().catch(null);
+const NostrBusStateV1Schema = z.object({
+  version: z.literal(1),
+  lastProcessedAt: NullableFiniteNumberSchema,
+  gatewayStartedAt: NullableFiniteNumberSchema,
+});
+
+const NostrBusStateSchema = z.object({
+  version: z.literal(2),
+  lastProcessedAt: NullableFiniteNumberSchema,
+  gatewayStartedAt: NullableFiniteNumberSchema,
+  recentEventIds: z
+    .array(z.unknown())
+    .catch([])
+    .transform((ids) => ids.filter((id): id is string => typeof id === "string")),
+});
+
+const NostrProfileStateSchema = z.object({
+  version: z.literal(1),
+  lastPublishedAt: NullableFiniteNumberSchema,
+  lastPublishedEventId: z.string().nullable().catch(null),
+  lastPublishResults: z
+    .record(z.string(), z.enum(["ok", "failed", "timeout"]))
+    .nullable()
+    .catch(null),
+});
 
 function normalizeAccountId(accountId?: string): string {
   const trimmed = accountId?.trim();
@@ -60,36 +80,23 @@ function resolveNostrProfileStatePath(
 }
 
 function safeParseState(raw: string): NostrBusState | null {
-  try {
-    const parsed = JSON.parse(raw) as Partial<NostrBusState> & Partial<NostrBusStateV1>;
+  const parsedV2 = safeParseJsonWithSchema(NostrBusStateSchema, raw);
+  if (parsedV2) {
+    return parsedV2;
+  }
 
-    if (parsed?.version === 2) {
-      return {
-        version: 2,
-        lastProcessedAt: typeof parsed.lastProcessedAt === "number" ? parsed.lastProcessedAt : null,
-        gatewayStartedAt:
-          typeof parsed.gatewayStartedAt === "number" ? parsed.gatewayStartedAt : null,
-        recentEventIds: Array.isArray(parsed.recentEventIds)
-          ? parsed.recentEventIds.filter((x): x is string => typeof x === "string")
-          : [],
-      };
-    }
-
-    // Back-compat: v1 state files
-    if (parsed?.version === 1) {
-      return {
-        version: 2,
-        lastProcessedAt: typeof parsed.lastProcessedAt === "number" ? parsed.lastProcessedAt : null,
-        gatewayStartedAt:
-          typeof parsed.gatewayStartedAt === "number" ? parsed.gatewayStartedAt : null,
-        recentEventIds: [],
-      };
-    }
-
-    return null;
-  } catch {
+  const parsedV1 = safeParseJsonWithSchema(NostrBusStateV1Schema, raw);
+  if (!parsedV1) {
     return null;
   }
+
+  // Back-compat: v1 state files
+  return {
+    version: 2,
+    lastProcessedAt: parsedV1.lastProcessedAt,
+    gatewayStartedAt: parsedV1.gatewayStartedAt,
+    recentEventIds: [],
+  };
 }
 
 export async function readNostrBusState(params: {
@@ -98,13 +105,14 @@ export async function readNostrBusState(params: {
 }): Promise<NostrBusState | null> {
   const filePath = resolveNostrStatePath(params.accountId, params.env);
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    return safeParseState(raw);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
+    const raw = await privateFileStore(path.dirname(filePath)).readTextIfExists(
+      path.basename(filePath),
+    );
+    if (raw === null) {
       return null;
     }
+    return safeParseState(raw);
+  } catch {
     return null;
   }
 }
@@ -117,20 +125,15 @@ export async function writeNostrBusState(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const filePath = resolveNostrStatePath(params.accountId, params.env);
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   const payload: NostrBusState = {
     version: STORE_VERSION,
     lastProcessedAt: params.lastProcessedAt,
     gatewayStartedAt: params.gatewayStartedAt,
     recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
   };
-  await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, {
-    encoding: "utf-8",
+  await privateFileStore(path.dirname(filePath)).writeJson(path.basename(filePath), payload, {
+    trailingNewline: true,
   });
-  await fs.chmod(tmp, 0o600);
-  await fs.rename(tmp, filePath);
 }
 
 /**
@@ -162,26 +165,7 @@ export function computeSinceTimestamp(
 // ============================================================================
 
 function safeParseProfileState(raw: string): NostrProfileState | null {
-  try {
-    const parsed = JSON.parse(raw) as Partial<NostrProfileState>;
-
-    if (parsed?.version === 1) {
-      return {
-        version: 1,
-        lastPublishedAt: typeof parsed.lastPublishedAt === "number" ? parsed.lastPublishedAt : null,
-        lastPublishedEventId:
-          typeof parsed.lastPublishedEventId === "string" ? parsed.lastPublishedEventId : null,
-        lastPublishResults:
-          parsed.lastPublishResults && typeof parsed.lastPublishResults === "object"
-            ? parsed.lastPublishResults
-            : null,
-      };
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
+  return safeParseJsonWithSchema(NostrProfileStateSchema, raw);
 }
 
 export async function readNostrProfileState(params: {
@@ -190,13 +174,14 @@ export async function readNostrProfileState(params: {
 }): Promise<NostrProfileState | null> {
   const filePath = resolveNostrProfileStatePath(params.accountId, params.env);
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    return safeParseProfileState(raw);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
+    const raw = await privateFileStore(path.dirname(filePath)).readTextIfExists(
+      path.basename(filePath),
+    );
+    if (raw === null) {
       return null;
     }
+    return safeParseProfileState(raw);
+  } catch {
     return null;
   }
 }
@@ -209,18 +194,13 @@ export async function writeNostrProfileState(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const filePath = resolveNostrProfileStatePath(params.accountId, params.env);
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   const payload: NostrProfileState = {
     version: PROFILE_STATE_VERSION,
     lastPublishedAt: params.lastPublishedAt,
     lastPublishedEventId: params.lastPublishedEventId,
     lastPublishResults: params.lastPublishResults,
   };
-  await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, {
-    encoding: "utf-8",
+  await privateFileStore(path.dirname(filePath)).writeJson(path.basename(filePath), payload, {
+    trailingNewline: true,
   });
-  await fs.chmod(tmp, 0o600);
-  await fs.rename(tmp, filePath);
 }

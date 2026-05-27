@@ -1,72 +1,66 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import {
+  THINKING_TAG_CASES,
+  createReasoningFinalAnswerMessage,
+  createStubSessionHarness,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
-type StubSession = {
-  subscribe: (fn: (evt: unknown) => void) => () => void;
-};
-
 describe("subscribeEmbeddedPiSession", () => {
-  const THINKING_TAG_CASES = [
-    { tag: "think", open: "<think>", close: "</think>" },
-    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
-    { tag: "thought", open: "<thought>", close: "</thought>" },
-    { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
-  ] as const;
-
-  it("emits reasoning as a separate message when enabled", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
+  function createReasoningBlockReplyHarness(params: { thinkingLevel?: "off" | "medium" } = {}) {
+    const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session,
       runId: "run",
       onBlockReply,
       blockReplyBreak: "message_end",
       reasoningMode: "on",
+      thinkingLevel: params.thinkingLevel,
     });
 
-    const assistantMessage = {
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "Because it helps" },
-        { type: "text", text: "Final answer" },
-      ],
-    } as AssistantMessage;
+    return { emit, onBlockReply };
+  }
 
-    handler?.({ type: "message_end", message: assistantMessage });
+  function blockReplyTextAt(onBlockReply: ReturnType<typeof vi.fn>, callIndex: number): string {
+    const call = onBlockReply.mock.calls[callIndex];
+    if (!call) {
+      throw new Error(`expected block reply call ${callIndex + 1}`);
+    }
+    return (call[0] as { text?: string }).text ?? "";
+  }
 
+  function expectReasoningAndAnswerCalls(onBlockReply: ReturnType<typeof vi.fn>) {
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply.mock.calls[0][0].text).toBe("Reasoning:\n_Because it helps_");
-    expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
+    expect(blockReplyTextAt(onBlockReply, 0)).toBe("Because it helps");
+    expect(blockReplyTextAt(onBlockReply, 1)).toBe("Final answer");
+  }
+
+  it("emits reasoning as a separate message when enabled", () => {
+    const { emit, onBlockReply } = createReasoningBlockReplyHarness();
+
+    const assistantMessage = createReasoningFinalAnswerMessage();
+
+    emit({ type: "message_end", message: assistantMessage });
+
+    expectReasoningAndAnswerCalls(onBlockReply);
   });
+
+  it("does not emit native reasoning when thinking is disabled", () => {
+    const { emit, onBlockReply } = createReasoningBlockReplyHarness({ thinkingLevel: "off" });
+
+    emit({ type: "message_end", message: createReasoningFinalAnswerMessage() });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(blockReplyTextAt(onBlockReply, 0)).toBe("Final answer");
+  });
+
   it.each(THINKING_TAG_CASES)(
     "promotes <%s> tags to thinking blocks at write-time",
     ({ open, close }) => {
-      let handler: ((evt: unknown) => void) | undefined;
-      const session: StubSession = {
-        subscribe: (fn) => {
-          handler = fn;
-          return () => {};
-        },
-      };
-
-      const onBlockReply = vi.fn();
-
-      subscribeEmbeddedPiSession({
-        session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
-        runId: "run",
-        onBlockReply,
-        blockReplyBreak: "message_end",
-        reasoningMode: "on",
-      });
+      const { emit, onBlockReply } = createReasoningBlockReplyHarness();
 
       const assistantMessage = {
         role: "assistant",
@@ -78,11 +72,9 @@ describe("subscribeEmbeddedPiSession", () => {
         ],
       } as AssistantMessage;
 
-      handler?.({ type: "message_end", message: assistantMessage });
+      emit({ type: "message_end", message: assistantMessage });
 
-      expect(onBlockReply).toHaveBeenCalledTimes(2);
-      expect(onBlockReply.mock.calls[0][0].text).toBe("Reasoning:\n_Because it helps_");
-      expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
+      expectReasoningAndAnswerCalls(onBlockReply);
 
       expect(assistantMessage.content).toEqual([
         { type: "thinking", thinking: "Because it helps" },

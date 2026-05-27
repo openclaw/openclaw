@@ -3,7 +3,10 @@
  * @see https://bot.zaloplatforms.com/docs
  */
 
+import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
+const ZALO_MEDIA_SSRF_POLICY: SsrFPolicy = {};
 
 export type ZaloFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -25,7 +28,9 @@ export type ZaloMessage = {
   from: {
     id: string;
     name?: string;
+    display_name?: string;
     avatar?: string;
+    is_bot?: boolean;
   };
   chat: {
     id: string;
@@ -33,9 +38,10 @@ export type ZaloMessage = {
   };
   date: number;
   text?: string;
-  photo?: string;
+  photo_url?: string;
   caption?: string;
   sticker?: string;
+  message_type?: string;
 };
 
 export type ZaloUpdate = {
@@ -58,9 +64,20 @@ export type ZaloSendPhotoParams = {
   caption?: string;
 };
 
+export type ZaloSendChatActionParams = {
+  chat_id: string;
+  action: "typing" | "upload_photo";
+};
+
 export type ZaloSetWebhookParams = {
   url: string;
   secret_token: string;
+};
+
+export type ZaloWebhookInfo = {
+  url?: string;
+  updated_at?: number;
+  has_custom_certificate?: boolean;
 };
 
 export type ZaloGetUpdatesParams = {
@@ -158,7 +175,43 @@ export async function sendPhoto(
   params: ZaloSendPhotoParams,
   fetcher?: ZaloFetch,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
-  return callZaloApi<ZaloMessage>("sendPhoto", token, params, { fetch: fetcher });
+  const photoUrl = params.photo.trim();
+  let parsedPhotoUrl: URL;
+  try {
+    parsedPhotoUrl = new URL(photoUrl);
+  } catch {
+    throw new Error("Zalo photo URL must be an absolute HTTP or HTTPS URL");
+  }
+
+  if (parsedPhotoUrl.protocol !== "http:" && parsedPhotoUrl.protocol !== "https:") {
+    throw new Error("Zalo photo URL must use HTTP or HTTPS");
+  }
+
+  await resolvePinnedHostnameWithPolicy(parsedPhotoUrl.hostname, {
+    policy: ZALO_MEDIA_SSRF_POLICY,
+  });
+
+  return callZaloApi<ZaloMessage>(
+    "sendPhoto",
+    token,
+    { ...params, photo: parsedPhotoUrl.href },
+    { fetch: fetcher },
+  );
+}
+
+/**
+ * Send a temporary chat action such as typing.
+ */
+export async function sendChatAction(
+  token: string,
+  params: ZaloSendChatActionParams,
+  fetcher?: ZaloFetch,
+  timeoutMs?: number,
+): Promise<ZaloApiResponse<boolean>> {
+  return callZaloApi<boolean>("sendChatAction", token, params, {
+    timeoutMs,
+    fetch: fetcher,
+  });
 }
 
 /**
@@ -183,8 +236,8 @@ export async function setWebhook(
   token: string,
   params: ZaloSetWebhookParams,
   fetcher?: ZaloFetch,
-): Promise<ZaloApiResponse<boolean>> {
-  return callZaloApi<boolean>("setWebhook", token, params, { fetch: fetcher });
+): Promise<ZaloApiResponse<ZaloWebhookInfo>> {
+  return callZaloApi<ZaloWebhookInfo>("setWebhook", token, params, { fetch: fetcher });
 }
 
 /**
@@ -193,8 +246,12 @@ export async function setWebhook(
 export async function deleteWebhook(
   token: string,
   fetcher?: ZaloFetch,
-): Promise<ZaloApiResponse<boolean>> {
-  return callZaloApi<boolean>("deleteWebhook", token, undefined, { fetch: fetcher });
+  timeoutMs?: number,
+): Promise<ZaloApiResponse<ZaloWebhookInfo>> {
+  return callZaloApi<ZaloWebhookInfo>("deleteWebhook", token, undefined, {
+    timeoutMs,
+    fetch: fetcher,
+  });
 }
 
 /**
@@ -203,6 +260,6 @@ export async function deleteWebhook(
 export async function getWebhookInfo(
   token: string,
   fetcher?: ZaloFetch,
-): Promise<ZaloApiResponse<{ url?: string; has_custom_certificate?: boolean }>> {
-  return callZaloApi("getWebhookInfo", token, undefined, { fetch: fetcher });
+): Promise<ZaloApiResponse<ZaloWebhookInfo>> {
+  return callZaloApi<ZaloWebhookInfo>("getWebhookInfo", token, undefined, { fetch: fetcher });
 }

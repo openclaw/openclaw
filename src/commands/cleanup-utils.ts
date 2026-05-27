@@ -1,16 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPathInside } from "../infra/path-guards.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { resolveHomeDir, resolveUserPath, shortenHomeInString } from "../utils.js";
 
-export type RemovalResult = {
+type RemovalResult = {
   ok: boolean;
   skipped?: boolean;
 };
 
-export function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
+type CleanupResolvedPaths = {
+  stateDir: string;
+  configPath: string;
+  oauthDir: string;
+  configInsideState: boolean;
+  oauthInsideState: boolean;
+};
+
+function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
   const dirs = new Set<string>();
   const defaults = cfg?.agents?.defaults;
   if (typeof defaults?.workspace === "string" && defaults.workspace.trim()) {
@@ -29,9 +38,25 @@ export function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] 
   return [...dirs];
 }
 
+export function buildCleanupPlan(params: {
+  cfg: OpenClawConfig | undefined;
+  stateDir: string;
+  configPath: string;
+  oauthDir: string;
+}): {
+  configInsideState: boolean;
+  oauthInsideState: boolean;
+  workspaceDirs: string[];
+} {
+  return {
+    configInsideState: isPathWithin(params.configPath, params.stateDir),
+    oauthInsideState: isPathWithin(params.oauthDir, params.stateDir),
+    workspaceDirs: collectWorkspaceDirs(params.cfg),
+  };
+}
+
 export function isPathWithin(child: string, parent: string): boolean {
-  const relative = path.relative(parent, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return isPathInside(parent, child);
 }
 
 function isUnsafeRemovalTarget(target: string): boolean {
@@ -76,6 +101,42 @@ export async function removePath(
   } catch (err) {
     runtime.error(`Failed to remove ${displayLabel}: ${String(err)}`);
     return { ok: false };
+  }
+}
+
+export async function removeStateAndLinkedPaths(
+  cleanup: CleanupResolvedPaths,
+  runtime: RuntimeEnv,
+  opts?: { dryRun?: boolean },
+): Promise<void> {
+  await removePath(cleanup.stateDir, runtime, {
+    dryRun: opts?.dryRun,
+    label: cleanup.stateDir,
+  });
+  if (!cleanup.configInsideState) {
+    await removePath(cleanup.configPath, runtime, {
+      dryRun: opts?.dryRun,
+      label: cleanup.configPath,
+    });
+  }
+  if (!cleanup.oauthInsideState) {
+    await removePath(cleanup.oauthDir, runtime, {
+      dryRun: opts?.dryRun,
+      label: cleanup.oauthDir,
+    });
+  }
+}
+
+export async function removeWorkspaceDirs(
+  workspaceDirs: readonly string[],
+  runtime: RuntimeEnv,
+  opts?: { dryRun?: boolean },
+): Promise<void> {
+  for (const workspace of workspaceDirs) {
+    await removePath(workspace, runtime, {
+      dryRun: opts?.dryRun,
+      label: workspace,
+    });
   }
 }
 

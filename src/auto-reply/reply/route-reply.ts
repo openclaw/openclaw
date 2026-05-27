@@ -7,26 +7,58 @@
  * across multiple providers.
  */
 
-import type { OpenClawConfig } from "../../config/config.js";
-import type { OriginatingChannelType } from "../templating.js";
-import type { ReplyPayload } from "../types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { normalizeChatChannelId } from "../../channels/registry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import type { OriginatingChannelType } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import {
+  formatBtwTextForExternalDelivery,
+  shouldSuppressReasoningPayload,
+} from "./reply-payloads.js";
+
+const messageRuntimeLoader = createLazyImportLoader(
+  () => import("../../channels/message/runtime.js"),
+);
+
+function loadDeliverRuntime() {
+  return messageRuntimeLoader.load();
+}
 
 export type RouteReplyParams = {
   /** The reply payload to send. */
   payload: ReplyPayload;
-  /** The originating channel type (telegram, slack, etc). */
+  /** The originating channel type. */
   channel: OriginatingChannelType;
   /** The destination chat/channel/user ID. */
   to: string;
   /** Session key for deriving agent identity defaults (multi-agent). */
   sessionKey?: string;
+  /** Session key for policy resolution when native-command delivery targets a different session. */
+  policySessionKey?: string;
+  /** Explicit conversation type for policy resolution when the policy key is generic. */
+  policyConversationType?: SilentReplyConversationType;
   /** Provider account id (multi-account). */
   accountId?: string;
+  /** Originating sender id for sender-scoped outbound media policy. */
+  requesterSenderId?: string;
+  /** Originating sender display name for name-keyed sender policy matching. */
+  requesterSenderName?: string;
+  /** Originating sender username for username-keyed sender policy matching. */
+  requesterSenderUsername?: string;
+  /** Originating sender E.164 phone number for e164-keyed sender policy matching. */
+  requesterSenderE164?: string;
   /** Thread id for replies (Telegram topic id or Matrix thread event id). */
   threadId?: string | number;
   /** Config for provider-specific settings. */
@@ -35,6 +67,10 @@ export type RouteReplyParams = {
   abortSignal?: AbortSignal;
   /** Mirror reply into session transcript (default: true when sessionKey is set). */
   mirror?: boolean;
+  /** Whether this message is being sent in a group/channel context */
+  isGroup?: boolean;
+  /** Group or channel identifier for correlation with received events */
+  groupId?: string;
 };
 
 export type RouteReplyResult = {
@@ -56,16 +92,28 @@ export type RouteReplyResult = {
  */
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
   const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
+  if (shouldSuppressReasoningPayload(payload)) {
+    return { ok: true };
+  }
   const normalizedChannel = normalizeMessageChannel(channel);
+  const channelId =
+    normalizeChannelId(channel) ?? normalizeOptionalLowercaseString(channel) ?? null;
+  const loadedPlugin = channelId ? getLoadedChannelPlugin(channelId) : undefined;
+  const bundledPlugin = channelId && !loadedPlugin ? getBundledChannelPlugin(channelId) : undefined;
+  const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
+  const threading = loadedPlugin?.threading ?? bundledPlugin?.threading;
+  const resolvedAgentId = params.sessionKey
+    ? resolveSessionAgentId({
+        sessionKey: params.sessionKey,
+        config: cfg,
+      })
+    : undefined;
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
   const responsePrefix = params.sessionKey
     ? resolveEffectiveMessagesConfig(
         cfg,
-        resolveSessionAgentId({
-          sessionKey: params.sessionKey,
-          config: cfg,
-        }),
+        resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
         { channel: normalizedChannel, accountId },
       ).responsePrefix
     : cfg.messages?.responsePrefix === "auto"
@@ -73,21 +121,51 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
+    transformReplyPayload: messaging?.transformReplyPayload
+      ? (nextPayload) =>
+          messaging.transformReplyPayload?.({
+            payload: nextPayload,
+            cfg,
+            accountId,
+          }) ?? nextPayload
+      : undefined,
   });
   if (!normalized) {
     return { ok: true };
   }
+  const externalPayload: ReplyPayload = {
+    ...normalized,
+    text: formatBtwTextForExternalDelivery(normalized),
+  };
 
-  let text = normalized.text ?? "";
-  let mediaUrls = (normalized.mediaUrls?.filter(Boolean) ?? []).length
-    ? (normalized.mediaUrls?.filter(Boolean) as string[])
-    : normalized.mediaUrl
-      ? [normalized.mediaUrl]
-      : [];
-  const replyToId = normalized.replyToId;
+  let text = externalPayload.text ?? "";
+  let mediaUrls: string[] = [];
+  for (const url of externalPayload.mediaUrls ?? []) {
+    if (url) {
+      mediaUrls.push(url);
+    }
+  }
+  if (mediaUrls.length === 0 && externalPayload.mediaUrl) {
+    mediaUrls = [externalPayload.mediaUrl];
+  }
+  const replyToId = externalPayload.replyToId;
+  const hasChannelData = messaging?.hasStructuredReplyPayload?.({
+    payload: externalPayload,
+  });
 
   // Skip empty replies.
-  if (!text.trim() && mediaUrls.length === 0) {
+  if (
+    !hasReplyPayloadContent(
+      {
+        ...externalPayload,
+        text,
+        mediaUrls,
+      },
+      {
+        hasChannelData,
+      },
+    )
+  ) {
     return { ok: true };
   }
 
@@ -98,7 +176,6 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     };
   }
 
-  const channelId = normalizeChannelId(channel) ?? null;
   if (!channelId) {
     return { ok: false, error: `Unknown channel: ${String(channel)}` };
   }
@@ -106,39 +183,67 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     return { ok: false, error: "Reply routing aborted" };
   }
 
-  const resolvedReplyToId =
-    replyToId ??
-    (channelId === "slack" && threadId != null && threadId !== "" ? String(threadId) : undefined);
-  const resolvedThreadId = channelId === "slack" ? null : (threadId ?? null);
+  const replyTransport =
+    threading?.resolveReplyTransport?.({
+      cfg,
+      accountId,
+      threadId,
+      replyToId,
+    }) ?? null;
+  const resolvedReplyToId = replyTransport?.replyToId ?? replyToId ?? undefined;
+  const resolvedThreadId =
+    replyTransport && Object.hasOwn(replyTransport, "threadId")
+      ? (replyTransport.threadId ?? null)
+      : (threadId ?? null);
 
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
-    const { deliverOutboundPayloads } = await import("../../infra/outbound/deliver.js");
-    const results = await deliverOutboundPayloads({
+    const { sendDurableMessageBatch } = await loadDeliverRuntime();
+    const outboundSession = buildOutboundSessionContext({
+      cfg,
+      agentId: resolvedAgentId,
+      sessionKey: params.sessionKey,
+      policySessionKey: params.policySessionKey,
+      conversationType: params.policyConversationType,
+      isGroup:
+        params.policySessionKey || params.policyConversationType ? undefined : params.isGroup,
+      requesterSenderId: params.requesterSenderId,
+      requesterSenderName: params.requesterSenderName,
+      requesterSenderUsername: params.requesterSenderUsername,
+      requesterSenderE164: params.requesterSenderE164,
+    });
+    const send = await sendDurableMessageBatch({
       cfg,
       channel: channelId,
       to,
       accountId: accountId ?? undefined,
-      payloads: [normalized],
+      payloads: [externalPayload],
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
-      abortSignal,
+      session: outboundSession,
+      signal: abortSignal,
       mirror:
         params.mirror !== false && params.sessionKey
           ? {
               sessionKey: params.sessionKey,
-              agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
+              agentId: resolvedAgentId,
               text,
               mediaUrls,
+              ...(params.isGroup != null ? { isGroup: params.isGroup } : {}),
+              ...(params.groupId ? { groupId: params.groupId } : {}),
             }
           : undefined,
     });
+    if (send.status === "failed" || send.status === "partial_failed") {
+      throw send.error;
+    }
+    const results = send.status === "sent" ? send.results : [];
 
     const last = results.at(-1);
     return { ok: true, messageId: last?.messageId };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return {
       ok: false,
       error: `Failed to route reply to ${channel}: ${message}`,
@@ -158,5 +263,5 @@ export function isRoutableChannel(
   if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
     return false;
   }
-  return normalizeChannelId(channel) !== null;
+  return normalizeChatChannelId(channel) !== null || normalizeChannelId(channel) !== null;
 }

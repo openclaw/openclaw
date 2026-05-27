@@ -10,7 +10,6 @@ extension ChannelsSettings {
         }
     }
 
-    @ViewBuilder
     func channelHeaderActions(_ channel: ChannelItem) -> some View {
         HStack(spacing: 8) {
             if channel.id == "whatsapp" {
@@ -88,7 +87,6 @@ extension ChannelsSettings {
         }
     }
 
-    @ViewBuilder
     func genericChannelSection(_ channel: ChannelItem) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             self.configEditorSection(channelId: channel.id)
@@ -97,9 +95,7 @@ extension ChannelsSettings {
 
     @ViewBuilder
     private func configEditorSection(channelId: String) -> some View {
-        self.formSection("Configuration") {
-            ChannelConfigForm(store: self.store, channelId: channelId)
-        }
+        ChannelConfigForm(store: self.store, channelId: channelId)
 
         self.configStatusMessage
 

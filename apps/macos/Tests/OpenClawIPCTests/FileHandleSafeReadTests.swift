@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-@Suite struct FileHandleSafeReadTests {
-    @Test func readToEndSafelyReturnsEmptyForClosedHandle() {
+struct FileHandleSafeReadTests {
+    @Test func `read to end safely returns empty for closed handle`() {
         let pipe = Pipe()
         let handle = pipe.fileHandleForReading
         try? handle.close()
@@ -12,7 +12,7 @@ import Testing
         #expect(data.isEmpty)
     }
 
-    @Test func readSafelyUpToCountReturnsEmptyForClosedHandle() {
+    @Test func `read safely up to count returns empty for closed handle`() {
         let pipe = Pipe()
         let handle = pipe.fileHandleForReading
         try? handle.close()
@@ -21,7 +21,7 @@ import Testing
         #expect(data.isEmpty)
     }
 
-    @Test func readToEndSafelyReadsPipeContents() {
+    @Test func `read to end safely reads pipe contents`() {
         let pipe = Pipe()
         let writeHandle = pipe.fileHandleForWriting
         writeHandle.write(Data("hello".utf8))
@@ -31,7 +31,7 @@ import Testing
         #expect(String(data: data, encoding: .utf8) == "hello")
     }
 
-    @Test func readSafelyUpToCountReadsIncrementally() {
+    @Test func `read safely up to count reads incrementally`() {
         let pipe = Pipe()
         let writeHandle = pipe.fileHandleForWriting
         writeHandle.write(Data("hello world".utf8))

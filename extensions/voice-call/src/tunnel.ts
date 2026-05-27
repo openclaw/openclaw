@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { getTailscaleDnsName } from "./webhook.js";
+import { getTailscaleDnsName } from "./webhook/tailscale.js";
 
 /**
  * Tunnel configuration for exposing the webhook server.
  */
-export interface TunnelConfig {
+interface TunnelConfig {
   /** Tunnel provider: ngrok, tailscale-serve, or tailscale-funnel */
   provider: "ngrok" | "tailscale-serve" | "tailscale-funnel" | "none";
   /** Local port to tunnel */

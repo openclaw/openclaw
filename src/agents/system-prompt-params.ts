@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { findGitRoot } from "../infra/git-root.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
+import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import {
   formatUserTime,
   resolveUserTimeFormat,
@@ -8,7 +11,7 @@ import {
   type ResolvedTimeFormat,
 } from "./date-time.js";
 
-export type RuntimeInfoInput = {
+type RuntimeInfoInput = {
   agentId?: string;
   host: string;
   os: string;
@@ -16,14 +19,16 @@ export type RuntimeInfoInput = {
   node: string;
   model: string;
   defaultModel?: string;
+  shell?: string;
   channel?: string;
   capabilities?: string[];
   /** Supported message actions for the current channel (e.g., react, edit, unsend) */
   channelActions?: string[];
   repoRoot?: string;
+  activeProcessSessions?: ActiveProcessSessionReference[];
 };
 
-export type SystemPromptRuntimeParams = {
+type SystemPromptRuntimeParams = {
   runtimeInfo: RuntimeInfoInput;
   userTimezone: string;
   userTime?: string;
@@ -74,9 +79,7 @@ function resolveRepoRoot(params: {
       // ignore invalid config path
     }
   }
-  const candidates = [params.workspaceDir, params.cwd]
-    .map((value) => value?.trim())
-    .filter(Boolean) as string[];
+  const candidates = normalizeStringEntries([params.workspaceDir ?? "", params.cwd ?? ""]);
   const seen = new Set<string>();
   for (const candidate of candidates) {
     const resolved = path.resolve(candidate);
@@ -90,25 +93,4 @@ function resolveRepoRoot(params: {
     }
   }
   return undefined;
-}
-
-function findGitRoot(startDir: string): string | null {
-  let current = path.resolve(startDir);
-  for (let i = 0; i < 12; i += 1) {
-    const gitPath = path.join(current, ".git");
-    try {
-      const stat = fs.statSync(gitPath);
-      if (stat.isDirectory() || stat.isFile()) {
-        return current;
-      }
-    } catch {
-      // ignore missing .git at this level
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      break;
-    }
-    current = parent;
-  }
-  return null;
 }

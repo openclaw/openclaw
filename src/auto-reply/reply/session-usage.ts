@@ -1,21 +1,96 @@
-import { setCliSessionId } from "../../agents/cli-session.js";
-import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
+import { setCliSessionBinding, setCliSessionId } from "../../agents/cli-session.js";
+import {
+  deriveSessionTotalTokens,
+  hasNonzeroUsage,
+  type NormalizedUsage,
+} from "../../agents/usage.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import {
   type SessionSystemPromptReport,
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+
+function applyCliSessionIdToSessionPatch(
+  params: {
+    providerUsed?: string;
+    cliSessionId?: string;
+    cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
+  },
+  entry: SessionEntry,
+  patch: Partial<SessionEntry>,
+): Partial<SessionEntry> {
+  const cliProvider = params.providerUsed ?? entry.modelProvider;
+  if (params.cliSessionBinding && cliProvider) {
+    const nextEntry = { ...entry, ...patch };
+    setCliSessionBinding(nextEntry, cliProvider, params.cliSessionBinding);
+    return {
+      ...patch,
+      cliSessionIds: nextEntry.cliSessionIds,
+      cliSessionBindings: nextEntry.cliSessionBindings,
+      claudeCliSessionId: nextEntry.claudeCliSessionId,
+    };
+  }
+  if (params.cliSessionId && cliProvider) {
+    const nextEntry = { ...entry, ...patch };
+    setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
+    return {
+      ...patch,
+      cliSessionIds: nextEntry.cliSessionIds,
+      cliSessionBindings: nextEntry.cliSessionBindings,
+      claudeCliSessionId: nextEntry.claudeCliSessionId,
+    };
+  }
+  return patch;
+}
+
+function resolveNonNegativeNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function estimateSessionRunCostUsd(params: {
+  cfg: OpenClawConfig;
+  usage?: NormalizedUsage;
+  providerUsed?: string;
+  modelUsed?: string;
+}): number | undefined {
+  if (!hasNonzeroUsage(params.usage)) {
+    return undefined;
+  }
+  const cost = resolveModelCostConfig({
+    provider: params.providerUsed,
+    model: params.modelUsed,
+    config: params.cfg,
+  });
+  return resolveNonNegativeNumber(estimateUsageCost({ usage: params.usage, cost }));
+}
 
 export async function persistSessionUsageUpdate(params: {
   storePath?: string;
   sessionKey?: string;
+  cfg?: OpenClawConfig;
   usage?: NormalizedUsage;
+  /**
+   * Usage from the last individual API call (not accumulated). When provided,
+   * this is used for `totalTokens` instead of the accumulated `usage` so that
+   * context-window utilization reflects the actual current context size rather
+   * than the sum of input tokens across all API calls in the run.
+   */
+  lastCallUsage?: NormalizedUsage;
   modelUsed?: string;
   providerUsed?: string;
   contextTokensUsed?: number;
+  promptTokens?: number;
+  usageIsContextSnapshot?: boolean;
+  isHeartbeat?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
+  cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
+  preserveFreshTotalTokensOnStaleUsage?: boolean;
+  preserveUserFacingSessionModelState?: boolean;
   logLabel?: string;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
@@ -24,37 +99,93 @@ export async function persistSessionUsageUpdate(params: {
   }
 
   const label = params.logLabel ? `${params.logLabel} ` : "";
-  if (hasNonzeroUsage(params.usage)) {
+  const cfg = params.cfg ?? getRuntimeConfig();
+  const hasUsage = hasNonzeroUsage(params.usage);
+  const hasPromptTokens =
+    typeof params.promptTokens === "number" &&
+    Number.isFinite(params.promptTokens) &&
+    params.promptTokens > 0;
+  const hasFreshContextSnapshot =
+    Boolean(params.lastCallUsage) || hasPromptTokens || params.usageIsContextSnapshot === true;
+
+  if (hasUsage || hasFreshContextSnapshot) {
     try {
       await updateSessionStoreEntry({
         storePath,
         sessionKey,
+        skipMaintenance: true,
+        takeCacheOwnership: true,
         update: async (entry) => {
-          const input = params.usage?.input ?? 0;
-          const output = params.usage?.output ?? 0;
-          const promptTokens =
-            input + (params.usage?.cacheRead ?? 0) + (params.usage?.cacheWrite ?? 0);
+          const preserveSessionModelState =
+            params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
+          const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
+          const resolvedContextTokens = preserveUserFacingRunState
+            ? entry.contextTokens
+            : (params.contextTokensUsed ?? entry.contextTokens);
+          // Use last-call usage for totalTokens when available. The accumulated
+          // `usage.input` sums input tokens from every API call in the run
+          // (tool-use loops, compaction retries), overstating actual context.
+          // `lastCallUsage` reflects only the final API call — the true context.
+          const usageForContext =
+            params.lastCallUsage ??
+            (params.usageIsContextSnapshot === true ? params.usage : undefined);
+          const totalTokens =
+            hasFreshContextSnapshot && !preserveUserFacingRunState
+              ? deriveSessionTotalTokens({
+                  usage: usageForContext,
+                  contextTokens: resolvedContextTokens,
+                  promptTokens: params.promptTokens,
+                })
+              : undefined;
+          const runEstimatedCostUsd = preserveUserFacingRunState
+            ? undefined
+            : estimateSessionRunCostUsd({
+                cfg,
+                usage: params.usage,
+                providerUsed: params.providerUsed ?? entry.modelProvider,
+                modelUsed: params.modelUsed ?? entry.model,
+              });
           const patch: Partial<SessionEntry> = {
-            inputTokens: input,
-            outputTokens: output,
-            totalTokens: promptTokens > 0 ? promptTokens : (params.usage?.total ?? input),
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
-            contextTokens: params.contextTokensUsed ?? entry.contextTokens,
-            systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+            modelProvider: preserveSessionModelState
+              ? entry.modelProvider
+              : (params.providerUsed ?? entry.modelProvider),
+            model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
+            ...(resolvedContextTokens !== undefined
+              ? { contextTokens: resolvedContextTokens }
+              : {}),
+            systemPromptReport: preserveUserFacingRunState
+              ? entry.systemPromptReport
+              : (params.systemPromptReport ?? entry.systemPromptReport),
             updatedAt: Date.now(),
           };
-          const cliProvider = params.providerUsed ?? entry.modelProvider;
-          if (params.cliSessionId && cliProvider) {
-            const nextEntry = { ...entry, ...patch };
-            setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
-            return {
-              ...patch,
-              cliSessionIds: nextEntry.cliSessionIds,
-              claudeCliSessionId: nextEntry.claudeCliSessionId,
-            };
+          if (hasUsage && !preserveUserFacingRunState) {
+            patch.inputTokens = params.usage?.input ?? 0;
+            patch.outputTokens = params.usage?.output ?? 0;
+            // Cache counters should reflect the latest context snapshot when
+            // available, not accumulated per-call totals across a whole run.
+            const cacheUsage = params.lastCallUsage ?? params.usage;
+            patch.cacheRead = cacheUsage?.cacheRead ?? 0;
+            patch.cacheWrite = cacheUsage?.cacheWrite ?? 0;
           }
-          return patch;
+          // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
+          // cumulative run usage, so assign directly instead of accumulating).
+          // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
+          if (runEstimatedCostUsd !== undefined) {
+            patch.estimatedCostUsd = runEstimatedCostUsd;
+          }
+          if (hasFreshContextSnapshot && !preserveUserFacingRunState) {
+            patch.totalTokens = totalTokens;
+            patch.totalTokensFresh = true;
+          } else if (
+            !preserveUserFacingRunState &&
+            (params.preserveFreshTotalTokensOnStaleUsage !== true ||
+              entry.totalTokensFresh !== true)
+          ) {
+            patch.totalTokensFresh = false;
+          }
+          return preserveUserFacingRunState
+            ? patch
+            : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
     } catch (err) {
@@ -68,25 +199,29 @@ export async function persistSessionUsageUpdate(params: {
       await updateSessionStoreEntry({
         storePath,
         sessionKey,
+        skipMaintenance: true,
+        takeCacheOwnership: true,
         update: async (entry) => {
+          const preserveSessionModelState =
+            params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
+          const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
+          const contextTokens = preserveUserFacingRunState
+            ? entry.contextTokens
+            : (params.contextTokensUsed ?? entry.contextTokens);
           const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
-            contextTokens: params.contextTokensUsed ?? entry.contextTokens,
-            systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+            modelProvider: preserveSessionModelState
+              ? entry.modelProvider
+              : (params.providerUsed ?? entry.modelProvider),
+            model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
+            ...(contextTokens !== undefined ? { contextTokens } : {}),
+            systemPromptReport: preserveUserFacingRunState
+              ? entry.systemPromptReport
+              : (params.systemPromptReport ?? entry.systemPromptReport),
             updatedAt: Date.now(),
           };
-          const cliProvider = params.providerUsed ?? entry.modelProvider;
-          if (params.cliSessionId && cliProvider) {
-            const nextEntry = { ...entry, ...patch };
-            setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
-            return {
-              ...patch,
-              cliSessionIds: nextEntry.cliSessionIds,
-              claudeCliSessionId: nextEntry.claudeCliSessionId,
-            };
-          }
-          return patch;
+          return preserveUserFacingRunState
+            ? patch
+            : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
     } catch (err) {

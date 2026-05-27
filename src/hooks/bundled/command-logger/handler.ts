@@ -26,7 +26,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveStateDir } from "../../../config/paths.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
+import { appendRegularFile } from "../../../infra/fs-safe.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { HookHandler } from "../../hooks.js";
+
+const log = createSubsystemLogger("command-logger");
 
 /**
  * Log all command events to a file
@@ -39,7 +45,7 @@ const logCommand: HookHandler = async (event) => {
 
   try {
     // Create log directory
-    const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
+    const stateDir = resolveStateDir(process.env, os.homedir);
     const logDir = path.join(stateDir, "logs");
     await fs.mkdir(logDir, { recursive: true });
 
@@ -54,12 +60,14 @@ const logCommand: HookHandler = async (event) => {
         source: event.context.commandSource ?? "unknown",
       }) + "\n";
 
-    await fs.appendFile(logFile, logLine, "utf-8");
+    await appendRegularFile({
+      filePath: logFile,
+      content: logLine,
+      rejectSymlinkParents: true,
+    });
   } catch (err) {
-    console.error(
-      "[command-logger] Failed to log command:",
-      err instanceof Error ? err.message : String(err),
-    );
+    const message = formatErrorMessage(err);
+    log.error(`Failed to log command: ${message}`);
   }
 };
 

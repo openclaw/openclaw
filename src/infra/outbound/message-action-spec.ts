@@ -1,4 +1,10 @@
-import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
+import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
 export type MessageActionTargetMode = "to" | "channelId" | "none";
 
@@ -7,6 +13,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     send: "to",
     broadcast: "none",
     poll: "to",
+    "poll-vote": "to",
     react: "to",
     reactions: "to",
     read: "to",
@@ -47,25 +54,56 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "category-create": "none",
     "category-edit": "none",
     "category-delete": "none",
+    "topic-create": "to",
+    "topic-edit": "to",
     "voice-status": "none",
     "event-list": "none",
     "event-create": "none",
     timeout: "none",
     kick: "none",
     ban: "none",
+    "set-profile": "none",
     "set-presence": "none",
+    "download-file": "none",
+    "upload-file": "to",
   };
 
-const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, string[]>> = {
-  unsend: ["messageId"],
-  edit: ["messageId"],
-  react: ["chatGuid", "chatIdentifier", "chatId"],
-  renameGroup: ["chatGuid", "chatIdentifier", "chatId"],
-  setGroupIcon: ["chatGuid", "chatIdentifier", "chatId"],
-  addParticipant: ["chatGuid", "chatIdentifier", "chatId"],
-  removeParticipant: ["chatGuid", "chatIdentifier", "chatId"],
-  leaveGroup: ["chatGuid", "chatIdentifier", "chatId"],
+type ActionTargetAliasSpec = {
+  aliases: string[];
 };
+
+const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTargetAliasSpec>> = {
+  unsend: { aliases: ["messageId"] },
+  edit: { aliases: ["messageId"] },
+  react: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+  renameGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+  setGroupIcon: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+  addParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+  removeParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+  leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+};
+
+function listActionTargetAliasSpecs(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+  channel?: string,
+): ActionTargetAliasSpec[] {
+  const specs: ActionTargetAliasSpec[] = [];
+  const coreSpec = ACTION_TARGET_ALIASES[action];
+  if (coreSpec) {
+    specs.push(coreSpec);
+  }
+  const normalizedChannel = normalizeOptionalLowercaseString(channel);
+  if (!normalizedChannel || !hasPotentialPluginActionParam(params)) {
+    return specs;
+  }
+  const plugin = getBootstrapChannelPlugin(normalizedChannel);
+  const channelSpec = plugin?.actions?.messageActionTargetAliases?.[action];
+  if (channelSpec) {
+    specs.push(channelSpec);
+  }
+  return specs;
+}
 
 export function actionRequiresTarget(action: ChannelMessageActionName): boolean {
   return MESSAGE_ACTION_TARGET_MODE[action] !== "none";
@@ -74,27 +112,30 @@ export function actionRequiresTarget(action: ChannelMessageActionName): boolean 
 export function actionHasTarget(
   action: ChannelMessageActionName,
   params: Record<string, unknown>,
+  options?: { channel?: string },
 ): boolean {
-  const to = typeof params.to === "string" ? params.to.trim() : "";
+  const to = normalizeOptionalString(params.to) ?? "";
   if (to) {
     return true;
   }
-  const channelId = typeof params.channelId === "string" ? params.channelId.trim() : "";
+  const channelId = normalizeOptionalString(params.channelId) ?? "";
   if (channelId) {
     return true;
   }
-  const aliases = ACTION_TARGET_ALIASES[action];
-  if (!aliases) {
+  const specs = listActionTargetAliasSpecs(action, params, options?.channel);
+  if (specs.length === 0) {
     return false;
   }
-  return aliases.some((alias) => {
-    const value = params[alias];
-    if (typeof value === "string") {
-      return value.trim().length > 0;
-    }
-    if (typeof value === "number") {
-      return Number.isFinite(value);
-    }
-    return false;
-  });
+  return specs.some((spec) =>
+    spec.aliases.some((alias) => {
+      const value = params[alias];
+      if (typeof value === "string") {
+        return Boolean(normalizeOptionalString(value));
+      }
+      if (typeof value === "number") {
+        return Number.isFinite(value);
+      }
+      return false;
+    }),
+  );
 }

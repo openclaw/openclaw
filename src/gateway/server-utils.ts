@@ -1,12 +1,10 @@
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 
 export function normalizeVoiceWakeTriggers(input: unknown): string[] {
-  const raw = Array.isArray(input) ? input : [];
-  const cleaned = raw
-    .map((v) => (typeof v === "string" ? v.trim() : ""))
-    .filter((v) => v.length > 0)
+  const cleaned = normalizeTrimmedStringList(input)
     .slice(0, 32)
-    .map((v) => v.slice(0, 64));
+    .map((value) => value.slice(0, 64));
   return cleaned.length > 0 ? cleaned : defaultVoiceWakeTriggers();
 }
 

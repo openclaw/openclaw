@@ -1,10 +1,12 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import type { SubagentRunRecord } from "./subagent-registry.js";
-import { STATE_DIR } from "../config/paths.js";
+import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-
-export type PersistedSubagentRegistryVersion = 1 | 2;
+import { readStringValue } from "../shared/string-coerce.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type PersistedSubagentRegistryV1 = {
   version: 1;
@@ -19,8 +21,14 @@ type PersistedSubagentRegistryV2 = {
 type PersistedSubagentRegistry = PersistedSubagentRegistryV1 | PersistedSubagentRegistryV2;
 
 const REGISTRY_VERSION = 2 as const;
+const MAX_SUBAGENT_REGISTRY_READ_CACHE_ENTRIES = 32;
 
 type PersistedSubagentRunRecord = SubagentRunRecord;
+
+type RegistryCacheEntry = {
+  signature: string;
+  runs: Map<string, SubagentRunRecord>;
+};
 
 type LegacySubagentRunRecord = PersistedSubagentRunRecord & {
   announceCompletedAt?: unknown;
@@ -29,22 +37,73 @@ type LegacySubagentRunRecord = PersistedSubagentRunRecord & {
   requesterAccountId?: unknown;
 };
 
+const registryReadCache = new Map<string, RegistryCacheEntry>();
+
+function cloneSubagentRunRecord(entry: SubagentRunRecord): SubagentRunRecord {
+  return structuredClone(entry);
+}
+
+function cloneSubagentRunMap(runs: Map<string, SubagentRunRecord>): Map<string, SubagentRunRecord> {
+  return new Map([...runs].map(([runId, entry]) => [runId, cloneSubagentRunRecord(entry)]));
+}
+
+function setCachedRegistryRead(
+  pathname: string,
+  signature: string,
+  runs: Map<string, SubagentRunRecord>,
+): void {
+  registryReadCache.delete(pathname);
+  registryReadCache.set(pathname, { signature, runs: cloneSubagentRunMap(runs) });
+  if (registryReadCache.size <= MAX_SUBAGENT_REGISTRY_READ_CACHE_ENTRIES) {
+    return;
+  }
+  const oldestKey = registryReadCache.keys().next().value;
+  if (typeof oldestKey === "string") {
+    registryReadCache.delete(oldestKey);
+  }
+}
+
+function resolveSubagentStateDir(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env.OPENCLAW_STATE_DIR?.trim();
+  if (explicit) {
+    return resolveStateDir(env);
+  }
+  if (env.VITEST || env.NODE_ENV === "test") {
+    return path.join(os.tmpdir(), "openclaw-test-state", String(process.pid));
+  }
+  return resolveStateDir(env);
+}
+
 export function resolveSubagentRegistryPath(): string {
-  return path.join(STATE_DIR, "subagents", "runs.json");
+  return path.join(resolveSubagentStateDir(process.env), "subagents", "runs.json");
 }
 
 export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
   const pathname = resolveSubagentRegistryPath();
+  const signature = statRegistryFileSignature(pathname);
+  if (signature === null) {
+    registryReadCache.delete(pathname);
+    return new Map();
+  }
+  const cached = registryReadCache.get(pathname);
+  if (cached?.signature === signature) {
+    registryReadCache.delete(pathname);
+    registryReadCache.set(pathname, cached);
+    return cloneSubagentRunMap(cached.runs);
+  }
   const raw = loadJsonFile(pathname);
   if (!raw || typeof raw !== "object") {
+    setCachedRegistryRead(pathname, signature, new Map());
     return new Map();
   }
   const record = raw as Partial<PersistedSubagentRegistry>;
   if (record.version !== 1 && record.version !== 2) {
+    setCachedRegistryRead(pathname, signature, new Map());
     return new Map();
   }
   const runsRaw = record.runs;
   if (!runsRaw || typeof runsRaw !== "object") {
+    setCachedRegistryRead(pathname, signature, new Map());
     return new Map();
   }
   const out = new Map<string, SubagentRunRecord>();
@@ -72,11 +131,17 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
           : undefined;
     const requesterOrigin = normalizeDeliveryContext(
       typed.requesterOrigin ?? {
-        channel: typeof typed.requesterChannel === "string" ? typed.requesterChannel : undefined,
-        accountId:
-          typeof typed.requesterAccountId === "string" ? typed.requesterAccountId : undefined,
+        channel: readStringValue(typed.requesterChannel),
+        accountId: readStringValue(typed.requesterAccountId),
       },
     );
+    const childSessionKey = readStringValue(typed.childSessionKey)?.trim() ?? "";
+    const requesterSessionKey = readStringValue(typed.requesterSessionKey)?.trim() ?? "";
+    const controllerSessionKey =
+      readStringValue(typed.controllerSessionKey)?.trim() || requesterSessionKey;
+    if (!childSessionKey || !requesterSessionKey) {
+      continue;
+    }
     const {
       announceCompletedAt: _announceCompletedAt,
       announceHandled: _announceHandled,
@@ -84,12 +149,19 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
       requesterAccountId: _accountId,
       ...rest
     } = typed;
-    out.set(runId, {
-      ...rest,
-      requesterOrigin,
-      cleanupCompletedAt,
-      cleanupHandled,
-    });
+    out.set(
+      runId,
+      normalizeSubagentRunState({
+        ...rest,
+        childSessionKey,
+        requesterSessionKey,
+        controllerSessionKey,
+        requesterOrigin,
+        cleanupCompletedAt,
+        cleanupHandled,
+        spawnMode: typed.spawnMode === "session" ? "session" : "run",
+      }),
+    );
     if (isLegacy) {
       migrated = true;
     }
@@ -100,6 +172,8 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
     } catch {
       // ignore migration write failures
     }
+  } else {
+    setCachedRegistryRead(pathname, signature, out);
   }
   return out;
 }
@@ -108,11 +182,32 @@ export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>)
   const pathname = resolveSubagentRegistryPath();
   const serialized: Record<string, PersistedSubagentRunRecord> = {};
   for (const [runId, entry] of runs.entries()) {
-    serialized[runId] = entry;
+    serialized[runId] = normalizeSubagentRunState(cloneSubagentRunRecord(entry));
   }
   const out: PersistedSubagentRegistry = {
     version: REGISTRY_VERSION,
     runs: serialized,
   };
   saveJsonFile(pathname, out);
+  const signature = statRegistryFileSignature(pathname);
+  if (signature === null) {
+    registryReadCache.delete(pathname);
+  } else {
+    setCachedRegistryRead(pathname, signature, runs);
+  }
+}
+
+function statRegistryFileSignature(pathname: string): string | null {
+  try {
+    const stat = fs.statSync(pathname, { bigint: true });
+    if (!stat.isFile()) {
+      return null;
+    }
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
 }

@@ -3,13 +3,56 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 type RunResult = {
   code: number | null;
-  signal: NodeJS.Signals | null;
+  signal: string | null;
   stdout: string;
   stderr: string;
 };
+
+type PnpmCommand = {
+  args: string[];
+  command: string;
+  env?: NodeJS.ProcessEnv;
+  shell: boolean;
+  windowsVerbatimArguments?: boolean;
+};
+
+type ResolvePnpmCommandOptions = {
+  comSpec?: string;
+  env?: NodeJS.ProcessEnv;
+  execPath?: string;
+  npmExecPath?: string;
+  platform?: NodeJS.Platform;
+};
+
+function resolveEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
+  return key === undefined ? undefined : env[key];
+}
+
+export function resolveZaiFallbackPnpmCommand(
+  args: string[],
+  options: ResolvePnpmCommandOptions = {},
+): PnpmCommand {
+  const env = options.env ?? process.env;
+  const command = resolvePnpmRunner({
+    comSpec: options.comSpec ?? resolveEnvValue(env, "ComSpec"),
+    npmExecPath: options.npmExecPath ?? env.npm_execpath,
+    nodeExecPath: options.execPath ?? process.execPath,
+    platform: options.platform,
+    pnpmArgs: args,
+  });
+  if (command.env === undefined) {
+    const invocation = { ...command };
+    delete invocation.env;
+    return invocation;
+  }
+  return command;
+}
 
 function pickAnthropicEnv(): { type: "oauth" | "api"; value: string } | null {
   const oauth = process.env.ANTHROPIC_OAUTH_TOKEN?.trim();
@@ -33,9 +76,12 @@ async function runCommand(
   env: NodeJS.ProcessEnv,
 ): Promise<RunResult> {
   return await new Promise((resolve, reject) => {
-    const child = spawn("pnpm", args, {
-      env,
+    const command = resolveZaiFallbackPnpmCommand(args, { env });
+    const child = spawn(command.command, command.args, {
+      env: command.env ?? env,
+      shell: command.shell,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsVerbatimArguments: command.windowsVerbatimArguments,
     });
     let stdout = "";
     let stderr = "";
@@ -98,17 +144,12 @@ async function main() {
   };
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
 
-  const sessionId =
-    process.env.OPENCLAW_ZAI_FALLBACK_SESSION_ID ??
-    process.env.CLAWDBOT_ZAI_FALLBACK_SESSION_ID ??
-    randomUUID();
+  const sessionId = process.env.OPENCLAW_ZAI_FALLBACK_SESSION_ID ?? randomUUID();
 
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
-    CLAWDBOT_CONFIG_PATH: configPath,
-    CLAWDBOT_STATE_DIR: stateDir,
     ZAI_API_KEY: zaiKey,
     Z_AI_API_KEY: "",
   };
@@ -162,7 +203,14 @@ async function main() {
   process.exit(run2.code ?? 1);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+function isCliEntrypoint() {
+  const entrypoint = process.argv[1];
+  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
+}
+
+if (isCliEntrypoint()) {
+  await main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

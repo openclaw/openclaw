@@ -1,105 +1,150 @@
-import type { Stats } from "node:fs";
-import type { FileHandle } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
+import "./fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  ensureDirectoryWithinRoot,
+  findExistingAncestor,
+  writeViaSiblingTempPath,
+} from "@openclaw/fs-safe/advanced";
+import { root as fsSafeRoot, type ReadResult } from "@openclaw/fs-safe/root";
 
-export type SafeOpenErrorCode = "invalid-path" | "not-found";
+export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
+export {
+  assertAbsolutePathInput,
+  canonicalPathFromExistingAncestor,
+  findExistingAncestor,
+  resolveAbsolutePathForRead,
+  resolveAbsolutePathForWrite,
+  type AbsolutePathSymlinkPolicy,
+  type EnsureAbsoluteDirectoryOptions,
+  type EnsureAbsoluteDirectoryResult,
+  type ResolvedAbsolutePath,
+  type ResolvedWritableAbsolutePath,
+} from "@openclaw/fs-safe/advanced";
+export { isPathInside } from "@openclaw/fs-safe/path";
+export { pathExists, pathExistsSync } from "@openclaw/fs-safe/advanced";
+export { movePathToTrash, type MovePathToTrashOptions } from "@openclaw/fs-safe/advanced";
+export { readLocalFileFromRoots, resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
+export {
+  appendRegularFile,
+  appendRegularFileSync,
+  readRegularFile,
+  readRegularFileSync,
+  resolveRegularFileAppendFlags,
+  statRegularFile,
+  statRegularFileSync,
+} from "@openclaw/fs-safe/advanced";
+export {
+  openLocalFileSafely,
+  readLocalFileSafely,
+  resolveOpenedFileRealPathForHandle,
+  root,
+  type OpenResult,
+  type ReadResult,
+} from "@openclaw/fs-safe/root";
+export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
+export {
+  readSecureFile,
+  type SecureFileReadOptions,
+  type SecureFileReadResult,
+} from "@openclaw/fs-safe/secure-file";
+export {
+  walkDirectory,
+  walkDirectorySync,
+  type WalkDirectoryEntry,
+  type WalkDirectoryOptions,
+  type WalkDirectoryResult,
+} from "@openclaw/fs-safe/walk";
+export { withTimeout } from "@openclaw/fs-safe/advanced";
 
-export class SafeOpenError extends Error {
-  code: SafeOpenErrorCode;
-
-  constructor(code: SafeOpenErrorCode, message: string) {
-    super(message);
-    this.code = code;
-    this.name = "SafeOpenError";
-  }
-}
-
-export type SafeOpenResult = {
-  handle: FileHandle;
-  realPath: string;
-  stat: Stats;
+export type ExternalFileWriteOptions = {
+  rootDir: string;
+  path: string;
+  write: (tempPath: string) => Promise<void>;
+  fallbackFileName?: string;
+  tempPrefix?: string;
 };
 
-const NOT_FOUND_CODES = new Set(["ENOENT", "ENOTDIR"]);
+export type ExternalFileWriteResult = {
+  path: string;
+};
 
-const ensureTrailingSep = (value: string) => (value.endsWith(path.sep) ? value : value + path.sep);
+export async function ensureAbsoluteDirectory(
+  dirPath: string,
+  options?: { scopeLabel?: string; mode?: number },
+): Promise<{ ok: true; path: string } | { ok: false; error: Error }> {
+  const absolutePath = path.resolve(dirPath);
+  const scopeLabel = options?.scopeLabel ?? "directory";
+  const existingAncestor = await findExistingAncestor(absolutePath);
+  if (!existingAncestor) {
+    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
+  }
+  if (existingAncestor === absolutePath) {
+    try {
+      const stat = await fs.lstat(absolutePath);
+      if (!stat.isSymbolicLink() && stat.isDirectory()) {
+        return { ok: true, path: absolutePath };
+      }
+    } catch {
+      // Fall through to the uniform invalid-path result below.
+    }
+    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
+  }
+  const result = await ensureDirectoryWithinRoot({
+    rootDir: existingAncestor,
+    requestedPath: path.relative(existingAncestor, absolutePath),
+    scopeLabel,
+    mode: options?.mode,
+  });
+  if (result.ok) {
+    return result;
+  }
+  return { ok: false, error: new Error(result.error) };
+}
 
-const isNodeError = (err: unknown): err is NodeJS.ErrnoException =>
-  Boolean(err && typeof err === "object" && "code" in (err as Record<string, unknown>));
+export async function writeExternalFileWithinRoot(
+  options: ExternalFileWriteOptions,
+): Promise<ExternalFileWriteResult> {
+  const targetPath = path.resolve(options.rootDir, options.path);
+  await writeViaSiblingTempPath({
+    rootDir: options.rootDir,
+    targetPath,
+    writeTemp: options.write,
+    fallbackFileName: options.fallbackFileName,
+    tempPrefix: options.tempPrefix,
+  });
+  return { path: targetPath };
+}
 
-const isNotFoundError = (err: unknown) =>
-  isNodeError(err) && typeof err.code === "string" && NOT_FOUND_CODES.has(err.code);
-
-const isSymlinkOpenError = (err: unknown) =>
-  isNodeError(err) && (err.code === "ELOOP" || err.code === "EINVAL" || err.code === "ENOTSUP");
-
-export async function openFileWithinRoot(params: {
+/** @deprecated Use root(rootDir).read(relativePath, options). */
+export async function readFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
-}): Promise<SafeOpenResult> {
-  let rootReal: string;
-  try {
-    rootReal = await fs.realpath(params.rootDir);
-  } catch (err) {
-    if (isNotFoundError(err)) {
-      throw new SafeOpenError("not-found", "root dir not found");
-    }
-    throw err;
-  }
-  const rootWithSep = ensureTrailingSep(rootReal);
-  const resolved = path.resolve(rootWithSep, params.relativePath);
-  if (!resolved.startsWith(rootWithSep)) {
-    throw new SafeOpenError("invalid-path", "path escapes root");
-  }
+  rejectHardlinks?: boolean;
+  nonBlockingRead?: boolean;
+  allowSymlinkTargetWithinRoot?: boolean;
+  maxBytes?: number;
+}): Promise<ReadResult> {
+  const root = await fsSafeRoot(params.rootDir);
+  return await root.read(params.relativePath, {
+    hardlinks: params.rejectHardlinks === false ? "allow" : "reject",
+    maxBytes: params.maxBytes,
+    nonBlockingRead: params.nonBlockingRead,
+    symlinks: params.allowSymlinkTargetWithinRoot === true ? "follow-within-root" : "reject",
+  });
+}
 
-  const supportsNoFollow = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
-  const flags = fsConstants.O_RDONLY | (supportsNoFollow ? fsConstants.O_NOFOLLOW : 0);
-
-  let handle: FileHandle;
-  try {
-    handle = await fs.open(resolved, flags);
-  } catch (err) {
-    if (isNotFoundError(err)) {
-      throw new SafeOpenError("not-found", "file not found");
-    }
-    if (isSymlinkOpenError(err)) {
-      throw new SafeOpenError("invalid-path", "symlink open blocked");
-    }
-    throw err;
-  }
-
-  try {
-    const lstat = await fs.lstat(resolved).catch(() => null);
-    if (lstat?.isSymbolicLink()) {
-      throw new SafeOpenError("invalid-path", "symlink not allowed");
-    }
-
-    const realPath = await fs.realpath(resolved);
-    if (!realPath.startsWith(rootWithSep)) {
-      throw new SafeOpenError("invalid-path", "path escapes root");
-    }
-
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
-      throw new SafeOpenError("invalid-path", "not a file");
-    }
-
-    const realStat = await fs.stat(realPath);
-    if (stat.ino !== realStat.ino || stat.dev !== realStat.dev) {
-      throw new SafeOpenError("invalid-path", "path mismatch");
-    }
-
-    return { handle, realPath, stat };
-  } catch (err) {
-    await handle.close().catch(() => {});
-    if (err instanceof SafeOpenError) {
-      throw err;
-    }
-    if (isNotFoundError(err)) {
-      throw new SafeOpenError("not-found", "file not found");
-    }
-    throw err;
-  }
+/** @deprecated Use root(rootDir).write(relativePath, data, options). */
+export async function writeFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  data: string | Buffer;
+  encoding?: BufferEncoding;
+  mkdir?: boolean;
+}): Promise<void> {
+  const root = await fsSafeRoot(params.rootDir);
+  await root.write(params.relativePath, params.data, {
+    encoding: params.encoding,
+    mkdir: params.mkdir,
+  });
 }

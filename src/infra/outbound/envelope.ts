@@ -9,7 +9,7 @@ export type OutboundResultEnvelope = {
 };
 
 type BuildEnvelopeParams = {
-  payloads?: ReplyPayload[] | OutboundPayloadJson[];
+  payloads?: readonly ReplyPayload[] | readonly OutboundPayloadJson[];
   meta?: unknown;
   delivery?: OutboundDeliveryJson;
   flattenDelivery?: boolean;
@@ -29,8 +29,8 @@ export function buildOutboundResultEnvelope(
       : params.payloads.length === 0
         ? []
         : isOutboundPayloadJson(params.payloads[0])
-          ? (params.payloads as OutboundPayloadJson[])
-          : normalizeOutboundPayloadsForJson(params.payloads as ReplyPayload[]);
+          ? [...(params.payloads as readonly OutboundPayloadJson[])]
+          : normalizeOutboundPayloadsForJson(params.payloads as readonly ReplyPayload[]);
 
   if (params.flattenDelivery !== false && params.delivery && !params.meta && !hasPayloads) {
     return params.delivery;

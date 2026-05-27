@@ -1,14 +1,9 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
-let runtime: PluginRuntime | null = null;
-
-export function setZalouserRuntime(next: PluginRuntime): void {
-  runtime = next;
-}
-
-export function getZalouserRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("Zalouser runtime not initialized");
-  }
-  return runtime;
-}
+const { setRuntime: setZalouserRuntime, getRuntime: getZalouserRuntime } =
+  createPluginRuntimeStore<PluginRuntime>({
+    pluginId: "zalouser",
+    errorMessage: "Zalouser runtime not initialized",
+  });
+export { getZalouserRuntime, setZalouserRuntime };

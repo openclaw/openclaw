@@ -1,5 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
@@ -11,7 +12,9 @@ export async function getUpdateCheckResult(params: {
   timeoutMs: number;
   fetchGit: boolean;
   includeRegistry: boolean;
+  updateConfigChannel?: string | null;
 }): Promise<UpdateCheckResult> {
+  const configChannel = normalizeUpdateChannel(params.updateConfigChannel);
   const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
     argv1: process.argv[1],
@@ -22,6 +25,10 @@ export async function getUpdateCheckResult(params: {
     timeoutMs: params.timeoutMs,
     fetchGit: params.fetchGit,
     includeRegistry: params.includeRegistry,
+    registryChannel: resolveRegistryUpdateChannel({
+      configChannel,
+      currentVersion: VERSION,
+    }),
   });
 }
 
@@ -71,6 +78,35 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
 
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {
   const parts: string[] = [];
+
+  const appendRegistryUpdateSummary = () => {
+    const registryLabel =
+      update.registry?.tag && update.registry.tag !== "latest"
+        ? `npm ${update.registry.tag}`
+        : "npm latest";
+    if (update.registry?.latestVersion) {
+      const cmp = compareSemverStrings(VERSION, update.registry.latestVersion);
+      if (cmp === 0) {
+        if (update.installKind !== "git") {
+          parts.push("up to date");
+        }
+        parts.push(`${registryLabel} ${update.registry.latestVersion}`);
+      } else if (cmp != null && cmp < 0) {
+        parts.push(
+          update.registry.tag && update.registry.tag !== "latest"
+            ? `${registryLabel} update ${update.registry.latestVersion}`
+            : `npm update ${update.registry.latestVersion}`,
+        );
+      } else {
+        parts.push(`${registryLabel} ${update.registry.latestVersion} (local newer)`);
+      }
+      return;
+    }
+    if (update.registry?.error) {
+      parts.push(`${registryLabel} unknown`);
+    }
+  };
+
   if (update.installKind === "git" && update.git) {
     const branch = update.git.branch ? `git ${update.git.branch}` : "git";
     parts.push(branch);
@@ -94,33 +130,10 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     if (update.git.fetchOk === false) {
       parts.push("fetch failed");
     }
-
-    if (update.registry?.latestVersion) {
-      const cmp = compareSemverStrings(VERSION, update.registry.latestVersion);
-      if (cmp === 0) {
-        parts.push(`npm latest ${update.registry.latestVersion}`);
-      } else if (cmp != null && cmp < 0) {
-        parts.push(`npm update ${update.registry.latestVersion}`);
-      } else {
-        parts.push(`npm latest ${update.registry.latestVersion} (local newer)`);
-      }
-    } else if (update.registry?.error) {
-      parts.push("npm latest unknown");
-    }
+    appendRegistryUpdateSummary();
   } else {
     parts.push(update.packageManager !== "unknown" ? update.packageManager : "pkg");
-    if (update.registry?.latestVersion) {
-      const cmp = compareSemverStrings(VERSION, update.registry.latestVersion);
-      if (cmp === 0) {
-        parts.push(`npm latest ${update.registry.latestVersion}`);
-      } else if (cmp != null && cmp < 0) {
-        parts.push(`npm update ${update.registry.latestVersion}`);
-      } else {
-        parts.push(`npm latest ${update.registry.latestVersion} (local newer)`);
-      }
-    } else if (update.registry?.error) {
-      parts.push("npm latest unknown");
-    }
+    appendRegistryUpdateSummary();
   }
 
   if (update.deps) {

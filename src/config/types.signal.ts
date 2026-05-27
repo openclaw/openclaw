@@ -1,28 +1,25 @@
-import type {
-  BlockStreamingCoalesceConfig,
-  DmPolicy,
-  GroupPolicy,
-  MarkdownConfig,
-} from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
-import type { DmConfig } from "./types.messages.js";
+import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
+export type SignalApiMode = "auto" | "native" | "container";
 
-export type SignalAccountConfig = {
-  /** Optional display name for this account (used in CLI/UI lists). */
-  name?: string;
-  /** Optional provider capability tags used for agent/runtime guidance. */
-  capabilities?: string[];
-  /** Markdown formatting overrides (tables). */
-  markdown?: MarkdownConfig;
-  /** Allow channel-initiated config writes (default: true). */
-  configWrites?: boolean;
-  /** If false, do not start this Signal account. Default: true. */
-  enabled?: boolean;
+export type SignalGroupConfig = {
+  requireMention?: boolean;
+  /** Emit internal message hooks for mention-skipped group messages. */
+  ingest?: boolean;
+  tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+};
+
+export type SignalAccountConfig = CommonChannelMessagingConfig & {
   /** Optional explicit E.164 account for signal-cli. */
   account?: string;
+  /** Optional account UUID for signal-cli (used for loop protection). */
+  accountUuid?: string;
+  /** Optional signal-cli config directory path (passed as --config). */
+  configPath?: string;
   /** Optional full base URL for signal-cli HTTP daemon. */
   httpUrl?: string;
   /** HTTP host for signal-cli daemon (default 127.0.0.1). */
@@ -39,32 +36,10 @@ export type SignalAccountConfig = {
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
   sendReadReceipts?: boolean;
-  /** Direct message access policy (default: pairing). */
-  dmPolicy?: DmPolicy;
-  allowFrom?: Array<string | number>;
-  /** Optional allowlist for Signal group senders (E.164). */
-  groupAllowFrom?: Array<string | number>;
-  /**
-   * Controls how group messages are handled:
-   * - "open": groups bypass allowFrom, no extra gating
-   * - "disabled": block all group messages
-   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
-   */
-  groupPolicy?: GroupPolicy;
-  /** Max group messages to keep as history context (0 disables). */
-  historyLimit?: number;
-  /** Max DM turns to keep as history context. */
-  dmHistoryLimit?: number;
-  /** Per-DM config overrides keyed by user ID. */
-  dms?: Record<string, DmConfig>;
+  /** Per-group overrides keyed by Signal group id (or "*"). */
+  groups?: Record<string, SignalGroupConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SignalReactionNotificationMode;
   /** Allowlist for reaction notifications when mode is allowlist. */
@@ -82,13 +57,19 @@ export type SignalAccountConfig = {
    * - "extensive": Agent can react liberally
    */
   reactionLevel?: SignalReactionLevel;
-  /** Heartbeat visibility settings for this channel. */
-  heartbeat?: ChannelHeartbeatVisibilityConfig;
-  /** Outbound response prefix override for this channel/account. */
-  responsePrefix?: string;
 };
 
 export type SignalConfig = {
+  /**
+   * Signal API mode (channel-global):
+   * - "auto" (default): Auto-detect based on available endpoints
+   * - "native": Use native signal-cli with JSON-RPC + SSE (/api/v1/rpc, /api/v1/events)
+   * - "container": Use bbernhard/signal-cli-rest-api with REST + WebSocket (/v2/send, /v1/receive/{account}).
+   *   Requires the container to run with MODE=json-rpc for real-time message receiving.
+   */
+  apiMode?: SignalApiMode;
   /** Optional per-account Signal configuration (multi-account). */
   accounts?: Record<string, SignalAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & SignalAccountConfig;

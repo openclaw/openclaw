@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelHeartbeatVisibilityConfig } from "../config/types.channels.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 
 export type ResolvedHeartbeatVisibility = {
@@ -16,7 +16,7 @@ const DEFAULT_VISIBILITY: ResolvedHeartbeatVisibility = {
 
 /**
  * Resolve heartbeat visibility settings for a channel.
- * Supports both deliverable channels (telegram, signal, etc.) and webchat.
+ * Supports both deliverable channels and webchat.
  * For webchat, uses channels.defaults.heartbeat since webchat doesn't have per-channel config.
  */
 export function resolveHeartbeatVisibility(params: {

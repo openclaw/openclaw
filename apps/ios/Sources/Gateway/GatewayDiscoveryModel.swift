@@ -1,7 +1,7 @@
-import OpenClawKit
 import Foundation
 import Network
 import Observation
+import OpenClawKit
 
 @MainActor
 @Observable
@@ -13,7 +13,10 @@ final class GatewayDiscoveryModel {
     }
 
     struct DiscoveredGateway: Identifiable, Equatable {
-        var id: String { self.stableID }
+        var id: String {
+            self.stableID
+        }
+
         var name: String
         var endpoint: NWEndpoint
         var stableID: String
@@ -53,23 +56,17 @@ final class GatewayDiscoveryModel {
         self.appendDebugLog("start()")
 
         for domain in OpenClawBonjour.gatewayServiceDomains {
-            let params = NWParameters.tcp
-            params.includePeerToPeer = true
-            let browser = NWBrowser(
-                for: .bonjour(type: OpenClawBonjour.gatewayServiceType, domain: domain),
-                using: params)
-
-            browser.stateUpdateHandler = { [weak self] state in
-                Task { @MainActor in
+            let browser = GatewayDiscoveryBrowserSupport.makeBrowser(
+                serviceType: OpenClawBonjour.gatewayServiceType,
+                domain: domain,
+                queueLabelPrefix: "ai.openclaw.ios.gateway-discovery",
+                onState: { [weak self] state in
                     guard let self else { return }
                     self.statesByDomain[domain] = state
                     self.updateStatusText()
                     self.appendDebugLog("state[\(domain)]: \(Self.prettyState(state))")
-                }
-            }
-
-            browser.browseResultsChangedHandler = { [weak self] results, _ in
-                Task { @MainActor in
+                },
+                onResults: { [weak self] results in
                     guard let self else { return }
                     self.gatewaysByDomain[domain] = results.compactMap { result -> DiscoveredGateway? in
                         switch result.endpoint {
@@ -98,13 +95,10 @@ final class GatewayDiscoveryModel {
                         }
                     }
                     .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-
                     self.recomputeGateways()
-                }
-            }
+                })
 
             self.browsers[domain] = browser
-            browser.start(queue: DispatchQueue(label: "bot.molt.ios.gateway-discovery.\(domain)"))
         }
     }
 
@@ -136,43 +130,9 @@ final class GatewayDiscoveryModel {
     }
 
     private func updateStatusText() {
-        let states = Array(self.statesByDomain.values)
-        if states.isEmpty {
-            self.statusText = self.browsers.isEmpty ? "Idle" : "Setup"
-            return
-        }
-
-        if let failed = states.first(where: { state in
-            if case .failed = state { return true }
-            return false
-        }) {
-            if case let .failed(err) = failed {
-                self.statusText = "Failed: \(err)"
-                return
-            }
-        }
-
-        if let waiting = states.first(where: { state in
-            if case .waiting = state { return true }
-            return false
-        }) {
-            if case let .waiting(err) = waiting {
-                self.statusText = "Waiting: \(err)"
-                return
-            }
-        }
-
-        if states.contains(where: { if case .ready = $0 { true } else { false } }) {
-            self.statusText = "Searching…"
-            return
-        }
-
-        if states.contains(where: { if case .setup = $0 { true } else { false } }) {
-            self.statusText = "Setup"
-            return
-        }
-
-        self.statusText = "Searching…"
+        self.statusText = GatewayDiscoveryStatusText.make(
+            states: Array(self.statesByDomain.values),
+            hasBrowsers: !self.browsers.isEmpty)
     }
 
     private static func prettyState(_ state: NWBrowser.State) -> String {

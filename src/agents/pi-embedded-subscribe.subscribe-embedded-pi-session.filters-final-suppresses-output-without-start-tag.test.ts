@@ -1,142 +1,414 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import {
+  createStubSessionHarness,
+  emitAssistantTextDelta,
+  emitAssistantTextEnd,
+  emitMessageStartAndEndForAssistantText,
+  extractAgentEventPayloads,
+} from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
-type StubSession = {
-  subscribe: (fn: (evt: unknown) => void) => () => void;
-};
+type ReplyMock = ReturnType<typeof vi.fn>;
+type ReplyPayload = { text?: string };
+
+function requireFirstReplyPayload(mock: ReplyMock): ReplyPayload {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected first reply call");
+  }
+  const payload = call[0];
+  if (!payload || typeof payload !== "object") {
+    throw new Error("expected first reply payload");
+  }
+  return payload as ReplyPayload;
+}
 
 describe("subscribeEmbeddedPiSession", () => {
-  const _THINKING_TAG_CASES = [
-    { tag: "think", open: "<think>", close: "</think>" },
-    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
-    { tag: "thought", open: "<thought>", close: "</thought>" },
-    { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
-  ] as const;
-
   it("filters to <final> and suppresses output without a start tag", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+    const { session, emit } = createStubSessionHarness();
 
     const onPartialReply = vi.fn();
     const onAgentEvent = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session,
       runId: "run",
       enforceFinalTag: true,
       onPartialReply,
       onAgentEvent,
     });
 
-    handler?.({ type: "message_start", message: { role: "assistant" } });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "<final>Hi there</final>",
-      },
-    });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "<final>Hi there</final>" });
 
-    expect(onPartialReply).toHaveBeenCalled();
-    const firstPayload = onPartialReply.mock.calls[0][0];
-    expect(firstPayload.text).toBe("Hi there");
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    const firstPayload = requireFirstReplyPayload(onPartialReply);
+    expect(firstPayload?.text).toBe("Hi there");
 
-    onPartialReply.mockReset();
+    onPartialReply.mockClear();
 
-    handler?.({ type: "message_start", message: { role: "assistant" } });
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "</final>Oops no start",
-      },
-    });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "</final>Oops no start" });
 
     expect(onPartialReply).not.toHaveBeenCalled();
   });
-  it("emits agent events on message_end even without <final> tags", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+  it("suppresses agent events on message_end without <final> tags when enforced", () => {
+    const { session, emit } = createStubSessionHarness();
 
     const onAgentEvent = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session,
       runId: "run",
       enforceFinalTag: true,
       onAgentEvent,
     });
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello world" }],
-    } as AssistantMessage;
-
-    handler?.({ type: "message_start", message: assistantMessage });
-    handler?.({ type: "message_end", message: assistantMessage });
-
-    const payloads = onAgentEvent.mock.calls
-      .map((call) => call[0]?.data as Record<string, unknown> | undefined)
-      .filter((value): value is Record<string, unknown> => Boolean(value));
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("Hello world");
-    expect(payloads[0]?.delta).toBe("Hello world");
+    emitMessageStartAndEndForAssistantText({ emit, text: "Hello world" });
+    // With enforceFinalTag, text without <final> tags is treated as leaked
+    // reasoning and should NOT be recovered by the message_end fallback.
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(0);
   });
-  it("does not require <final> when enforcement is off", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+  it("emits via streaming when <final> tags are present and enforcement is on", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onPartialReply,
+      onAgentEvent,
+    });
+
+    // With enforceFinalTag, content is emitted via streaming (text_delta path),
+    // NOT recovered from message_end fallback. extractAssistantText strips
+    // <final> tags, so message_end would see plain text with no <final> markers
+    // and correctly suppress it (treated as reasoning leak).
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "<final>Hello world</final>" });
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(requireFirstReplyPayload(onPartialReply).text).toBe("Hello world");
+  });
+
+  it("strips final tags split across streamed deltas without emitting tag remnants", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    for (const delta of ["<", "final>Title\n", "Line one\nLine two</", "final>"]) {
+      emitAssistantTextDelta({ emit, delta });
+    }
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    const streamedText = payloads.map((payload) => payload.delta).join("");
+    expect(streamedText).toBe("Title\nLine one\nLine two");
+    expect(streamedText).not.toContain("<");
+    expect(streamedText).not.toContain("final>");
+    expect(payloads.some((payload) => payload.replace)).toBe(false);
+  });
+
+  it("strips self-closing and attributed final tags from streamed deltas", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({
+      emit,
+      delta: "<final data-model=openrouter/google/gemini>Visible<final/>",
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    const streamedText = payloads.map((payload) => payload.delta).join("");
+    expect(streamedText).toBe("Visible");
+    expect(streamedText).not.toContain("<final");
+  });
+
+  it("strips attributed final tags split across streamed deltas", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    for (const delta of ["<final data-model='ge", "mini'>Visible</final>"]) {
+      emitAssistantTextDelta({ emit, delta });
+    }
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    const streamedText = payloads.map((payload) => payload.delta).join("");
+    expect(streamedText).toBe("Visible");
+    expect(streamedText).not.toContain("<final");
+  });
+
+  it("treats self-closing final tags as closers during enforced streaming", () => {
+    const { session, emit } = createStubSessionHarness();
 
     const onPartialReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session,
       runId: "run",
+      enforceFinalTag: true,
       onPartialReply,
     });
 
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello world",
-      },
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({
+      emit,
+      delta: "<final data-model='gemma'>Visible<final data-model='x' />hidden",
     });
 
-    const payload = onPartialReply.mock.calls[0][0];
-    expect(payload.text).toBe("Hello world");
+    const streamedText = onPartialReply.mock.calls
+      .map((call) => (call[0] as { delta?: unknown }).delta)
+      .filter((delta): delta is string => typeof delta === "string")
+      .join("");
+    expect(streamedText).toBe("Visible");
   });
-  it("emits block replies on message_end", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+
+  it("treats leading self-closing final tags as openers during enforced streaming", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({
+      emit,
+      delta: "<final data-model=openrouter/google/gemini/>Visible",
+    });
+
+    const streamedText = onPartialReply.mock.calls
+      .map((call) => (call[0] as { delta?: unknown }).delta)
+      .filter((delta): delta is string => typeof delta === "string")
+      .join("");
+    expect(streamedText).toBe("Visible");
+  });
+
+  it("preserves enforced final content when attributed final tags split across deltas", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    for (const delta of ["<final data-model=openrouter/google/ge", "mma>Visible</final>"]) {
+      emitAssistantTextDelta({ emit, delta });
+    }
+
+    const streamedText = onPartialReply.mock.calls
+      .map((call) => (call[0] as { delta?: unknown }).delta)
+      .filter((delta): delta is string => typeof delta === "string")
+      .join("");
+    expect(streamedText).toBe("Visible");
+  });
+
+  it("does not treat custom or malformed final-like tags as enforced final blocks", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "<final-result>hidden" });
+    emitAssistantTextDelta({ emit, delta: '<final reason="a>b">also hidden' });
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
+  it("preserves final content when enforced final tags are split across streamed deltas", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    for (const delta of ["<fi", "nal>Visible", " content</fi", "nal>"]) {
+      emitAssistantTextDelta({ emit, delta });
+    }
+
+    const streamedText = onPartialReply.mock.calls
+      .map((call) => (call[0] as { delta?: unknown }).delta)
+      .filter((delta): delta is string => typeof delta === "string")
+      .join("");
+    expect(streamedText).toBe("Visible content");
+  });
+
+  it("does not buffer ordinary trailing less-than text as a tag fragment", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "1 < 2" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.map((payload) => payload.delta).join("")).toBe("1 < 2");
+  });
+
+  it("flushes a literal trailing final-tag prefix when the text stream ends", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "Answer ends with <fi" });
+    emitAssistantTextEnd({ emit });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.map((payload) => payload.delta).join("")).toBe("Answer ends with <fi");
+  });
+
+  it("flushes a literal trailing final-tag prefix in text_end block replies", async () => {
+    const { session, emit } = createStubSessionHarness();
 
     const onBlockReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      session,
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "Answer ends with <fi" });
+    emitAssistantTextEnd({ emit });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(requireFirstReplyPayload(onBlockReply).text).toBe("Answer ends with <fi");
+  });
+
+  it("keeps a trailing final-tag prefix when synchronous message_end drains chunked text_end replies", async () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: { minChars: 1, maxChars: 200 },
+    });
+
+    const text = "Answer ends with <fi";
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: text });
+    emitAssistantTextEnd({ emit });
+    emit({ type: "message_end", message: assistantMessage });
+    await Promise.resolve();
+
+    expect(onBlockReply.mock.calls.map((call) => call[0]?.text)).toEqual([
+      "Answer ends with",
+      "<fi",
+    ]);
+  });
+
+  it("preserves literal trailing tag-prefix text from message end fallback", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emitMessageStartAndEndForAssistantText({ emit, text: "Answer ends with <" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.map((payload) => payload.delta).join("")).toBe("Answer ends with <");
+  });
+  it("does not require <final> when enforcement is off", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onPartialReply,
+    });
+
+    emitAssistantTextDelta({ emit, delta: "Hello world" });
+
+    const payload = requireFirstReplyPayload(onPartialReply);
+    expect(payload?.text).toBe("Hello world");
+  });
+  it("emits block replies on message_end", async () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
       runId: "run",
       onBlockReply,
       blockReplyBreak: "message_end",
@@ -147,10 +419,11 @@ describe("subscribeEmbeddedPiSession", () => {
       content: [{ type: "text", text: "Hello block" }],
     } as AssistantMessage;
 
-    handler?.({ type: "message_end", message: assistantMessage });
+    emit({ type: "message_end", message: assistantMessage });
+    await Promise.resolve();
 
-    expect(onBlockReply).toHaveBeenCalled();
-    const payload = onBlockReply.mock.calls[0][0];
-    expect(payload.text).toBe("Hello block");
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = requireFirstReplyPayload(onBlockReply);
+    expect(payload?.text).toBe("Hello block");
   });
 });

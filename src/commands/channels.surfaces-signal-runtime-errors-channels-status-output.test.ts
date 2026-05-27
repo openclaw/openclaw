@@ -1,77 +1,46 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../runtime.js";
-import { signalPlugin } from "../../extensions/signal/src/channel.js";
+import { collectStatusIssuesFromLastError } from "../plugin-sdk/status-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createIMessageTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { formatGatewayChannelsStatusLines } from "./channels/status.js";
 
-const configMocks = vi.hoisted(() => ({
-  readConfigFileSnapshot: vi.fn(),
-  writeConfigFile: vi.fn().mockResolvedValue(undefined),
-}));
+const now = 1_700_000_000_000;
 
-const authMocks = vi.hoisted(() => ({
-  loadAuthProfileStore: vi.fn(),
-}));
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
-    writeConfigFile: configMocks.writeConfigFile,
-  };
-});
-
-vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/auth-profiles.js")>();
-  return {
-    ...actual,
-    loadAuthProfileStore: authMocks.loadAuthProfileStore,
-  };
-});
-
-import { formatGatewayChannelsStatusLines } from "./channels.js";
-
-const runtime: RuntimeEnv = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
+const signalPlugin = {
+  ...createChannelTestPluginBase({ id: "signal" }),
+  status: {
+    collectStatusIssues: (accounts: Parameters<typeof collectStatusIssuesFromLastError>[1]) =>
+      collectStatusIssuesFromLastError("signal", accounts),
+  },
 };
 
-const _baseSnapshot = {
-  path: "/tmp/openclaw.json",
-  exists: true,
-  raw: "{}",
-  parsed: {},
-  valid: true,
-  config: {},
-  issues: [],
-  legacyIssues: [],
+const imessagePlugin = {
+  ...createChannelTestPluginBase({ id: "imessage" }),
+  status: {
+    collectStatusIssues: (accounts: Parameters<typeof collectStatusIssuesFromLastError>[1]) =>
+      collectStatusIssuesFromLastError("imessage", accounts),
+  },
 };
 
 describe("channels command", () => {
   beforeEach(() => {
-    configMocks.readConfigFileSnapshot.mockReset();
-    configMocks.writeConfigFile.mockClear();
-    authMocks.loadAuthProfileStore.mockReset();
-    runtime.log.mockClear();
-    runtime.error.mockClear();
-    runtime.exit.mockClear();
-    authMocks.loadAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {},
-    });
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "signal", source: "test", plugin: signalPlugin }]),
     );
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     setActivePluginRegistry(createTestRegistry([]));
   });
 
   it("surfaces Signal runtime errors in channels status output", () => {
     const lines = formatGatewayChannelsStatusLines({
+      channelLabels: {
+        signal: "Signal",
+      },
       channelAccounts: {
         signal: [
           {
@@ -95,11 +64,14 @@ describe("channels command", () => {
         {
           pluginId: "imessage",
           source: "test",
-          plugin: createIMessageTestPlugin(),
+          plugin: imessagePlugin,
         },
       ]),
     );
     const lines = formatGatewayChannelsStatusLines({
+      channelLabels: {
+        imessage: "iMessage",
+      },
       channelAccounts: {
         imessage: [
           {
@@ -115,5 +87,46 @@ describe("channels command", () => {
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/imessage/i);
     expect(lines.join("\n")).toMatch(/Channel error/i);
+  });
+
+  it("surfaces degraded gateway event-loop health in channels status output", () => {
+    const lines = formatGatewayChannelsStatusLines({
+      eventLoop: {
+        degraded: true,
+        reasons: ["event_loop_delay", "cpu"],
+        intervalMs: 62_000,
+        delayP99Ms: 61_000,
+        delayMaxMs: 62_000,
+        utilization: 1,
+        cpuCoreRatio: 1,
+      },
+      channelLabels: {},
+      channelAccounts: {},
+    });
+
+    expect(lines.join("\n")).toMatch(/Gateway event loop degraded/);
+    expect(lines.join("\n")).toMatch(/eventLoopDelayMaxMs=62000/);
+  });
+
+  it("surfaces transport liveness timestamps in channels status output", () => {
+    const lines = formatGatewayChannelsStatusLines({
+      channelLabels: {
+        signal: "Signal",
+      },
+      channelAccounts: {
+        signal: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            running: true,
+            connected: true,
+            lastTransportActivityAt: now - 2 * 60_000,
+          },
+        ],
+      },
+    });
+
+    expect(lines.join("\n")).toContain("transport:");
   });
 });

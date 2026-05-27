@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
+import { applyParentDefaultHelpAction } from "../program/parent-default-help.js";
 import {
   registerCronAddCommand,
   registerCronListCommand,
@@ -16,7 +17,7 @@ export function registerCronCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/cron", "docs.openclaw.ai/cli/cron")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/cron", "docs.openclaw.ai/cli/cron")}\n${theme.muted("Upgrade tip:")} run \`openclaw doctor --fix\` to normalize legacy cron job storage.\n`,
     );
 
   registerCronStatusCommand(cron);
@@ -24,4 +25,6 @@ export function registerCronCli(program: Command) {
   registerCronAddCommand(cron);
   registerCronSimpleCommands(cron);
   registerCronEditCommand(cron);
+
+  applyParentDefaultHelpAction(cron);
 }

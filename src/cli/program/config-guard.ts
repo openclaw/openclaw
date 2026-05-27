@@ -1,12 +1,11 @@
+import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { loadAndMaybeMigrateDoctorConfig } from "../../commands/doctor-config-flow.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
-import { colorize, isRich, theme } from "../../terminal/theme.js";
-import { shortenHomePath } from "../../utils.js";
-import { formatCliCommand } from "../command-format.js";
+import { withSuppressedNotes } from "../../terminal/note.js";
+import { shouldMigrateStateFromPath } from "../argv.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
 const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
+  "run",
   "status",
   "probe",
   "health",
@@ -19,50 +18,104 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "restart",
 ]);
 let didRunDoctorConfigFlow = false;
+let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> | null =
+  null;
 
-function formatConfigIssues(issues: Array<{ path: string; message: string }>): string[] {
-  return issues.map((issue) => `- ${issue.path || "<root>"}: ${issue.message}`);
+function resetConfigGuardStateForTests() {
+  didRunDoctorConfigFlow = false;
+  configSnapshotPromise = null;
+}
+
+async function getConfigSnapshot() {
+  // Tests often mutate config fixtures; caching can make those flaky.
+  if (process.env.VITEST === "true") {
+    return readConfigFileSnapshot();
+  }
+  if (!configSnapshotPromise) {
+    const pendingSnapshot = readConfigFileSnapshot();
+    configSnapshotPromise = pendingSnapshot;
+    pendingSnapshot.catch(() => {
+      if (configSnapshotPromise === pendingSnapshot) {
+        configSnapshotPromise = null;
+      }
+    });
+  }
+  return configSnapshotPromise;
 }
 
 export async function ensureConfigReady(params: {
   runtime: RuntimeEnv;
   commandPath?: string[];
+  suppressDoctorStdout?: boolean;
+  allowInvalid?: boolean;
 }): Promise<void> {
-  if (!didRunDoctorConfigFlow) {
+  const commandPath = params.commandPath ?? [];
+  let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
+  if (!didRunDoctorConfigFlow && shouldMigrateStateFromPath(commandPath)) {
     didRunDoctorConfigFlow = true;
-    await loadAndMaybeMigrateDoctorConfig({
-      options: { nonInteractive: true },
-      confirm: async () => false,
-    });
+    const runDoctorConfigPreflight = async () =>
+      (await import("../../commands/doctor-config-preflight.js")).runDoctorConfigPreflight({
+        // Keep ordinary CLI startup on the lightweight validation path.
+        migrateState: false,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+      });
+    if (!params.suppressDoctorStdout) {
+      preflightSnapshot = (await runDoctorConfigPreflight()).snapshot;
+    } else {
+      preflightSnapshot = (await withSuppressedNotes(runDoctorConfigPreflight)).snapshot;
+    }
   }
 
-  const snapshot = await readConfigFileSnapshot();
-  const commandName = params.commandPath?.[0];
-  const subcommandName = params.commandPath?.[1];
+  const snapshot = preflightSnapshot ?? (await getConfigSnapshot());
+  const commandName = commandPath[0];
+  const subcommandName = commandPath[1];
+  const isBareGatewayForegroundRun =
+    commandName === "gateway" && (subcommandName === undefined || subcommandName.trim() === "");
   const allowInvalid = commandName
-    ? ALLOWED_INVALID_COMMANDS.has(commandName) ||
+    ? params.allowInvalid === true ||
+      ALLOWED_INVALID_COMMANDS.has(commandName) ||
+      isBareGatewayForegroundRun ||
       (commandName === "gateway" &&
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
     : false;
-  const issues = snapshot.exists && !snapshot.valid ? formatConfigIssues(snapshot.issues) : [];
-  const legacyIssues =
-    snapshot.legacyIssues.length > 0
-      ? snapshot.legacyIssues.map((issue) => `- ${issue.path}: ${issue.message}`)
+  const { formatConfigIssueLines } = await import("../../config/issue-format.js");
+  const issues =
+    snapshot.exists && !snapshot.valid
+      ? formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })
       : [];
+  const legacyIssues =
+    snapshot.legacyIssues.length > 0 ? formatConfigIssueLines(snapshot.legacyIssues, "-") : [];
 
   const invalid = snapshot.exists && !snapshot.valid;
+  if (!invalid) {
+    setRuntimeConfigSnapshot(snapshot.runtimeConfig ?? snapshot.config, snapshot.sourceConfig);
+  }
   if (!invalid) {
     return;
   }
 
+  const [
+    { colorize, isRich, theme },
+    { shortenHomePath },
+    { formatCliCommand },
+    { isPluginPackagingRuntimeOutputInvalidConfigSnapshot },
+    { formatPluginPackagingRuntimeOutputRecoveryHint },
+  ] = await Promise.all([
+    import("../../terminal/theme.js"),
+    import("../../utils.js"),
+    import("../command-format.js"),
+    import("../../config/recovery-policy.js"),
+    import("../config-recovery-hints.js"),
+  ]);
   const rich = isRich();
   const muted = (value: string) => colorize(rich, theme.muted, value);
   const error = (value: string) => colorize(rich, theme.error, value);
   const heading = (value: string) => colorize(rich, theme.heading, value);
   const commandText = (value: string) => colorize(rich, theme.command, value);
 
-  params.runtime.error(heading("Config invalid"));
+  params.runtime.error(heading("OpenClaw config is invalid"));
   params.runtime.error(`${muted("File:")} ${muted(shortenHomePath(snapshot.path))}`);
   if (issues.length > 0) {
     params.runtime.error(muted("Problem:"));
@@ -73,10 +126,22 @@ export async function ensureConfigReady(params: {
     params.runtime.error(legacyIssues.map((issue) => `  ${error(issue)}`).join("\n"));
   }
   params.runtime.error("");
+  const fixHint = isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+    ? formatPluginPackagingRuntimeOutputRecoveryHint()
+    : commandText(formatCliCommand("openclaw doctor --fix"));
+  params.runtime.error(`${muted("Fix:")} ${fixHint}`);
   params.runtime.error(
-    `${muted("Run:")} ${commandText(formatCliCommand("openclaw doctor --fix"))}`,
+    `${muted("Inspect:")} ${commandText(formatCliCommand("openclaw config validate"))}`,
+  );
+  params.runtime.error(
+    muted("Status, health, logs, and doctor commands still run with invalid config."),
   );
   if (!allowInvalid) {
     params.runtime.exit(1);
   }
 }
+
+export const testApi = {
+  resetConfigGuardStateForTests,
+};
+export { testApi as __test__ };

@@ -1,6 +1,6 @@
 import type { Command } from "commander";
-import type { MessageCliHelpers } from "./helpers.js";
 import { collectOption } from "../helpers.js";
+import type { MessageCliHelpers } from "./helpers.js";
 
 export function registerMessageEmojiCommands(message: Command, helpers: MessageCliHelpers) {
   const emoji = message.command("emoji").description("Emoji actions");

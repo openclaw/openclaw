@@ -1,7 +1,7 @@
-import OpenClawKit
-import OpenClawProtocol
 import Foundation
 import Observation
+import OpenClawKit
+import OpenClawProtocol
 import OSLog
 import SwiftUI
 
@@ -41,8 +41,13 @@ final class OnboardingWizardModel {
     private var restartAttempts = 0
     private let maxRestartAttempts = 1
 
-    var isComplete: Bool { self.status == "done" }
-    var isRunning: Bool { self.status == "running" }
+    var isComplete: Bool {
+        self.status == "done"
+    }
+
+    var isRunning: Bool {
+        self.status == "running"
+    }
 
     func reset() {
         self.sessionId = nil
@@ -140,10 +145,7 @@ final class OnboardingWizardModel {
         self.sessionId = res.sessionid
         self.status = wizardStatusString(res.status) ?? (res.done ? "done" : "running")
         self.errorMessage = res.error
-        self.currentStep = decodeWizardStep(res.step)
-        if self.currentStep == nil, res.step != nil {
-            onboardingWizardLogger.error("wizard step decode failed")
-        }
+        self.currentStep = res.step
         if res.done { self.currentStep = nil }
         self.restartAttempts = 0
     }
@@ -152,10 +154,7 @@ final class OnboardingWizardModel {
         let status = wizardStatusString(res.status)
         self.status = status ?? self.status
         self.errorMessage = res.error
-        self.currentStep = decodeWizardStep(res.step)
-        if self.currentStep == nil, res.step != nil {
-            onboardingWizardLogger.error("wizard step decode failed")
-        }
+        self.currentStep = res.step
         if res.done { self.currentStep = nil }
         if res.done || status == "done" || status == "cancelled" || status == "error" {
             self.sessionId = nil
@@ -408,5 +407,7 @@ private struct WizardOptionItem: Identifiable {
     let index: Int
     let option: WizardOption
 
-    var id: Int { self.index }
+    var id: Int {
+        self.index
+    }
 }

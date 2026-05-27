@@ -14,12 +14,13 @@ export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode)
   if (!markdown || mode === "off") {
     return markdown;
   }
+  const effectiveMode = mode === "block" ? "code" : mode;
   const { ir, hasTables } = markdownToIRWithMeta(markdown, {
     linkify: false,
     autolink: false,
     headingStyle: "none",
     blockquotePrefix: "",
-    tableMode: mode,
+    tableMode: effectiveMode,
   });
   if (!hasTables) {
     return markdown;

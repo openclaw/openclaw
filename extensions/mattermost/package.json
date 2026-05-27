@@ -1,15 +1,33 @@
 {
   "name": "@openclaw/mattermost",
-  "version": "2026.2.6",
+  "version": "2026.5.26",
   "description": "OpenClaw Mattermost channel plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
+  "dependencies": {
+    "ws": "8.21.0",
+    "zod": "4.4.3"
+  },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.26"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "mattermost",
       "label": "Mattermost",
@@ -20,9 +38,7 @@
       "order": 65
     },
     "install": {
-      "npmSpec": "@openclaw/mattermost",
-      "localPath": "extensions/mattermost",
-      "defaultChoice": "npm"
+      "minHostVersion": ">=2026.4.10"
     }
   }
 }

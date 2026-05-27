@@ -1,25 +1,37 @@
-import { createRequire } from "node:module";
 import util from "node:util";
 import type { OpenClawConfig } from "../config/types.js";
-import { isVerbose } from "../globals.js";
+import { isVerbose } from "../global-state.js";
 import { stripAnsi } from "../terminal/ansi.js";
-import { readLoggingConfig } from "./config.js";
+import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
+import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
-import { getLogger, type LoggerSettings } from "./logger.js";
+import { getLogger } from "./logger.js";
+import { redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
+import { formatLocalIsoWithOffset, formatTimestamp } from "./timestamps.js";
+import type { ConsoleStyle, LoggerSettings } from "./types.js";
 
-export type ConsoleStyle = "pretty" | "compact" | "json";
+export type { ConsoleStyle } from "./types.js";
 type ConsoleSettings = {
   level: LogLevel;
   style: ConsoleStyle;
 };
 export type ConsoleLoggerSettings = ConsoleSettings;
 
-const requireConfig = createRequire(import.meta.url);
+type ConsoleConfigLoader = () => OpenClawConfig["logging"] | undefined;
+const loadConfigFallbackDefault: ConsoleConfigLoader = () => undefined;
+let loadConfigFallback: ConsoleConfigLoader = loadConfigFallbackDefault;
+
+export function setConsoleConfigLoaderForTests(loader?: ConsoleConfigLoader): void {
+  loadConfigFallback = loader ?? loadConfigFallbackDefault;
+}
 
 function normalizeConsoleLevel(level?: string): LogLevel {
   if (isVerbose()) {
     return "debug";
+  }
+  if (!level && process.env.VITEST === "true" && process.env.OPENCLAW_TEST_CONSOLE !== "1") {
+    return "silent";
   }
   return normalizeLogLevel(level, "info");
 }
@@ -35,26 +47,34 @@ function normalizeConsoleStyle(style?: string): ConsoleStyle {
 }
 
 function resolveConsoleSettings(): ConsoleSettings {
+  const envLevel = resolveEnvLogLevelOverride();
+  // Test runs default to silent console logging unless explicitly overridden.
+  // Skip config-file and full config fallback reads in this fast path.
+  if (
+    process.env.VITEST === "true" &&
+    process.env.OPENCLAW_TEST_CONSOLE !== "1" &&
+    !isVerbose() &&
+    !envLevel &&
+    !loggingState.overrideSettings
+  ) {
+    return { level: "silent", style: normalizeConsoleStyle(undefined) };
+  }
+
   let cfg: OpenClawConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
-  if (!cfg) {
+  if (!cfg && !shouldSkipMutatingLoggingConfigRead()) {
     if (loggingState.resolvingConsoleSettings) {
       cfg = undefined;
     } else {
       loggingState.resolvingConsoleSettings = true;
       try {
-        const loaded = requireConfig("../config/config.js") as {
-          loadConfig?: () => OpenClawConfig;
-        };
-        cfg = loaded.loadConfig?.().logging;
-      } catch {
-        cfg = undefined;
+        cfg = loadConfigFallback();
       } finally {
         loggingState.resolvingConsoleSettings = false;
       }
     }
   }
-  const level = normalizeConsoleLevel(cfg?.consoleLevel);
+  const level = envLevel ?? normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
   return { level, style };
 }
@@ -98,12 +118,26 @@ export function setConsoleTimestampPrefix(enabled: boolean): void {
   loggingState.consoleTimestampPrefix = enabled;
 }
 
-export function shouldLogSubsystemToConsole(subsystem: string): boolean {
+function normalizeConsoleSubsystem(subsystem?: string | null): string | null {
+  if (typeof subsystem !== "string") {
+    return null;
+  }
+  const normalized = subsystem.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+export function shouldLogSubsystemToConsole(subsystem?: string | null): boolean {
   const filter = loggingState.consoleSubsystemFilter;
   if (!filter || filter.length === 0) {
     return true;
   }
-  return filter.some((prefix) => subsystem === prefix || subsystem.startsWith(`${prefix}/`));
+  const normalizedSubsystem = normalizeConsoleSubsystem(subsystem);
+  if (!normalizedSubsystem) {
+    return false;
+  }
+  return filter.some(
+    (prefix) => normalizedSubsystem === prefix || normalizedSubsystem.startsWith(`${prefix}/`),
+  );
 }
 
 const SUPPRESSED_CONSOLE_PREFIXES = [
@@ -115,17 +149,11 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
 ] as const;
 
 function shouldSuppressConsoleMessage(message: string): boolean {
-  if (isVerbose()) {
-    return false;
-  }
   if (SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix))) {
     return true;
   }
-  if (
-    message.startsWith("[EventQueue] Slow listener detected") &&
-    message.includes("DiscordMessageListener")
-  ) {
-    return true;
+  if (isVerbose()) {
+    return false;
   }
   return false;
 }
@@ -135,29 +163,18 @@ function isEpipeError(err: unknown): boolean {
   return code === "EPIPE" || code === "EIO";
 }
 
-function formatConsoleTimestamp(style: ConsoleStyle): string {
-  const now = new Date().toISOString();
+export function formatConsoleTimestamp(style: ConsoleStyle): string {
+  const now = new Date();
   if (style === "pretty") {
-    return now.slice(11, 19);
+    return formatTimestamp(now, { style: "short" }).replace(/[+-]\d{2}:\d{2}$/, "");
   }
-  return now;
+  return formatLocalIsoWithOffset(now);
 }
 
 function hasTimestampPrefix(value: string): boolean {
-  return /^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)/.test(value);
-}
-
-function isJsonPayload(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-    return false;
-  }
-  try {
-    JSON.parse(trimmed);
-    return true;
-  } catch {
-    return false;
-  }
+  return /^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)/.test(
+    value,
+  );
 }
 
 /**
@@ -169,6 +186,29 @@ export function enableConsoleCapture(): void {
     return;
   }
   loggingState.consolePatched = true;
+
+  // Handle async EPIPE errors on stdout/stderr. The synchronous try/catch in
+  // the forward() wrapper below only covers errors thrown during write dispatch.
+  // When the receiving pipe closes (e.g. during shutdown), Node emits the error
+  // asynchronously on the stream. Without a listener this becomes an uncaught
+  // exception that crashes the gateway.
+  // Guard separately from consolePatched so test resets don't stack listeners.
+  if (!loggingState.streamErrorHandlersInstalled) {
+    loggingState.streamErrorHandlersInstalled = true;
+    for (const stream of [process.stdout, process.stderr]) {
+      stream.on("error", (err) => {
+        if (isEpipeError(err)) {
+          // stdout/stderr broken means the process is orphaned (e.g. the parent
+          // service restarted and closed the journal pipe). Exit cleanly instead
+          // of spinning in a tight loop where every log attempt re-triggers EPIPE.
+          const exitCode = process.exitCode;
+          process.exit(exitCode !== undefined && exitCode !== 0 && exitCode !== "0" ? exitCode : 0);
+          return;
+        }
+        throw err;
+      });
+    }
+  }
 
   let logger: ReturnType<typeof getLogger> | null = null;
   const getLoggerLazy = () => {
@@ -202,10 +242,7 @@ export function enableConsoleCapture(): void {
       }
       const trimmed = stripAnsi(formatted).trimStart();
       const shouldPrefixTimestamp =
-        loggingState.consoleTimestampPrefix &&
-        trimmed.length > 0 &&
-        !hasTimestampPrefix(trimmed) &&
-        !isJsonPayload(trimmed);
+        loggingState.consoleTimestampPrefix && trimmed.length > 0 && !hasTimestampPrefix(trimmed);
       const timestamp = shouldPrefixTimestamp
         ? formatConsoleTimestamp(getConsoleSettings().style)
         : "";
@@ -229,9 +266,10 @@ export function enableConsoleCapture(): void {
         // never block console output on logging failures
       }
       if (loggingState.forceConsoleToStderr) {
-        // in RPC/JSON mode, keep stdout clean
+        // In --json mode, all console.* writes are diagnostics and should stay off stdout.
         try {
-          const line = timestamp ? `${timestamp} ${formatted}` : formatted;
+          const redacted = redactSensitiveText(formatted);
+          const line = timestamp ? `${timestamp} ${redacted}` : redacted;
           process.stderr.write(`${line}\n`);
         } catch (err) {
           if (isEpipeError(err)) {
@@ -241,19 +279,16 @@ export function enableConsoleCapture(): void {
         }
       } else {
         try {
+          const redacted = redactSensitiveText(formatted);
           if (!timestamp) {
-            orig.apply(console, args as []);
+            if (args.length === 0) {
+              orig.apply(console, args as []);
+              return;
+            }
+            orig.call(console, redacted);
             return;
           }
-          if (args.length === 0) {
-            orig.call(console, timestamp);
-            return;
-          }
-          if (typeof args[0] === "string") {
-            orig.call(console, `${timestamp} ${args[0]}`, ...args.slice(1));
-            return;
-          }
-          orig.call(console, timestamp, ...args);
+          orig.call(console, redacted ? `${timestamp} ${redacted}` : timestamp);
         } catch (err) {
           if (isEpipeError(err)) {
             return;

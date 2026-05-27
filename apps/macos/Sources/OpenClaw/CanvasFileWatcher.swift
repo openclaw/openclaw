@@ -1,16 +1,46 @@
-import CoreServices
 import Foundation
 
-final class CanvasFileWatcher: @unchecked Sendable {
-    private let url: URL
-    private let queue: DispatchQueue
-    private var stream: FSEventStreamRef?
-    private var pending = false
-    private let onChange: () -> Void
+final class CanvasFileWatcher: @unchecked Sendable, SimpleFileWatcherOwner {
+    let watcher: SimpleFileWatcher
+    private let pollingWatcher: PollingDirectoryWatcher
 
     init(url: URL, onChange: @escaping () -> Void) {
+        self.watcher = SimpleFileWatcher(CoalescingFSEventsWatcher(
+            paths: [url.path],
+            queueLabel: "ai.openclaw.canvaswatcher",
+            onChange: onChange))
+        self.pollingWatcher = PollingDirectoryWatcher(
+            url: url,
+            queueLabel: "ai.openclaw.canvaswatcher.poll",
+            onChange: onChange)
+    }
+
+    func start() {
+        self.watcher.start()
+        self.pollingWatcher.start()
+    }
+
+    func stop() {
+        self.watcher.stop()
+        self.pollingWatcher.stop()
+    }
+}
+
+private final class PollingDirectoryWatcher: @unchecked Sendable {
+    private struct FileSignature: Equatable {
+        let modifiedAt: TimeInterval
+        let size: Int
+    }
+
+    private let url: URL
+    private let queue: DispatchQueue
+    private let onChange: () -> Void
+    private var timer: DispatchSourceTimer?
+    private var lastSnapshot: [String: FileSignature] = [:]
+
+    init(url: URL, queueLabel: String, onChange: @escaping () -> Void) {
         self.url = url
-        self.queue = DispatchQueue(label: "ai.openclaw.canvaswatcher")
+        self.queue = DispatchQueue(label: queueLabel)
         self.onChange = onChange
     }
 
@@ -19,76 +49,54 @@ final class CanvasFileWatcher: @unchecked Sendable {
     }
 
     func start() {
-        guard self.stream == nil else { return }
+        self.queue.sync {
+            guard self.timer == nil else { return }
+            self.lastSnapshot = self.snapshot()
 
-        let retainedSelf = Unmanaged.passRetained(self)
-        var context = FSEventStreamContext(
-            version: 0,
-            info: retainedSelf.toOpaque(),
-            retain: nil,
-            release: { pointer in
-                guard let pointer else { return }
-                Unmanaged<CanvasFileWatcher>.fromOpaque(pointer).release()
-            },
-            copyDescription: nil)
-
-        let paths = [self.url.path] as CFArray
-        let flags = FSEventStreamCreateFlags(
-            kFSEventStreamCreateFlagFileEvents |
-                kFSEventStreamCreateFlagUseCFTypes |
-                kFSEventStreamCreateFlagNoDefer)
-
-        guard let stream = FSEventStreamCreate(
-            kCFAllocatorDefault,
-            Self.callback,
-            &context,
-            paths,
-            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            0.05,
-            flags)
-        else {
-            retainedSelf.release()
-            return
-        }
-
-        self.stream = stream
-        FSEventStreamSetDispatchQueue(stream, self.queue)
-        if FSEventStreamStart(stream) == false {
-            self.stream = nil
-            FSEventStreamSetDispatchQueue(stream, nil)
-            FSEventStreamInvalidate(stream)
-            FSEventStreamRelease(stream)
+            let timer = DispatchSource.makeTimerSource(queue: self.queue)
+            timer.schedule(deadline: .now() + 0.15, repeating: 0.25)
+            timer.setEventHandler { [weak self] in
+                self?.poll()
+            }
+            self.timer = timer
+            timer.resume()
         }
     }
 
     func stop() {
-        guard let stream = self.stream else { return }
-        self.stream = nil
-        FSEventStreamStop(stream)
-        FSEventStreamSetDispatchQueue(stream, nil)
-        FSEventStreamInvalidate(stream)
-        FSEventStreamRelease(stream)
-    }
-}
-
-extension CanvasFileWatcher {
-    private static let callback: FSEventStreamCallback = { _, info, numEvents, _, eventFlags, _ in
-        guard let info else { return }
-        let watcher = Unmanaged<CanvasFileWatcher>.fromOpaque(info).takeUnretainedValue()
-        watcher.handleEvents(numEvents: numEvents, eventFlags: eventFlags)
-    }
-
-    private func handleEvents(numEvents: Int, eventFlags: UnsafePointer<FSEventStreamEventFlags>?) {
-        guard numEvents > 0 else { return }
-        guard eventFlags != nil else { return }
-
-        // Coalesce rapid changes (common during builds/atomic saves).
-        if self.pending { return }
-        self.pending = true
-        self.queue.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-            guard let self else { return }
-            self.pending = false
-            self.onChange()
+        self.queue.sync {
+            self.timer?.cancel()
+            self.timer = nil
+            self.lastSnapshot = [:]
         }
+    }
+
+    private func poll() {
+        let next = self.snapshot()
+        guard next != self.lastSnapshot else { return }
+        self.lastSnapshot = next
+        self.onChange()
+    }
+
+    private func snapshot() -> [String: FileSignature] {
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: self.url,
+            includingPropertiesForKeys: keys,
+            options: [.skipsPackageDescendants])
+        else { return [:] }
+
+        var result: [String: FileSignature] = [:]
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: Set(keys)),
+                  values.isRegularFile == true
+            else { continue }
+
+            let relativePath = String(fileURL.path.dropFirst(self.url.path.count + 1))
+            result[relativePath] = FileSignature(
+                modifiedAt: values.contentModificationDate?.timeIntervalSinceReferenceDate ?? 0,
+                size: values.fileSize ?? 0)
+        }
+        return result
     }
 }

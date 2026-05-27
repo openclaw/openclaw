@@ -1,7 +1,7 @@
-import OpenClawKit
-import OpenClawProtocol
 import Foundation
 import Observation
+import OpenClawKit
+import OpenClawProtocol
 import SwiftUI
 
 struct ControlHeartbeatEvent: Codable {
@@ -14,8 +14,11 @@ struct ControlHeartbeatEvent: Codable {
     let reason: String?
 }
 
-struct ControlAgentEvent: Codable, Sendable, Identifiable {
-    var id: String { "\(self.runId)-\(self.seq)" }
+struct ControlAgentEvent: Codable, Identifiable {
+    var id: String {
+        "\(self.runId)-\(self.seq)"
+    }
+
     let runId: String
     let seq: Int
     let stream: String
@@ -185,6 +188,10 @@ final class ControlChannel {
             return desc
         }
 
+        if let authIssue = RemoteGatewayAuthIssue(error: error) {
+            return authIssue.statusMessage
+        }
+
         // If the gateway explicitly rejects the hello (e.g., auth/token mismatch), surface it.
         if let urlErr = error as? URLError,
            urlErr.code == .dataNotAllowed // used for WS close 1008 auth failures
@@ -233,6 +240,12 @@ final class ControlChannel {
             case .timedOut:
                 return "Gateway request timed out; check gateway on localhost:\(port)."
             case .notConnectedToInternet:
+                if Self.isLikelyLocalNetworkPermissionBlock() {
+                    return """
+                    macOS is blocking OpenClaw Local Network access.
+                    Allow OpenClaw in System Settings → Privacy & Security → Local Network, then relaunch the app.
+                    """
+                }
                 return "No network connectivity; cannot reach gateway."
             default:
                 break
@@ -248,6 +261,22 @@ final class ControlChannel {
         let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.lowercased().hasPrefix("gateway error:") { return trimmed }
         return "Gateway error: \(trimmed)"
+    }
+
+    private static func isLikelyLocalNetworkPermissionBlock() -> Bool {
+        let root = OpenClawConfigFile.loadDict()
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        guard ConnectionModeResolver.resolve(root: root).mode == .remote,
+              resolution.transport == .direct,
+              let url = resolution.directURL,
+              url.scheme?.lowercased() == "ws",
+              let host = url.host,
+              GatewayRemoteConfig.isTrustedPlaintextRemoteHost(host),
+              !LoopbackHost.isLoopbackHost(host)
+        else {
+            return false
+        }
+        return true
     }
 
     private func scheduleRecovery(reason: String) {
@@ -317,6 +346,8 @@ final class ControlChannel {
         switch source {
         case .deviceToken:
             return "Auth: device token (paired device)"
+        case .bootstrapToken:
+            return "Auth: bootstrap token (setup code)"
         case .sharedToken:
             return "Auth: shared token (\(isRemote ? "gateway.remote.token" : "gateway.auth.token"))"
         case .password:
@@ -333,16 +364,8 @@ final class ControlChannel {
     }
 
     private func startEventStream() {
-        self.eventTask?.cancel()
-        self.eventTask = Task { [weak self] in
-            guard let self else { return }
-            let stream = await GatewayConnection.shared.subscribe()
-            for await push in stream {
-                if Task.isCancelled { return }
-                await MainActor.run { [weak self] in
-                    self?.handle(push: push)
-                }
-            }
+        GatewayPushSubscription.restartTask(task: &self.eventTask) { [weak self] push in
+            self?.handle(push: push)
         }
     }
 

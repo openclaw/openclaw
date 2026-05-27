@@ -1,10 +1,11 @@
-import type { GetReplyOptions } from "../auto-reply/types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
+import { resolveAgentIdentity, resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import {
   extractShortModelName,
   type ResponsePrefixContext,
 } from "../auto-reply/reply/response-prefix-template.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 type ModelSelectionContext = Parameters<NonNullable<GetReplyOptions["onModelSelected"]>>[0];
 
@@ -28,7 +29,7 @@ export function createReplyPrefixContext(params: {
 }): ReplyPrefixContextBundle {
   const { cfg, agentId } = params;
   const prefixContext: ResponsePrefixContext = {
-    identityName: resolveIdentityName(cfg, agentId),
+    identityName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.name),
   };
 
   const onModelSelected = (ctx: ModelSelectionContext) => {
@@ -58,5 +59,9 @@ export function createReplyPrefixOptions(params: {
 }): ReplyPrefixOptions {
   const { responsePrefix, responsePrefixContextProvider, onModelSelected } =
     createReplyPrefixContext(params);
-  return { responsePrefix, responsePrefixContextProvider, onModelSelected };
+  return {
+    responsePrefix,
+    responsePrefixContextProvider,
+    onModelSelected,
+  };
 }

@@ -1,4 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { TerminationReason } from "../process/supervisor/types.js";
+import type { DeliveryContext } from "../utils/delivery-context.js";
 import { createSessionSlug as createSessionSlugId } from "./session-slug.js";
 
 const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -20,7 +23,12 @@ export type ProcessStatus = "running" | "completed" | "failed" | "killed";
 export type SessionStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
   end: () => void;
+  // When backed by a real Node stream (child.stdin), this exists; for PTY wrappers it may not.
+  destroy?: () => void;
   destroyed?: boolean;
+  writable?: boolean;
+  writableEnded?: boolean;
+  writableFinished?: boolean;
 };
 
 export interface ProcessSession {
@@ -28,7 +36,22 @@ export interface ProcessSession {
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  /** `session.mainKey` from the runtime config, snapshotted at exec start.
+   *  Used by background-exit notifications to remap cron-run keys to the
+   *  agent's main queue without an ambient config load. If config changes
+   *  while the process runs, the exit notification follows the start-time
+   *  session contract. */
+  mainKey?: string;
+  /** `session.scope` from the runtime config; required so the cron-run remap
+   *  can route global-scope agents to the literal "global" queue instead
+   *  of an agent-main queue the heartbeat never drains. Snapshotted with
+   *  `mainKey` for the same start-time routing reason. */
+  sessionScope?: "per-sender" | "global";
+  /** Start-time routing policy for detached exec system events. */
+  eventRouting?: EventSessionRoutingPolicy;
+  notifyDeliveryContext?: DeliveryContext;
   notifyOnExit?: boolean;
+  notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
   child?: ChildProcessWithoutNullStreams;
   stdin?: SessionStdin;
@@ -46,9 +69,12 @@ export interface ProcessSession {
   tail: string;
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
+  exitReason?: TerminationReason;
   exited: boolean;
   truncated: boolean;
   backgrounded: boolean;
+  /** PTY cursor key mode: unknown until a PTY reports smkx/rmkx. */
+  cursorKeyMode: "unknown" | "normal" | "application";
 }
 
 export interface FinishedSession {
@@ -61,6 +87,7 @@ export interface FinishedSession {
   status: ProcessStatus;
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
+  exitReason?: TerminationReason;
   aggregated: string;
   tail: string;
   truncated: boolean;
@@ -143,10 +170,12 @@ export function markExited(
   exitCode: number | null,
   exitSignal: NodeJS.Signals | number | null,
   status: ProcessStatus,
+  exitReason?: TerminationReason,
 ) {
   session.exited = true;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
+  session.exitReason = exitReason;
   session.tail = tail(session.aggregated, 2000);
   moveToFinished(session, status);
 }
@@ -157,6 +186,38 @@ export function markBackgrounded(session: ProcessSession) {
 
 function moveToFinished(session: ProcessSession, status: ProcessStatus) {
   runningSessions.delete(session.id);
+
+  // Clean up child process stdio streams to prevent FD leaks
+  if (session.child) {
+    // Destroy stdio streams to release file descriptors
+    session.child.stdin?.destroy?.();
+    session.child.stdout?.destroy?.();
+    session.child.stderr?.destroy?.();
+
+    // Remove all event listeners to prevent memory leaks
+    session.child.removeAllListeners();
+
+    // Clear the reference
+    delete session.child;
+  }
+
+  // Clean up stdin wrapper - call destroy if available, otherwise just remove reference
+  if (session.stdin) {
+    // Try to call destroy/end method if exists
+    if (typeof session.stdin.destroy === "function") {
+      session.stdin.destroy();
+    } else if (typeof session.stdin.end === "function") {
+      session.stdin.end();
+    }
+    // Only set flag if writable
+    try {
+      (session.stdin as { destroyed?: boolean }).destroyed = true;
+    } catch {
+      // Ignore if read-only
+    }
+    delete session.stdin;
+  }
+
   if (!session.backgrounded) {
     return;
   }
@@ -170,6 +231,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     status,
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
+    exitReason: session.exitReason,
     aggregated: session.aggregated,
     tail: session.tail,
     truncated: session.truncated,
@@ -202,9 +264,17 @@ function capPendingBuffer(buffer: string[], pendingChars: number, cap: number) {
     buffer.push(last.slice(last.length - cap));
     return cap;
   }
-  while (buffer.length && pendingChars - buffer[0].length >= cap) {
-    pendingChars -= buffer[0].length;
-    buffer.shift();
+  let dropCount = 0;
+  while (dropCount < buffer.length) {
+    const chunk = buffer[dropCount];
+    if (chunk === undefined || pendingChars - chunk.length < cap) {
+      break;
+    }
+    pendingChars -= chunk.length;
+    dropCount += 1;
+  }
+  if (dropCount > 0) {
+    buffer.splice(0, dropCount);
   }
   if (buffer.length && pendingChars > cap) {
     const overflow = pendingChars - cap;

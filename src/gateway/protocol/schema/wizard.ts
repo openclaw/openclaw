@@ -1,5 +1,12 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
+
+const WizardRunStatusSchema = Type.Union([
+  Type.Literal("running"),
+  Type.Literal("done"),
+  Type.Literal("cancelled"),
+  Type.Literal("error"),
+]);
 
 export const WizardStartParamsSchema = Type.Object(
   {
@@ -25,19 +32,16 @@ export const WizardNextParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const WizardCancelParamsSchema = Type.Object(
+const WizardSessionIdParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
   },
   { additionalProperties: false },
 );
 
-export const WizardStatusParamsSchema = Type.Object(
-  {
-    sessionId: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
+export const WizardCancelParamsSchema = WizardSessionIdParamsSchema;
+
+export const WizardStatusParamsSchema = WizardSessionIdParamsSchema;
 
 export const WizardStepOptionSchema = Type.Object(
   {
@@ -62,6 +66,7 @@ export const WizardStepSchema = Type.Object(
     ]),
     title: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
+    format: Type.Optional(Type.Union([Type.Literal("plain")])),
     options: Type.Optional(Type.Array(WizardStepOptionSchema)),
     initialValue: Type.Optional(Type.Unknown()),
     placeholder: Type.Optional(Type.String()),
@@ -71,49 +76,28 @@ export const WizardStepSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const WizardNextResultSchema = Type.Object(
-  {
-    done: Type.Boolean(),
-    step: Type.Optional(WizardStepSchema),
-    status: Type.Optional(
-      Type.Union([
-        Type.Literal("running"),
-        Type.Literal("done"),
-        Type.Literal("cancelled"),
-        Type.Literal("error"),
-      ]),
-    ),
-    error: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
+const WizardResultFields = {
+  done: Type.Boolean(),
+  step: Type.Optional(WizardStepSchema),
+  status: Type.Optional(WizardRunStatusSchema),
+  error: Type.Optional(Type.String()),
+};
+
+export const WizardNextResultSchema = Type.Object(WizardResultFields, {
+  additionalProperties: false,
+});
 
 export const WizardStartResultSchema = Type.Object(
   {
     sessionId: NonEmptyString,
-    done: Type.Boolean(),
-    step: Type.Optional(WizardStepSchema),
-    status: Type.Optional(
-      Type.Union([
-        Type.Literal("running"),
-        Type.Literal("done"),
-        Type.Literal("cancelled"),
-        Type.Literal("error"),
-      ]),
-    ),
-    error: Type.Optional(Type.String()),
+    ...WizardResultFields,
   },
   { additionalProperties: false },
 );
 
 export const WizardStatusResultSchema = Type.Object(
   {
-    status: Type.Union([
-      Type.Literal("running"),
-      Type.Literal("done"),
-      Type.Literal("cancelled"),
-      Type.Literal("error"),
-    ]),
+    status: WizardRunStatusSchema,
     error: Type.Optional(Type.String()),
   },
   { additionalProperties: false },

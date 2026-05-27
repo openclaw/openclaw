@@ -1,54 +1,64 @@
 ---
 name: weather
-description: Get current weather and forecasts (no API key required).
+description: "Current weather and forecasts with wttr.in via curl for locations, rain, temperature, travel planning."
 homepage: https://wttr.in/:help
-metadata: { "openclaw": { "emoji": "🌤️", "requires": { "bins": ["curl"] } } }
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "☔",
+        "requires": { "bins": ["curl"] },
+        "install":
+          [
+            {
+              "id": "brew",
+              "kind": "brew",
+              "formula": "curl",
+              "bins": ["curl"],
+              "label": "Install curl (brew)",
+            },
+          ],
+      },
+  }
 ---
 
 # Weather
 
-Two free services, no API keys needed.
+Use for current weather, rain/temperature checks, forecasts, and travel planning. Need a city, region, airport code, or coordinates.
 
-## wttr.in (primary)
-
-Quick one-liner:
+## Commands
 
 ```bash
-curl -s "wttr.in/London?format=3"
-# Output: London: ⛅️ +8°C
+curl "wttr.in/London?format=3"
+curl "wttr.in/London?0"
+curl "wttr.in/London"
+curl "wttr.in/London?format=v2"
+curl "wttr.in/London?1"
+curl "wttr.in/New+York?format=3"
 ```
 
-Compact format:
+Useful formats:
+
+- `%l`: location
+- `%c`: condition icon
+- `%t`: temperature
+- `%f`: feels like
+- `%w`: wind
+- `%h`: humidity
+- `%p`: precipitation
 
 ```bash
-curl -s "wttr.in/London?format=%l:+%c+%t+%h+%w"
-# Output: London: ⛅️ +8°C 71% ↙5km/h
+curl "wttr.in/London?format=%l:+%c+%t,+feels+%f,+rain+%p,+wind+%w"
 ```
 
-Full forecast:
+JSON:
 
 ```bash
-curl -s "wttr.in/London?T"
+curl "wttr.in/London?format=j1"
 ```
 
-Format codes: `%c` condition · `%t` temp · `%h` humidity · `%w` wind · `%l` location · `%m` moon
+## Notes
 
-Tips:
-
-- URL-encode spaces: `wttr.in/New+York`
-- Airport codes: `wttr.in/JFK`
-- Units: `?m` (metric) `?u` (USCS)
-- Today only: `?1` · Current only: `?0`
-- PNG: `curl -s "wttr.in/Berlin.png" -o /tmp/weather.png`
-
-## Open-Meteo (fallback, JSON)
-
-Free, no key, good for programmatic use:
-
-```bash
-curl -s "https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.12&current_weather=true"
-```
-
-Find coordinates for a city, then query. Returns JSON with temp, windspeed, weathercode.
-
-Docs: https://open-meteo.com/en/docs
+- For severe alerts, aviation, marine, or official decisions, use official local weather services.
+- For historical climate/weather, use an archive/API, not wttr.in.
+- For hyper-local microclimates, prefer local sensors.

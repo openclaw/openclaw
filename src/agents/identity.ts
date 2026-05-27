@@ -1,4 +1,5 @@
-import type { OpenClawConfig, HumanDelayConfig, IdentityConfig } from "../config/config.js";
+import type { HumanDelayConfig, IdentityConfig } from "../config/types.base.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 const DEFAULT_ACK_REACTION = "👀";
@@ -10,11 +11,37 @@ export function resolveAgentIdentity(
   return resolveAgentConfig(cfg, agentId)?.identity;
 }
 
-export function resolveAckReaction(cfg: OpenClawConfig, agentId: string): string {
+export function resolveAckReaction(
+  cfg: OpenClawConfig,
+  agentId: string,
+  opts?: { channel?: string; accountId?: string },
+): string {
+  // L1: Channel account level
+  if (opts?.channel && opts?.accountId) {
+    const channelCfg = getChannelConfig(cfg, opts.channel);
+    const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
+    const accountReaction = accounts?.[opts.accountId]?.ackReaction as string | undefined;
+    if (accountReaction !== undefined) {
+      return accountReaction.trim();
+    }
+  }
+
+  // L2: Channel level
+  if (opts?.channel) {
+    const channelCfg = getChannelConfig(cfg, opts.channel);
+    const channelReaction = channelCfg?.ackReaction as string | undefined;
+    if (channelReaction !== undefined) {
+      return channelReaction.trim();
+    }
+  }
+
+  // L3: Global messages level
   const configured = cfg.messages?.ackReaction;
   if (configured !== undefined) {
     return configured.trim();
   }
+
+  // L4: Agent identity emoji fallback
   const emoji = resolveAgentIdentity(cfg, agentId)?.emoji?.trim();
   return emoji || DEFAULT_ACK_REACTION;
 }
@@ -28,11 +55,6 @@ export function resolveIdentityNamePrefix(
     return undefined;
   }
   return `[${name}]`;
-}
-
-/** Returns just the identity name (without brackets) for template context. */
-export function resolveIdentityName(cfg: OpenClawConfig, agentId: string): string | undefined {
-  return resolveAgentIdentity(cfg, agentId)?.name?.trim() || undefined;
 }
 
 export function resolveMessagePrefix(

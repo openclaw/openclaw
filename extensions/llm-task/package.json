@@ -1,10 +1,14 @@
 {
   "name": "@openclaw/llm-task",
-  "version": "2026.2.6",
+  "version": "2026.5.26",
+  "private": true,
   "description": "OpenClaw JSON-only LLM task plugin",
   "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [

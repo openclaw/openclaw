@@ -1,17 +1,37 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-import { mattermostPlugin } from "./src/channel.js";
-import { setMattermostRuntime } from "./src/runtime.js";
+import {
+  defineBundledChannelEntry,
+  loadBundledEntryExportSync,
+} from "openclaw/plugin-sdk/channel-entry-contract";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 
-const plugin = {
+function registerSlashCommandRoute(api: OpenClawPluginApi): void {
+  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
+    specifier: "./slash-route-api.js",
+    exportName: "registerSlashCommandRoute",
+  });
+  register(api);
+}
+
+export default defineBundledChannelEntry({
   id: "mattermost",
   name: "Mattermost",
   description: "Mattermost channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setMattermostRuntime(api.runtime);
-    api.registerChannel({ plugin: mattermostPlugin });
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "mattermostPlugin",
   },
-};
-
-export default plugin;
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setMattermostRuntime",
+  },
+  registerFull(api) {
+    // Actual slash-command registration happens after the monitor connects and
+    // knows the team id; the route itself can be wired here.
+    registerSlashCommandRoute(api);
+  },
+});

@@ -1,6 +1,7 @@
-import type { RuntimeEnv } from "../../runtime.js";
-import { loadConfig } from "../../config/config.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { loadModelsConfig } from "./load-config.js";
 import {
   ensureFlagCompatibility,
   normalizeAlias,
@@ -13,7 +14,7 @@ export async function modelsAliasesListCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const cfg = loadConfig();
+  const cfg = await loadModelsConfig({ commandName: "models aliases list", runtime });
   const models = cfg.agents?.defaults?.models ?? {};
   const aliases = Object.entries(models).reduce<Record<string, string>>(
     (acc, [modelKey, entry]) => {
@@ -27,7 +28,7 @@ export async function modelsAliasesListCommand(
   );
 
   if (opts.json) {
-    runtime.log(JSON.stringify({ aliases }, null, 2));
+    writeRuntimeJson(runtime, { aliases });
     return;
   }
   if (opts.plain) {
@@ -53,8 +54,9 @@ export async function modelsAliasesAddCommand(
   runtime: RuntimeEnv,
 ) {
   const alias = normalizeAlias(aliasRaw);
-  const resolved = resolveModelTarget({ raw: modelRaw, cfg: loadConfig() });
-  const _updated = await updateConfig((cfg) => {
+  const cfg = await loadModelsConfig({ commandName: "models aliases add", runtime });
+  const resolved = resolveModelTarget({ raw: modelRaw, cfg });
+  await updateConfig((cfg) => {
     const modelKey = `${resolved.provider}/${resolved.model}`;
     const nextModels = { ...cfg.agents?.defaults?.models };
     for (const [key, entry] of Object.entries(nextModels)) {
@@ -94,7 +96,9 @@ export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: Runt
       }
     }
     if (!found) {
-      throw new Error(`Alias not found: ${alias}`);
+      throw new Error(
+        `Alias not found: ${alias}. Run ${formatCliCommand("openclaw models aliases list")} to see configured aliases.`,
+      );
     }
     return {
       ...cfg,

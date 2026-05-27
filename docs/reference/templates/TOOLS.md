@@ -1,5 +1,6 @@
 ---
 summary: "Workspace template for TOOLS.md"
+title: "TOOLS.md template"
 read_when:
   - Bootstrapping a workspace manually
 ---
@@ -44,3 +45,7 @@ Skills are shared. Your setup is yours. Keeping them apart means you can update 
 ---
 
 Add whatever helps you do your job. This is your cheat sheet.
+
+## Related
+
+- [Agent workspace](/concepts/agent-workspace)

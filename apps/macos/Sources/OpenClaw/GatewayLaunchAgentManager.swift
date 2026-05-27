@@ -5,7 +5,12 @@ enum GatewayLaunchAgentManager {
     private static let disableLaunchAgentMarker = ".openclaw/disable-launchagent"
 
     private static var disableLaunchAgentMarkerURL: URL {
-        FileManager().homeDirectoryForCurrentUser
+        #if DEBUG
+        if let testingDisableLaunchAgentMarkerURL {
+            return testingDisableLaunchAgentMarkerURL
+        }
+        #endif
+        return FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent(self.disableLaunchAgentMarker)
     }
 
@@ -17,6 +22,10 @@ enum GatewayLaunchAgentManager {
     static func isLaunchAgentWriteDisabled() -> Bool {
         if FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path) { return true }
         return false
+    }
+
+    static func applyAttachOnlyRuntimeOverride() -> String? {
+        self.setLaunchAgentWriteDisabled(true)
     }
 
     static func setLaunchAgentWriteDisabled(_ disabled: Bool) -> String? {
@@ -144,6 +153,15 @@ extension GatewayLaunchAgentManager {
         timeout: Double,
         quiet: Bool) async -> CommandResult
     {
+        #if DEBUG
+        if self.testingInterceptDaemonCommands {
+            self.testingDaemonCommandCalls.append(args)
+            return CommandResult(
+                success: true,
+                payload: Data("{\"ok\":true}".utf8),
+                message: nil)
+        }
+        #endif
         let command = CommandResolver.openclawCommand(
             subcommand: "gateway",
             extraArgs: self.withJsonFlag(args),
@@ -180,25 +198,33 @@ extension GatewayLaunchAgentManager {
     }
 
     private static func parseDaemonJson(from raw: String) -> ParsedDaemonJson? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let start = trimmed.firstIndex(of: "{"),
-              let end = trimmed.lastIndex(of: "}")
-        else {
-            return nil
-        }
-        let jsonText = String(trimmed[start...end])
-        guard let data = jsonText.data(using: .utf8) else { return nil }
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return ParsedDaemonJson(text: jsonText, object: object)
+        guard let parsed = JSONObjectExtractionSupport.extract(from: raw) else { return nil }
+        return ParsedDaemonJson(text: parsed.text, object: parsed.object)
     }
 
     private static func summarize(_ text: String) -> String? {
-        let lines = text
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard let last = lines.last else { return nil }
-        let normalized = last.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        return normalized.count > 200 ? String(normalized.prefix(199)) + "…" : normalized
+        TextSummarySupport.summarizeLastLine(text)
     }
+
+    #if DEBUG
+    private nonisolated(unsafe) static var testingDisableLaunchAgentMarkerURL: URL?
+    private nonisolated(unsafe) static var testingInterceptDaemonCommands = false
+    private nonisolated(unsafe) static var testingDaemonCommandCalls: [[String]] = []
+
+    static func setTestingDisableLaunchAgentMarkerURL(_ url: URL?) {
+        self.testingDisableLaunchAgentMarkerURL = url
+    }
+
+    static func setTestingInterceptDaemonCommands(_ intercept: Bool) {
+        self.testingInterceptDaemonCommands = intercept
+    }
+
+    static func clearTestingDaemonCommandCalls() {
+        self.testingDaemonCommandCalls.removeAll(keepingCapacity: false)
+    }
+
+    static func testingDaemonCommandCallsSnapshot() -> [[String]] {
+        self.testingDaemonCommandCalls
+    }
+    #endif
 }

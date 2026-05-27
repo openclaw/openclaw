@@ -1,7 +1,9 @@
-export type NormalizedChatType = "direct" | "group" | "channel";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
-export function normalizeChatType(raw?: string): NormalizedChatType | undefined {
-  const value = raw?.trim().toLowerCase();
+export type ChatType = "direct" | "group" | "channel";
+
+export function normalizeChatType(raw?: string): ChatType | undefined {
+  const value = normalizeOptionalLowercaseString(raw);
   if (!value) {
     return undefined;
   }

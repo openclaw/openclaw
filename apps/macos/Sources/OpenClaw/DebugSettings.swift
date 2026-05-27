@@ -49,6 +49,7 @@ struct DebugSettings: View {
             VStack(alignment: .leading, spacing: 14) {
                 self.header
 
+                self.overviewSection
                 self.launchdSection
                 self.appInfoSection
                 self.gatewaySection
@@ -61,9 +62,7 @@ struct DebugSettings: View {
 
                 Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
+            .settingsDetailContent()
             .groupBoxStyle(PlainSettingsGroupBoxStyle())
         }
         .task {
@@ -92,14 +91,6 @@ struct DebugSettings: View {
                             self.launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
                             return
                         }
-                        if newValue {
-                            Task {
-                                _ = await GatewayLaunchAgentManager.set(
-                                    enabled: false,
-                                    bundlePath: Bundle.main.bundlePath,
-                                    port: GatewayEnvironment.gatewayPort())
-                            }
-                        }
                     }
 
                 Text(
@@ -124,6 +115,31 @@ struct DebugSettings: View {
             Text("Tools for diagnosing local issues (Gateway, ports, logs, Canvas).")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var overviewSection: some View {
+        HStack(spacing: 12) {
+            DebugMetricCard(
+                title: "App Health",
+                value: self.healthStore.state.debugTitle,
+                icon: "heart.text.square",
+                tint: self.healthStore.state.tint,
+                subtitle: self.healthStore.summaryLine)
+
+            DebugMetricCard(
+                title: "Gateway",
+                value: self.gatewayManager.status.label,
+                icon: "antenna.radiowaves.left.and.right",
+                tint: self.gatewayManager.status.debugTint,
+                subtitle: self.canRestartGateway ? "Local process" : "Remote connection")
+
+            DebugMetricCard(
+                title: "App PID",
+                value: "\(ProcessInfo.processInfo.processIdentifier)",
+                icon: "number.square",
+                tint: .blue,
+                subtitle: Bundle.main.bundleURL.lastPathComponent)
         }
     }
 
@@ -224,8 +240,12 @@ struct DebugSettings: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
                     }
-                    .frame(height: 180)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2)))
+                    .frame(height: 130)
+                    .background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(.white.opacity(0.06))
+                    }
 
                     HStack(spacing: 8) {
                         if self.canRestartGateway {
@@ -768,10 +788,8 @@ struct DebugSettings: View {
     }
 
     private func loadSessionStorePath() {
-        let url = self.configURL()
+        let parsed = OpenClawConfigFile.loadDict()
         guard
-            let data = try? Data(contentsOf: url),
-            let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let session = parsed["session"] as? [String: Any],
             let path = session["store"] as? String
         else {
@@ -783,28 +801,17 @@ struct DebugSettings: View {
 
     private func saveSessionStorePath() {
         let trimmed = self.sessionStorePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        var root: [String: Any] = [:]
-        let url = self.configURL()
-        if let data = try? Data(contentsOf: url),
-           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        {
-            root = parsed
-        }
+        var root = OpenClawConfigFile.loadDict()
 
         var session = root["session"] as? [String: Any] ?? [:]
         session["store"] = trimmed.isEmpty ? SessionLoader.defaultStorePath : trimmed
         root["session"] = session
 
-        do {
-            let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-            try FileManager().createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try data.write(to: url, options: [.atomic])
-            self.sessionStoreSaveError = nil
-        } catch {
-            self.sessionStoreSaveError = error.localizedDescription
+        guard OpenClawConfigFile.saveDict(root) else {
+            self.sessionStoreSaveError = "Config write rejected to protect gateway auth/mode."
+            return
         }
+        self.sessionStoreSaveError = nil
     }
 
     private var bindingOverride: Binding<String> {
@@ -827,10 +834,6 @@ struct DebugSettings: View {
 
     private var canRestartGateway: Bool {
         self.state.connectionMode == .local
-    }
-
-    private func configURL() -> URL {
-        OpenClawPaths.configURL
     }
 }
 
@@ -954,13 +957,81 @@ extension DebugSettings {
 
 struct PlainSettingsGroupBoxStyle: GroupBoxStyle {
     func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             configuration.label
-                .font(.caption.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
             configuration.content
         }
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.34), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.055))
+        }
+    }
+}
+
+private struct DebugMetricCard: View {
+    let title: String
+    let value: String
+    let icon: String
+    let tint: Color
+    let subtitle: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: self.icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(self.tint)
+                .frame(width: 34, height: 34)
+                .background(self.tint.opacity(0.18), in: Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(self.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(self.value)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(self.subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.055))
+        }
+    }
+}
+
+extension HealthState {
+    fileprivate var debugTitle: String {
+        switch self {
+        case .unknown: "Unknown"
+        case .ok: "Healthy"
+        case .linkingNeeded: "Needs Link"
+        case .degraded: "Degraded"
+        }
+    }
+}
+
+extension GatewayProcessManager.Status {
+    fileprivate var debugTint: Color {
+        switch self {
+        case .running, .attachedExisting: .green
+        case .starting: .orange
+        case .failed: .red
+        case .stopped: .secondary
+        }
     }
 }
 
@@ -1009,6 +1080,7 @@ extension DebugSettings {
 
         _ = view.body
         _ = view.header
+        _ = view.overviewSection
         _ = view.appInfoSection
         _ = view.gatewaySection
         _ = view.logsSection

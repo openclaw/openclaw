@@ -1,0 +1,360 @@
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  buildGroupedTestComparison,
+  buildGroupedTestReport,
+  renderGroupedTestComparison,
+  resolveGroupKey,
+  resolveTestArea,
+} from "../../scripts/lib/test-group-report.mjs";
+import {
+  parseTestGroupReportArgs,
+  resolveReportArtifactDirs,
+  resolveRunPlans,
+} from "../../scripts/test-group-report.mjs";
+
+describe("scripts/test-group-report grouping", () => {
+  it("groups repo files by stable product area", () => {
+    expect(resolveTestArea("extensions/discord/src/send.test.ts")).toBe("extensions/discord");
+    expect(resolveTestArea("src/commands/agent.test.ts")).toBe("src/commands");
+    expect(resolveTestArea("packages/plugin-sdk/src/index.test.ts")).toBe("packages/plugin-sdk");
+    expect(resolveTestArea("ui/src/ui/views/chat.test.ts")).toBe("ui/views");
+    expect(resolveTestArea("test/scripts/test-group-report.test.ts")).toBe("test/scripts");
+  });
+
+  it("supports folder and top-level grouping modes", () => {
+    expect(resolveGroupKey("src/commands/agent.test.ts", "folder")).toBe("src/commands");
+    expect(resolveGroupKey("extensions/browser/src/browser/pw.test.ts", "folder")).toBe(
+      "extensions/browser/src",
+    );
+    expect(resolveGroupKey("extensions/browser/src/browser/pw.test.ts", "top")).toBe("extensions");
+  });
+});
+
+describe("scripts/test-group-report aggregation", () => {
+  it("aggregates file durations by group and config", () => {
+    const report = buildGroupedTestReport({
+      groupBy: "area",
+      reports: [
+        {
+          config: "test/vitest/vitest.commands.config.ts",
+          report: {
+            testResults: [
+              {
+                name: path.join(process.cwd(), "src", "commands", "agent.test.ts"),
+                startTime: 100,
+                endTime: 700,
+                assertionResults: [
+                  { duration: 150, fullName: "agent ok", status: "passed" },
+                  { duration: 2600, fullName: "agent slow", status: "passed" },
+                ],
+              },
+              {
+                name: path.join(process.cwd(), "extensions", "discord", "src", "send.test.ts"),
+                startTime: 200,
+                endTime: 450,
+                assertionResults: [{ duration: 50, fullName: "send ok", status: "passed" }],
+              },
+            ],
+          },
+        },
+      ],
+      maxTestMs: 2000,
+    });
+
+    expect(report.totals).toEqual({ durationMs: 850, fileCount: 2, testCount: 3 });
+    expect(report.groups.map((group) => [group.key, group.durationMs])).toEqual([
+      ["src/commands", 600],
+      ["extensions/discord", 250],
+    ]);
+    expect(report.configs).toStrictEqual([
+      {
+        configs: ["commands"],
+        key: "commands",
+        durationMs: 850,
+        fileCount: 2,
+        testCount: 3,
+      },
+    ]);
+    expect(report.slowTests).toStrictEqual([
+      {
+        config: "commands",
+        durationMs: 2600,
+        file: "src/commands/agent.test.ts",
+        fullName: "agent slow",
+        status: "passed",
+      },
+    ]);
+  });
+});
+
+describe("scripts/test-group-report comparison", () => {
+  it("compares grouped reports by group, file, config, and run metrics", () => {
+    const comparison = buildGroupedTestComparison({
+      beforePath: "before.json",
+      afterPath: "after.json",
+      before: {
+        groupBy: "area",
+        totals: { durationMs: 1000, fileCount: 2, testCount: 4 },
+        groups: [
+          { key: "src/commands", durationMs: 700, fileCount: 1, testCount: 2 },
+          { key: "extensions/discord", durationMs: 300, fileCount: 1, testCount: 2 },
+        ],
+        configs: [{ key: "commands", durationMs: 1000, fileCount: 2, testCount: 4 }],
+        topFiles: [
+          {
+            config: "commands",
+            file: "src/commands/agent.test.ts",
+            group: "src/commands",
+            durationMs: 700,
+            testCount: 2,
+          },
+          {
+            config: "commands",
+            file: "extensions/discord/src/send.test.ts",
+            group: "extensions/discord",
+            durationMs: 300,
+            testCount: 2,
+          },
+        ],
+        runs: [
+          {
+            config: "test/vitest/vitest.commands.config.ts",
+            elapsedMs: 2000,
+            maxRssBytes: 1024 * 1024 * 100,
+            status: 0,
+          },
+        ],
+      },
+      after: {
+        groupBy: "area",
+        totals: { durationMs: 900, fileCount: 2, testCount: 5 },
+        groups: [{ key: "src/commands", durationMs: 900, fileCount: 2, testCount: 5 }],
+        configs: [{ key: "commands", durationMs: 900, fileCount: 2, testCount: 5 }],
+        topFiles: [
+          {
+            config: "commands",
+            file: "src/commands/agent.test.ts",
+            group: "src/commands",
+            durationMs: 800,
+            testCount: 3,
+          },
+          {
+            config: "commands",
+            file: "src/commands/new.test.ts",
+            group: "src/commands",
+            durationMs: 100,
+            testCount: 2,
+          },
+        ],
+        runs: [
+          {
+            config: "test/vitest/vitest.commands.config.ts",
+            elapsedMs: 1800,
+            maxRssBytes: 1024 * 1024 * 80,
+            status: 0,
+          },
+        ],
+      },
+    });
+
+    expect(comparison.totals.delta).toEqual({ durationMs: -100, fileCount: 0, testCount: 1 });
+    const commandsGroup = comparison.groups.find((group) => group.key === "src/commands");
+    expect(commandsGroup?.delta).toStrictEqual({ durationMs: 200, fileCount: 1, testCount: 3 });
+    const removedDiscordFile = comparison.files.find(
+      (file) => file.file === "extensions/discord/src/send.test.ts",
+    );
+    expect(removedDiscordFile?.status).toBe("removed");
+    expect(removedDiscordFile?.delta).toStrictEqual({ durationMs: -300, testCount: -2 });
+    expect(comparison.runs[0]?.key).toBe("commands");
+    expect(comparison.runs[0]?.delta).toStrictEqual({
+      elapsedMs: -200,
+      maxRssBytes: -1024 * 1024 * 20,
+    });
+
+    expect(renderGroupedTestComparison(comparison, { limit: 2, topFiles: 2 })).toContain(
+      "Top group regressions",
+    );
+  });
+
+  it("keeps sharded run labels distinct in comparisons", () => {
+    const comparison = buildGroupedTestComparison({
+      before: {
+        groupBy: "area",
+        totals: { durationMs: 0, fileCount: 0, testCount: 0 },
+        groups: [],
+        configs: [],
+        topFiles: [],
+        runs: [
+          {
+            config: "test/vitest/vitest.gateway-server.config.ts",
+            label: "gateway-server-1",
+            elapsedMs: 100,
+            status: 0,
+          },
+          {
+            config: "test/vitest/vitest.gateway-server.config.ts",
+            label: "gateway-server-2",
+            elapsedMs: 200,
+            status: 0,
+          },
+        ],
+      },
+      after: {
+        groupBy: "area",
+        totals: { durationMs: 0, fileCount: 0, testCount: 0 },
+        groups: [],
+        configs: [],
+        topFiles: [],
+        runs: [
+          {
+            config: "test/vitest/vitest.gateway-server.config.ts",
+            label: "gateway-server-1",
+            elapsedMs: 110,
+            status: 0,
+          },
+          {
+            config: "test/vitest/vitest.gateway-server.config.ts",
+            label: "gateway-server-2",
+            elapsedMs: 220,
+            status: 0,
+          },
+        ],
+      },
+    });
+
+    expect(comparison.runs.map((run) => run.key).toSorted()).toEqual([
+      "gateway-server-1",
+      "gateway-server-2",
+    ]);
+  });
+});
+
+describe("scripts/test-group-report arg parsing", () => {
+  it("parses repeatable config and passthrough args", () => {
+    expect(
+      parseTestGroupReportArgs([
+        "--config",
+        "a.ts",
+        "--config",
+        "b.ts",
+        "--group-by",
+        "folder",
+        "--allow-failures",
+        "--",
+        "--maxWorkers=1",
+      ]),
+    ).toStrictEqual({
+      allowFailures: true,
+      compare: null,
+      configs: ["a.ts", "b.ts"],
+      fullSuite: false,
+      groupBy: "folder",
+      limit: 25,
+      maxTestMs: null,
+      output: null,
+      reports: [],
+      rss: process.platform !== "win32",
+      topFiles: 25,
+      vitestArgs: ["--maxWorkers=1"],
+    });
+  });
+
+  it("parses compare mode", () => {
+    expect(
+      parseTestGroupReportArgs([
+        "--compare",
+        "before.json",
+        "after.json",
+        "--limit",
+        "5",
+        "--top-files",
+        "3",
+      ]),
+    ).toStrictEqual({
+      allowFailures: false,
+      compare: { before: "before.json", after: "after.json" },
+      configs: [],
+      fullSuite: false,
+      groupBy: "area",
+      limit: 5,
+      maxTestMs: null,
+      output: null,
+      reports: [],
+      rss: process.platform !== "win32",
+      topFiles: 3,
+      vitestArgs: [],
+    });
+  });
+
+  it("parses individual test duration threshold", () => {
+    expect(parseTestGroupReportArgs(["--max-test-ms", "2000"])).toMatchObject({
+      maxTestMs: 2000,
+    });
+  });
+});
+
+describe("scripts/test-group-report run plans", () => {
+  it("uses leaf configs for full-suite profiling without requiring parallel env", () => {
+    const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    const previousLeaf = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    try {
+      const plans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
+
+      expect(plans.map((plan) => plan.config)).not.toContain(
+        "test/vitest/vitest.full-agentic.config.ts",
+      );
+      expect(plans.map((plan) => plan.config)).toContain(
+        "test/vitest/vitest.agents-tools.config.ts",
+      );
+    } finally {
+      if (previousParallel === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
+      }
+      if (previousLeaf === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previousLeaf;
+      }
+    }
+  });
+
+  it("preserves full-suite shard file args and unique report labels", () => {
+    const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = "6";
+    try {
+      const plans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
+      const gatewayServerPlans = plans.filter(
+        (plan) => plan.config === "test/vitest/vitest.gateway-server.config.ts",
+      );
+
+      expect(gatewayServerPlans.length).toBeGreaterThan(1);
+      expect(new Set(gatewayServerPlans.map((plan) => plan.label)).size).toBe(
+        gatewayServerPlans.length,
+      );
+      expect(gatewayServerPlans.every((plan) => plan.forwardedArgs.length > 0)).toBe(true);
+      expect(gatewayServerPlans.flatMap((plan) => plan.forwardedArgs)).toContain(
+        "src/gateway/server.node-pairing-authz.test.ts",
+      );
+    } finally {
+      if (previousParallel === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
+      }
+    }
+  });
+});
+
+describe("scripts/test-group-report artifact paths", () => {
+  it("keeps raw Vitest reports scoped to the output file stem", () => {
+    expect(resolveReportArtifactDirs(".artifacts/test-perf/baseline-before.json")).toEqual({
+      reportDir: path.join(".artifacts", "test-perf", "baseline-before", "vitest-json"),
+      logDir: path.join(".artifacts", "test-perf", "baseline-before", "logs"),
+    });
+  });
+});

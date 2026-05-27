@@ -1,177 +1,101 @@
-import JSON5 from "json5";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { writeTextAtomic } from "../../infra/json-files.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
+  deliveryContextFromChannelRoute,
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
-  type DeliveryContext,
-} from "../../utils/delivery-context.js";
-import { getFileMtimeMs, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
+} from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { getFileStatSnapshot } from "../cache-utils.js";
+import { getRuntimeConfig } from "../io.js";
+import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
-import { mergeSessionEntry, type SessionEntry } from "./types.js";
+import { resolveStorePath } from "./paths.js";
+import {
+  cloneSessionStoreRecord,
+  dropSessionStoreObjectCache,
+  dropSessionStoreSnapshotCache,
+  getSerializedSessionStore,
+  isSessionStoreCacheEnabled,
+  setSerializedSessionStore,
+  takeMutableSessionStoreCache,
+  writeSessionStoreCache,
+} from "./store-cache.js";
+import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
+import {
+  loadSessionStore,
+  normalizeSessionStore,
+  readSessionEntries,
+  readSessionEntry,
+} from "./store-load.js";
+import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
+import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
+import {
+  capEntryCount,
+  getActiveSessionMaintenanceWarning,
+  pruneQuotaSuspensions,
+  pruneStaleEntries,
+  shouldRunSessionEntryMaintenance,
+  type QuotaSuspensionMaintenanceResult,
+  type ResolvedSessionMaintenanceConfig,
+  type SessionMaintenanceWarning,
+} from "./store-maintenance.js";
+import { runExclusiveSessionStoreWrite } from "./store-writer.js";
+import {
+  mergeSessionEntry,
+  mergeSessionEntryPreserveActivity,
+  type SessionEntry,
+} from "./types.js";
 
-// ============================================================================
-// Session Store Cache with TTL Support
-// ============================================================================
+export {
+  clearSessionStoreCacheForTest,
+  drainSessionStoreWriterQueuesForTest,
+  getSessionStoreWriterQueueSizeForTest,
+} from "./store-writer-state.js";
+export { withSessionStoreWriterForTest } from "./store-writer.js";
+export {
+  loadSessionStore,
+  readSessionEntries,
+  readSessionEntry,
+  readSessionStoreSnapshot,
+} from "./store-load.js";
+export type {
+  SessionStoreSnapshot,
+  SessionStoreSnapshotEntries,
+  SessionStoreSnapshotEntry,
+} from "./store-cache.js";
+export { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 
-type SessionStoreCacheEntry = {
-  store: Record<string, SessionEntry>;
-  loadedAt: number;
-  storePath: string;
-  mtimeMs?: number;
-};
+const log = createSubsystemLogger("sessions/store");
+let sessionArchiveRuntimePromise: Promise<
+  typeof import("../../gateway/session-archive.runtime.js")
+> | null = null;
+let trajectoryCleanupRuntimePromise: Promise<typeof import("../../trajectory/cleanup.js")> | null =
+  null;
 
-const SESSION_STORE_CACHE = new Map<string, SessionStoreCacheEntry>();
-const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
-
-function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+function loadSessionArchiveRuntime() {
+  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
+  return sessionArchiveRuntimePromise;
 }
 
-function getSessionStoreTtl(): number {
-  return resolveCacheTtlMs({
-    envValue: process.env.OPENCLAW_SESSION_CACHE_TTL_MS,
-    defaultTtlMs: DEFAULT_SESSION_STORE_TTL_MS,
-  });
+function loadTrajectoryCleanupRuntime() {
+  trajectoryCleanupRuntimePromise ??= import("../../trajectory/cleanup.js");
+  return trajectoryCleanupRuntimePromise;
 }
 
-function isSessionStoreCacheEnabled(): boolean {
-  return isCacheEnabled(getSessionStoreTtl());
-}
-
-function isSessionStoreCacheValid(entry: SessionStoreCacheEntry): boolean {
-  const now = Date.now();
-  const ttl = getSessionStoreTtl();
-  return now - entry.loadedAt <= ttl;
-}
-
-function invalidateSessionStoreCache(storePath: string): void {
-  SESSION_STORE_CACHE.delete(storePath);
-}
-
-function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
-  const normalized = normalizeSessionDeliveryFields({
-    channel: entry.channel,
-    lastChannel: entry.lastChannel,
-    lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
-    deliveryContext: entry.deliveryContext,
-  });
-  const nextDelivery = normalized.deliveryContext;
-  const sameDelivery =
-    (entry.deliveryContext?.channel ?? undefined) === nextDelivery?.channel &&
-    (entry.deliveryContext?.to ?? undefined) === nextDelivery?.to &&
-    (entry.deliveryContext?.accountId ?? undefined) === nextDelivery?.accountId &&
-    (entry.deliveryContext?.threadId ?? undefined) === nextDelivery?.threadId;
-  const sameLast =
-    entry.lastChannel === normalized.lastChannel &&
-    entry.lastTo === normalized.lastTo &&
-    entry.lastAccountId === normalized.lastAccountId &&
-    entry.lastThreadId === normalized.lastThreadId;
-  if (sameDelivery && sameLast) {
-    return entry;
+function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
+  if (!context || context.threadId == null) {
+    return context;
   }
-  return {
-    ...entry,
-    deliveryContext: nextDelivery,
-    lastChannel: normalized.lastChannel,
-    lastTo: normalized.lastTo,
-    lastAccountId: normalized.lastAccountId,
-    lastThreadId: normalized.lastThreadId,
-  };
-}
-
-function normalizeSessionStore(store: Record<string, SessionEntry>): void {
-  for (const [key, entry] of Object.entries(store)) {
-    if (!entry) {
-      continue;
-    }
-    const normalized = normalizeSessionEntryDelivery(entry);
-    if (normalized !== entry) {
-      store[key] = normalized;
-    }
-  }
-}
-
-export function clearSessionStoreCacheForTest(): void {
-  SESSION_STORE_CACHE.clear();
-}
-
-type LoadSessionStoreOptions = {
-  skipCache?: boolean;
-};
-
-export function loadSessionStore(
-  storePath: string,
-  opts: LoadSessionStoreOptions = {},
-): Record<string, SessionEntry> {
-  // Check cache first if enabled
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
-    const cached = SESSION_STORE_CACHE.get(storePath);
-    if (cached && isSessionStoreCacheValid(cached)) {
-      const currentMtimeMs = getFileMtimeMs(storePath);
-      if (currentMtimeMs === cached.mtimeMs) {
-        // Return a deep copy to prevent external mutations affecting cache
-        return structuredClone(cached.store);
-      }
-      invalidateSessionStoreCache(storePath);
-    }
-  }
-
-  // Cache miss or disabled - load from disk
-  let store: Record<string, SessionEntry> = {};
-  let mtimeMs = getFileMtimeMs(storePath);
-  try {
-    const raw = fs.readFileSync(storePath, "utf-8");
-    const parsed = JSON5.parse(raw);
-    if (isSessionStoreRecord(parsed)) {
-      store = parsed;
-    }
-    mtimeMs = getFileMtimeMs(storePath) ?? mtimeMs;
-  } catch {
-    // ignore missing/invalid store; we'll recreate it
-  }
-
-  // Best-effort migration: message provider → channel naming.
-  for (const entry of Object.values(store)) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    const rec = entry as unknown as Record<string, unknown>;
-    if (typeof rec.channel !== "string" && typeof rec.provider === "string") {
-      rec.channel = rec.provider;
-      delete rec.provider;
-    }
-    if (typeof rec.lastChannel !== "string" && typeof rec.lastProvider === "string") {
-      rec.lastChannel = rec.lastProvider;
-      delete rec.lastProvider;
-    }
-
-    // Best-effort migration: legacy `room` field → `groupChannel` (keep value, prune old key).
-    if (typeof rec.groupChannel !== "string" && typeof rec.room === "string") {
-      rec.groupChannel = rec.room;
-      delete rec.room;
-    } else if ("room" in rec) {
-      delete rec.room;
-    }
-  }
-
-  // Cache the result if caching is enabled
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
-    SESSION_STORE_CACHE.set(storePath, {
-      store: structuredClone(store), // Store a copy to prevent external mutations
-      loadedAt: Date.now(),
-      storePath,
-      mtimeMs,
-    });
-  }
-
-  return structuredClone(store);
+  const next: DeliveryContext = { ...context };
+  delete next.threadId;
+  return next;
 }
 
 export function readSessionUpdatedAt(params: {
@@ -179,67 +103,403 @@ export function readSessionUpdatedAt(params: {
   sessionKey: string;
 }): number | undefined {
   try {
-    const store = loadSessionStore(params.storePath);
-    return store[params.sessionKey]?.updatedAt;
+    return readSessionEntry(params.storePath, params.sessionKey)?.updatedAt;
   } catch {
     return undefined;
+  }
+}
+
+// ============================================================================
+// Session Store Pruning, Capping & File Rotation
+// ============================================================================
+
+export type SessionMaintenanceApplyReport = {
+  mode: ResolvedSessionMaintenanceConfig["mode"];
+  beforeCount: number;
+  afterCount: number;
+  pruned: number;
+  capped: number;
+  diskBudget: SessionDiskBudgetSweepResult | null;
+};
+
+export {
+  capEntryCount,
+  getActiveSessionMaintenanceWarning,
+  pruneStaleEntries,
+  resolveMaintenanceConfig,
+};
+export type { ResolvedSessionMaintenanceConfig, SessionMaintenanceWarning };
+
+type SaveSessionStoreOptions = {
+  /** Skip pruning, capping, and rotation (e.g. during one-time migrations). */
+  skipMaintenance?: boolean;
+  /** Internal hot paths can hand writer-owned stores to the cache after persistence. */
+  takeCacheOwnership?: boolean;
+  /** Active session key for warn-only maintenance. */
+  activeSessionKey?: string;
+  /**
+   * Session keys that are allowed to drop persisted ACP metadata during this update.
+   * All other updates preserve existing `entry.acp` blocks when callers replace the
+   * whole session entry without carrying ACP state forward.
+   */
+  allowDropAcpMetaSessionKeys?: string[];
+  /** Optional callback for warn-only maintenance. */
+  onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
+  /** Optional callback with maintenance stats after a save. */
+  onMaintenanceApplied?: (report: SessionMaintenanceApplyReport) => void | Promise<void>;
+  /** Optional overrides used by maintenance commands. */
+  maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
+  /** Fully resolved maintenance settings when the caller already has config loaded. */
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+};
+
+type SessionEntryWorkflowOptions = {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  storePath?: string;
+};
+
+function cloneSessionEntry(entry: SessionEntry): SessionEntry {
+  return cloneSessionStoreRecord({ entry }).entry;
+}
+
+function resolveSessionWorkflowStorePath(
+  options: SessionEntryWorkflowOptions & { sessionKey?: string },
+): string {
+  if (options.storePath) {
+    return options.storePath;
+  }
+  const agentId = options.agentId ?? resolveAgentIdFromSessionKey(options.sessionKey);
+  return resolveStorePath(getRuntimeConfig().session?.store, {
+    agentId,
+    env: options.env,
+  });
+}
+
+export function getSessionEntry(
+  options: SessionEntryWorkflowOptions & { sessionKey: string },
+): SessionEntry | undefined {
+  const entry = readSessionEntry(resolveSessionWorkflowStorePath(options), options.sessionKey) as
+    | SessionEntry
+    | undefined;
+  return entry ? cloneSessionEntry(entry) : undefined;
+}
+
+export function listSessionEntries(
+  options: SessionEntryWorkflowOptions = {},
+): Array<{ sessionKey: string; entry: SessionEntry }> {
+  return readSessionEntries(resolveSessionWorkflowStorePath(options)).map(
+    ([sessionKey, entry]) => ({
+      sessionKey,
+      entry: cloneSessionEntry(entry as SessionEntry),
+    }),
+  );
+}
+
+function updateSessionStoreWriteCaches(params: {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  serialized: string;
+  takeOwnership?: boolean;
+}): void {
+  const fileStat = getFileStatSnapshot(params.storePath);
+  setSerializedSessionStore(params.storePath, params.serialized, fileStat?.sizeBytes);
+  if (!isSessionStoreCacheEnabled()) {
+    dropSessionStoreObjectCache(params.storePath);
+    dropSessionStoreSnapshotCache(params.storePath);
+    return;
+  }
+  writeSessionStoreCache({
+    storePath: params.storePath,
+    store: params.store,
+    mtimeMs: fileStat?.mtimeMs,
+    sizeBytes: fileStat?.sizeBytes,
+    serialized: params.serialized,
+    takeOwnership: params.takeOwnership,
+  });
+  dropSessionStoreSnapshotCache(params.storePath);
+}
+
+function loadMutableSessionStoreForWriter(storePath: string): Record<string, SessionEntry> {
+  if (isSessionStoreCacheEnabled()) {
+    const currentFileStat = getFileStatSnapshot(storePath);
+    const cached = takeMutableSessionStoreCache({
+      storePath,
+      mtimeMs: currentFileStat?.mtimeMs,
+      sizeBytes: currentFileStat?.sizeBytes,
+    });
+    if (cached) {
+      return cached;
+    }
+  }
+  return loadSessionStore(storePath, { skipCache: true, clone: false });
+}
+
+function resolveMutableSessionStoreKey(
+  store: Record<string, SessionEntry>,
+  sessionKey: string,
+): string | undefined {
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (Object.prototype.hasOwnProperty.call(store, trimmed)) {
+    return trimmed;
+  }
+  const normalized = normalizeStoreSessionKey(trimmed);
+  if (Object.prototype.hasOwnProperty.call(store, normalized)) {
+    return normalized;
+  }
+  return Object.keys(store).find((key) => normalizeStoreSessionKey(key) === normalized);
+}
+
+function collectAcpMetadataSnapshot(
+  store: Record<string, SessionEntry>,
+): Map<string, NonNullable<SessionEntry["acp"]>> {
+  const snapshot = new Map<string, NonNullable<SessionEntry["acp"]>>();
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    if (entry?.acp) {
+      snapshot.set(sessionKey, entry.acp);
+    }
+  }
+  return snapshot;
+}
+
+function preserveExistingAcpMetadata(params: {
+  previousAcpByKey: Map<string, NonNullable<SessionEntry["acp"]>>;
+  nextStore: Record<string, SessionEntry>;
+  allowDropSessionKeys?: string[];
+}): void {
+  const allowDrop = new Set(
+    (params.allowDropSessionKeys ?? []).map((key) => normalizeStoreSessionKey(key)),
+  );
+  for (const [previousKey, previousAcp] of params.previousAcpByKey.entries()) {
+    const normalizedKey = normalizeStoreSessionKey(previousKey);
+    if (allowDrop.has(normalizedKey)) {
+      continue;
+    }
+    const nextKey = resolveMutableSessionStoreKey(params.nextStore, previousKey);
+    if (!nextKey) {
+      continue;
+    }
+    const nextEntry = params.nextStore[nextKey];
+    if (!nextEntry || nextEntry.acp) {
+      continue;
+    }
+    params.nextStore[nextKey] = {
+      ...nextEntry,
+      acp: previousAcp,
+    };
   }
 }
 
 async function saveSessionStoreUnlocked(
   storePath: string,
   store: Record<string, SessionEntry>,
+  opts?: SaveSessionStoreOptions,
 ): Promise<void> {
-  // Invalidate cache on write to ensure consistency
-  invalidateSessionStoreCache(storePath);
-
   normalizeSessionStore(store);
+
+  if (!opts?.skipMaintenance) {
+    // Resolve maintenance config once (avoids repeated getRuntimeConfig() calls).
+    const maintenance = opts?.maintenanceConfig
+      ? { ...opts.maintenanceConfig, ...opts?.maintenanceOverride }
+      : { ...resolveMaintenanceConfig(), ...opts?.maintenanceOverride };
+    const shouldWarnOnly = maintenance.mode === "warn";
+    const beforeCount = Object.keys(store).length;
+    const forceMaintenance = opts?.maintenanceOverride !== undefined;
+    const shouldRunEntryMaintenance = shouldRunSessionEntryMaintenance({
+      entryCount: beforeCount,
+      maxEntries: maintenance.maxEntries,
+      force: forceMaintenance,
+    });
+
+    if (shouldWarnOnly) {
+      const activeSessionKey = opts?.activeSessionKey?.trim();
+      if (activeSessionKey && shouldRunEntryMaintenance) {
+        const warning = getActiveSessionMaintenanceWarning({
+          store,
+          activeSessionKey,
+          pruneAfterMs: maintenance.pruneAfterMs,
+          maxEntries: maintenance.maxEntries,
+        });
+        if (warning) {
+          log.warn("session maintenance would evict active session; skipping enforcement", {
+            activeSessionKey: warning.activeSessionKey,
+            wouldPrune: warning.wouldPrune,
+            wouldCap: warning.wouldCap,
+            pruneAfterMs: warning.pruneAfterMs,
+            maxEntries: warning.maxEntries,
+          });
+          await opts?.onWarn?.(warning);
+        }
+      }
+      const diskBudget = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: opts?.activeSessionKey,
+        maintenance,
+        warnOnly: true,
+        log,
+      });
+      await opts?.onMaintenanceApplied?.({
+        mode: maintenance.mode,
+        beforeCount,
+        afterCount: Object.keys(store).length,
+        pruned: 0,
+        capped: 0,
+        diskBudget,
+      });
+    } else {
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeys([opts?.activeSessionKey]);
+      // Prune stale entries and cap total count before serializing.
+      const removedSessionFiles = new Map<string, string | undefined>();
+      const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
+        onPruned: ({ entry }) => {
+          rememberRemovedSessionFile(removedSessionFiles, entry);
+        },
+        preserveKeys: preserveSessionKeys,
+      });
+      const countAfterPrune = Object.keys(store).length;
+      const shouldRunCapMaintenance =
+        forceMaintenance ||
+        shouldRunSessionEntryMaintenance({
+          entryCount: countAfterPrune,
+          maxEntries: maintenance.maxEntries,
+        });
+      const capped = shouldRunCapMaintenance
+        ? capEntryCount(store, maintenance.maxEntries, {
+            onCapped: ({ entry }) => {
+              rememberRemovedSessionFile(removedSessionFiles, entry);
+            },
+            preserveKeys: preserveSessionKeys,
+          })
+        : 0;
+      const archivedDirs = new Set<string>();
+      const referencedSessionIds = new Set(
+        Object.values(store)
+          .map((entry) => entry?.sessionId)
+          .filter((id): id is string => Boolean(id)),
+      );
+      const archivedForDeletedSessions = await archiveRemovedSessionTranscripts({
+        removedSessionFiles,
+        referencedSessionIds,
+        storePath,
+        reason: "deleted",
+        restrictToStoreDir: true,
+      });
+      if (removedSessionFiles.size > 0) {
+        const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
+        await removeRemovedSessionTrajectoryArtifacts({
+          removedSessionFiles,
+          referencedSessionIds,
+          storePath,
+          restrictToStoreDir: true,
+        });
+      }
+      for (const archivedDir of archivedForDeletedSessions) {
+        archivedDirs.add(archivedDir);
+      }
+      if (archivedDirs.size > 0 || maintenance.resetArchiveRetentionMs != null) {
+        const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
+        const targetDirs =
+          archivedDirs.size > 0 ? [...archivedDirs] : [path.dirname(path.resolve(storePath))];
+        await cleanupArchivedSessionTranscripts({
+          directories: targetDirs,
+          olderThanMs: maintenance.pruneAfterMs,
+          reason: "deleted",
+        });
+        if (maintenance.resetArchiveRetentionMs != null) {
+          await cleanupArchivedSessionTranscripts({
+            directories: targetDirs,
+            olderThanMs: maintenance.resetArchiveRetentionMs,
+            reason: "reset",
+          });
+        }
+      }
+
+      const diskBudget = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: opts?.activeSessionKey,
+        preserveKeys: preserveSessionKeys,
+        maintenance,
+        warnOnly: false,
+        log,
+      });
+      await opts?.onMaintenanceApplied?.({
+        mode: maintenance.mode,
+        beforeCount,
+        afterCount: Object.keys(store).length,
+        pruned,
+        capped,
+        diskBudget,
+      });
+    }
+  }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);
+  if (getSerializedSessionStore(storePath) === json) {
+    updateSessionStoreWriteCaches({
+      storePath,
+      store,
+      serialized: json,
+      takeOwnership: opts?.takeCacheOwnership,
+    });
+    return;
+  }
 
-  // Windows: avoid atomic rename swaps (can be flaky under concurrent access).
-  // We serialize writers via the session-store lock instead.
+  // Windows: keep retry semantics because rename can fail while readers hold locks.
   if (process.platform === "win32") {
-    try {
-      await fs.promises.writeFile(storePath, json, "utf-8");
-    } catch (err) {
-      const code =
-        err && typeof err === "object" && "code" in err
-          ? String((err as { code?: unknown }).code)
-          : null;
-      if (code === "ENOENT") {
+    for (let i = 0; i < 5; i++) {
+      try {
+        await writeSessionStoreAtomic({
+          storePath,
+          store,
+          serialized: json,
+          takeOwnership: opts?.takeCacheOwnership,
+        });
         return;
+      } catch (err) {
+        const code = getErrorCode(err);
+        if (code === "ENOENT") {
+          return;
+        }
+        if (i < 4) {
+          await new Promise((r) => setTimeout(r, 50 * (i + 1)));
+          continue;
+        }
+        // Final attempt failed - skip this save. The writer queue ensures
+        // the next save will retry with fresh data. Log for diagnostics.
+        log.warn(`atomic write failed after 5 attempts: ${storePath}`);
       }
-      throw err;
     }
     return;
   }
 
-  const tmp = `${storePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   try {
-    await fs.promises.writeFile(tmp, json, { mode: 0o600, encoding: "utf-8" });
-    await fs.promises.rename(tmp, storePath);
-    // Ensure permissions are set even if rename loses them
-    await fs.promises.chmod(storePath, 0o600);
+    await writeSessionStoreAtomic({
+      storePath,
+      store,
+      serialized: json,
+      takeOwnership: opts?.takeCacheOwnership,
+    });
   } catch (err) {
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? String((err as { code?: unknown }).code)
-        : null;
+    const code = getErrorCode(err);
 
     if (code === "ENOENT") {
       // In tests the temp session-store directory may be deleted while writes are in-flight.
       // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
       try {
-        await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-        await fs.promises.writeFile(storePath, json, { mode: 0o600, encoding: "utf-8" });
-        await fs.promises.chmod(storePath, 0o600);
+        await writeSessionStoreAtomic({
+          storePath,
+          store,
+          serialized: json,
+          takeOwnership: opts?.takeCacheOwnership,
+        });
       } catch (err2) {
-        const code2 =
-          err2 && typeof err2 === "object" && "code" in err2
-            ? String((err2 as { code?: unknown }).code)
-            : null;
+        const code2 = getErrorCode(err2);
         if (code2 === "ENOENT") {
           return;
         }
@@ -249,120 +509,157 @@ async function saveSessionStoreUnlocked(
     }
 
     throw err;
-  } finally {
-    await fs.promises.rm(tmp, { force: true });
   }
 }
 
 export async function saveSessionStore(
   storePath: string,
   store: Record<string, SessionEntry>,
+  opts?: SaveSessionStoreOptions,
 ): Promise<void> {
-  await withSessionStoreLock(storePath, async () => {
-    await saveSessionStoreUnlocked(storePath, store);
+  await runExclusiveSessionStoreWrite(storePath, async () => {
+    await saveSessionStoreUnlocked(storePath, store, opts);
   });
 }
 
 export async function updateSessionStore<T>(
   storePath: string,
   mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
+  opts?: SaveSessionStoreOptions,
 ): Promise<T> {
-  return await withSessionStoreLock(storePath, async () => {
-    // Always re-read inside the lock to avoid clobbering concurrent writers.
-    const store = loadSessionStore(storePath, { skipCache: true });
+  return await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(storePath);
+    const previousAcpByKey = collectAcpMetadataSnapshot(store);
     const result = await mutator(store);
-    await saveSessionStoreUnlocked(storePath, store);
+    preserveExistingAcpMetadata({
+      previousAcpByKey,
+      nextStore: store,
+      allowDropSessionKeys: opts?.allowDropAcpMetaSessionKeys,
+    });
+    await saveSessionStoreUnlocked(storePath, store, opts);
     return result;
   });
 }
 
-type SessionStoreLockOptions = {
-  timeoutMs?: number;
-  pollIntervalMs?: number;
-  staleMs?: number;
-};
+export async function runQuotaSuspensionMaintenance(params: {
+  storePath: string;
+  now?: number;
+  ttlMs?: number;
+  log?: boolean;
+}): Promise<QuotaSuspensionMaintenanceResult> {
+  if (!fs.existsSync(params.storePath)) {
+    return { resumed: [], cleared: 0 };
+  }
+  return await updateSessionStore(
+    params.storePath,
+    (store) =>
+      pruneQuotaSuspensions({
+        store,
+        now: params.now ?? Date.now(),
+        ttlMs: params.ttlMs,
+        log: params.log,
+      }),
+    { skipMaintenance: true },
+  );
+}
 
-async function withSessionStoreLock<T>(
-  storePath: string,
-  fn: () => Promise<T>,
-  opts: SessionStoreLockOptions = {},
-): Promise<T> {
-  const timeoutMs = opts.timeoutMs ?? 10_000;
-  const pollIntervalMs = opts.pollIntervalMs ?? 25;
-  const staleMs = opts.staleMs ?? 30_000;
-  const lockPath = `${storePath}.lock`;
-  const startedAt = Date.now();
+function getErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return null;
+  }
+  return String((error as { code?: unknown }).code);
+}
 
-  await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+function rememberRemovedSessionFile(
+  removedSessionFiles: Map<string, string | undefined>,
+  entry: SessionEntry,
+): void {
+  if (!removedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
+    removedSessionFiles.set(entry.sessionId, entry.sessionFile);
+  }
+}
 
-  while (true) {
-    try {
-      const handle = await fs.promises.open(lockPath, "wx");
-      try {
-        await handle.writeFile(
-          JSON.stringify({ pid: process.pid, startedAt: Date.now() }),
-          "utf-8",
-        );
-      } catch {
-        // best-effort
-      }
-      await handle.close();
-      break;
-    } catch (err) {
-      const code =
-        err && typeof err === "object" && "code" in err
-          ? String((err as { code?: unknown }).code)
-          : null;
-      if (code === "ENOENT") {
-        // Store directory may be deleted/recreated in tests while writes are in-flight.
-        // Best-effort: recreate the parent dir and retry until timeout.
-        await fs.promises
-          .mkdir(path.dirname(storePath), { recursive: true })
-          .catch(() => undefined);
-        await new Promise((r) => setTimeout(r, pollIntervalMs));
-        continue;
-      }
-      if (code !== "EEXIST") {
-        throw err;
-      }
-
-      const now = Date.now();
-      if (now - startedAt > timeoutMs) {
-        throw new Error(`timeout acquiring session store lock: ${lockPath}`, { cause: err });
-      }
-
-      // Best-effort stale lock eviction (e.g. crashed process).
-      try {
-        const st = await fs.promises.stat(lockPath);
-        const ageMs = now - st.mtimeMs;
-        if (ageMs > staleMs) {
-          await fs.promises.unlink(lockPath);
-          continue;
-        }
-      } catch {
-        // ignore
-      }
-
-      await new Promise((r) => setTimeout(r, pollIntervalMs));
+export async function archiveRemovedSessionTranscripts(params: {
+  removedSessionFiles: Iterable<[string, string | undefined]>;
+  referencedSessionIds: ReadonlySet<string>;
+  storePath: string;
+  reason: "deleted" | "reset";
+  restrictToStoreDir?: boolean;
+}): Promise<Set<string>> {
+  const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
+  const archivedDirs = new Set<string>();
+  for (const [sessionId, sessionFile] of params.removedSessionFiles) {
+    if (params.referencedSessionIds.has(sessionId)) {
+      continue;
+    }
+    const archived = archiveSessionTranscripts({
+      sessionId,
+      storePath: params.storePath,
+      sessionFile,
+      reason: params.reason,
+      restrictToStoreDir: params.restrictToStoreDir,
+    });
+    for (const archivedPath of archived) {
+      archivedDirs.add(path.dirname(archivedPath));
     }
   }
+  return archivedDirs;
+}
 
-  try {
-    return await fn();
-  } finally {
-    await fs.promises.unlink(lockPath).catch(() => undefined);
+async function writeSessionStoreAtomic(params: {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  serialized: string;
+  takeOwnership?: boolean;
+}): Promise<void> {
+  // Stage the temp as `sessions.json.<pid>.<uuid>.tmp` (not the generic
+  // `.fs-safe-replace.*`) so a temp orphaned by a crash between write and rename
+  // is identifiable as a session-store temp and reclaimable by cleanup (#56827).
+  await writeTextAtomic(params.storePath, params.serialized, {
+    durable: false,
+    mode: 0o600,
+    tempPrefix: path.basename(params.storePath),
+  });
+  updateSessionStoreWriteCaches({
+    storePath: params.storePath,
+    store: params.store,
+    serialized: params.serialized,
+    takeOwnership: params.takeOwnership,
+  });
+}
+
+async function persistResolvedSessionEntry(params: {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  resolved: ReturnType<typeof resolveSessionStoreEntry>;
+  next: SessionEntry;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+}): Promise<SessionEntry> {
+  params.store[params.resolved.normalizedKey] = params.next;
+  for (const legacyKey of params.resolved.legacyKeys) {
+    delete params.store[legacyKey];
   }
+  await saveSessionStoreUnlocked(params.storePath, params.store, {
+    activeSessionKey: params.resolved.normalizedKey,
+    skipMaintenance: params.skipMaintenance,
+    takeCacheOwnership: params.takeCacheOwnership,
+  });
+  return params.next;
 }
 
 export async function updateSessionStoreEntry(params: {
   storePath: string;
   sessionKey: string;
   update: (entry: SessionEntry) => Promise<Partial<SessionEntry> | null>;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, update } = params;
-  return await withSessionStoreLock(storePath, async () => {
-    const store = loadSessionStore(storePath);
-    const existing = store[sessionKey];
+  return await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(storePath);
+    const resolved = resolveSessionStoreEntry({ store, sessionKey });
+    const existing = resolved.existing;
     if (!existing) {
       return null;
     }
@@ -371,9 +668,75 @@ export async function updateSessionStoreEntry(params: {
       return existing;
     }
     const next = mergeSessionEntry(existing, patch);
-    store[sessionKey] = next;
-    await saveSessionStoreUnlocked(storePath, store);
-    return next;
+    return await persistResolvedSessionEntry({
+      storePath,
+      store,
+      resolved,
+      next,
+      skipMaintenance: params.skipMaintenance,
+      takeCacheOwnership: params.takeCacheOwnership,
+    });
+  });
+}
+
+export async function patchSessionEntry(
+  params: SessionEntryWorkflowOptions & {
+    sessionKey: string;
+    fallbackEntry?: SessionEntry;
+    preserveActivity?: boolean;
+    replaceEntry?: boolean;
+    update: (
+      entry: SessionEntry,
+    ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
+  },
+): Promise<SessionEntry | null> {
+  const storePath = resolveSessionWorkflowStorePath(params);
+  return await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(storePath);
+    const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+    const existing = resolved.existing ?? params.fallbackEntry;
+    if (!existing) {
+      return null;
+    }
+    const patch = await params.update(cloneSessionEntry(existing));
+    if (!patch) {
+      return existing;
+    }
+    const next = params.replaceEntry
+      ? cloneSessionEntry(patch as SessionEntry)
+      : params.preserveActivity
+        ? mergeSessionEntryPreserveActivity(existing, patch)
+        : mergeSessionEntry(existing, patch);
+    return await persistResolvedSessionEntry({
+      storePath,
+      store,
+      resolved,
+      next,
+    });
+  });
+}
+
+export async function upsertSessionEntry(
+  params: SessionEntryWorkflowOptions & {
+    sessionKey: string;
+    entry: SessionEntry;
+    allowDropAcpMeta?: boolean;
+  },
+): Promise<void> {
+  const storePath = resolveSessionWorkflowStorePath(params);
+  await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(storePath);
+    const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+    const next = cloneSessionEntry(params.entry);
+    if (!params.allowDropAcpMeta && resolved.existing?.acp && !next.acp) {
+      next.acp = resolved.existing.acp;
+    }
+    await persistResolvedSessionEntry({
+      storePath,
+      store,
+      resolved,
+      next,
+    });
   });
 }
 
@@ -386,24 +749,42 @@ export async function recordSessionMetaFromInbound(params: {
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, ctx } = params;
   const createIfMissing = params.createIfMissing ?? true;
-  return await updateSessionStore(storePath, (store) => {
-    const existing = store[sessionKey];
-    const patch = deriveSessionMetaPatch({
-      ctx,
-      sessionKey,
-      existing,
-      groupResolution: params.groupResolution,
-    });
-    if (!patch) {
-      return existing ?? null;
-    }
-    if (!existing && !createIfMissing) {
-      return null;
-    }
-    const next = mergeSessionEntry(existing, patch);
-    store[sessionKey] = next;
-    return next;
-  });
+  return await updateSessionStore(
+    storePath,
+    (store) => {
+      const resolved = resolveSessionStoreEntry({ store, sessionKey });
+      const existing = resolved.existing;
+      const patch = deriveSessionMetaPatch({
+        ctx,
+        sessionKey: resolved.normalizedKey,
+        existing,
+        groupResolution: params.groupResolution,
+      });
+      if (!patch) {
+        if (existing && resolved.legacyKeys.length > 0) {
+          store[resolved.normalizedKey] = existing;
+          for (const legacyKey of resolved.legacyKeys) {
+            delete store[legacyKey];
+          }
+        }
+        return existing ?? null;
+      }
+      if (!existing && !createIfMissing) {
+        return null;
+      }
+      const next = existing
+        ? // Inbound metadata updates must not refresh activity timestamps;
+          // idle reset evaluation relies on updatedAt from actual session turns.
+          mergeSessionEntryPreserveActivity(existing, patch)
+        : mergeSessionEntry(existing, patch);
+      store[resolved.normalizedKey] = next;
+      for (const legacyKey of resolved.legacyKeys) {
+        delete store[legacyKey];
+      }
+      return next;
+    },
+    { activeSessionKey: normalizeStoreSessionKey(sessionKey) },
+  );
 }
 
 export async function updateLastRoute(params: {
@@ -413,15 +794,21 @@ export async function updateLastRoute(params: {
   to?: string;
   accountId?: string;
   threadId?: string | number;
+  route?: SessionEntry["route"];
   deliveryContext?: DeliveryContext;
   ctx?: MsgContext;
   groupResolution?: import("./types.js").GroupKeyResolution | null;
-}) {
+  createIfMissing?: boolean;
+}): Promise<SessionEntry | null> {
   const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
-  return await withSessionStoreLock(storePath, async () => {
-    const store = loadSessionStore(storePath);
-    const existing = store[sessionKey];
-    const now = Date.now();
+  const createIfMissing = params.createIfMissing ?? true;
+  return await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(storePath);
+    const resolved = resolveSessionStoreEntry({ store, sessionKey });
+    const existing = resolved.existing;
+    if (!existing && !createIfMissing) {
+      return null;
+    }
     const explicitContext = normalizeDeliveryContext(params.deliveryContext);
     const inlineContext = normalizeDeliveryContext({
       channel,
@@ -429,9 +816,35 @@ export async function updateLastRoute(params: {
       accountId,
       threadId,
     });
-    const mergedInput = mergeDeliveryContext(explicitContext, inlineContext);
-    const merged = mergeDeliveryContext(mergedInput, deliveryContextFromSession(existing));
+    const routeContext = deliveryContextFromChannelRoute(params.route);
+    const mergedInput = mergeDeliveryContext(
+      routeContext,
+      mergeDeliveryContext(explicitContext, inlineContext),
+    );
+    const explicitDeliveryContext = params.deliveryContext;
+    const explicitThreadFromDeliveryContext =
+      explicitDeliveryContext != null &&
+      Object.prototype.hasOwnProperty.call(explicitDeliveryContext, "threadId")
+        ? explicitDeliveryContext.threadId
+        : undefined;
+    const explicitThreadValue =
+      explicitThreadFromDeliveryContext ??
+      (threadId != null && threadId !== "" ? threadId : undefined);
+    const explicitRouteProvided = Boolean(
+      routeContext?.channel ||
+      routeContext?.to ||
+      explicitContext?.channel ||
+      explicitContext?.to ||
+      inlineContext?.channel ||
+      inlineContext?.to,
+    );
+    const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
+    const fallbackContext = clearThreadFromFallback
+      ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
+      : deliveryContextFromSession(existing);
+    const merged = mergeDeliveryContext(mergedInput, fallbackContext);
     const normalized = normalizeSessionDeliveryFields({
+      route: params.route,
       deliveryContext: {
         channel: merged?.channel,
         to: merged?.to,
@@ -442,25 +855,30 @@ export async function updateLastRoute(params: {
     const metaPatch = ctx
       ? deriveSessionMetaPatch({
           ctx,
-          sessionKey,
+          sessionKey: resolved.normalizedKey,
           existing,
           groupResolution: params.groupResolution,
         })
       : null;
     const basePatch: Partial<SessionEntry> = {
-      updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+      route: normalized.route,
       deliveryContext: normalized.deliveryContext,
       lastChannel: normalized.lastChannel,
       lastTo: normalized.lastTo,
       lastAccountId: normalized.lastAccountId,
       lastThreadId: normalized.lastThreadId,
     };
-    const next = mergeSessionEntry(
+    // Route updates must not refresh activity timestamps; idle/daily reset
+    // evaluation relies on updatedAt from actual session turns (#49515).
+    const next = mergeSessionEntryPreserveActivity(
       existing,
       metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
     );
-    store[sessionKey] = next;
-    await saveSessionStoreUnlocked(storePath, store);
-    return next;
+    return await persistResolvedSessionEntry({
+      storePath,
+      store,
+      resolved,
+      next,
+    });
   });
 }

@@ -9,13 +9,28 @@ function createStubChild() {
   child.stdin = new PassThrough() as ChildProcess["stdin"];
   child.stdout = new PassThrough() as ChildProcess["stdout"];
   child.stderr = new PassThrough() as ChildProcess["stderr"];
-  child.pid = 1234;
-  child.killed = false;
+  Object.defineProperty(child, "pid", { value: 1234, configurable: true });
+  Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
   child.kill = vi.fn(() => true) as ChildProcess["kill"];
   queueMicrotask(() => {
     child.emit("spawn");
   });
   return child;
+}
+
+function spawnOptionsAt(
+  spawnMock: { mock: { calls: readonly unknown[][] } },
+  callIndex: number,
+): { stdio?: unknown } {
+  const call = spawnMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected spawn call ${callIndex}`);
+  }
+  const options = call[2];
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    throw new Error(`expected spawn call ${callIndex} options`);
+  }
+  return options;
 }
 
 describe("spawnWithFallback", () => {
@@ -39,8 +54,8 @@ describe("spawnWithFallback", () => {
     expect(result.usedFallback).toBe(true);
     expect(result.fallbackLabel).toBe("safe-stdin");
     expect(spawnMock).toHaveBeenCalledTimes(2);
-    expect(spawnMock.mock.calls[0]?.[2]?.stdio).toEqual(["pipe", "pipe", "pipe"]);
-    expect(spawnMock.mock.calls[1]?.[2]?.stdio).toEqual(["ignore", "pipe", "pipe"]);
+    expect(spawnOptionsAt(spawnMock, 0).stdio).toEqual(["pipe", "pipe", "pipe"]);
+    expect(spawnOptionsAt(spawnMock, 1).stdio).toEqual(["ignore", "pipe", "pipe"]);
   });
 
   it("does not retry on non-EBADF errors", async () => {

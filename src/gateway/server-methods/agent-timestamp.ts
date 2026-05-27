@@ -1,12 +1,12 @@
-import type { OpenClawConfig } from "../../config/types.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
-import { formatZonedTimestamp } from "../../auto-reply/envelope.js";
+import type { OpenClawConfig } from "../../config/types.js";
+import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 
 /**
  * Cron jobs inject "Current time: ..." into their messages.
  * Skip injection for those.
  */
-const CRON_TIME_PATTERN = /Current time: /;
+const CRON_TIME_MARKER = "Current time: ";
 
 /**
  * Matches a leading `[... YYYY-MM-DD HH:MM ...]` envelope — either from
@@ -36,7 +36,7 @@ export interface TimestampInjectionOptions {
  * these handlers, so there is no double-stamping risk. The detection
  * pattern is a safety net for edge cases.
  *
- * @see https://github.com/moltbot/moltbot/issues/3658
+ * @see https://github.com/openclaw/openclaw/issues/3658
  */
 export function injectTimestamp(message: string, opts?: TimestampInjectionOptions): string {
   if (!message.trim()) {
@@ -49,14 +49,14 @@ export function injectTimestamp(message: string, opts?: TimestampInjectionOption
   }
 
   // Already has a cron-injected timestamp
-  if (CRON_TIME_PATTERN.test(message)) {
+  if (message.includes(CRON_TIME_MARKER)) {
     return message;
   }
 
   const now = opts?.now ?? new Date();
   const timezone = opts?.timezone ?? "UTC";
 
-  const formatted = formatZonedTimestamp(now, timezone);
+  const formatted = formatZonedTimestamp(now, { timeZone: timezone });
   if (!formatted) {
     return message;
   }

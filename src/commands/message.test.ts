@@ -1,79 +1,104 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelOutboundAdapter,
-  ChannelPlugin,
-} from "../channels/plugins/types.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
-const loadMessageCommand = async () => await import("./message.js");
+import { captureEnv } from "../test-utils/env.js";
 
-let testConfig: Record<string, unknown> = {};
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => testConfig,
+type RunMessageActionParams = {
+  cfg?: unknown;
+  action: string;
+  params: Record<string, unknown>;
+  agentId?: string;
+  senderIsOwner?: boolean;
+  gateway?: {
+    clientName?: string;
+    mode?: string;
   };
-});
-
-const callGatewayMock = vi.fn();
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (...args: unknown[]) => callGatewayMock(...args),
-  randomIdempotencyKey: () => "idem-1",
-}));
-
-const webAuthExists = vi.fn(async () => false);
-vi.mock("../web/session.js", () => ({
-  webAuthExists: (...args: unknown[]) => webAuthExists(...args),
-}));
-
-const handleDiscordAction = vi.fn(async () => ({ details: { ok: true } }));
-vi.mock("../agents/tools/discord-actions.js", () => ({
-  handleDiscordAction: (...args: unknown[]) => handleDiscordAction(...args),
-}));
-
-const handleSlackAction = vi.fn(async () => ({ details: { ok: true } }));
-vi.mock("../agents/tools/slack-actions.js", () => ({
-  handleSlackAction: (...args: unknown[]) => handleSlackAction(...args),
-}));
-
-const handleTelegramAction = vi.fn(async () => ({ details: { ok: true } }));
-vi.mock("../agents/tools/telegram-actions.js", () => ({
-  handleTelegramAction: (...args: unknown[]) => handleTelegramAction(...args),
-}));
-
-const handleWhatsAppAction = vi.fn(async () => ({ details: { ok: true } }));
-vi.mock("../agents/tools/whatsapp-actions.js", () => ({
-  handleWhatsAppAction: (...args: unknown[]) => handleWhatsAppAction(...args),
-}));
-
-const originalTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
-const originalDiscordToken = process.env.DISCORD_BOT_TOKEN;
-
-const setRegistry = async (registry: ReturnType<typeof createTestRegistry>) => {
-  const { setActivePluginRegistry } = await import("../plugins/runtime.js");
-  setActivePluginRegistry(registry);
 };
 
-beforeEach(async () => {
-  process.env.TELEGRAM_BOT_TOKEN = "";
-  process.env.DISCORD_BOT_TOKEN = "";
-  testConfig = {};
-  vi.resetModules();
-  await setRegistry(createTestRegistry([]));
-  callGatewayMock.mockReset();
-  webAuthExists.mockReset().mockResolvedValue(false);
-  handleDiscordAction.mockReset();
-  handleSlackAction.mockReset();
-  handleTelegramAction.mockReset();
-  handleWhatsAppAction.mockReset();
-});
+function readOnlyMessageActionCall(): RunMessageActionParams {
+  expect(runMessageActionMock).toHaveBeenCalledOnce();
+  const call = runMessageActionMock.mock.calls[0]?.[0];
+  if (!call) {
+    throw new Error("Expected message action call");
+  }
+  return call;
+}
 
-afterAll(() => {
-  process.env.TELEGRAM_BOT_TOKEN = originalTelegramToken;
-  process.env.DISCORD_BOT_TOKEN = originalDiscordToken;
+let testConfig: Record<string, unknown> = {};
+const applyPluginAutoEnable = vi.hoisted(() => vi.fn(({ config }) => ({ config, changes: [] })));
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => testConfig,
+  loadConfig: () => testConfig,
+}));
+
+vi.mock("../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable,
+}));
+
+const resolveCommandConfigWithSecrets = vi.hoisted(() =>
+  vi.fn(async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    effectiveConfig: config,
+    diagnostics: [] as string[],
+  })),
+);
+
+vi.mock("../cli/command-config-resolution.js", () => ({
+  resolveCommandConfigWithSecrets: async (opts: {
+    autoEnable?: boolean;
+    config: unknown;
+    env?: NodeJS.ProcessEnv;
+    runtime?: { log: (message: string) => void };
+  }) => {
+    const result = await resolveCommandConfigWithSecrets(opts);
+    for (const entry of result.diagnostics ?? []) {
+      opts.runtime?.log(`[secrets] ${entry}`);
+    }
+    const effectiveConfig =
+      opts.autoEnable === true
+        ? applyPluginAutoEnable({
+            config: result.resolvedConfig,
+            env: opts.env ?? process.env,
+          }).config
+        : result.effectiveConfig;
+    return {
+      ...result,
+      effectiveConfig,
+    };
+  },
+}));
+
+const getScopedChannelsCommandSecretTargets = vi.hoisted(() =>
+  vi.fn(() => ({
+    targetIds: new Set(["channels.telegram.token"]),
+  })),
+);
+
+vi.mock("../cli/command-secret-targets.js", () => ({
+  getScopedChannelsCommandSecretTargets,
+}));
+
+const runMessageActionMock = vi.hoisted(() =>
+  vi.fn(async ({ action, params }: RunMessageActionParams) => ({
+    kind: action === "poll" ? "poll" : "send",
+    channel: typeof params.channel === "string" ? params.channel : "telegram",
+    action: action === "poll" ? "poll" : "send",
+    to: typeof params.target === "string" ? params.target : "123456",
+    handledBy: "plugin",
+    payload: { ok: true },
+    dryRun: false,
+  })),
+);
+
+vi.mock("../infra/outbound/message-action-runner.js", () => ({
+  runMessageAction: runMessageActionMock,
+}));
+
+let messageCommand: typeof import("./message.js").messageCommand;
+let envSnapshot: ReturnType<typeof captureEnv>;
+
+beforeAll(async () => {
+  ({ messageCommand } = await import("./message.js"));
 });
 
 const runtime: RuntimeEnv = {
@@ -83,6 +108,25 @@ const runtime: RuntimeEnv = {
     throw new Error("exit");
   }),
 };
+
+beforeEach(() => {
+  envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN"]);
+  process.env.TELEGRAM_BOT_TOKEN = "";
+  process.env.DISCORD_BOT_TOKEN = "";
+  testConfig = {};
+  runMessageActionMock.mockClear();
+  resolveCommandConfigWithSecrets.mockClear();
+  getScopedChannelsCommandSecretTargets.mockClear();
+  applyPluginAutoEnable.mockClear();
+  applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
+  vi.mocked(runtime.log).mockClear();
+  vi.mocked(runtime.error).mockClear();
+  vi.mocked(runtime.exit).mockClear();
+});
+
+afterEach(() => {
+  envSnapshot.restore();
+});
 
 const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
   sendMessageWhatsApp: vi.fn(),
@@ -94,191 +138,204 @@ const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
   ...overrides,
 });
 
-const createStubPlugin = (params: {
-  id: ChannelPlugin["id"];
-  label?: string;
-  actions?: ChannelMessageActionAdapter;
-  outbound?: ChannelOutboundAdapter;
-}): ChannelPlugin => ({
-  id: params.id,
-  meta: {
-    id: params.id,
-    label: params.label ?? String(params.id),
-    selectionLabel: params.label ?? String(params.id),
-    docsPath: `/channels/${params.id}`,
-    blurb: "test stub.",
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => ["default"],
-    resolveAccount: () => ({}),
-    isConfigured: async () => true,
-  },
-  actions: params.actions,
-  outbound: params.outbound,
-});
+function createTelegramSecretRawConfig() {
+  return {
+    channels: {
+      telegram: {
+        token: { $secret: "vault://telegram/token" }, // pragma: allowlist secret
+      },
+    },
+  };
+}
+
+function createTelegramResolvedTokenConfig(token: string) {
+  return {
+    channels: {
+      telegram: {
+        token,
+      },
+    },
+  };
+}
+
+function mockResolvedCommandConfig(params: {
+  rawConfig: Record<string, unknown>;
+  resolvedConfig: Record<string, unknown>;
+  diagnostics?: string[];
+}) {
+  testConfig = params.rawConfig;
+  resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+    resolvedConfig: params.resolvedConfig,
+    effectiveConfig: params.resolvedConfig,
+    diagnostics: params.diagnostics ?? ["resolved channels.telegram.token"],
+  });
+}
+
+async function runMessageCommand(opts: Record<string, unknown> = {}) {
+  await messageCommand(
+    {
+      action: "send",
+      channel: "telegram",
+      target: "123456",
+      message: "hi",
+      json: true,
+      ...opts,
+    },
+    makeDeps(),
+    runtime,
+  );
+}
 
 describe("messageCommand", () => {
-  it("defaults channel when only one configured", async () => {
-    process.env.TELEGRAM_BOT_TOKEN = "token-abc";
-    await setRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: createStubPlugin({
-            id: "telegram",
-            label: "Telegram",
-            actions: {
-              listActions: () => ["send"],
-              handleAction: async ({ action, params, cfg, accountId }) =>
-                await handleTelegramAction(
-                  { action, to: params.to, accountId: accountId ?? undefined },
-                  cfg,
-                ),
-            },
-          }),
-        },
-      ]),
-    );
-    const deps = makeDeps();
-    const { messageCommand } = await loadMessageCommand();
-    await messageCommand(
-      {
-        target: "123456",
-        message: "hi",
-      },
-      deps,
-      runtime,
-    );
-    expect(handleTelegramAction).toHaveBeenCalled();
-  });
+  it("threads resolved SecretRef config into message actions", async () => {
+    const rawConfig = createTelegramSecretRawConfig();
+    const resolvedConfig = createTelegramResolvedTokenConfig("12345:resolved-token");
+    mockResolvedCommandConfig({
+      rawConfig: rawConfig as unknown as Record<string, unknown>,
+      resolvedConfig: resolvedConfig as unknown as Record<string, unknown>,
+    });
 
-  it("requires channel when multiple configured", async () => {
-    process.env.TELEGRAM_BOT_TOKEN = "token-abc";
-    process.env.DISCORD_BOT_TOKEN = "token-discord";
-    await setRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: createStubPlugin({
-            id: "telegram",
-            label: "Telegram",
-            actions: {
-              listActions: () => ["send"],
-              handleAction: async ({ action, params, cfg, accountId }) =>
-                await handleTelegramAction(
-                  { action, to: params.to, accountId: accountId ?? undefined },
-                  cfg,
-                ),
-            },
-          }),
-        },
-        {
-          pluginId: "discord",
-          source: "test",
-          plugin: createStubPlugin({
-            id: "discord",
-            label: "Discord",
-            actions: {
-              listActions: () => ["poll"],
-              handleAction: async ({ action, params, cfg, accountId }) =>
-                await handleDiscordAction(
-                  { action, to: params.to, accountId: accountId ?? undefined },
-                  cfg,
-                ),
-            },
-          }),
-        },
-      ]),
-    );
-    const deps = makeDeps();
-    const { messageCommand } = await loadMessageCommand();
-    await expect(
-      messageCommand(
-        {
-          target: "123",
-          message: "hi",
-        },
-        deps,
-        runtime,
+    await runMessageCommand();
+
+    const actionCall = readOnlyMessageActionCall();
+    expect(actionCall.cfg).toBe(resolvedConfig);
+    expect(actionCall.action).toBe("send");
+    expect(actionCall.params.channel).toBe("telegram");
+    expect(actionCall.params.target).toBe("123456");
+    expect(actionCall.params.message).toBe("hi");
+    expect(actionCall.agentId).toBe("main");
+    expect(actionCall.senderIsOwner).toBe(true);
+    expect(actionCall.gateway?.clientName).toBe("cli");
+    expect(actionCall.gateway?.mode).toBe("cli");
+    expect(actionCall.cfg).not.toBe(rawConfig);
+    const configResolutionCall = resolveCommandConfigWithSecrets.mock.calls[0]?.[0] as {
+      commandName?: string;
+      config?: unknown;
+      targetIds?: Set<string>;
+    };
+    expect(configResolutionCall.config).toBe(rawConfig);
+    expect(configResolutionCall.commandName).toBe("message");
+    expect(getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
+      config: rawConfig,
+      channel: "telegram",
+      accountId: undefined,
+    });
+    expect(configResolutionCall.targetIds).toBeInstanceOf(Set);
+    expect(
+      [...(configResolutionCall.targetIds ?? [])].filter(
+        (id) => !id.startsWith("channels.telegram."),
       ),
-    ).rejects.toThrow(/Channel is required/);
+    ).toStrictEqual([]);
   });
 
-  it("sends via gateway for WhatsApp", async () => {
-    callGatewayMock.mockResolvedValueOnce({ messageId: "g1" });
-    await setRegistry(
-      createTestRegistry([
-        {
-          pluginId: "whatsapp",
-          source: "test",
-          plugin: createStubPlugin({
-            id: "whatsapp",
-            label: "WhatsApp",
-            outbound: {
-              deliveryMode: "gateway",
-            },
-          }),
+  it("keeps local-fallback resolved cfg and logs diagnostics", async () => {
+    const rawConfig = {
+      channels: {
+        telegram: {
+          token: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
         },
-      ]),
-    );
-    const deps = makeDeps();
-    const { messageCommand } = await loadMessageCommand();
-    await messageCommand(
-      {
-        action: "send",
-        channel: "whatsapp",
-        target: "+15551234567",
-        message: "hi",
       },
-      deps,
-      runtime,
-    );
-    expect(callGatewayMock).toHaveBeenCalled();
+    };
+    const locallyResolvedConfig = createTelegramResolvedTokenConfig("12345:local-fallback-token");
+    mockResolvedCommandConfig({
+      rawConfig: rawConfig as unknown as Record<string, unknown>,
+      resolvedConfig: locallyResolvedConfig as unknown as Record<string, unknown>,
+      diagnostics: ["gateway secrets.resolve unavailable; used local resolver fallback."],
+    });
+
+    await runMessageCommand();
+
+    const actionCall = readOnlyMessageActionCall();
+    expect(actionCall.cfg).toBe(locallyResolvedConfig);
+    expect(actionCall.cfg).not.toBe(rawConfig);
+    expect(
+      vi
+        .mocked(runtime.log)
+        .mock.calls.some(([message]) =>
+          String(message).includes("[secrets] gateway secrets.resolve unavailable"),
+        ),
+    ).toBe(true);
   });
 
-  it("routes discord polls through message action", async () => {
-    await setRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          source: "test",
-          plugin: createStubPlugin({
-            id: "discord",
-            label: "Discord",
-            actions: {
-              listActions: () => ["poll"],
-              handleAction: async ({ action, params, cfg, accountId }) =>
-                await handleDiscordAction(
-                  { action, to: params.to, accountId: accountId ?? undefined },
-                  cfg,
-                ),
-            },
-          }),
+  it("uses auto-enabled effective config for message actions", async () => {
+    const rawConfig = {};
+    const resolvedConfig = {};
+    const autoEnabledConfig = {
+      channels: {
+        telegram: {
+          token: "12345:auto-enabled-token",
         },
-      ]),
-    );
-    const deps = makeDeps();
-    const { messageCommand } = await loadMessageCommand();
-    await messageCommand(
-      {
-        action: "poll",
-        channel: "discord",
-        target: "channel:123456789",
-        pollQuestion: "Snack?",
-        pollOption: ["Pizza", "Sushi"],
       },
-      deps,
-      runtime,
-    );
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "poll",
-        to: "channel:123456789",
-      }),
-      expect.any(Object),
-    );
+      plugins: { allow: ["telegram"] },
+    };
+    mockResolvedCommandConfig({ rawConfig, resolvedConfig, diagnostics: [] });
+    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+
+    await runMessageCommand({ channel: undefined });
+
+    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: resolvedConfig,
+      env: process.env,
+    });
+    const actionCall = readOnlyMessageActionCall();
+    expect(actionCall.cfg).toBe(autoEnabledConfig);
+    expect(actionCall.params.target).toBe("123456");
+  });
+
+  it("normalizes poll actions and sender ownership before dispatch", async () => {
+    await runMessageCommand({
+      action: "poll",
+      channel: "telegram",
+      target: "123456789",
+      pollQuestion: "Ship it?",
+      pollOption: ["Yes", "No"],
+      senderIsOwner: false,
+    });
+
+    const actionCall = readOnlyMessageActionCall();
+    expect(actionCall.action).toBe("poll");
+    expect(actionCall.senderIsOwner).toBe(false);
+    expect(actionCall.params.channel).toBe("telegram");
+    expect(actionCall.params.target).toBe("123456789");
+    expect(actionCall.params.pollQuestion).toBe("Ship it?");
+  });
+
+  it("includes a stable top-level messageId in JSON output", async () => {
+    runMessageActionMock.mockResolvedValueOnce({
+      kind: "send",
+      channel: "discord",
+      action: "send",
+      to: "channel:general",
+      handledBy: "plugin",
+      payload: {
+        ok: true,
+        result: {
+          messageId: "msg-json-1",
+          channelId: "general",
+        },
+      } as { ok: boolean } & Record<string, unknown>,
+      dryRun: false,
+    });
+
+    await runMessageCommand({
+      channel: "discord",
+      target: "channel:general",
+    });
+
+    const output = vi.mocked(runtime.log).mock.calls[0]?.[0];
+    const json = JSON.parse(String(output)) as { messageId?: string; payload?: unknown };
+    expect(json.messageId).toBe("msg-json-1");
+    expect(json.payload).toEqual({
+      ok: true,
+      result: {
+        messageId: "msg-json-1",
+        channelId: "general",
+      },
+    });
+  });
+
+  it("rejects unknown message actions before dispatch", async () => {
+    await expect(runMessageCommand({ action: "nope" })).rejects.toThrow("Unknown message action");
+    expect(runMessageActionMock).not.toHaveBeenCalled();
   });
 });

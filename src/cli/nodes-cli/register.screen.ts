@@ -1,6 +1,4 @@
 import type { Command } from "commander";
-import type { NodesRpcOpts } from "./types.js";
-import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import {
@@ -10,7 +8,16 @@ import {
 } from "../nodes-screen.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import {
+  buildNodeInvokeParams,
+  callGatewayCli,
+  nodesCallOpts,
+  parseOptionalNodeFiniteNumber,
+  parseOptionalNodeNonNegativeInteger,
+  parseOptionalNodePositiveInteger,
+  resolveNodeId,
+} from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
 
 export function registerNodesScreenCommands(nodes: Command) {
   const screen = nodes
@@ -30,15 +37,18 @@ export function registerNodesScreenCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 120000)", "120000")
       .action(async (opts: NodesRpcOpts & { out?: string }) => {
         await runNodesCommand("screen record", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          const nodeId = await resolveNodeId(opts, opts.node ?? "");
           const durationMs = parseDurationMs(opts.duration ?? "");
-          const screenIndex = Number.parseInt(String(opts.screen ?? "0"), 10);
-          const fps = Number.parseFloat(String(opts.fps ?? "10"));
-          const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
-            : undefined;
+          const screenIndex = parseOptionalNodeNonNegativeInteger(opts.screen ?? "0", "--screen");
+          const fps = parseOptionalNodeFiniteNumber(opts.fps ?? "10", "--fps", {
+            minExclusive: 0,
+          });
+          const timeoutMs = parseOptionalNodePositiveInteger(
+            opts.invokeTimeout,
+            "--invoke-timeout",
+          );
 
-          const invokeParams: Record<string, unknown> = {
+          const invokeParams = buildNodeInvokeParams({
             nodeId,
             command: "screen.record",
             params: {
@@ -48,11 +58,8 @@ export function registerNodesScreenCommands(nodes: Command) {
               format: "mp4",
               includeAudio: opts.audio !== false,
             },
-            idempotencyKey: randomIdempotencyKey(),
-          };
-          if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-            invokeParams.timeoutMs = timeoutMs;
-          }
+            timeoutMs,
+          });
 
           const raw = await callGatewayCli("node.invoke", opts, invokeParams);
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
@@ -61,21 +68,15 @@ export function registerNodesScreenCommands(nodes: Command) {
           const written = await writeScreenRecordToFile(filePath, parsed.base64);
 
           if (opts.json) {
-            defaultRuntime.log(
-              JSON.stringify(
-                {
-                  file: {
-                    path: written.path,
-                    durationMs: parsed.durationMs,
-                    fps: parsed.fps,
-                    screenIndex: parsed.screenIndex,
-                    hasAudio: parsed.hasAudio,
-                  },
-                },
-                null,
-                2,
-              ),
-            );
+            defaultRuntime.writeJson({
+              file: {
+                path: written.path,
+                durationMs: parsed.durationMs,
+                fps: parsed.fps,
+                screenIndex: parsed.screenIndex,
+                hasAudio: parsed.hasAudio,
+              },
+            });
             return;
           }
           defaultRuntime.log(`MEDIA:${shortenHomePath(written.path)}`);

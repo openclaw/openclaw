@@ -18,40 +18,14 @@ repos:
       - id: check-added-large-files
         args: [--maxkb=500]
       - id: check-merge-conflict
-
-  # Secret detection (same as CI)
-  - repo: https://github.com/Yelp/detect-secrets
-    rev: v1.5.0
-    hooks:
-      - id: detect-secrets
-        args:
-          - --baseline
-          - .secrets.baseline
-          - --exclude-files
-          - '(^|/)(dist/|vendor/|pnpm-lock\.yaml$|\.detect-secrets\.cfg$)'
-          - --exclude-lines
-          - 'key_content\.include\?\("BEGIN PRIVATE KEY"\)'
-          - --exclude-lines
-          - 'case \.apiKeyEnv: "API key \(env var\)"'
-          - --exclude-lines
-          - 'case apikey = "apiKey"'
-          - --exclude-lines
-          - '"gateway\.remote\.password"'
-          - --exclude-lines
-          - '"gateway\.auth\.password"'
-          - --exclude-lines
-          - '"talk\.apiKey"'
-          - --exclude-lines
-          - '=== "string"'
-          - --exclude-lines
-          - 'typeof remote\?\.password === "string"'
-
+      - id: detect-private-key
+        exclude: '(^|/)(\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)'
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0
     hooks:
       - id: shellcheck
-        args: [--severity=error] # Only fail on errors, not warnings/info
+        args: [--rcfile=config/shellcheckrc, --severity=error] # Only fail on errors, not warnings/info
         # Exclude vendor and scripts with embedded code or known issues
         exclude: "^(vendor/|scripts/e2e/)"
 
@@ -66,12 +40,44 @@ repos:
     rev: v1.22.0
     hooks:
       - id: zizmor
-        args: [--persona=regular, --min-severity=medium, --min-confidence=medium]
-        exclude: "^(vendor/|Swabble/)"
+        args:
+          [
+            --config,
+            .github/zizmor.yml,
+            --persona=regular,
+            --min-severity=medium,
+            --min-confidence=medium,
+          ]
+        exclude: "^(vendor/|apps/swabble/)"
+
+  # Python checks for skills scripts
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.1
+    hooks:
+      - id: ruff
+        files: "^skills/.*\\.py$"
+        args: [--config, skills/pyproject.toml]
+
+  - repo: local
+    hooks:
+      - id: skills-python-tests
+        name: skills python tests
+        entry: pytest -q -c skills/pyproject.toml skills
+        language: python
+        additional_dependencies: [pytest>=8, <9]
+        pass_filenames: false
+        files: "^skills/.*\\.py$"
 
   # Project checks (same commands as CI)
   - repo: local
     hooks:
+      # node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
+      - id: pnpm-audit-prod
+        name: pnpm-audit-prod
+        entry: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
+        language: system
+        pass_filenames: false
+
       # oxlint --type-aware src test
       - id: oxlint
         name: oxlint
@@ -91,7 +97,7 @@ repos:
       # swiftlint (same as CI)
       - id: swiftlint
         name: swiftlint
-        entry: swiftlint --config .swiftlint.yml
+        entry: swiftlint lint --config config/swiftlint.yml
         language: system
         pass_filenames: false
         types: [swift]
@@ -99,7 +105,7 @@ repos:
       # swiftformat --lint (same as CI)
       - id: swiftformat
         name: swiftformat
-        entry: swiftformat --lint apps/macos/Sources --config .swiftformat
+        entry: swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
         language: system
         pass_filenames: false
         types: [swift]

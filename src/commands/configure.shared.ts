@@ -5,6 +5,7 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 
 export const CONFIGURE_WIZARD_SECTIONS = [
@@ -14,11 +15,28 @@ export const CONFIGURE_WIZARD_SECTIONS = [
   "gateway",
   "daemon",
   "channels",
+  "plugins",
   "skills",
   "health",
 ] as const;
 
 export type WizardSection = (typeof CONFIGURE_WIZARD_SECTIONS)[number];
+
+export function parseConfigureWizardSections(raw: unknown): {
+  sections: WizardSection[];
+  invalid: string[];
+} {
+  const sectionsRaw: string[] = Array.isArray(raw) ? normalizeStringEntries(raw) : [];
+  if (sectionsRaw.length === 0) {
+    return { sections: [], invalid: [] };
+  }
+
+  const invalid = sectionsRaw.filter((s) => !CONFIGURE_WIZARD_SECTIONS.includes(s as never));
+  const sections = sectionsRaw.filter((s): s is WizardSection =>
+    CONFIGURE_WIZARD_SECTIONS.includes(s as never),
+  );
+  return { sections, invalid };
+}
 
 export type ChannelsWizardMode = "configure" | "remove";
 
@@ -34,7 +52,7 @@ export const CONFIGURE_SECTION_OPTIONS: Array<{
 }> = [
   { value: "workspace", label: "Workspace", hint: "Set workspace + sessions" },
   { value: "model", label: "Model", hint: "Pick provider + credentials" },
-  { value: "web", label: "Web tools", hint: "Configure Brave search + fetch" },
+  { value: "web", label: "Web tools", hint: "Configure web search (Perplexity/Brave) + fetch" },
   { value: "gateway", label: "Gateway", hint: "Port, bind, auth, tailscale" },
   {
     value: "daemon",
@@ -46,6 +64,7 @@ export const CONFIGURE_SECTION_OPTIONS: Array<{
     label: "Channels",
     hint: "Link WhatsApp/Telegram/etc and defaults",
   },
+  { value: "plugins", label: "Plugins", hint: "Configure plugin settings (sandbox, tools, etc.)" },
   { value: "skills", label: "Skills", hint: "Install/enable workspace skills" },
   {
     value: "health",

@@ -1,9 +1,9 @@
-import { normalizeCommandBody } from "./commands-registry.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export type GroupActivationMode = "mention" | "always";
 
 export function normalizeGroupActivation(raw?: string | null): GroupActivationMode | undefined {
-  const value = raw?.trim().toLowerCase();
+  const value = normalizeOptionalLowercaseString(raw);
   if (value === "mention") {
     return "mention";
   }
@@ -24,7 +24,10 @@ export function parseActivationCommand(raw?: string): {
   if (!trimmed) {
     return { hasCommand: false };
   }
-  const normalized = normalizeCommandBody(trimmed);
+  const normalized = trimmed.replace(/^\/([^\s:]+)\s*:(.*)$/, (_, cmd: string, rest: string) => {
+    const trimmedRest = rest.trimStart();
+    return trimmedRest ? `/${cmd} ${trimmedRest}` : `/${cmd}`;
+  });
   const match = normalized.match(/^\/activation(?:\s+([a-zA-Z]+))?\s*$/i);
   if (!match) {
     return { hasCommand: false };

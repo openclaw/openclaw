@@ -1,28 +1,89 @@
+import OpenClawKit
+import OpenClawProtocol
 import SwiftUI
 import UIKit
 
 struct RootCanvas: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
+    @AppStorage("onboarding.requestID") private var onboardingRequestID: Int = 0
+    @AppStorage("gateway.onboardingComplete") private var onboardingComplete: Bool = false
+    @AppStorage("gateway.hasConnectedOnce") private var hasConnectedOnce: Bool = false
+    @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
+    @AppStorage("gateway.preferredStableID") private var preferredGatewayStableID: String = ""
+    @AppStorage("gateway.manual.enabled") private var manualGatewayEnabled: Bool = false
+    @AppStorage("gateway.manual.host") private var manualGatewayHost: String = ""
+    @AppStorage("onboarding.quickSetupDismissed") private var quickSetupDismissed: Bool = false
     @State private var presentedSheet: PresentedSheet?
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
+    @State private var showOnboarding: Bool = false
+    @State private var onboardingAllowSkip: Bool = true
+    @State private var didEvaluateOnboarding: Bool = false
+    @State private var didAutoOpenSettings: Bool = false
 
     private enum PresentedSheet: Identifiable {
         case settings
         case chat
+        case quickSetup
 
         var id: Int {
             switch self {
             case .settings: 0
             case .chat: 1
+            case .quickSetup: 2
             }
         }
+    }
+
+    enum StartupPresentationRoute: Equatable {
+        case none
+        case onboarding
+        case settings
+    }
+
+    static func startupPresentationRoute(
+        gatewayConnected: Bool,
+        hasConnectedOnce: Bool,
+        onboardingComplete: Bool,
+        hasExistingGatewayConfig: Bool,
+        shouldPresentOnLaunch: Bool) -> StartupPresentationRoute
+    {
+        if gatewayConnected {
+            return .none
+        }
+        // On first run or explicit launch onboarding state, onboarding always wins.
+        if shouldPresentOnLaunch || !hasConnectedOnce || !onboardingComplete {
+            return .onboarding
+        }
+        // Settings auto-open is a recovery path for previously-connected installs only.
+        if !hasExistingGatewayConfig {
+            return .settings
+        }
+        return .none
+    }
+
+    static func shouldPresentQuickSetup(
+        quickSetupDismissed: Bool,
+        showOnboarding: Bool,
+        hasPresentedSheet: Bool,
+        gatewayConnected: Bool,
+        hasExistingGatewayConfig: Bool,
+        discoveredGatewayCount: Int) -> Bool
+    {
+        guard !quickSetupDismissed else { return false }
+        guard !showOnboarding else { return false }
+        guard !hasPresentedSheet else { return false }
+        guard !gatewayConnected else { return false }
+        // If a gateway target is already configured (manual or last-known), skip quick setup.
+        guard !hasExistingGatewayConfig else { return false }
+        return discoveredGatewayCount > 0
     }
 
     var body: some View {
@@ -39,6 +100,12 @@ struct RootCanvas: View {
                 },
                 openSettings: {
                     self.presentedSheet = .settings
+                },
+                retryGatewayConnection: {
+                    Task { await self.gatewayController.connectLastKnown() }
+                },
+                resetOnboarding: {
+                    self.resetOnboardingFromGatewayProblem()
                 })
                 .preferredColorScheme(.dark)
 
@@ -46,25 +113,93 @@ struct RootCanvas: View {
                 CameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
             }
         }
+        .gatewayTrustPromptAlert()
+        .deepLinkAgentPromptAlert()
+        .execApprovalPromptDialog()
         .sheet(item: self.$presentedSheet) { sheet in
             switch sheet {
             case .settings:
                 SettingsTab()
+                    .environment(self.appModel)
+                    .environment(self.appModel.voiceWake)
+                    .environment(self.gatewayController)
             case .chat:
                 ChatSheet(
-                    gateway: self.appModel.gatewaySession,
-                    sessionKey: self.appModel.mainSessionKey,
+                    // Chat RPCs run on the operator session (read/write scopes).
+                    gateway: self.appModel.operatorSession,
+                    sessionKey: self.appModel.chatSessionKey,
+                    agentName: self.appModel.activeAgentName,
                     userAccent: self.appModel.seamColor)
+            case .quickSetup:
+                GatewayQuickSetupSheet()
+                    .environment(self.appModel)
+                    .environment(self.gatewayController)
             }
         }
+        .fullScreenCover(isPresented: self.$showOnboarding) {
+            OnboardingWizardView(
+                allowSkip: self.onboardingAllowSkip,
+                onClose: {
+                    self.showOnboarding = false
+                })
+                .environment(self.appModel)
+                .environment(self.appModel.voiceWake)
+                .environment(self.gatewayController)
+        }
         .onAppear { self.updateIdleTimer() }
+        .onAppear { self.updateHomeCanvasState() }
+        .onAppear { self.evaluateOnboardingPresentation(force: false) }
+        .onAppear { self.maybeAutoOpenSettings() }
         .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
-        .onChange(of: self.scenePhase) { _, _ in self.updateIdleTimer() }
+        .onChange(of: self.scenePhase) { _, newValue in
+            self.updateIdleTimer()
+            self.updateHomeCanvasState()
+            guard newValue == .active else { return }
+            Task {
+                await self.appModel.refreshGatewayOverviewIfConnected()
+                await MainActor.run {
+                    self.updateHomeCanvasState()
+                }
+            }
+        }
+        .onAppear { self.maybeShowQuickSetup() }
+        .onChange(of: self.gatewayController.gateways.count) { _, _ in self.maybeShowQuickSetup() }
         .onAppear { self.updateCanvasDebugStatus() }
         .onChange(of: self.canvasDebugStatusEnabled) { _, _ in self.updateCanvasDebugStatus() }
-        .onChange(of: self.appModel.gatewayStatusText) { _, _ in self.updateCanvasDebugStatus() }
-        .onChange(of: self.appModel.gatewayServerName) { _, _ in self.updateCanvasDebugStatus() }
-        .onChange(of: self.appModel.gatewayRemoteAddress) { _, _ in self.updateCanvasDebugStatus() }
+        .onChange(of: self.appModel.gatewayStatusText) { _, _ in
+            self.updateCanvasDebugStatus()
+            self.updateHomeCanvasState()
+        }
+        .onChange(of: self.appModel.gatewayServerName) { _, _ in
+            self.updateCanvasDebugStatus()
+            self.updateHomeCanvasState()
+        }
+        .onChange(of: self.appModel.gatewayServerName) { _, newValue in
+            if newValue != nil {
+                self.showOnboarding = false
+            }
+        }
+        .onChange(of: self.onboardingRequestID) { _, _ in
+            self.evaluateOnboardingPresentation(force: true)
+        }
+        .onChange(of: self.appModel.gatewayRemoteAddress) { _, _ in
+            self.updateCanvasDebugStatus()
+            self.updateHomeCanvasState()
+        }
+        .onChange(of: self.appModel.homeCanvasRevision) { _, _ in
+            self.updateHomeCanvasState()
+        }
+        .onChange(of: self.appModel.gatewayServerName) { _, newValue in
+            if newValue != nil {
+                self.onboardingComplete = true
+                self.hasConnectedOnce = true
+                OnboardingStateStore.markCompleted(mode: nil)
+            }
+            self.maybeAutoOpenSettings()
+        }
+        .onChange(of: self.appModel.openChatRequestID) { _, _ in
+            self.presentedSheet = .chat
+        }
         .onChange(of: self.voiceWake.lastTriggeredCommand) { _, newValue in
             guard let newValue else { return }
             let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -92,20 +227,7 @@ struct RootCanvas: View {
     }
 
     private var gatewayStatus: StatusPill.GatewayState {
-        if self.appModel.gatewayServerName != nil { return .connected }
-
-        let text = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.localizedCaseInsensitiveContains("connecting") ||
-            text.localizedCaseInsensitiveContains("reconnecting")
-        {
-            return .connecting
-        }
-
-        if text.localizedCaseInsensitiveContains("error") {
-            return .error
-        }
-
-        return .disconnected
+        GatewayStatusBuilder.build(appModel: self.appModel)
     }
 
     private func updateIdleTimer() {
@@ -115,16 +237,242 @@ struct RootCanvas: View {
     private func updateCanvasDebugStatus() {
         self.appModel.screen.setDebugStatusEnabled(self.canvasDebugStatusEnabled)
         guard self.canvasDebugStatusEnabled else { return }
-        let title = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = self.appModel.gatewayDisplayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         let subtitle = self.appModel.gatewayServerName ?? self.appModel.gatewayRemoteAddress
         self.appModel.screen.updateDebugStatus(title: title, subtitle: subtitle)
     }
+
+    private func updateHomeCanvasState() {
+        let payload = self.makeHomeCanvasPayload()
+        guard let data = try? JSONEncoder().encode(payload),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            self.appModel.screen.updateHomeCanvasState(json: nil)
+            return
+        }
+        self.appModel.screen.updateHomeCanvasState(json: json)
+    }
+
+    private func makeHomeCanvasPayload() -> HomeCanvasPayload {
+        let gatewayName = self.normalized(self.appModel.gatewayServerName)
+        let gatewayAddress = self.normalized(self.appModel.gatewayRemoteAddress)
+        let gatewayLabel = gatewayName ?? gatewayAddress ?? "Gateway"
+        let activeAgentID = self.resolveActiveAgentID()
+        let agents = self.homeCanvasAgents(activeAgentID: activeAgentID)
+
+        switch self.gatewayStatus {
+        case .connected:
+            return HomeCanvasPayload(
+                gatewayState: "connected",
+                eyebrow: "Connected to \(gatewayLabel)",
+                title: "Your agents are ready",
+                subtitle:
+                "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
+                gatewayLabel: gatewayLabel,
+                activeAgentName: self.appModel.activeAgentName,
+                activeAgentBadge: agents.first(where: { $0.isActive })?.badge ?? "OC",
+                activeAgentCaption: "Selected on this phone",
+                agentCount: agents.count,
+                agents: Array(agents.prefix(6)),
+                footer: "The overview refreshes on reconnect and when the app returns to foreground.")
+        case .connecting:
+            return HomeCanvasPayload(
+                gatewayState: "connecting",
+                eyebrow: "Reconnecting",
+                title: "OpenClaw is syncing back up",
+                subtitle:
+                "The gateway session is coming back online. "
+                    + "Agent shortcuts should settle automatically in a moment.",
+                gatewayLabel: gatewayLabel,
+                activeAgentName: self.appModel.activeAgentName,
+                activeAgentBadge: "OC",
+                activeAgentCaption: "Gateway session in progress",
+                agentCount: agents.count,
+                agents: Array(agents.prefix(4)),
+                footer: "If the gateway is reachable, reconnect should complete without intervention.")
+        case .error, .disconnected:
+            return HomeCanvasPayload(
+                gatewayState: self.gatewayStatus == .error ? "error" : "offline",
+                eyebrow: "Welcome to OpenClaw",
+                title: "Your phone stays quiet until it is needed",
+                subtitle:
+                "Pair this device to your gateway to wake it only for real work, "
+                    + "keep a live agent overview handy, and avoid battery-draining background loops.",
+                gatewayLabel: gatewayLabel,
+                activeAgentName: "Main",
+                activeAgentBadge: "OC",
+                activeAgentCaption: "Connect to load your agents",
+                agentCount: agents.count,
+                agents: Array(agents.prefix(4)),
+                footer:
+                "When connected, the gateway can wake the phone with a silent push "
+                    + "instead of holding an always-on session.")
+        }
+    }
+
+    private func resolveActiveAgentID() -> String {
+        let selected = self.normalized(self.appModel.selectedAgentId) ?? ""
+        if !selected.isEmpty {
+            return selected
+        }
+        return self.resolveDefaultAgentID()
+    }
+
+    private func resolveDefaultAgentID() -> String {
+        self.normalized(self.appModel.gatewayDefaultAgentId) ?? ""
+    }
+
+    private func homeCanvasAgents(activeAgentID: String) -> [HomeCanvasAgentCard] {
+        let defaultAgentID = self.resolveDefaultAgentID()
+        let cards = self.appModel.gatewayAgents.map { agent -> HomeCanvasAgentCard in
+            let isActive = !activeAgentID.isEmpty && agent.id == activeAgentID
+            let isDefault = !defaultAgentID.isEmpty && agent.id == defaultAgentID
+            return HomeCanvasAgentCard(
+                id: agent.id,
+                name: self.homeCanvasName(for: agent),
+                badge: self.homeCanvasBadge(for: agent),
+                caption: isActive ? "Active on this phone" : (isDefault ? "Default agent" : "Ready"),
+                isActive: isActive)
+        }
+
+        return cards.sorted { lhs, rhs in
+            if lhs.isActive != rhs.isActive {
+                return lhs.isActive
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private func homeCanvasName(for agent: AgentSummary) -> String {
+        self.normalized(agent.name) ?? agent.id
+    }
+
+    private func homeCanvasBadge(for agent: AgentSummary) -> String {
+        if let identity = agent.identity,
+           let emoji = identity["emoji"]?.value as? String,
+           let normalizedEmoji = normalized(emoji)
+        {
+            return normalizedEmoji
+        }
+        let words = self.homeCanvasName(for: agent)
+            .split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "_" })
+            .prefix(2)
+        let initials = words.compactMap(\.first).map(String.init).joined()
+        if !initials.isEmpty {
+            return initials.uppercased()
+        }
+        return "OC"
+    }
+
+    private func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func evaluateOnboardingPresentation(force: Bool) {
+        if force {
+            self.onboardingAllowSkip = true
+            self.showOnboarding = true
+            return
+        }
+
+        guard !self.didEvaluateOnboarding else { return }
+        self.didEvaluateOnboarding = true
+        let route = Self.startupPresentationRoute(
+            gatewayConnected: self.appModel.gatewayServerName != nil,
+            hasConnectedOnce: self.hasConnectedOnce,
+            onboardingComplete: self.onboardingComplete,
+            hasExistingGatewayConfig: self.hasExistingGatewayConfig(),
+            shouldPresentOnLaunch: OnboardingStateStore.shouldPresentOnLaunch(appModel: self.appModel))
+        switch route {
+        case .none:
+            break
+        case .onboarding:
+            self.onboardingAllowSkip = true
+            self.showOnboarding = true
+        case .settings:
+            self.didAutoOpenSettings = true
+            self.presentedSheet = .settings
+        }
+    }
+
+    private func hasExistingGatewayConfig() -> Bool {
+        if self.appModel.activeGatewayConnectConfig != nil { return true }
+        if GatewaySettingsStore.loadLastGatewayConnection() != nil { return true }
+
+        let preferredStableID = self.preferredGatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !preferredStableID.isEmpty { return true }
+
+        let manualHost = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        return self.manualGatewayEnabled && !manualHost.isEmpty
+    }
+
+    private func maybeAutoOpenSettings() {
+        guard !self.didAutoOpenSettings else { return }
+        guard !self.showOnboarding else { return }
+        let route = Self.startupPresentationRoute(
+            gatewayConnected: self.appModel.gatewayServerName != nil,
+            hasConnectedOnce: self.hasConnectedOnce,
+            onboardingComplete: self.onboardingComplete,
+            hasExistingGatewayConfig: self.hasExistingGatewayConfig(),
+            shouldPresentOnLaunch: false)
+        guard route == .settings else { return }
+        self.didAutoOpenSettings = true
+        self.presentedSheet = .settings
+    }
+
+    private func maybeShowQuickSetup() {
+        let shouldPresent = Self.shouldPresentQuickSetup(
+            quickSetupDismissed: self.quickSetupDismissed,
+            showOnboarding: self.showOnboarding,
+            hasPresentedSheet: self.presentedSheet != nil,
+            gatewayConnected: self.appModel.gatewayServerName != nil,
+            hasExistingGatewayConfig: self.hasExistingGatewayConfig(),
+            discoveredGatewayCount: self.gatewayController.gateways.count)
+        guard shouldPresent else { return }
+        self.presentedSheet = .quickSetup
+    }
+
+    private func resetOnboardingFromGatewayProblem() {
+        GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
+        self.presentedSheet = nil
+        self.onboardingAllowSkip = false
+        self.showOnboarding = true
+    }
+}
+
+private struct HomeCanvasPayload: Codable {
+    var gatewayState: String
+    var eyebrow: String
+    var title: String
+    var subtitle: String
+    var gatewayLabel: String
+    var activeAgentName: String
+    var activeAgentBadge: String
+    var activeAgentCaption: String
+    var agentCount: Int
+    var agents: [HomeCanvasAgentCard]
+    var footer: String
+}
+
+private struct HomeCanvasAgentCard: Codable {
+    var id: String
+    var name: String
+    var badge: String
+    var caption: String
+    var isActive: Bool
 }
 
 private struct CanvasContent: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
+    @State private var showGatewayActions: Bool = false
+    @State private var showGatewayProblemDetails: Bool = false
+    @State private var showTalkPermissionPrompt: Bool = false
+    @State private var showTalkPermissionTray: Bool = false
     var systemColorScheme: ColorScheme
     var gatewayStatus: StatusPill.GatewayState
     var voiceWakeEnabled: Bool
@@ -133,59 +481,102 @@ private struct CanvasContent: View {
     var cameraHUDKind: NodeAppModel.CameraHUDKind?
     var openChat: () -> Void
     var openSettings: () -> Void
+    var retryGatewayConnection: () -> Void
+    var resetOnboarding: () -> Void
 
-    private var brightenButtons: Bool { self.systemColorScheme == .light }
+    private var brightenButtons: Bool {
+        self.systemColorScheme == .light
+    }
+
+    private var talkActive: Bool {
+        (self.appModel.talkMode.isEnabled || self.talkEnabled) && !self.talkPermissionBlocksStart
+    }
+
+    private var talkPermissionBlocksStart: Bool {
+        self.appModel.talkMode.gatewayTalkPermissionState.requiresTalkPermissionAction
+    }
+
+    private var showTalkTray: Bool {
+        self.talkActive ||
+            self.showTalkPermissionTray ||
+            self.appModel.talkMode.gatewayTalkPermissionState.isApprovalRequestInProgress
+    }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             ScreenTab()
-
-            VStack(spacing: 10) {
-                OverlayButton(systemImage: "text.bubble.fill", brighten: self.brightenButtons) {
-                    self.openChat()
-                }
-                .accessibilityLabel("Chat")
-
-                if self.talkButtonEnabled {
-                    // Talk mode lives on a side bubble so it doesn't get buried in settings.
-                    OverlayButton(
-                        systemImage: self.appModel.talkMode.isEnabled ? "waveform.circle.fill" : "waveform.circle",
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                if self.showTalkTray {
+                    TalkToolbarTray(
                         brighten: self.brightenButtons,
                         tint: self.appModel.seamColor,
-                        isActive: self.appModel.talkMode.isEnabled)
-                    {
-                        let next = !self.appModel.talkMode.isEnabled
-                        self.talkEnabled = next
-                        self.appModel.setTalkEnabled(next)
-                    }
-                    .accessibilityLabel("Talk Mode")
+                        statusText: self.appModel.talkMode.statusText,
+                        agentName: self.appModel.activeAgentName,
+                        micLevel: self.appModel.talkMode.micLevel,
+                        isListening: self.appModel.talkMode.isListening,
+                        isSpeaking: self.appModel.talkMode.isSpeaking,
+                        isUserSpeechDetected: self.appModel.talkMode.isUserSpeechDetected,
+                        permissionState: self.appModel.talkMode.gatewayTalkPermissionState,
+                        voiceModeTitle: self.appModel.talkMode.gatewayTalkVoiceModeTitle,
+                        voiceModeSubtitle: self.appModel.talkMode.gatewayTalkVoiceModeSubtitle,
+                        onEnableTalk: {
+                            self.showTalkPermissionPrompt = true
+                        },
+                        onStopTalk: {
+                            self.showTalkPermissionTray = false
+                            self.stopTalk()
+                        })
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
-                OverlayButton(systemImage: "gearshape.fill", brighten: self.brightenButtons) {
-                    self.openSettings()
-                }
-                .accessibilityLabel("Settings")
+                HomeToolbar(
+                    gateway: self.gatewayStatus,
+                    voiceWakeEnabled: self.voiceWakeEnabled,
+                    activity: self.statusActivity,
+                    brighten: self.brightenButtons,
+                    talkButtonEnabled: self.talkButtonEnabled,
+                    talkActive: self.talkActive,
+                    talkTint: self.appModel.seamColor,
+                    onStatusTap: {
+                        if self.gatewayStatus == .connected {
+                            self.showGatewayActions = true
+                        } else if self.appModel.lastGatewayProblem != nil {
+                            self.showGatewayProblemDetails = true
+                        } else {
+                            self.openSettings()
+                        }
+                    },
+                    onChatTap: {
+                        self.openChat()
+                    },
+                    onTalkTap: {
+                        self.handleTalkToolbarTap()
+                    },
+                    onSettingsTap: {
+                        self.openSettings()
+                    })
             }
-            .padding(.top, 10)
-            .padding(.trailing, 10)
+            .animation(.spring(response: 0.28, dampingFraction: 0.86), value: self.showTalkTray)
         }
-        .overlay(alignment: .center) {
-            if self.appModel.talkMode.isEnabled {
-                TalkOrbOverlay()
-                    .transition(.opacity)
+        .overlay(alignment: .top) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem,
+               self.gatewayStatus != .connected
+            {
+                GatewayProblemBanner(
+                    problem: gatewayProblem,
+                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
+                    onPrimaryAction: {
+                        self.handleGatewayProblemPrimaryAction(gatewayProblem)
+                    },
+                    onShowDetails: {
+                        self.showGatewayProblemDetails = true
+                    })
+                    .padding(.horizontal, 12)
+                    .safeAreaPadding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
-        }
-        .overlay(alignment: .topLeading) {
-            StatusPill(
-                gateway: self.gatewayStatus,
-                voiceWakeEnabled: self.voiceWakeEnabled,
-                activity: self.statusActivity,
-                brighten: self.brightenButtons,
-                onTap: {
-                    self.openSettings()
-                })
-                .padding(.leading, 10)
-                .safeAreaPadding(.top, 10)
         }
         .overlay(alignment: .topLeading) {
             if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
@@ -193,124 +584,117 @@ private struct CanvasContent: View {
                     command: voiceWakeToastText,
                     brighten: self.brightenButtons)
                     .padding(.leading, 10)
-                    .safeAreaPadding(.top, 58)
+                    .safeAreaPadding(.top, self.appModel.lastGatewayProblem == nil ? 58 : 132)
                     .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .gatewayActionsDialog(
+            isPresented: self.$showGatewayActions,
+            onDisconnect: { self.appModel.disconnectGateway() },
+            onOpenSettings: { self.openSettings() })
+        .sheet(isPresented: self.$showGatewayProblemDetails) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem {
+                GatewayProblemDetailsSheet(
+                    problem: gatewayProblem,
+                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
+                    onPrimaryAction: {
+                        self.handleGatewayProblemPrimaryAction(gatewayProblem)
+                    })
+            }
+        }
+        .sheet(isPresented: self.$showTalkPermissionPrompt) {
+            NavigationStack {
+                TalkPermissionPromptView(
+                    style: .sheet,
+                    onPermissionReady: {
+                        self.showTalkPermissionPrompt = false
+                        self.showTalkPermissionTray = false
+                        self.startTalk()
+                    })
+                    .padding()
+                    .navigationTitle("Enable Talk")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Not Now") {
+                                self.showTalkPermissionPrompt = false
+                            }
+                        }
+                    }
+            }
+            .presentationDetents([.medium, .large])
+        }
+        .onAppear {
+            // Keep the runtime talk state aligned with persisted toggle state on cold launch.
+            if self.talkPermissionBlocksStart, self.talkEnabled || self.appModel.talkMode.isEnabled {
+                self.stopTalk()
+            } else if self.talkEnabled != self.appModel.talkMode.isEnabled {
+                self.appModel.setTalkEnabled(self.talkEnabled)
             }
         }
     }
 
     private var statusActivity: StatusPill.Activity? {
-        // Status pill owns transient activity state so it doesn't overlap the connection indicator.
-        if self.appModel.isBackgrounded {
-            return StatusPill.Activity(
-                title: "Foreground required",
-                systemImage: "exclamationmark.triangle.fill",
-                tint: .orange)
-        }
-
-        let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let gatewayLower = gatewayStatus.lowercased()
-        if gatewayLower.contains("repair") {
-            return StatusPill.Activity(title: "Repairing…", systemImage: "wrench.and.screwdriver", tint: .orange)
-        }
-        if gatewayLower.contains("approval") || gatewayLower.contains("pairing") {
-            return StatusPill.Activity(title: "Approval pending", systemImage: "person.crop.circle.badge.clock")
-        }
-        // Avoid duplicating the primary gateway status ("Connecting…") in the activity slot.
-
-        if self.appModel.screenRecordActive {
-            return StatusPill.Activity(title: "Recording screen…", systemImage: "record.circle.fill", tint: .red)
-        }
-
-        if let cameraHUDText, !cameraHUDText.isEmpty, let cameraHUDKind {
-            let systemImage: String
-            let tint: Color?
-            switch cameraHUDKind {
-            case .photo:
-                systemImage = "camera.fill"
-                tint = nil
-            case .recording:
-                systemImage = "video.fill"
-                tint = .red
-            case .success:
-                systemImage = "checkmark.circle.fill"
-                tint = .green
-            case .error:
-                systemImage = "exclamationmark.triangle.fill"
-                tint = .red
-            }
-            return StatusPill.Activity(title: cameraHUDText, systemImage: systemImage, tint: tint)
-        }
-
-        if self.voiceWakeEnabled {
-            let voiceStatus = self.appModel.voiceWake.statusText
-            if voiceStatus.localizedCaseInsensitiveContains("microphone permission") {
-                return StatusPill.Activity(title: "Mic permission", systemImage: "mic.slash", tint: .orange)
-            }
-            if voiceStatus == "Paused" {
-                let suffix = self.appModel.isBackgrounded ? " (background)" : ""
-                return StatusPill.Activity(title: "Voice Wake paused\(suffix)", systemImage: "pause.circle.fill")
-            }
-        }
-
-        return nil
+        StatusActivityBuilder.build(
+            appModel: self.appModel,
+            voiceWakeEnabled: self.voiceWakeEnabled,
+            cameraHUDText: self.cameraHUDText,
+            cameraHUDKind: self.cameraHUDKind)
     }
-}
 
-private struct OverlayButton: View {
-    let systemImage: String
-    let brighten: Bool
-    var tint: Color?
-    var isActive: Bool = false
-    let action: () -> Void
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
+        if problem.canTrustRotatedCertificate { return "Trust certificate" }
+        if problem.suggestsOnboardingReset { return "Reset onboarding" }
+        return problem.retryable ? "Retry" : "Open Settings"
+    }
 
-    var body: some View {
-        Button(action: self.action) {
-            Image(systemName: self.systemImage)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(self.isActive ? (self.tint ?? .primary) : .primary)
-                .padding(10)
-                .background {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            .white.opacity(self.brighten ? 0.26 : 0.18),
-                                            .white.opacity(self.brighten ? 0.08 : 0.04),
-                                            .clear,
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing))
-                                .blendMode(.overlay)
-                        }
-                        .overlay {
-                            if let tint {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [
-                                                tint.opacity(self.isActive ? 0.22 : 0.14),
-                                                tint.opacity(self.isActive ? 0.10 : 0.06),
-                                                .clear,
-                                            ],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing))
-                                    .blendMode(.overlay)
-                            }
-                        }
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .strokeBorder(
-                                    (self.tint ?? .white).opacity(self.isActive ? 0.34 : (self.brighten ? 0.24 : 0.18)),
-                                    lineWidth: self.isActive ? 0.7 : 0.5)
-                        }
-                        .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
-                }
+    private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) {
+        if problem.canTrustRotatedCertificate {
+            Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
+        } else if problem.suggestsOnboardingReset {
+            self.resetOnboarding()
+        } else if problem.retryable {
+            self.retryGatewayConnection()
+        } else {
+            self.openSettings()
         }
-        .buttonStyle(.plain)
+    }
+
+    private func handleTalkToolbarTap() {
+        GatewayDiagnostics.log(
+            "talk.timeline tap active=\(self.talkActive) permissionBlocked=\(self.talkPermissionBlocksStart)")
+        if self.talkActive {
+            self.showTalkPermissionTray = false
+            self.stopTalk()
+            return
+        }
+
+        if self.talkPermissionBlocksStart {
+            self.stopTalk()
+            self.showTalkPermissionTray = true
+            Task {
+                await self.appModel.pollTalkPermissionUpgrade()
+                if !self.talkPermissionBlocksStart {
+                    self.showTalkPermissionTray = false
+                    self.startTalk()
+                }
+            }
+            return
+        }
+
+        self.showTalkPermissionTray = false
+        self.startTalk()
+    }
+
+    private func startTalk() {
+        GatewayDiagnostics.log("talk.timeline start requested from toolbar")
+        self.talkEnabled = true
+        self.appModel.setTalkEnabled(true)
+    }
+
+    private func stopTalk() {
+        GatewayDiagnostics.log("talk.timeline stop requested from toolbar")
+        self.talkEnabled = false
+        self.appModel.setTalkEnabled(false)
     }
 }
 

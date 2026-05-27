@@ -1,0 +1,948 @@
+name: OpenClaw Release Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, for example v2026.5.1-alpha.1 or v2026.5.1-beta.1
+        required: true
+        type: string
+      preflight_run_id:
+        description: Successful OpenClaw NPM Release preflight run id, required when publish_openclaw_npm=true
+        required: false
+        type: string
+      full_release_validation_run_id:
+        description: Successful Full Release Validation run id for this tag/SHA, required when publish_openclaw_npm=true
+        required: false
+        type: string
+      npm_telegram_run_id:
+        description: Optional successful NPM Telegram Beta E2E run id to include in final release evidence
+        required: false
+        type: string
+      npm_dist_tag:
+        description: npm dist-tag for the OpenClaw package
+        required: true
+        default: beta
+        type: choice
+        options:
+          - alpha
+          - beta
+          - latest
+      plugin_publish_scope:
+        description: Plugin publish scope to run before OpenClaw publish
+        required: true
+        default: all-publishable
+        type: choice
+        options:
+          - selected
+          - all-publishable
+      plugins:
+        description: Comma-separated plugin package names when plugin_publish_scope=selected
+        required: false
+        type: string
+      publish_openclaw_npm:
+        description: Publish the OpenClaw npm package after plugin npm succeeds; ClawHub may still run
+        required: true
+        default: true
+        type: boolean
+      release_profile:
+        description: Release coverage profile used for release evidence summaries
+        required: false
+        default: beta
+        type: choice
+        options:
+          - beta
+          - stable
+          - full
+      wait_for_clawhub:
+        description: Wait for ClawHub plugin publish before marking this workflow complete
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: openclaw-release-publish-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.15.0"
+
+jobs:
+  resolve_release_target:
+    name: Resolve release target
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      sha: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
+      preflight_artifact_name: ${{ steps.preflight_artifact.outputs.name }}
+    steps:
+      - name: Validate inputs
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
+          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
+          PLUGINS: ${{ inputs.plugins }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
+            echo "Invalid release tag: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" != "alpha" ]]; then
+            echo "Alpha prerelease tags must publish OpenClaw to npm dist-tag alpha." >&2
+            exit 1
+          fi
+          if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
+            echo "Beta prerelease tags must publish OpenClaw to npm dist-tag beta." >&2
+            exit 1
+          fi
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && -z "${PREFLIGHT_RUN_ID}" ]]; then
+            echo "publish_openclaw_npm=true requires preflight_run_id." >&2
+            exit 1
+          fi
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && -z "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
+            echo "publish_openclaw_npm=true requires full_release_validation_run_id." >&2
+            exit 1
+          fi
+          tideclaw_alpha_publish=false
+          if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            tideclaw_alpha_publish=true
+          fi
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${WORKFLOW_REF}" != "refs/heads/main" && ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ && "${tideclaw_alpha_publish}" != "true" ]]; then
+            echo "publish_openclaw_npm=true requires dispatching this workflow from main, release/YYYY.M.D, or a Tideclaw alpha branch for alpha prereleases." >&2
+            exit 1
+          fi
+          if [[ "${PLUGIN_PUBLISH_SCOPE}" == "selected" && -z "${PLUGINS}" ]]; then
+            echo "plugin_publish_scope=selected requires plugins." >&2
+            exit 1
+          fi
+          if [[ "${PLUGIN_PUBLISH_SCOPE}" == "all-publishable" && -n "${PLUGINS}" ]]; then
+            echo "plugin_publish_scope=all-publishable must not include plugins." >&2
+            exit 1
+          fi
+          case "$RELEASE_PROFILE" in
+            beta|stable|full) ;;
+            *)
+              echo "release_profile must be one of: beta, stable, full" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Download OpenClaw npm preflight manifest
+        id: preflight_artifact
+        if: ${{ inputs.publish_openclaw_npm }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          preferred_name="openclaw-npm-preflight-${RELEASE_TAG}"
+          preflight_dir="${RUNNER_TEMP}/openclaw-npm-preflight-manifest"
+          rm -rf "${preflight_dir}"
+          mkdir -p "${preflight_dir}"
+
+          download_named_artifact() {
+            local artifact_name="$1"
+            for attempt in 1 2 3; do
+              if gh run download "${PREFLIGHT_RUN_ID}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --name "${artifact_name}" \
+                --dir "${preflight_dir}"; then
+                return 0
+              fi
+              if [[ "$attempt" != "3" ]]; then
+                echo "::warning::Artifact download for ${artifact_name} failed on attempt ${attempt}; retrying."
+                sleep $((attempt * 10))
+              fi
+            done
+            return 1
+          }
+
+          if download_named_artifact "${preferred_name}"; then
+            echo "name=${preferred_name}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::warning::${preferred_name} not found; checking run artifacts for a single compatible preflight artifact."
+          mapfile -t matches < <(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}/artifacts" \
+            --jq '.artifacts[] | select(.expired != true) | .name' |
+            grep '^openclaw-npm-preflight-' || true)
+          if [[ "${#matches[@]}" != "1" ]]; then
+            echo "Expected ${preferred_name}, or exactly one openclaw-npm-preflight-* fallback artifact in run ${PREFLIGHT_RUN_ID}." >&2
+            printf 'Available preflight candidates:\n' >&2
+            printf -- '- %s\n' "${matches[@]:-<none>}" >&2
+            exit 1
+          fi
+          fallback_name="${matches[0]}"
+          download_named_artifact "${fallback_name}"
+          echo "name=${fallback_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Download full release validation manifest
+        if: ${{ inputs.publish_openclaw_npm }}
+        uses: actions/download-artifact@v8
+        with:
+          name: full-release-validation-${{ inputs.full_release_validation_run_id }}
+          path: ${{ runner.temp }}/full-release-validation-manifest
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.full_release_validation_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve checked-out release ref
+        id: ref
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate OpenClaw npm preflight manifest
+        id: manifest
+        if: ${{ inputs.publish_openclaw_npm }}
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          preflight_dir="${RUNNER_TEMP}/openclaw-npm-preflight-manifest"
+          manifest="${preflight_dir}/preflight-manifest.json"
+          if [[ ! -f "$manifest" ]]; then
+            echo "OpenClaw npm preflight manifest is missing." >&2
+            ls -la "$preflight_dir" >&2 || true
+            exit 1
+          fi
+          release_tag="$(jq -r '.releaseTag // ""' "$manifest")"
+          release_sha="$(jq -r '.releaseSha // ""' "$manifest")"
+          npm_dist_tag="$(jq -r '.npmDistTag // ""' "$manifest")"
+          tarball_name="$(jq -r '.tarballName // ""' "$manifest")"
+          tarball_sha256="$(jq -r '.tarballSha256 // ""' "$manifest")"
+          if [[ "$release_tag" != "$RELEASE_TAG" ]]; then
+            echo "Preflight manifest tag mismatch: expected $RELEASE_TAG, got $release_tag" >&2
+            exit 1
+          fi
+          if [[ "$release_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Preflight manifest SHA mismatch: expected $EXPECTED_SHA, got $release_sha" >&2
+            exit 1
+          fi
+          if [[ "$npm_dist_tag" != "$RELEASE_NPM_DIST_TAG" ]]; then
+            echo "Preflight manifest npm dist-tag mismatch: expected $RELEASE_NPM_DIST_TAG, got $npm_dist_tag" >&2
+            exit 1
+          fi
+          if [[ -z "$tarball_name" || ! -f "${preflight_dir}/${tarball_name}" ]]; then
+            echo "Preflight manifest tarball is missing: $tarball_name" >&2
+            exit 1
+          fi
+          actual_tarball_sha256="$(sha256sum "${preflight_dir}/${tarball_name}" | awk '{print $1}')"
+          if [[ "$actual_tarball_sha256" != "$tarball_sha256" ]]; then
+            echo "Preflight manifest tarball digest mismatch." >&2
+            exit 1
+          fi
+          echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Validate full release validation manifest
+        if: ${{ inputs.publish_openclaw_npm }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
+          EXPECTED_RELEASE_PROFILE: ${{ inputs.release_profile }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          RUN_JSON="$(gh run view "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
+          printf '%s' "$RUN_JSON" | node -e 'const fs = require("node:fs"); const run = JSON.parse(fs.readFileSync(0, "utf8")); const checks = [["workflowName", "Full Release Validation"], ["event", "workflow_dispatch"], ["status", "completed"], ["conclusion", "success"]]; for (const [key, expected] of checks) { if (run[key] !== expected) { console.error(`Referenced full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`); process.exit(1); } } const allowedBranches = new Set(["main", process.env.EXPECTED_WORKFLOW_BRANCH].filter(Boolean)); if (!allowedBranches.has(run.headBranch)) { console.error(`Referenced full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID} must have headBranch in ${[...allowedBranches].join(", ")}, got ${run.headBranch ?? "<missing>"}.`); process.exit(1); } console.log(`Using full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID}: ${run.url}`);'
+
+          manifest="${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json"
+          if [[ ! -f "$manifest" ]]; then
+            echo "Full release validation manifest is missing." >&2
+            ls -la "${RUNNER_TEMP}/full-release-validation-manifest" >&2 || true
+            exit 1
+          fi
+          workflow_name="$(jq -r '.workflowName // ""' "$manifest")"
+          target_sha="$(jq -r '.targetSha // ""' "$manifest")"
+          release_profile="$(jq -r '.releaseProfile // ""' "$manifest")"
+          rerun_group="$(jq -r '.rerunGroup // ""' "$manifest")"
+          if [[ "$workflow_name" != "Full Release Validation" ]]; then
+            echo "Full release validation manifest workflow mismatch: $workflow_name" >&2
+            exit 1
+          fi
+          if [[ "$target_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Full release validation target SHA mismatch: expected $EXPECTED_SHA, got $target_sha" >&2
+            exit 1
+          fi
+          if [[ "$release_profile" != "$EXPECTED_RELEASE_PROFILE" ]]; then
+            echo "Full release validation profile mismatch: expected $EXPECTED_RELEASE_PROFILE, got $release_profile" >&2
+            exit 1
+          fi
+          if [[ "$rerun_group" != "all" ]]; then
+            echo "Full release validation must run rerun_group=all before npm publish; got $rerun_group" >&2
+            exit 1
+          fi
+
+      - name: Validate release tag is reachable from a trusted release branch
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            '+refs/heads/release/*:refs/remotes/origin/release/*'
+          if git merge-base --is-ancestor HEAD origin/main; then
+            exit 0
+          fi
+          while IFS= read -r release_ref; do
+            if git merge-base --is-ancestor HEAD "${release_ref}"; then
+              exit 0
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
+          if [[ "${RELEASE_TAG}" == *"-alpha."* ]]; then
+            if [[ ! "${WORKFLOW_REF_NAME}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+              echo "Alpha publish tags must be dispatched from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
+              exit 1
+            fi
+            git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
+            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${WORKFLOW_REF_NAME}"; then
+              exit 0
+            fi
+          fi
+          echo "Release tag must point to a commit reachable from main, release/*, or the matching Tideclaw alpha branch for alpha prereleases." >&2
+          exit 1
+
+      - name: Summarize release target
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+        run: |
+          {
+            echo "### Release target"
+            echo
+            echo "- Tag: \`${RELEASE_TAG}\`"
+            echo "- SHA: \`${TARGET_SHA}\`"
+            echo "- Release profile: \`${RELEASE_PROFILE}\`"
+            if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ID// }" ]]; then
+              echo "- Full release validation: \`${FULL_RELEASE_VALIDATION_RUN_ID}\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish plugins, then OpenClaw
+    needs: [resolve_release_target]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: npm-release
+    steps:
+      - name: Checkout release SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_release_target.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Dispatch publish workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
+          PLUGINS: ${{ inputs.plugins }}
+          PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
+          WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
+          PREFLIGHT_ARTIFACT_NAME: ${{ needs.resolve_release_target.outputs.preflight_artifact_name }}
+          NPM_TELEGRAM_RUN_ID: ${{ inputs.npm_telegram_run_id }}
+          POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
+        run: |
+          set -euo pipefail
+
+          dispatch_workflow() {
+            local workflow="$1"
+            shift
+
+            local before_json dispatch_output run_id
+            before_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+              -F event=workflow_dispatch \
+              -F per_page=100 \
+              --jq '[.workflow_runs[].id]')"
+
+            dispatch_output="$(gh workflow run --repo "$GITHUB_REPOSITORY" "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            printf '%s\n' "$dispatch_output" >&2
+            run_id="$(
+              printf '%s\n' "$dispatch_output" |
+                sed -nE 's#.*actions/runs/([0-9]+).*#\1#p' |
+                tail -n 1
+            )"
+
+            if [[ -z "$run_id" ]]; then
+              for _ in $(seq 1 60); do
+                run_id="$(
+                  BEFORE_IDS="$before_json" gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+                    -F event=workflow_dispatch \
+                    -F per_page=50 \
+                    --jq '.workflow_runs | map({databaseId:.id, createdAt:.created_at}) | map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
+                )"
+                if [[ -n "$run_id" ]]; then
+                  break
+                fi
+                sleep 5
+              done
+            fi
+
+            if [[ -z "${run_id:-}" ]]; then
+              echo "Could not find dispatched run for ${workflow}." >&2
+              exit 1
+            fi
+
+            echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
+            {
+              echo "- ${workflow}: dispatched (https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id})"
+            } >> "$GITHUB_STEP_SUMMARY"
+            printf '%s\n' "${run_id}"
+          }
+
+          print_pending_deployments() {
+            local workflow="$1"
+            local run_id="$2"
+            local pending_json
+
+            pending_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments" 2>/dev/null || true)"
+            if [[ -z "${pending_json}" ]] || ! printf '%s' "${pending_json}" | jq -e 'length > 0' >/dev/null 2>&1; then
+              return 0
+            fi
+
+            echo "${workflow} pending environment approval:"
+            while IFS=$'\t' read -r env_id env_name can_approve; do
+              echo "- env=${env_name} canApprove=${can_approve}"
+              echo "  approve: gh api -X POST repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments -F 'environment_ids[]=${env_id}' -f state=approved -f comment='Approve release gate'"
+            done < <(printf '%s' "${pending_json}" | jq -r '.[] | [.environment.id, .environment.name, .current_user_can_approve] | @tsv')
+          }
+
+          approve_pending_deployments() {
+            local workflow="$1"
+            local run_id="$2"
+            local pending_json approved
+
+            pending_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments" 2>/dev/null || true)"
+            if [[ -z "${pending_json}" ]] || ! printf '%s' "${pending_json}" | jq -e 'length > 0' >/dev/null 2>&1; then
+              return 1
+            fi
+
+            approved=0
+            while IFS=$'\t' read -r env_id env_name; do
+              if [[ -z "${env_id}" ]]; then
+                continue
+              fi
+              echo "${workflow}: approving pending environment ${env_name} (${env_id})"
+              gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments" \
+                -F "environment_ids[]=${env_id}" \
+                -f state=approved \
+                -f comment="Approve child release gate after parent release approval" >/dev/null
+              approved=1
+            done < <(printf '%s' "${pending_json}" | jq -r '.[] | select(.current_user_can_approve == true) | [.environment.id, .environment.name] | @tsv')
+
+            if [[ "${approved}" == "1" ]]; then
+              echo "${workflow}: approved available pending environment gates"
+              return 0
+            fi
+            return 1
+          }
+
+          print_failed_run_summary() {
+            local run_id="$1"
+            local failed_json
+
+            failed_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs \
+              --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {databaseId, name, conclusion, url}' || true)"
+            if [[ -z "${failed_json}" ]]; then
+              return 0
+            fi
+
+            echo "Failed child job summary:"
+            printf '%s\n' "${failed_json}"
+            while IFS=$'\t' read -r job_id job_name; do
+              if [[ -z "${job_id}" ]]; then
+                continue
+              fi
+              echo "--- ${job_name} (${job_id}) log tail ---"
+              gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --job "${job_id}" --log 2>/dev/null |
+                tail -200 || true
+            done < <(printf '%s\n' "${failed_json}" | jq -r '[.databaseId, .name] | @tsv' 2>/dev/null || true)
+          }
+
+          wait_for_run() {
+            local workflow="$1"
+            local run_id="$2"
+            local status conclusion url updated_at created_at duration_seconds duration_label last_state
+
+            last_state=""
+            while true; do
+              run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status,url,updatedAt)"
+              status="$(printf '%s' "$run_json" | jq -r '.status')"
+              if [[ "$status" == "completed" ]]; then
+                break
+              fi
+              url="$(printf '%s' "$run_json" | jq -r '.url')"
+              updated_at="$(printf '%s' "$run_json" | jq -r '.updatedAt')"
+              state="${status}:${updated_at}"
+              if [[ "$state" != "$last_state" ]]; then
+                echo "${workflow} still ${status} (updated ${updated_at}): ${url}"
+                print_pending_deployments "${workflow}" "${run_id}"
+                approve_pending_deployments "${workflow}" "${run_id}" || true
+                last_state="$state"
+              fi
+              sleep 30
+            done
+
+            run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json conclusion,url,createdAt,updatedAt)"
+            conclusion="$(printf '%s' "$run_json" | jq -r '.conclusion')"
+            url="$(printf '%s' "$run_json" | jq -r '.url')"
+            created_at="$(printf '%s' "$run_json" | jq -r '.createdAt')"
+            updated_at="$(printf '%s' "$run_json" | jq -r '.updatedAt')"
+            duration_seconds="$(
+              CREATED_AT="${created_at}" UPDATED_AT="${updated_at}" node --input-type=module -e '
+                const created = Date.parse(process.env.CREATED_AT ?? "");
+                const updated = Date.parse(process.env.UPDATED_AT ?? "");
+                console.log(Number.isFinite(created) && Number.isFinite(updated) ? Math.max(0, Math.round((updated - created) / 1000)) : "");
+              '
+            )"
+            if [[ -n "${duration_seconds}" ]]; then
+              duration_label="$((duration_seconds / 60))m$(printf '%02d' $((duration_seconds % 60)))s"
+            else
+              duration_label="unknown duration"
+            fi
+            echo "${workflow} finished with ${conclusion} in ${duration_label}: ${url}"
+            {
+              echo "- ${workflow}: ${conclusion} in ${duration_label} (${url})"
+            } >> "$GITHUB_STEP_SUMMARY"
+            if [[ "$conclusion" != "success" ]]; then
+              print_failed_run_summary "${run_id}"
+              return 1
+            fi
+          }
+
+          wait_for_run_background() {
+            local workflow="$1"
+            local run_id="$2"
+            local result_file="$3"
+            (
+              if wait_for_run "${workflow}" "${run_id}"; then
+                printf 'success\n' > "${result_file}"
+              else
+                printf 'failure\n' > "${result_file}"
+              fi
+            ) &
+            wait_run_pid="$!"
+          }
+
+          wait_for_job_success() {
+            local workflow="$1"
+            local run_id="$2"
+            local job_name="$3"
+            local jobs_json job_json run_status run_conclusion status conclusion url deadline
+
+            deadline=$((SECONDS + 900))
+            while true; do
+              jobs_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status,conclusion,jobs)"
+              run_status="$(printf '%s' "$jobs_json" | jq -r '.status')"
+              run_conclusion="$(printf '%s' "$jobs_json" | jq -r '.conclusion // ""')"
+              job_json="$(printf '%s' "$jobs_json" | jq -c --arg name "$job_name" '.jobs[]? | select(.name == $name) | {status, conclusion, url}' | head -n 1)"
+              if [[ -n "$job_json" ]]; then
+                status="$(printf '%s' "$job_json" | jq -r '.status')"
+                conclusion="$(printf '%s' "$job_json" | jq -r '.conclusion // ""')"
+                url="$(printf '%s' "$job_json" | jq -r '.url // ""')"
+                if [[ "$status" == "completed" ]]; then
+                  if [[ "$conclusion" == "success" || "$conclusion" == "skipped" ]]; then
+                    echo "${workflow} ${job_name} ${conclusion}: ${url}"
+                    echo "- ${workflow} ${job_name}: ${conclusion} (${url})" >> "$GITHUB_STEP_SUMMARY"
+                    return 0
+                  fi
+                  echo "${workflow} ${job_name} failed: ${conclusion} ${url}" >&2
+                  print_failed_run_summary "${run_id}"
+                  return 1
+                fi
+                echo "${workflow} ${job_name} still ${status}: ${url}"
+              elif [[ "$run_status" == "completed" ]]; then
+                if [[ "$run_conclusion" == "success" ]]; then
+                  echo "${workflow} completed before ${job_name} was needed."
+                  echo "- ${workflow} ${job_name}: not needed" >> "$GITHUB_STEP_SUMMARY"
+                  return 0
+                fi
+                echo "${workflow} completed before ${job_name} with ${run_conclusion}." >&2
+                print_failed_run_summary "${run_id}"
+                return 1
+              else
+                echo "${workflow} waiting for ${job_name} to start: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+              fi
+              if (( SECONDS >= deadline )); then
+                echo "${workflow} ${job_name} did not complete within 15 minutes." >&2
+                return 1
+              fi
+              sleep 10
+            done
+          }
+
+          approve_child_publish_environment() {
+            local workflow="$1"
+            local run_id="$2"
+            local run_json status conclusion deadline
+
+            deadline=$((SECONDS + 900))
+            while true; do
+              if approve_pending_deployments "${workflow}" "${run_id}"; then
+                echo "- ${workflow}: child environment gate approved" >> "$GITHUB_STEP_SUMMARY"
+                return 0
+              fi
+              run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status,conclusion,url)"
+              status="$(printf '%s' "$run_json" | jq -r '.status')"
+              conclusion="$(printf '%s' "$run_json" | jq -r '.conclusion // ""')"
+              if [[ "$status" == "completed" ]]; then
+                if [[ "$conclusion" == "success" ]]; then
+                  echo "${workflow}: completed before child environment approval was needed"
+                  return 0
+                fi
+                echo "${workflow}: completed before child environment approval with ${conclusion}" >&2
+                print_failed_run_summary "${run_id}"
+                return 1
+              fi
+              if (( SECONDS >= deadline )); then
+                echo "${workflow}: child environment approval was not available within 15 minutes." >&2
+                print_pending_deployments "${workflow}" "${run_id}"
+                return 1
+              fi
+              sleep 10
+            done
+          }
+
+          create_or_update_github_release() {
+            local release_version notes_version title notes_file changelog_file latest_arg prerelease_args
+            release_version="${RELEASE_TAG#v}"
+            notes_version="${release_version}"
+            if [[ "${notes_version}" =~ ^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)-(alpha|beta)\.[1-9][0-9]*$ ]]; then
+              notes_version="${BASH_REMATCH[1]}"
+            fi
+            title="openclaw ${release_version}"
+            changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
+            notes_file="${RUNNER_TEMP}/release-notes.md"
+
+            git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
+            awk -v version="${notes_version}" '
+              $0 == "## " version { in_section = 1; next }
+              /^## / && in_section { exit }
+              in_section { print }
+            ' "${changelog_file}" > "${notes_file}"
+            if [[ ! -s "${notes_file}" ]] && [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
+              awk '
+                $0 == "## Unreleased" { in_section = 1; next }
+                /^## / && in_section { exit }
+                in_section { print }
+              ' "${changelog_file}" > "${notes_file}"
+            fi
+            if [[ ! -s "${notes_file}" ]]; then
+              echo "CHANGELOG.md does not contain release notes for ${notes_version} or an Unreleased prerelease fallback." >&2
+              exit 1
+            fi
+
+            prerelease_args=()
+            latest_arg="--latest=false"
+            if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
+              prerelease_args=(--prerelease)
+            elif [[ "${RELEASE_NPM_DIST_TAG}" == "latest" ]]; then
+              latest_arg="--latest"
+            fi
+
+            if gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
+                --title "${title}" \
+                --notes-file "${notes_file}" \
+                "${prerelease_args[@]}"
+            else
+              gh release create "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" \
+                --verify-tag \
+                --title "${title}" \
+                --notes-file "${notes_file}" \
+                "${prerelease_args[@]}" \
+                "${latest_arg}"
+            fi
+            echo "- GitHub release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          upload_dependency_evidence_release_asset() {
+            local release_version download_dir asset_path asset_name artifact_name
+            release_version="${RELEASE_TAG#v}"
+            download_dir="${RUNNER_TEMP}/openclaw-release-dependency-evidence-asset"
+            asset_name="openclaw-${release_version}-dependency-evidence.zip"
+            asset_path="${RUNNER_TEMP}/${asset_name}"
+            artifact_name="${PREFLIGHT_ARTIFACT_NAME:-openclaw-npm-preflight-${RELEASE_TAG}}"
+
+            rm -rf "${download_dir}" "${asset_path}"
+            mkdir -p "${download_dir}"
+            gh run download "${PREFLIGHT_RUN_ID}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --name "${artifact_name}" \
+              --dir "${download_dir}"
+
+            if [[ ! -d "${download_dir}/dependency-evidence" ]]; then
+              echo "Dependency evidence is missing from OpenClaw npm preflight artifact." >&2
+              find "${download_dir}" -maxdepth 2 -type f -print >&2 || true
+              exit 1
+            fi
+
+            (cd "${download_dir}" && zip -qr "${asset_path}" dependency-evidence)
+            gh release upload "${RELEASE_TAG}" "${asset_path}#${asset_name}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+            echo "- Dependency evidence asset: \`${asset_name}\`" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          verify_published_release() {
+            local release_version evidence_path
+            local -a verify_args
+
+            release_version="${RELEASE_TAG#v}"
+            evidence_path="${POSTPUBLISH_EVIDENCE_DIR}/release-postpublish-evidence.json"
+            mkdir -p "${POSTPUBLISH_EVIDENCE_DIR}"
+
+            verify_args=(
+              release:verify-beta
+              --
+              "${release_version}"
+              --tag "${RELEASE_TAG}"
+              --dist-tag "${RELEASE_NPM_DIST_TAG}"
+              --repo "${GITHUB_REPOSITORY}"
+              --workflow-ref "${CHILD_WORKFLOW_REF}"
+              --full-release-validation-run "${FULL_RELEASE_VALIDATION_RUN_ID}"
+              --plugin-npm-run "${plugin_npm_run_id}"
+              --openclaw-npm-run "${openclaw_npm_run_id}"
+              --evidence-out "${evidence_path}"
+            )
+            if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
+              verify_args+=(--plugin-clawhub-run "${plugin_clawhub_run_id}")
+            else
+              verify_args+=(--skip-clawhub)
+            fi
+            if [[ -n "${PLUGINS// }" ]]; then
+              verify_args+=(--plugins "${PLUGINS}")
+            fi
+            if [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
+              verify_args+=(--npm-telegram-run "${NPM_TELEGRAM_RUN_ID}")
+            fi
+
+            pnpm "${verify_args[@]}"
+            {
+              echo "- Postpublish verification: passed"
+              echo "- Postpublish evidence: \`${evidence_path}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          append_release_proof_to_github_release() {
+            local release_version body_file notes_file tarball integrity telegram_line clawhub_line
+
+            release_version="${RELEASE_TAG#v}"
+            body_file="${RUNNER_TEMP}/release-body.md"
+            notes_file="${RUNNER_TEMP}/release-notes-with-proof.md"
+            tarball="$(npm view "openclaw@${release_version}" dist.tarball --json | jq -r '.')"
+            integrity="$(npm view "openclaw@${release_version}" dist.integrity --json | jq -r '.')"
+            gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "${body_file}"
+
+            if [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
+              telegram_line="- npm Telegram beta E2E: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${NPM_TELEGRAM_RUN_ID}"
+            else
+              telegram_line="- npm Telegram beta E2E: not supplied"
+            fi
+            if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
+              clawhub_line="- plugin ClawHub publish: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${plugin_clawhub_run_id}"
+            else
+              clawhub_line="- plugin ClawHub publish: dispatched separately, not awaited by this proof: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${plugin_clawhub_run_id}"
+            fi
+
+            RELEASE_BODY_FILE="${body_file}" \
+              RELEASE_NOTES_FILE="${notes_file}" \
+              RELEASE_VERSION="${release_version}" \
+              RELEASE_TAG="${RELEASE_TAG}" \
+              RELEASE_REPO="${GITHUB_REPOSITORY}" \
+              RELEASE_TARBALL="${tarball}" \
+              RELEASE_INTEGRITY="${integrity}" \
+              RELEASE_PUBLISH_RUN_ID="${GITHUB_RUN_ID}" \
+              PREFLIGHT_RUN_ID="${PREFLIGHT_RUN_ID}" \
+              FULL_RELEASE_VALIDATION_RUN_ID="${FULL_RELEASE_VALIDATION_RUN_ID}" \
+              PLUGIN_NPM_RUN_ID="${plugin_npm_run_id}" \
+              OPENCLAW_NPM_RUN_ID="${openclaw_npm_run_id}" \
+              CLAWHUB_LINE="${clawhub_line}" \
+              TELEGRAM_LINE="${telegram_line}" \
+              node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const bodyFile = process.env.RELEASE_BODY_FILE;
+          const notesFile = process.env.RELEASE_NOTES_FILE;
+          if (!bodyFile || !notesFile) {
+            throw new Error("Missing release notes file paths.");
+          }
+
+          const body = readFileSync(bodyFile, "utf8").trimEnd();
+          const section = [
+            "### Release verification",
+            "",
+            `- npm package: https://www.npmjs.com/package/openclaw/v/${process.env.RELEASE_VERSION}`,
+            `- registry tarball: ${process.env.RELEASE_TARBALL}`,
+            `- integrity: \`${process.env.RELEASE_INTEGRITY}\``,
+            `- full release CI report: https://github.com/openclaw/releases-private/blob/main/evidence/${process.env.RELEASE_VERSION}/release-evidence.md`,
+            `- release publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_PUBLISH_RUN_ID}`,
+            `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_RUN_ID}`,
+            `- full release validation: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.FULL_RELEASE_VALIDATION_RUN_ID}`,
+            `- plugin npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID}`,
+            process.env.CLAWHUB_LINE,
+            `- OpenClaw npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.OPENCLAW_NPM_RUN_ID}`,
+            process.env.TELEGRAM_LINE,
+          ].join("\n");
+
+          const withoutOldProof = body.replace(/\n?### Release verification\n[\s\S]*?(?=\n### |\n## |$)/, "");
+          writeFileSync(notesFile, `${withoutOldProof.trimEnd()}\n\n${section}\n`);
+          NODE
+
+            gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --notes-file "${notes_file}"
+            echo "- Release proof: appended to GitHub release" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          {
+            echo "### Publish sequence"
+            echo
+            echo "- Workflow ref: \`${CHILD_WORKFLOW_REF}\`"
+            echo "- Release tag: \`${RELEASE_TAG}\`"
+            echo "- Release SHA: \`${TARGET_SHA}\`"
+            echo "- Release approval: this workflow job"
+            echo "- Plugin npm and ClawHub publish: dispatched in parallel"
+            if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+              echo "- OpenClaw npm publish: starts after plugin npm succeeds"
+            else
+              echo "- OpenClaw npm publish: skipped by input"
+            fi
+            if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
+              echo "- Workflow completion waits for ClawHub"
+            else
+              echo "- Workflow completion does not wait for ClawHub; monitor the dispatched ClawHub run separately"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}")
+          clawhub_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}")
+          if [[ -n "${PLUGINS}" ]]; then
+            npm_args+=(-f plugins="${PLUGINS}")
+            clawhub_args+=(-f plugins="${PLUGINS}")
+          fi
+
+          plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"
+          plugin_clawhub_run_id="$(dispatch_workflow plugin-clawhub-release.yml "${clawhub_args[@]}")"
+          {
+            echo "- Plugin npm run ID: \`${plugin_npm_run_id}\`"
+            echo "- Plugin ClawHub run ID: \`${plugin_clawhub_run_id}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}"; then
+            echo "Plugin npm publish failed; cancelling ClawHub publish child ${plugin_clawhub_run_id}." >&2
+            gh run cancel --repo "$GITHUB_REPOSITORY" "${plugin_clawhub_run_id}" >/dev/null 2>&1 || true
+            exit 1
+          fi
+
+          openclaw_npm_run_id=""
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+            openclaw_npm_run_id="$(dispatch_workflow openclaw-npm-release.yml \
+              -f tag="${RELEASE_TAG}" \
+              -f preflight_only=false \
+              -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
+              -f full_release_validation_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}" \
+              -f release_publish_run_id="${GITHUB_RUN_ID}" \
+              -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}")"
+            echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- OpenClaw npm publish: skipped by input" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          clawhub_result=""
+          clawhub_pid=""
+          if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
+            clawhub_result="$RUNNER_TEMP/clawhub-result.txt"
+            wait_run_pid=""
+            wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${clawhub_result}"
+            clawhub_pid="${wait_run_pid}"
+          else
+            wait_for_job_success plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "Validate release publish approval"
+            if approve_child_publish_environment plugin-clawhub-release.yml "${plugin_clawhub_run_id}"; then
+              :
+            else
+              echo "- plugin-clawhub-release.yml: child environment gate not ready; publish was left dispatched (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo "- plugin-clawhub-release.yml: publish not awaited (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          openclaw_result=""
+          openclaw_pid=""
+          if [[ -n "${openclaw_npm_run_id}" ]]; then
+            openclaw_result="$RUNNER_TEMP/openclaw-npm-result.txt"
+            wait_run_pid=""
+            wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${openclaw_result}"
+            openclaw_pid="${wait_run_pid}"
+          fi
+
+          failed=0
+          openclaw_failed=0
+          if [[ -n "${openclaw_pid}" ]] && ! wait "${openclaw_pid}"; then
+            failed=1
+            openclaw_failed=1
+          fi
+          if [[ -n "${openclaw_result}" && -f "${openclaw_result}" && "$(cat "${openclaw_result}")" != "success" ]]; then
+            failed=1
+            openclaw_failed=1
+          fi
+
+          if [[ -n "${openclaw_npm_run_id}" && "${openclaw_failed}" == "0" ]]; then
+            create_or_update_github_release
+            upload_dependency_evidence_release_asset
+          fi
+
+          if [[ -n "${clawhub_pid}" ]] && ! wait "${clawhub_pid}"; then
+            failed=1
+          fi
+          if [[ -f "${clawhub_result}" && "$(cat "${clawhub_result}")" != "success" ]]; then
+            failed=1
+          fi
+
+          if [[ "${failed}" == "0" && -n "${openclaw_npm_run_id}" ]]; then
+            verify_published_release
+            append_release_proof_to_github_release
+          fi
+          if [[ "${failed}" != "0" ]]; then
+            exit 1
+          fi
+
+      - name: Upload postpublish evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-release-postpublish-evidence-${{ inputs.tag }}
+          path: ${{ runner.temp }}/openclaw-release-postpublish-evidence
+          if-no-files-found: ignore

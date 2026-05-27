@@ -1,114 +1,143 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
+import { describe, expect, it } from "vitest";
+import { normalizeLegacyStreamingAliases } from "../config/channel-compat-normalization.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { normalizeLegacyBrowserConfig } from "./doctor/shared/legacy-config-core-normalizers.js";
 
-describe("normalizeLegacyConfigValues", () => {
-  let previousOauthDir: string | undefined;
-  let tempOauthDir: string | undefined;
+function asLegacyConfig(value: unknown): OpenClawConfig {
+  return value as OpenClawConfig;
+}
 
-  const writeCreds = (dir: string) => {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, "creds.json"), JSON.stringify({ me: {} }));
-  };
+function getLegacyProperty(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return (value as Record<string, unknown>)[key];
+}
 
-  beforeEach(() => {
-    previousOauthDir = process.env.OPENCLAW_OAUTH_DIR;
-    tempOauthDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oauth-"));
-    process.env.OPENCLAW_OAUTH_DIR = tempOauthDir;
+function normalizeStreaming(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  resolvedMode: string;
+  resolvedNativeTransport?: unknown;
+  offModeLegacyNotice?: (pathPrefix: string) => string;
+}) {
+  const changes: string[] = [];
+  const result = normalizeLegacyStreamingAliases({
+    ...params,
+    changes,
+    includePreviewChunk: true,
   });
+  return { entry: result.entry, changes };
+}
 
-  afterEach(() => {
-    if (previousOauthDir === undefined) {
-      delete process.env.OPENCLAW_OAUTH_DIR;
-    } else {
-      process.env.OPENCLAW_OAUTH_DIR = previousOauthDir;
-    }
-    if (tempOauthDir) {
-      fs.rmSync(tempOauthDir, { recursive: true, force: true });
-      tempOauthDir = undefined;
-    }
-  });
-
-  it("does not add whatsapp config when missing and no auth exists", () => {
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀" },
+describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
+  it("preserves telegram boolean streaming aliases as-is", () => {
+    const res = normalizeStreaming({
+      entry: { streaming: false },
+      pathPrefix: "channels.telegram",
+      resolvedMode: "off",
     });
 
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
-  });
-
-  it("copies legacy ack reaction when whatsapp config exists", () => {
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
-      channels: { whatsapp: {} },
-    });
-
-    expect(res.config.channels?.whatsapp?.ackReaction).toEqual({
-      emoji: "👀",
-      direct: false,
-      group: "mentions",
-    });
+    expect(res.entry.streaming).toEqual({ mode: "off" });
+    expect(getLegacyProperty(res.entry, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
-      "Copied messages.ackReaction → channels.whatsapp.ackReaction (scope: group-mentions).",
+      "Moved channels.telegram.streaming (boolean) → channels.telegram.streaming.mode (off).",
     ]);
   });
 
-  it("does not add whatsapp config when only auth exists (issue #900)", () => {
-    const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "default");
-    writeCreds(credsDir);
-
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
+  it("preserves discord boolean streaming aliases as-is", () => {
+    const res = normalizeStreaming({
+      entry: { streaming: true },
+      pathPrefix: "channels.discord",
+      resolvedMode: "partial",
     });
 
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
+    expect(res.entry.streaming).toEqual({ mode: "partial" });
+    expect(getLegacyProperty(res.entry, "streamMode")).toBeUndefined();
+    expect(res.changes).toEqual([
+      "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (partial).",
+    ]);
   });
 
-  it("does not add whatsapp config when only legacy auth exists (issue #900)", () => {
-    const credsPath = path.join(tempOauthDir ?? "", "creds.json");
-    fs.writeFileSync(credsPath, JSON.stringify({ me: {} }));
-
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
+  it("preserves explicit discord streaming=false as-is", () => {
+    const res = normalizeStreaming({
+      entry: { streaming: false },
+      pathPrefix: "channels.discord",
+      resolvedMode: "off",
     });
 
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
+    expect(res.entry.streaming).toEqual({ mode: "off" });
+    expect(getLegacyProperty(res.entry, "streamMode")).toBeUndefined();
+    expect(res.changes).toEqual([
+      "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (off).",
+    ]);
   });
 
-  it("does not add whatsapp config when only non-default auth exists (issue #900)", () => {
-    const credsDir = path.join(tempOauthDir ?? "", "whatsapp", "work");
-    writeCreds(credsDir);
-
-    const res = normalizeLegacyConfigValues({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
+  it("preserves discord streamMode when legacy config resolves to off", () => {
+    const res = normalizeStreaming({
+      entry: { streamMode: "off" },
+      pathPrefix: "channels.discord",
+      resolvedMode: "off",
+      offModeLegacyNotice: (pathPrefix) =>
+        `${pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${pathPrefix}.streaming.mode="partial" to opt in explicitly.`,
     });
 
-    expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
+    expect(res.entry.streaming).toEqual({ mode: "off" });
+    expect(getLegacyProperty(res.entry, "streamMode")).toBeUndefined();
+    expect(res.changes).toEqual([
+      "Moved channels.discord.streamMode → channels.discord.streaming.mode (off).",
+      'channels.discord.streaming remains off by default to avoid Discord preview-edit rate limits; set channels.discord.streaming.mode="partial" to opt in explicitly.',
+    ]);
   });
 
-  it("copies legacy ack reaction when authDir override exists", () => {
-    const customDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-auth-"));
-    try {
-      writeCreds(customDir);
+  it("preserves slack boolean streaming aliases as-is", () => {
+    const res = normalizeStreaming({
+      entry: { streaming: false },
+      pathPrefix: "channels.slack",
+      resolvedMode: "off",
+      resolvedNativeTransport: false,
+    });
 
-      const res = normalizeLegacyConfigValues({
-        messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
-        channels: { whatsapp: { accounts: { work: { authDir: customDir } } } },
-      });
+    expect(res.entry.streaming).toEqual({
+      mode: "off",
+      nativeTransport: false,
+    });
+    expect(getLegacyProperty(res.entry, "streamMode")).toBeUndefined();
+    expect(res.changes).toEqual([
+      "Moved channels.slack.streaming (boolean) → channels.slack.streaming.mode (off).",
+      "Moved channels.slack.streaming (boolean) → channels.slack.streaming.nativeTransport.",
+    ]);
+  });
+});
 
-      expect(res.config.channels?.whatsapp?.ackReaction).toEqual({
-        emoji: "👀",
-        direct: false,
-        group: "mentions",
-      });
-    } finally {
-      fs.rmSync(customDir, { recursive: true, force: true });
-    }
+describe("normalizeCompatibilityConfigValues browser compatibility aliases", () => {
+  it("removes legacy browser relay bind host and migrates extension profiles", () => {
+    const changes: string[] = [];
+    const config = normalizeLegacyBrowserConfig(
+      asLegacyConfig({
+        browser: {
+          relayBindHost: "127.0.0.1",
+          profiles: {
+            work: {
+              driver: "extension",
+            },
+            keep: {
+              driver: "existing-session",
+            },
+          },
+        },
+      }),
+      changes,
+    );
+
+    expect(
+      (config.browser as { relayBindHost?: string } | undefined)?.relayBindHost,
+    ).toBeUndefined();
+    expect(config.browser?.profiles?.work?.driver).toBe("existing-session");
+    expect(config.browser?.profiles?.keep?.driver).toBe("existing-session");
+    expect(changes).toEqual([
+      "Removed browser.relayBindHost (legacy Chrome extension relay setting; host-local Chrome now uses Chrome MCP existing-session attach).",
+      'Moved browser.profiles.work.driver "extension" → "existing-session" (Chrome MCP attach).',
+    ]);
   });
 });
