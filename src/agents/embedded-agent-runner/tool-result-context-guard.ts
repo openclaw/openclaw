@@ -25,6 +25,7 @@ const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
 export const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
   "Context overflow: estimated context size exceeds safe threshold during tool loop.";
 const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO = 4 / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
+const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
 
 type GuardableTransformContext = (
   messages: AgentMessage[],
@@ -48,6 +49,71 @@ type MidTurnPrecheckOptions = {
 };
 
 export { CONTEXT_LIMIT_TRUNCATION_NOTICE, formatContextLimitTruncationNotice };
+
+export function markTranscriptPromptText(message: AgentMessage, text: string): void {
+  Object.defineProperty(message, TRANSCRIPT_PROMPT_TEXT_KEY, {
+    configurable: true,
+    enumerable: true,
+    value: text,
+  });
+}
+
+function getTranscriptPromptText(message: AgentMessage): string | undefined {
+  const value = (message as unknown as Record<string, unknown>)[TRANSCRIPT_PROMPT_TEXT_KEY];
+  return typeof value === "string" ? value : undefined;
+}
+
+function restoreTranscriptPromptText(
+  message: AgentMessage,
+  cache: WeakMap<AgentMessage, AgentMessage>,
+): AgentMessage {
+  const transcriptText = getTranscriptPromptText(message);
+  if (transcriptText === undefined || message.role !== "user") {
+    return message;
+  }
+  const cached = cache.get(message);
+  if (cached) {
+    return cached;
+  }
+  const content = (message as { content?: unknown }).content;
+  const { [TRANSCRIPT_PROMPT_TEXT_KEY]: _transcriptPromptText, ...messageRest } =
+    message as unknown as Record<string, unknown>;
+  let restoredMessage: AgentMessage = message;
+  if (typeof content === "string") {
+    restoredMessage = { ...messageRest, content: transcriptText } as unknown as AgentMessage;
+  } else if (Array.isArray(content)) {
+    let restored = false;
+    const nextContent = content.map((block) => {
+      if (restored || !block || typeof block !== "object") {
+        return block;
+      }
+      const textBlock = block as { type?: unknown; text?: unknown };
+      if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
+        return block;
+      }
+      restored = true;
+      return Object.assign({}, block, { text: transcriptText });
+    });
+    if (restored) {
+      restoredMessage = { ...messageRest, content: nextContent } as unknown as AgentMessage;
+    }
+  }
+  cache.set(message, restoredMessage);
+  return restoredMessage;
+}
+
+function projectTranscriptPromptMessages(
+  messages: AgentMessage[],
+  cache: WeakMap<AgentMessage, AgentMessage>,
+): AgentMessage[] {
+  let changed = false;
+  const projected = messages.map((message) => {
+    const next = restoreTranscriptPromptText(message, cache);
+    changed ||= next !== message;
+    return next;
+  });
+  return changed ? projected : messages;
+}
 
 function truncateTextToBudget(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
@@ -252,20 +318,25 @@ export function installContextEngineLoopHook(params: {
   let lastSeenLength: number | null = null;
   let lastAssembledView: AgentMessage[] | null = null;
   let lastSourceMessages: AgentMessage[] | null = null;
+  const transcriptProjectionCache = new WeakMap<AgentMessage, AgentMessage>();
 
   mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
+    const transcriptMessages = projectTranscriptPromptMessages(
+      sourceMessages,
+      transcriptProjectionCache,
+    );
     const checkedPrefixLength =
-      lastSeenLength == null ? 0 : Math.min(lastSeenLength, sourceMessages.length);
+      lastSeenLength == null ? 0 : Math.min(lastSeenLength, transcriptMessages.length);
     const sourceHistoryChanged =
       lastSeenLength != null &&
       lastSourceMessages != null &&
-      (sourceMessages.length < lastSeenLength ||
-        (sourceMessages.length === lastSeenLength &&
-          sourceMessages
+      (transcriptMessages.length < lastSeenLength ||
+        (transcriptMessages.length === lastSeenLength &&
+          transcriptMessages
             .slice(0, checkedPrefixLength)
             .some((message, index) => message !== lastSourceMessages?.[index])));
     if (sourceHistoryChanged) {
@@ -279,15 +350,15 @@ export function installContextEngineLoopHook(params: {
     const prePromptMessageCount = Math.max(
       0,
       Math.min(
-        sourceMessages.length,
-        lastSeenLength ?? params.getPrePromptMessageCount?.() ?? sourceMessages.length,
+        transcriptMessages.length,
+        lastSeenLength ?? params.getPrePromptMessageCount?.() ?? transcriptMessages.length,
       ),
     );
 
-    const hasNewMessages = sourceMessages.length > prePromptMessageCount;
+    const hasNewMessages = transcriptMessages.length > prePromptMessageCount;
     if (!hasNewMessages) {
       lastSeenLength = prePromptMessageCount;
-      lastSourceMessages = sourceMessages;
+      lastSourceMessages = transcriptMessages;
       return lastAssembledView ?? sourceMessages;
     }
     try {
@@ -296,16 +367,16 @@ export function installContextEngineLoopHook(params: {
           sessionId,
           sessionKey,
           sessionFile,
-          messages: sourceMessages,
+          messages: transcriptMessages,
           prePromptMessageCount,
           tokenBudget,
           runtimeContext: params.getRuntimeContext?.({
-            messages: sourceMessages,
+            messages: transcriptMessages,
             prePromptMessageCount,
           }),
         });
       } else {
-        const newMessages = sourceMessages.slice(prePromptMessageCount);
+        const newMessages = transcriptMessages.slice(prePromptMessageCount);
         if (newMessages.length > 0) {
           if (typeof contextEngine.ingestBatch === "function") {
             await contextEngine.ingestBatch({
@@ -324,9 +395,9 @@ export function installContextEngineLoopHook(params: {
           }
         }
       }
-      lastSeenLength = sourceMessages.length;
+      lastSeenLength = transcriptMessages.length;
       params.onAfterTurnCheckpoint?.(lastSeenLength);
-      lastSourceMessages = sourceMessages;
+      lastSourceMessages = transcriptMessages;
       const assembled = await contextEngine.assemble({
         sessionId,
         sessionKey,
@@ -344,7 +415,7 @@ export function installContextEngineLoopHook(params: {
       // messages so the tool loop still makes forward progress.
       lastSeenLength = prePromptMessageCount;
       lastAssembledView = null;
-      lastSourceMessages = sourceMessages;
+      lastSourceMessages = transcriptMessages;
     }
 
     return sourceMessages;
