@@ -1175,6 +1175,25 @@ describe("device pairing tokens", () => {
       ok: true,
       issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
     });
+
+    const issuedWithoutSharedAuth = await ensureDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      baseDir,
+    });
+    expect(issuedWithoutSharedAuth?.token).not.toBe(issuedFromBrowserSharedAuth?.token);
+    expect(issuedWithoutSharedAuth?.issuer).toBeUndefined();
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token: requireToken(issuedWithoutSharedAuth?.token),
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
   });
 
   test("normalizes legacy node token scopes back to [] on re-approval", async () => {

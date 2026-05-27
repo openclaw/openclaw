@@ -432,7 +432,7 @@ function deviceTokenIssuerMatches(
   issuer: DeviceAuthToken["issuer"] | undefined,
 ): boolean {
   if (!issuer) {
-    return true;
+    return !entry.issuer;
   }
   return entry.issuer?.kind === issuer.kind && entry.issuer.generation === issuer.generation;
 }
@@ -442,6 +442,7 @@ function buildDeviceAuthToken(params: {
   scopes: string[];
   issuer?: DeviceAuthToken["issuer"];
   existing?: DeviceAuthToken;
+  preserveExistingIssuer?: boolean;
   now: number;
   rotatedAtMs?: number;
 }): DeviceAuthToken {
@@ -449,7 +450,7 @@ function buildDeviceAuthToken(params: {
     token: newToken(),
     role: params.role,
     scopes: params.scopes,
-    issuer: params.issuer ?? params.existing?.issuer,
+    issuer: params.issuer ?? (params.preserveExistingIssuer ? params.existing?.issuer : undefined),
     createdAtMs: params.existing?.createdAtMs ?? params.now,
     rotatedAtMs: params.rotatedAtMs,
     revokedAtMs: undefined,
@@ -1019,9 +1020,7 @@ export async function ensureDeviceToken(params: {
         scopes: existing.scopes,
         approvedScopes,
       });
-      const issuerAllowsReuse = params.issuer
-        ? deviceTokenIssuerMatches(existing, params.issuer)
-        : true;
+      const issuerAllowsReuse = deviceTokenIssuerMatches(existing, params.issuer);
       if (
         existingWithinApproved &&
         issuerAllowsReuse &&
@@ -1124,6 +1123,7 @@ export async function rotateDeviceToken(params: {
       role,
       scopes: requestedScopes,
       existing,
+      preserveExistingIssuer: true,
       now,
       rotatedAtMs: now,
     });
