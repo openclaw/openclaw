@@ -69,6 +69,7 @@ function startThreadWithHarness(
     buildAttemptParams: createAttemptParams,
     sessionAgentId: "agent-1",
     effectiveWorkspace: "/tmp",
+    effectiveCwd: "/tmp",
     dynamicTools: [],
     developerInstructions: undefined,
     finalConfigPatch: undefined,
