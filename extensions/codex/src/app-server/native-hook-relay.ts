@@ -95,6 +95,8 @@ export function createCodexNativeHookRelay(params: {
         gatewayTimeoutMs?: number;
       }
     | undefined;
+  generation?: string;
+  generationMismatchGraceMs?: number;
   events: readonly NativeHookRelayEvent[];
   agentId: string | undefined;
   sessionId: string;
@@ -117,6 +119,10 @@ export function createCodexNativeHookRelay(params: {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
     }),
+    ...(params.generation ? { generation: params.generation } : {}),
+    ...(params.generationMismatchGraceMs
+      ? { generationMismatchGraceMs: params.generationMismatchGraceMs }
+      : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),

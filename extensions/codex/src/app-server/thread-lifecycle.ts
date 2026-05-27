@@ -202,6 +202,7 @@ export async function startOrResumeThread(params: {
   developerInstructions?: string;
   config?: JsonObject;
   finalConfigPatch?: JsonObject;
+  nativeHookRelayGeneration?: string;
   nativeCodeModeEnabled?: boolean;
   nativeCodeModeOnlyEnabled?: boolean;
   userMcpServersEnabled?: boolean;
@@ -433,6 +434,8 @@ export async function startOrResumeThread(params: {
               dynamicToolsFingerprint,
               userMcpServersFingerprint,
               mcpServersFingerprint: nextMcpServersFingerprint,
+              nativeHookRelayGeneration:
+                params.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
               pluginAppsFingerprint: binding.pluginAppsFingerprint,
               pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
               pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -475,6 +478,8 @@ export async function startOrResumeThread(params: {
           dynamicToolsFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
+          nativeHookRelayGeneration:
+            params.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
           pluginAppsFingerprint: binding.pluginAppsFingerprint,
           pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
           pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -548,6 +553,7 @@ export async function startOrResumeThread(params: {
           dynamicToolsFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
+          nativeHookRelayGeneration: params.nativeHookRelayGeneration,
           pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
           pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
           pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -592,6 +598,7 @@ export async function startOrResumeThread(params: {
     dynamicToolsFingerprint,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
+    nativeHookRelayGeneration: params.nativeHookRelayGeneration,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,

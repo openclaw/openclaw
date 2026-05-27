@@ -801,6 +801,11 @@ export async function runCodexAppServerAttempt(
     });
     nativeHookRelay = createCodexNativeHookRelay({
       options: options.nativeHookRelay,
+      generation: startupBinding?.nativeHookRelayGeneration,
+      generationMismatchGraceMs:
+        startupBinding && !startupBinding.nativeHookRelayGeneration
+          ? CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS
+          : undefined,
       events: nativeHookRelayEvents,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
@@ -838,6 +843,7 @@ export async function runCodexAppServerAttempt(
       dynamicTools: toolBridge.specs,
       developerInstructions: promptBuild.developerInstructions,
       finalConfigPatch: nativeHookRelayConfig,
+      nativeHookRelayGeneration: nativeHookRelay?.generation,
       bundleMcpThreadConfig,
       nativeToolSurfaceEnabled,
       sandboxExecServerEnabled,

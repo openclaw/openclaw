@@ -394,6 +394,24 @@ export function createResumeHarness() {
 }
 
 export function extractRelayIdFromThreadRequest(params: unknown): string {
+  const command = extractNativeHookRelayCommandFromThreadRequest(params);
+  const match = command.match(/--relay-id ([^ ]+)/);
+  if (!match?.[1]) {
+    throw new Error(`relay id missing from command: ${command}`);
+  }
+  return match[1];
+}
+
+export function extractGenerationFromThreadRequest(params: unknown): string {
+  const command = extractNativeHookRelayCommandFromThreadRequest(params);
+  const match = command.match(/--generation ([^ ]+)/);
+  if (!match?.[1]) {
+    throw new Error(`relay generation missing from command: ${command}`);
+  }
+  return match[1];
+}
+
+function extractNativeHookRelayCommandFromThreadRequest(params: unknown): string {
   const config = (params as { config?: Record<string, unknown> }).config;
   let command: string | undefined;
   for (const key of [
@@ -416,11 +434,10 @@ export function extractRelayIdFromThreadRequest(params: unknown): string {
       break;
     }
   }
-  const match = command?.match(/--relay-id ([^ ]+)/);
-  if (!match?.[1]) {
-    throw new Error(`relay id missing from command: ${command}`);
+  if (!command) {
+    throw new Error("native hook relay command missing from thread request");
   }
-  return match[1];
+  return command;
 }
 
 type RuntimeDynamicToolForTest = Parameters<

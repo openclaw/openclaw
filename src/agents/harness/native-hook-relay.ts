@@ -76,6 +76,7 @@ export type NativeHookRelayProcessResponse = {
 export type NativeHookRelayRegistration = {
   relayId: string;
   provider: NativeHookRelayProvider;
+  generationMismatchGraceExpiresAtMs?: number;
   agentId?: string;
   sessionId: string;
   sessionKey?: string;
@@ -98,6 +99,8 @@ export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
 export type RegisterNativeHookRelayParams = {
   provider: NativeHookRelayProvider;
   relayId?: string;
+  generation?: string;
+  generationMismatchGraceMs?: number;
   agentId?: string;
   sessionId: string;
   sessionKey?: string;
@@ -353,12 +356,18 @@ export function registerNativeHookRelay(
   pruneExpiredNativeHookRelays();
   pruneNativeHookRelayPermissionAllowAlways();
   const relayId = normalizeRelayId(params.relayId) ?? randomUUID();
+  const generation = normalizeRelayGeneration(params.generation) ?? randomUUID();
+  const generationMismatchGraceMs = normalizePositiveInteger(params.generationMismatchGraceMs, 0);
+  const now = Date.now();
   const allowedEvents = normalizeAllowedEvents(params.allowedEvents);
   unregisterNativeHookRelay(relayId);
   const registration: ActiveNativeHookRelayRegistration = {
     relayId,
     provider: params.provider,
-    generation: randomUUID(),
+    generation,
+    ...(generationMismatchGraceMs > 0
+      ? { generationMismatchGraceExpiresAtMs: now + generationMismatchGraceMs }
+      : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -366,7 +375,7 @@ export function registerNativeHookRelay(
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents,
-    expiresAtMs: Date.now() + normalizePositiveInteger(params.ttlMs, DEFAULT_RELAY_TTL_MS),
+    expiresAtMs: now + normalizePositiveInteger(params.ttlMs, DEFAULT_RELAY_TTL_MS),
     ...(params.signal ? { signal: params.signal } : {}),
   };
   relays.set(relayId, registration);
@@ -423,6 +432,17 @@ function normalizeRelayId(value: string | undefined): string | undefined {
   }
   if (trimmed.length > 160 || !/^[A-Za-z0-9._:-]+$/u.test(trimmed)) {
     throw new Error("native hook relay id must be non-empty, compact, and URL-safe");
+  }
+  return trimmed;
+}
+
+function normalizeRelayGeneration(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.length > 160 || !/^[A-Za-z0-9._:-]+$/u.test(trimmed)) {
+    throw new Error("native hook relay generation must be non-empty, compact, and URL-safe");
   }
   return trimmed;
 }
@@ -522,7 +542,14 @@ export async function invokeNativeHookRelay(
   if (params.requireGeneration) {
     const generation = readNonEmptyString(params.generation, "generation");
     if (generation !== registration.generation) {
-      throw new Error(NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
+      if (!canAcceptNativeHookRelayGenerationMismatch(registration)) {
+        throw new Error(NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
+      }
+      log.debug("native hook relay accepted bootstrap generation mismatch", {
+        relayId,
+        event,
+        runId: registration.runId,
+      });
     }
   }
   if (!registration.allowedEvents.includes(event)) {
@@ -649,6 +676,13 @@ function removeNativeHookRelayInvocations(relayId: string): void {
       invocations.splice(index, 1);
     }
   }
+}
+
+function canAcceptNativeHookRelayGenerationMismatch(
+  registration: NativeHookRelayRegistration,
+): boolean {
+  const expiresAtMs = registration.generationMismatchGraceExpiresAtMs;
+  return typeof expiresAtMs === "number" && Date.now() <= expiresAtMs;
 }
 
 function pruneExpiredNativeHookRelays(now = Date.now()): void {
