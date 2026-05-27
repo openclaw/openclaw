@@ -1089,7 +1089,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
-  it("passes queued room-event abort signals into followup agent runs", async () => {
+  it("passes the admitted reply abort signal into followup fallback and agent runs", async () => {
     const abortController = new AbortController();
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [],
@@ -1113,8 +1113,14 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
+    const fallbackCall = requireLastMockCallArg(
+      runWithModelFallbackMock,
+      "run with model fallback",
+    );
     const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
-    expect(call.abortSignal).toBe(abortController.signal);
+    expect(fallbackCall.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(fallbackCall.abortSignal).not.toBe(abortController.signal);
+    expect(call.abortSignal).toBe(fallbackCall.abortSignal);
   });
 
   it("does not inherit source abort signals for queued user followups", async () => {
@@ -1142,8 +1148,14 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
+    const fallbackCall = requireLastMockCallArg(
+      runWithModelFallbackMock,
+      "run with model fallback",
+    );
     const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
-    expect(call.abortSignal).toBeUndefined();
+    expect(fallbackCall.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(fallbackCall.abortSignal).not.toBe(sourceAbortController.signal);
+    expect(call.abortSignal).toBe(fallbackCall.abortSignal);
   });
 
   it("keeps queued delivery correlations active during followup agent runs", async () => {

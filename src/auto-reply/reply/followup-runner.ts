@@ -624,6 +624,7 @@ export function createFollowupRunner(params: {
       fallbackProvider = run.provider;
       fallbackModel = run.model;
       replyOperation.setPhase("running");
+      const runAbortSignal = replyOperation.abortSignal;
       let pendingDeferredCliTerminal:
         | {
             provider: string;
@@ -639,6 +640,7 @@ export function createFollowupRunner(params: {
           ...resolveModelFallbackOptions(run, runtimeConfig),
           cfg: runtimeConfig,
           runId,
+          abortSignal: runAbortSignal,
           resolveAgentHarnessRuntimeOverride: (provider) =>
             resolveSessionRuntimeOverrideForProvider({
               provider,
@@ -764,7 +766,7 @@ export function createFollowupRunner(params: {
                     }),
                     agentAccountId: run.agentAccountId,
                     disableTools: opts?.disableTools,
-                    abortSignal: queued.abortSignal,
+                    abortSignal: runAbortSignal,
                   },
                   transformResult: (rawResult) =>
                     isRoomEventCliRun && rawResult.meta.agentMeta
@@ -850,7 +852,7 @@ export function createFollowupRunner(params: {
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
                 runId,
-                abortSignal: queued.abortSignal,
+                abortSignal: runAbortSignal,
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,

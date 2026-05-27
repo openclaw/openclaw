@@ -1870,6 +1870,7 @@ export async function runAgentTurnWithFallback(params: {
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
       const runLane = CommandLane.Main;
+      const runAbortSignal = params.replyOperation?.abortSignal ?? params.opts?.abortSignal;
       let queuedUserMessagePersistedAcrossFallback = false;
       let assistantErrorPersistedAcrossFallback = false;
       const userTurnTranscriptRecorder =
@@ -1891,6 +1892,7 @@ export async function runAgentTurnWithFallback(params: {
           runId,
           sessionId: params.followupRun.run.sessionId,
           lane: runLane,
+          abortSignal: runAbortSignal,
           resolveAgentHarnessRuntimeOverride: (provider) =>
             resolveSessionRuntimeOverrideForProvider({
               provider,
@@ -2089,7 +2091,7 @@ export async function runAgentTurnWithFallback(params: {
                     agentAccountId: params.followupRun.run.agentAccountId,
                     senderIsOwner: params.followupRun.run.senderIsOwner,
                     disableTools: params.opts?.disableTools,
-                    abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+                    abortSignal: runAbortSignal,
                     replyOperation: params.replyOperation,
                   },
                   transformResult: (rawResult) =>
@@ -2219,7 +2221,7 @@ export async function runAgentTurnWithFallback(params: {
                     bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
                     images: currentTurnImages.images,
                     imageOrder: currentTurnImages.imageOrder,
-                    abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+                    abortSignal: runAbortSignal,
                     replyOperation: params.replyOperation,
                     blockReplyBreak: params.resolvedBlockStreamingBreak,
                     blockReplyChunking: params.blockReplyChunking,

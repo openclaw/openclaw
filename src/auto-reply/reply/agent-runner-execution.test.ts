@@ -199,6 +199,7 @@ async function getApplyFallbackCandidateSelectionToEntry() {
 type FallbackRunnerParams = {
   provider: string;
   model: string;
+  abortSignal?: AbortSignal;
   run: (provider: string, model: string) => Promise<unknown>;
   classifyResult?: (params: {
     result: { payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }> };
@@ -1114,6 +1115,31 @@ describe("runAgentTurnWithFallback", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("passes the reply abort signal to fallback orchestration and candidates", async () => {
+    const { replyOperation } = createMockReplyOperation();
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    const fallbackCall = requireRecord(
+      state.runWithModelFallbackMock.mock.calls[0]?.[0],
+      "runWithModelFallback params",
+    );
+    const embeddedCall = requireRecord(
+      state.runEmbeddedPiAgentMock.mock.calls[0]?.[0],
+      "runEmbeddedPiAgent params",
+    );
+    expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
+    expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
   });
 
   it("rechecks queued auto fallback primary probes before running", async () => {
