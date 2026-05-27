@@ -109,6 +109,136 @@ function collectPnpmLockPackageVersions(lockfile) {
   return versionsByName;
 }
 
+function exactVersionFromPnpmDependencyResolution(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const version = value.replace(/\(.*/u, "");
+  if (EXACT_VERSION_PATTERN.test(version)) {
+    return version;
+  }
+  return exactVersionFromOverrideSpec(value);
+}
+
+function sameStableVersionLine(left, right) {
+  const leftParts = stableVersionParts(left);
+  const rightParts = stableVersionParts(right);
+  return (
+    leftParts !== null &&
+    rightParts !== null &&
+    leftParts.major === rightParts.major &&
+    leftParts.minor === rightParts.minor
+  );
+}
+
+function collectPnpmLockParentDependencyOverrides(
+  lockfile,
+  versionsByName,
+  dependencyVersionsByName,
+) {
+  const snapshots = lockfile?.snapshots;
+  if (!snapshots || typeof snapshots !== "object" || Array.isArray(snapshots)) {
+    return {};
+  }
+  const overrides = new Map();
+  for (const [packageKey, snapshot] of Object.entries(snapshots)) {
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+      continue;
+    }
+    const parent = parsePnpmPackageKey(packageKey);
+    if (!parent) {
+      continue;
+    }
+    const dependencies = {
+      ...snapshot.dependencies,
+      ...snapshot.optionalDependencies,
+    };
+    for (const [dependencyName, resolution] of Object.entries(dependencies)) {
+      const dependencyVersions = dependencyVersionsByName?.get(dependencyName);
+      if (dependencyVersionsByName && !dependencyVersions) {
+        continue;
+      }
+      const lockedVersions = versionsByName.get(dependencyName);
+      if (!lockedVersions || lockedVersions.size < 2) {
+        continue;
+      }
+      const dependencyVersion = exactVersionFromPnpmDependencyResolution(resolution);
+      if (!dependencyVersion || !lockedVersions.has(dependencyVersion)) {
+        continue;
+      }
+      if (dependencyVersions && !dependencyVersions.has(dependencyVersion)) {
+        continue;
+      }
+      const parentKey = `${parent.name}@${parent.version}`;
+      const parentOverrides = overrides.get(parentKey) ?? {};
+      parentOverrides[dependencyName] = dependencyVersion;
+      overrides.set(parentKey, parentOverrides);
+    }
+  }
+  return Object.fromEntries(
+    [...overrides.entries()]
+      .map(([parentKey, parentOverrides]) => [
+        parentKey,
+        Object.fromEntries(
+          Object.entries(parentOverrides).toSorted(([left], [right]) => left.localeCompare(right)),
+        ),
+      ])
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function addVersion(versionMap, packageName, version) {
+  const versions = versionMap.get(packageName) ?? new Set();
+  versions.add(version);
+  versionMap.set(packageName, versions);
+}
+
+function collectPnpmLockDriftOverrides(
+  lockfile,
+  versionsByName,
+  violations,
+  directDependencyNames = new Set(),
+) {
+  const flatOverrides = {};
+  const parentOverrideVersionsByName = new Map();
+  for (const violation of violations) {
+    const parsed = parsePnpmPackageKey(violation.packageKey);
+    const lockedVersions = parsed ? versionsByName.get(parsed.name) : undefined;
+    const lockVersion = lockedVersions
+      ? [...lockedVersions].find((version) => sameStableVersionLine(version, parsed.version))
+      : undefined;
+    if (!parsed || !lockVersion || flatOverrides[parsed.name] !== undefined) {
+      continue;
+    }
+    if (directDependencyNames.has(parsed.name)) {
+      addVersion(parentOverrideVersionsByName, parsed.name, lockVersion);
+      continue;
+    }
+    flatOverrides[parsed.name] = lockVersion;
+    const exceptionVersions = new Set(
+      [...lockedVersions].filter((version) => version !== lockVersion),
+    );
+    for (const version of exceptionVersions) {
+      addVersion(parentOverrideVersionsByName, parsed.name, version);
+    }
+  }
+  if (Object.keys(flatOverrides).length === 0 && parentOverrideVersionsByName.size === 0) {
+    return {};
+  }
+  return Object.fromEntries(
+    [
+      ...Object.entries(flatOverrides),
+      ...Object.entries(
+        collectPnpmLockParentDependencyOverrides(
+          lockfile,
+          versionsByName,
+          parentOverrideVersionsByName,
+        ),
+      ),
+    ].toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
 function stableVersionParts(version) {
   const match = version.match(STABLE_VERSION_PATTERN);
   return match
@@ -154,12 +284,13 @@ function readPnpmLockVersionOverrides() {
   if (versionsByName.size === 0) {
     throw new Error("pnpm-lock.yaml is missing package resolution data.");
   }
-  return Object.fromEntries(
+  const flatOverrides = Object.fromEntries(
     [...versionsByName.entries()]
       .map(([name, versions]) => [name, pnpmLockOverrideVersionForVersions(versions)])
       .filter(([, version]) => version !== null)
       .toSorted(([left], [right]) => left.localeCompare(right)),
   );
+  return flatOverrides;
 }
 
 function setKey(values) {
@@ -462,6 +593,45 @@ function normalizeNpmVersionDrift(lockfile) {
   return lockfile;
 }
 
+function readGeneratedShrinkwrap(tempDir) {
+  return normalizeNpmVersionDrift(
+    applyPackageExtensionPeerMetadata(
+      JSON.parse(readFileSync(path.join(tempDir, "npm-shrinkwrap.json"), "utf8")),
+    ),
+  );
+}
+
+function regenerateShrinkwrapWithPnpmLockDriftOverrides(
+  tempDir,
+  packageJson,
+  shrinkwrapOverrides,
+  violations,
+  npmInstallArgs,
+) {
+  const pnpmLock = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8"));
+  const versionsByName = collectPnpmLockPackageVersions(pnpmLock);
+  const driftOverrides = collectPnpmLockDriftOverrides(
+    pnpmLock,
+    versionsByName,
+    violations,
+    declaredPackageDependencies(packageJson),
+  );
+  if (Object.keys(driftOverrides).length === 0) {
+    return null;
+  }
+  const retryOverrides = mergeOverrides(driftOverrides, shrinkwrapOverrides, {});
+  rmSync(path.join(tempDir, "npm-shrinkwrap.json"), { force: true });
+  rmSync(path.join(tempDir, "package-lock.json"), { force: true });
+  writeFileSync(
+    path.join(tempDir, "package.json"),
+    `${JSON.stringify(packageJsonForShrinkwrap(packageJson, retryOverrides), null, 2)}\n`,
+  );
+  runNpm(npmInstallArgs, tempDir);
+  runNpm(["shrinkwrap", "--ignore-scripts", "--no-audit", "--no-fund"], tempDir);
+  normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides, npmInstallArgs);
+  return readGeneratedShrinkwrap(tempDir);
+}
+
 function generateShrinkwrap(packageDir, options = {}) {
   const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-"));
   try {
@@ -488,12 +658,20 @@ function generateShrinkwrap(packageDir, options = {}) {
     runNpm(npmInstallArgs, tempDir);
     runNpm(["shrinkwrap", "--ignore-scripts", "--no-audit", "--no-fund"], tempDir);
     normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides, npmInstallArgs);
-    const generated = normalizeNpmVersionDrift(
-      applyPackageExtensionPeerMetadata(
-        JSON.parse(readFileSync(path.join(tempDir, "npm-shrinkwrap.json"), "utf8")),
-      ),
-    );
-    assertShrinkwrapMatchesPnpmLock(generated);
+    let generated = readGeneratedShrinkwrap(tempDir);
+    let violations = collectPnpmLockViolations(generated);
+    if (violations.length > 0) {
+      generated =
+        regenerateShrinkwrapWithPnpmLockDriftOverrides(
+          tempDir,
+          packageJson,
+          shrinkwrapOverrides,
+          violations,
+          npmInstallArgs,
+        ) ?? generated;
+      violations = collectPnpmLockViolations(generated);
+    }
+    assertShrinkwrapMatchesPnpmLock(generated, violations);
     return `${JSON.stringify(generated, null, 2)}\n`;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -589,8 +767,10 @@ function readCurrentShrinkwrapOverrides(
   }
 }
 
-function assertShrinkwrapMatchesPnpmLock(shrinkwrap) {
-  const violations = collectPnpmLockViolations(shrinkwrap);
+function assertShrinkwrapMatchesPnpmLock(
+  shrinkwrap,
+  violations = collectPnpmLockViolations(shrinkwrap),
+) {
   if (violations.length === 0) {
     return;
   }
@@ -860,8 +1040,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 export {
   collectCurrentShrinkwrapOverrides,
   collectOverrideViolations,
+  collectPnpmLockDriftOverrides,
+  collectPnpmLockParentDependencyOverrides,
   collectPnpmLockViolations,
   disableShrinkwrappedOverrideConflictSources,
+  exactVersionFromPnpmDependencyResolution,
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   applyPackageExtensionPeerMetadata,

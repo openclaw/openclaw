@@ -4,9 +4,12 @@ import {
   applyPackageExtensionPeerMetadata,
   collectCurrentShrinkwrapOverrides,
   collectOverrideViolations,
+  collectPnpmLockDriftOverrides,
+  collectPnpmLockParentDependencyOverrides,
   collectPnpmLockViolations,
   createNpmShrinkwrapCommand,
   disableShrinkwrappedOverrideConflictSources,
+  exactVersionFromPnpmDependencyResolution,
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
@@ -53,6 +56,110 @@ describe("generate-npm-shrinkwrap", () => {
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.38", "3.972.39"]))).toBe("3.972.39");
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "3.973.0"]))).toBeNull();
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "4.0.0"]))).toBeNull();
+  });
+
+  it("parses exact pnpm dependency resolution versions", () => {
+    expect(exactVersionFromPnpmDependencyResolution("11.5.0")).toBe("11.5.0");
+    expect(exactVersionFromPnpmDependencyResolution("19.2.4(react@19.2.4)")).toBe("19.2.4");
+    expect(exactVersionFromPnpmDependencyResolution("npm:@nolyfill/domexception@1.0.28")).toBe(
+      "1.0.28",
+    );
+    expect(exactVersionFromPnpmDependencyResolution("workspace:*")).toBeNull();
+  });
+
+  it("pins mixed-version transitive dependency edges by parent package version", () => {
+    const versionsByName = new Map([
+      ["lru-cache", new Set(["6.0.0", "11.5.0"])],
+      ["lodash.clonedeep", new Set(["4.5.0"])],
+    ]);
+    const lockfile = {
+      snapshots: {
+        "lru-memoizer@2.3.0": {
+          dependencies: {
+            "lodash.clonedeep": "4.5.0",
+            "lru-cache": "6.0.0",
+          },
+        },
+        "lru-memoizer@3.0.0": {
+          dependencies: {
+            "lodash.clonedeep": "4.5.0",
+            "lru-cache": "11.5.0",
+          },
+        },
+      },
+    };
+
+    expect(collectPnpmLockParentDependencyOverrides(lockfile, versionsByName)).toEqual({
+      "lru-memoizer@2.3.0": {
+        "lru-cache": "6.0.0",
+      },
+      "lru-memoizer@3.0.0": {
+        "lru-cache": "11.5.0",
+      },
+    });
+  });
+
+  it("builds focused npm overrides for same-line registry drift", () => {
+    const versionsByName = new Map([["lru-cache", new Set(["6.0.0", "11.5.0"])]]);
+    const lockfile = {
+      snapshots: {
+        "lru-memoizer@2.3.0": {
+          dependencies: {
+            "lru-cache": "6.0.0",
+          },
+        },
+        "lru-memoizer@3.0.0": {
+          dependencies: {
+            "lru-cache": "11.5.0",
+          },
+        },
+      },
+    };
+
+    expect(
+      collectPnpmLockDriftOverrides(lockfile, versionsByName, [
+        {
+          packageKey: "lru-cache@11.5.1",
+          path: "node_modules/lru-cache",
+        },
+      ]),
+    ).toEqual({
+      "lru-cache": "11.5.0",
+      "lru-memoizer@2.3.0": {
+        "lru-cache": "6.0.0",
+      },
+    });
+  });
+
+  it("uses parent-specific drift overrides when a package is a direct dependency", () => {
+    const versionsByName = new Map([["jwks-rsa", new Set(["3.2.2", "4.0.1"])]]);
+    const lockfile = {
+      snapshots: {
+        "@microsoft/teams.apps@2.0.11": {
+          dependencies: {
+            "jwks-rsa": "3.2.2",
+          },
+        },
+      },
+    };
+
+    expect(
+      collectPnpmLockDriftOverrides(
+        lockfile,
+        versionsByName,
+        [
+          {
+            packageKey: "jwks-rsa@3.2.3",
+            path: "node_modules/@microsoft/teams.apps/node_modules/jwks-rsa",
+          },
+        ],
+        new Set(["jwks-rsa"]),
+      ),
+    ).toEqual({
+      "@microsoft/teams.apps@2.0.11": {
+        "jwks-rsa": "3.2.2",
+      },
+    });
   });
 
   it("parses nested scoped package paths", () => {
