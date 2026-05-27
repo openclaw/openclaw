@@ -170,7 +170,11 @@ export {
   hasSandboxBindReadonlyHostShadows,
   resolveWritableSandboxBindHostRoots,
 } from "../agents/sandbox/fs-paths.js";
-export { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
+export {
+  buildBootstrapContextForFiles,
+  resolveBootstrapContextForRun,
+  resolveBootstrapFilesForRun,
+} from "../agents/bootstrap-files.js";
 export type { EmbeddedContextFile } from "../agents/pi-embedded-helpers/types.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export {
