@@ -77,16 +77,24 @@ function resolveAuthEvidence(
   env: NodeJS.ProcessEnv,
 ): EnvApiKeyResult | null {
   for (const entry of evidence ?? []) {
-    if (entry.type !== "local-file-with-env") {
-      continue;
+    if (entry.type === "local-file-with-env") {
+      if (!hasRequiredAuthEvidenceEnv(entry, env) || !hasLocalFileAuthEvidence(entry, env)) {
+        continue;
+      }
+      return {
+        apiKey: entry.credentialMarker,
+        source: entry.source ?? "local auth evidence",
+      };
     }
-    if (!hasRequiredAuthEvidenceEnv(entry, env) || !hasLocalFileAuthEvidence(entry, env)) {
-      continue;
+    if (entry.type === "env-vars-with-marker") {
+      if (!hasRequiredAuthEvidenceEnv(entry, env)) {
+        continue;
+      }
+      return {
+        apiKey: entry.credentialMarker,
+        source: entry.source ?? "env auth evidence",
+      };
     }
-    return {
-      apiKey: entry.credentialMarker,
-      source: entry.source ?? "local auth evidence",
-    };
   }
   return null;
 }

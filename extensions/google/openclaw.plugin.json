@@ -609,9 +609,14 @@
               "${APPDATA}/gcloud/application_default_credentials.json"
             ],
             "requiresAnyEnv": ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
-            "requiresAllEnv": ["GOOGLE_CLOUD_LOCATION"],
             "credentialMarker": "gcp-vertex-credentials",
             "source": "gcloud adc"
+          },
+          {
+            "type": "env-vars-with-marker",
+            "requiresAnyEnv": ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+            "credentialMarker": "gcp-vertex-credentials",
+            "source": "gcp adc (metadata server / workload identity)"
           }
         ]
       },

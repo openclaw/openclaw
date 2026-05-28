@@ -225,22 +225,35 @@ export type PluginManifestSetupProvider = {
   authEvidence?: PluginManifestSetupProviderAuthEvidence[];
 };
 
-export type PluginManifestSetupProviderAuthEvidence = {
-  /** Generic local file evidence gated by required environment metadata. */
-  type: "local-file-with-env";
-  /** Optional env var containing an explicit credential file path. */
-  fileEnvVar?: string;
-  /** Optional fallback credential file paths. Supports `${HOME}` and `${APPDATA}`. */
-  fallbackPaths?: string[];
-  /** At least one of these env vars must be non-empty when provided. */
-  requiresAnyEnv?: string[];
-  /** Every env var listed here must be non-empty when provided. */
-  requiresAllEnv?: string[];
-  /** Non-secret marker returned when this evidence is present. */
-  credentialMarker: string;
-  /** Human-readable auth source label. */
-  source?: string;
-};
+export type PluginManifestSetupProviderAuthEvidence =
+  | {
+      /** Generic local file evidence gated by required environment metadata. */
+      type: "local-file-with-env";
+      /** Optional env var containing an explicit credential file path. */
+      fileEnvVar?: string;
+      /** Optional fallback credential file paths. Supports `${HOME}` and `${APPDATA}`. */
+      fallbackPaths?: string[];
+      /** At least one of these env vars must be non-empty when provided. */
+      requiresAnyEnv?: string[];
+      /** Every env var listed here must be non-empty when provided. */
+      requiresAllEnv?: string[];
+      /** Non-secret marker returned when this evidence is present. */
+      credentialMarker: string;
+      /** Human-readable auth source label. */
+      source?: string;
+    }
+  | {
+      /** Env-var-only evidence for ambient credential sources (metadata server, workload identity). */
+      type: "env-vars-with-marker";
+      /** At least one of these env vars must be non-empty when provided. */
+      requiresAnyEnv?: string[];
+      /** Every env var listed here must be non-empty when provided. */
+      requiresAllEnv?: string[];
+      /** Non-secret marker returned when this evidence is present. */
+      credentialMarker: string;
+      /** Human-readable auth source label. */
+      source?: string;
+    };
 
 export type PluginManifestSetup = {
   /** Cheap provider setup metadata exposed before runtime loads. */
@@ -1444,30 +1457,43 @@ function normalizeManifestSetupProviderAuthEvidence(
   }
   const normalized: PluginManifestSetupProviderAuthEvidence[] = [];
   for (const entry of value) {
-    if (!isRecord(entry) || entry.type !== "local-file-with-env") {
+    if (!isRecord(entry)) {
       continue;
     }
     const credentialMarker = normalizeOptionalString(entry.credentialMarker);
     if (!credentialMarker) {
       continue;
     }
-    const fileEnvVar = normalizeOptionalString(entry.fileEnvVar);
-    const fallbackPaths = normalizeTrimmedStringList(entry.fallbackPaths);
-    if (!fileEnvVar && fallbackPaths.length === 0) {
-      continue;
+    if (entry.type === "local-file-with-env") {
+      const fileEnvVar = normalizeOptionalString(entry.fileEnvVar);
+      const fallbackPaths = normalizeTrimmedStringList(entry.fallbackPaths);
+      if (!fileEnvVar && fallbackPaths.length === 0) {
+        continue;
+      }
+      const requiresAnyEnv = normalizeTrimmedStringList(entry.requiresAnyEnv);
+      const requiresAllEnv = normalizeTrimmedStringList(entry.requiresAllEnv);
+      const source = normalizeOptionalString(entry.source);
+      normalized.push({
+        type: "local-file-with-env",
+        ...(fileEnvVar ? { fileEnvVar } : {}),
+        ...(fallbackPaths.length > 0 ? { fallbackPaths } : {}),
+        ...(requiresAnyEnv.length > 0 ? { requiresAnyEnv } : {}),
+        ...(requiresAllEnv.length > 0 ? { requiresAllEnv } : {}),
+        credentialMarker,
+        ...(source ? { source } : {}),
+      });
+    } else if (entry.type === "env-vars-with-marker") {
+      const requiresAnyEnv = normalizeTrimmedStringList(entry.requiresAnyEnv);
+      const requiresAllEnv = normalizeTrimmedStringList(entry.requiresAllEnv);
+      const source = normalizeOptionalString(entry.source);
+      normalized.push({
+        type: "env-vars-with-marker",
+        ...(requiresAnyEnv.length > 0 ? { requiresAnyEnv } : {}),
+        ...(requiresAllEnv.length > 0 ? { requiresAllEnv } : {}),
+        credentialMarker,
+        ...(source ? { source } : {}),
+      });
     }
-    const requiresAnyEnv = normalizeTrimmedStringList(entry.requiresAnyEnv);
-    const requiresAllEnv = normalizeTrimmedStringList(entry.requiresAllEnv);
-    const source = normalizeOptionalString(entry.source);
-    normalized.push({
-      type: "local-file-with-env",
-      ...(fileEnvVar ? { fileEnvVar } : {}),
-      ...(fallbackPaths.length > 0 ? { fallbackPaths } : {}),
-      ...(requiresAnyEnv.length > 0 ? { requiresAnyEnv } : {}),
-      ...(requiresAllEnv.length > 0 ? { requiresAllEnv } : {}),
-      credentialMarker,
-      ...(source ? { source } : {}),
-    });
   }
   return normalized.length > 0 ? normalized : undefined;
 }
