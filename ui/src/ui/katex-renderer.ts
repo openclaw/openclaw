@@ -277,6 +277,15 @@ export function preProcessTex(tex: string, _displayMode: boolean): string {
  * Falls back to <code class="katex-fallback"> when katex is not yet
  * loaded or rendering produces an error.
  */
+/** Handle both \x00 and \ufffd variants — markdown-it converts \x00 → \ufffd. */
+function replacePlaceholder(html: string, ph: string, replacement: string): string {
+  let result = html.replaceAll(ph, replacement);
+  if (ph.includes("\x00")) {
+    result = result.replaceAll(ph.replaceAll("\x00", "\ufffd"), replacement);
+  }
+  return result;
+}
+
 export function restoreMathBlocksSync(
   html: string,
   mathBlocks: Map<string, { tex: string; displayMode: boolean }>,
@@ -286,7 +295,11 @@ export function restoreMathBlocksSync(
   if (!katexModule) {
     let result = html;
     for (const [ph, { tex }] of mathBlocks) {
-      result = result.replaceAll(ph, `<code class="katex-fallback">${escapeHtml(tex)}</code>`);
+      result = replacePlaceholder(
+        result,
+        ph,
+        `<code class="katex-fallback">${escapeHtml(tex)}</code>`,
+      );
     }
     return result;
   }
@@ -308,7 +321,7 @@ export function restoreMathBlocksSync(
     if (rendered.includes("katex-error")) {
       rendered = `<code class="katex-fallback">${escapeHtml(tex)}</code>`;
     }
-    result = result.replaceAll(ph, rendered);
+    result = replacePlaceholder(result, ph, rendered);
   }
   return result;
 }
