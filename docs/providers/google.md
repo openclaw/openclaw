@@ -16,6 +16,12 @@ Gemini Grounding.
 - Runtime option: provider/model `agentRuntime.id: "google-gemini-cli"`
   reuses Gemini CLI OAuth while keeping model refs canonical as `google/*`.
 
+<Note>
+  To use Gemini models through Google Cloud Vertex AI (Agent Platform) with
+  GCP project billing and credits, see the
+  [Google Vertex AI](/providers/google-vertex) provider instead.
+</Note>
+
 ## Getting started
 
 Choose your preferred auth method and follow the setup steps.
@@ -471,5 +477,8 @@ WebSocket endpoint, sends the initial setup payload, and waits for
   </Card>
   <Card title="Music generation" href="/tools/music-generation" icon="music">
     Shared music tool parameters and provider selection.
+  </Card>
+  <Card title="Google Vertex AI" href="/providers/google-vertex" icon="cloud">
+    Gemini models via GCP project billing and ADC (Vertex AI / Agent Platform).
   </Card>
 </CardGroup>
