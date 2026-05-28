@@ -46,8 +46,21 @@
     }
   },
   "modelCatalog": {
+    "providers": {
+      "google-vertex": {
+        "api": "google-vertex",
+        "models": [
+          { "id": "gemini-flash-latest", "name": "Gemini Flash (latest)", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536, "tags": ["default"] },
+          { "id": "gemini-pro-latest", "name": "Gemini Pro (latest)", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536 },
+          { "id": "gemini-flash-lite-latest", "name": "Gemini Flash-Lite (latest)", "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536 },
+          { "id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536 },
+          { "id": "gemini-3-flash-preview", "name": "Gemini 3 Flash Preview", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536 }
+        ]
+      }
+    },
     "discovery": {
-      "google": "runtime"
+      "google": "runtime",
+      "google-vertex": "static"
     },
     "suppressions": [
       {
