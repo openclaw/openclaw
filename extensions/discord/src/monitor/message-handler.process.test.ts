@@ -108,7 +108,7 @@ vi.mock("./reply-delivery.js", () => ({
 }));
 
 type DispatchInboundParams = {
-  ctx?: unknown;
+  ctx?: Record<string, unknown>;
   dispatcher: {
     sendBlockReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
     sendFinalReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
@@ -240,7 +240,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
       onSettled?: () => unknown;
       onFreshSettledDelivery?: () => unknown;
     };
-    ctx?: unknown;
+    ctx?: Record<string, unknown>;
     replyOptions?: DispatchInboundParams["replyOptions"];
   }) => {
     const pendingDeliveries: Promise<void>[] = [];

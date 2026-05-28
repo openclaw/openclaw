@@ -62,9 +62,9 @@ function dispatchWithDeliveries(
   deliveries: Delivery[],
   dispatcherOptions: {
     beforeDeliver?: ReplyDispatchBeforeDeliver;
-    deliver?: (payload: ReplyPayload, info: { kind: Delivery["kind"] }) => Promise<unknown>;
-    onSettled?: () => unknown;
-    onFreshSettledDelivery?: () => unknown;
+    deliver?: (payload: ReplyPayload, info: { kind: Delivery["kind"] }) => Promise<object | void>;
+    onSettled?: () => object | void | Promise<object | void>;
+    onFreshSettledDelivery?: () => object | void | Promise<object | void>;
   } = {},
 ) {
   return dispatchInboundMessageWithBufferedDispatcher({
