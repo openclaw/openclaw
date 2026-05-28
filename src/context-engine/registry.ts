@@ -11,6 +11,7 @@ import type {
   IngestBatchResult,
   IngestResult,
   SubagentSpawnPreparation,
+  ContextEngineInfo,
 } from "./types.js";
 
 /**
@@ -43,7 +44,20 @@ type RegisterContextEngineForOwnerOptions = {
 };
 
 const LEGACY_SESSION_KEY_COMPAT = Symbol.for("openclaw.contextEngine.sessionKeyCompat");
-const RESOLVED_CONTEXT_ENGINE_METADATA = new WeakMap<ContextEngine, { owner: string }>();
+type ResolvedContextEngineMetadata = {
+  owner: string;
+};
+
+type RuntimeQuarantineProxyState = {
+  engineId: string;
+  getResolvedFallbackEngine: () => ContextEngine | undefined;
+};
+
+const RESOLVED_CONTEXT_ENGINE_METADATA = new WeakMap<
+  ContextEngine,
+  ResolvedContextEngineMetadata
+>();
+const RUNTIME_QUARANTINE_PROXY_STATE = new WeakMap<ContextEngine, RuntimeQuarantineProxyState>();
 const SESSION_KEY_COMPAT_METHODS = [
   "bootstrap",
   "maintain",
@@ -545,12 +559,27 @@ export function resolveContextEngineOwnerPluginId(
   if (!engine) {
     return undefined;
   }
-  const owner = RESOLVED_CONTEXT_ENGINE_METADATA.get(engine)?.owner;
+  const owner = resolveEffectiveContextEngineMetadata(engine)?.owner;
   if (!owner?.startsWith("plugin:")) {
     return undefined;
   }
   const pluginId = owner.slice("plugin:".length).trim();
   return pluginId || undefined;
+}
+
+function resolveEffectiveContextEngineMetadata(
+  engine: ContextEngine,
+): ResolvedContextEngineMetadata | undefined {
+  const quarantineState = RUNTIME_QUARANTINE_PROXY_STATE.get(engine);
+  if (quarantineState && getContextEngineQuarantine(quarantineState.engineId)) {
+    const fallbackEngine = quarantineState.getResolvedFallbackEngine();
+    return (
+      (fallbackEngine ? RESOLVED_CONTEXT_ENGINE_METADATA.get(fallbackEngine) : undefined) ?? {
+        owner: CORE_CONTEXT_ENGINE_OWNER,
+      }
+    );
+  }
+  return RESOLVED_CONTEXT_ENGINE_METADATA.get(engine);
 }
 
 function describeResolvedContextEngineContractError(
@@ -738,16 +767,35 @@ function wrapContextEngineWithRuntimeQuarantine(params: {
   factoryCtx: ContextEngineFactoryContext;
 }): ContextEngine {
   let fallbackEnginePromise: Promise<ContextEngine> | undefined;
+  let resolvedFallbackEngine: ContextEngine | undefined;
   const getFallbackEngine = () => {
     fallbackEnginePromise ??= resolveDefaultContextEngine(
       params.defaultEngineId,
       params.factoryCtx,
-    );
+    ).then((engine) => {
+      resolvedFallbackEngine = engine;
+      return engine;
+    });
     return fallbackEnginePromise;
   };
+  const fallbackInfo = (): ContextEngineInfo => {
+    return (
+      resolvedFallbackEngine?.info ?? {
+        id: params.defaultEngineId,
+        name:
+          params.defaultEngineId === "legacy"
+            ? "Legacy Context Engine"
+            : `${params.defaultEngineId} Context Engine`,
+      }
+    );
+  };
+  const isQuarantined = () => Boolean(getContextEngineQuarantine(params.engineId));
 
-  return new Proxy(params.engine, {
+  const proxy = new Proxy(params.engine, {
     get(target, property, receiver) {
+      if (property === "info" && isQuarantined()) {
+        return fallbackInfo();
+      }
       const value = Reflect.get(target, property, receiver);
       if (typeof value !== "function" || !GUARDED_CONTEXT_ENGINE_METHODS.has(property)) {
         return typeof value === "function" ? value.bind(target) : value;
@@ -759,7 +807,7 @@ function wrapContextEngineWithRuntimeQuarantine(params: {
         if (aborted) {
           throw aborted;
         }
-        if (getContextEngineQuarantine(params.engineId)) {
+        if (isQuarantined()) {
           return await invokeFallbackContextEngineMethod({
             getFallbackEngine,
             methodName,
@@ -780,7 +828,7 @@ function wrapContextEngineWithRuntimeQuarantine(params: {
             error,
             defaultEngineId: params.defaultEngineId,
           });
-          if (methodName === "prepareSubagentSpawn") {
+          if (methodName === "compact" || methodName === "prepareSubagentSpawn") {
             throw error;
           }
           try {
@@ -796,8 +844,12 @@ function wrapContextEngineWithRuntimeQuarantine(params: {
       };
     },
   });
+  RUNTIME_QUARANTINE_PROXY_STATE.set(proxy, {
+    engineId: params.engineId,
+    getResolvedFallbackEngine: () => resolvedFallbackEngine,
+  });
+  return proxy;
 }
-
 // ---------------------------------------------------------------------------
 // Resolution
 // ---------------------------------------------------------------------------

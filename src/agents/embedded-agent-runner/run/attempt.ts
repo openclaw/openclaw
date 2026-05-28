@@ -964,7 +964,8 @@ export async function runEmbeddedAttempt(
         host: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
       });
     }
-    const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
+    const resolveActiveContextEnginePluginId = () =>
+      resolveContextEngineOwnerPluginId(activeContextEngine);
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const diagnosticTrace = freezeDiagnosticTraceContext(
       createDiagnosticTraceContextFromActiveScope(),
@@ -1859,7 +1860,7 @@ export async function runEmbeddedAttempt(
           agentDir,
           tokenBudget: params.contextTokenBudget,
           activeAgentId: sessionAgentId,
-          contextEnginePluginId: activeContextEnginePluginId,
+          contextEnginePluginId: resolveActiveContextEnginePluginId(),
         }),
         runMaintenance: async (contextParams) =>
           await runContextEngineMaintenance({
@@ -4238,7 +4239,7 @@ export async function runEmbeddedAttempt(
             lastCallUsage,
             promptCache,
             activeAgentId: sessionAgentId,
-            contextEnginePluginId: activeContextEnginePluginId,
+            contextEnginePluginId: resolveActiveContextEnginePluginId(),
           });
           await finalizeAttemptContextEngineTurn({
             contextEngine: activeContextEngine,

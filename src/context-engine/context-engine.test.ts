@@ -1012,6 +1012,88 @@ describe("Invalid engine fallback", () => {
     );
   });
 
+  it("exposes fallback metadata on the same engine after lifecycle quarantine", async () => {
+    const engineId = uniqueEngineId("runtime-fail-metadata");
+    const assemble = vi.fn(async () => {
+      throw new Error("plugin store unavailable");
+    });
+    registerContextEngineForOwner(
+      engineId,
+      () => ({
+        info: {
+          id: "lcm",
+          name: "Lossless Context Manager",
+          ownsCompaction: true,
+        },
+        async ingest() {
+          return { ingested: true };
+        },
+        assemble,
+        async compact() {
+          return { ok: true, compacted: false };
+        },
+      }),
+      "plugin:lossless-claw",
+      { allowSameOwnerRefresh: true },
+    );
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.ownsCompaction).toBe(true);
+    expect(resolveContextEngineOwnerPluginId(engine)).toBe("lossless-claw");
+
+    const message = makeMockMessage("user", "hello");
+    const result = await engine.assemble({
+      sessionId: "s1",
+      messages: [message],
+    });
+
+    expect(result.messages).toEqual([message]);
+    expect(engine.info.id).toBe("legacy");
+    expect(engine.info.ownsCompaction).toBeUndefined();
+    expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
+    expect(assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("quarantines compact failures without same-call legacy fallback", async () => {
+    const engineId = uniqueEngineId("runtime-fail-compact");
+    const compact = vi.fn(async () => {
+      throw new Error("plugin compaction failed");
+    });
+    registerContextEngineForOwner(
+      engineId,
+      () => ({
+        info: {
+          id: "lcm",
+          name: "Lossless Context Manager",
+          ownsCompaction: true,
+        },
+        async ingest() {
+          return { ingested: true };
+        },
+        async assemble({ messages }: { messages: AgentMessage[] }) {
+          return { messages, estimatedTokens: 0 };
+        },
+        compact,
+      }),
+      "plugin:lossless-claw",
+      { allowSameOwnerRefresh: true },
+    );
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+
+    await expect(
+      engine.compact({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.json",
+      }),
+    ).rejects.toThrow("plugin compaction failed");
+
+    expect(engine.info.id).toBe("legacy");
+    expect(engine.info.ownsCompaction).toBeUndefined();
+    expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
+    expect(compact).toHaveBeenCalledTimes(1);
+  });
+
   it("clears a missing-engine quarantine when the plugin registers later", async () => {
     const engineId = uniqueEngineId("late-register");
     const missingEngine = await resolveContextEngine(configWithSlot(engineId));
