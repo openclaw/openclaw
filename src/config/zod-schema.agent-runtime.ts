@@ -1014,6 +1014,7 @@ export const AgentEntrySchema = z
   .object({
     id: z.string(),
     default: z.boolean().optional(),
+    aliases: z.array(z.string()).optional(),
     name: z.string().optional(),
     description: z.string().optional(),
     workspace: z.string().optional(),
