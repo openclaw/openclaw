@@ -14,7 +14,7 @@ describe("resolveWhatsAppDocumentFileName", () => {
   it("strips C0 control characters and DEL from fileName", () => {
     expect(
       resolveWhatsAppDocumentFileName({
-        fileName: "\x00evil\x1f.pdf",
+        fileName: "\x00evil\x1f\x7f.pdf",
         mimetype: "application/pdf",
       }),
     ).toBe("evil.pdf");
