@@ -594,7 +594,7 @@ function renderChatSessionPickerPopover(
                 void applyChatSessionPickerSearch(state);
               }
             }}
-            @blur=${() => void applyChatSessionPickerSearch(state)}
+            @blur=${() => requestAnimationFrame(() => void applyChatSessionPickerSearch(state))}
           />
         </label>
         <button
