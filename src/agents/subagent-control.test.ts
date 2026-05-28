@@ -1354,3 +1354,139 @@ describe("steerControlledSubagentRun", () => {
     });
   });
 });
+
+describe("sendControlledSubagentMessage timeout", () => {
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    __testing.setDepsForTest();
+  });
+
+  it("uses configured runTimeoutSeconds + 5s buffer", async () => {
+    const capturedTimeouts: number[] = [];
+
+    addSubagentRunForTests({
+      runId: "run-timeout-test",
+      childSessionKey: "agent:main:subagent:timeout-worker",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "timeout test",
+      cleanup: "keep",
+      createdAt: Date.now() - 2_000,
+      startedAt: Date.now() - 1_000,
+    });
+
+    setSubagentControlDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "chat.history") {
+          return { messages: [] } as T;
+        }
+        if (request.method === "agent") {
+          return { runId: "run-timeout-followup" } as T;
+        }
+        if (request.method === "agent.wait") {
+          // Capture the timeout passed to agent.wait
+          capturedTimeouts.push(request.params?.timeoutMs as number);
+          return { status: "done" } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await sendControlledSubagentMessage({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        agents: {
+          defaults: {
+            subagents: {
+              runTimeoutSeconds: 60, // Configure 60 seconds
+            },
+          },
+        },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-timeout-test",
+        childSessionKey: "agent:main:subagent:timeout-worker",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "timeout test",
+        cleanup: "keep",
+        createdAt: Date.now() - 2_000,
+        startedAt: Date.now() - 1_000,
+      },
+      message: "continue",
+    });
+
+    expect(result.status).toBe("ok");
+    // 60 seconds * 1000 + 5000 buffer = 65000ms
+    expect(capturedTimeouts[0]).toBe(65_000);
+  });
+
+  it("defaults to 30000ms when runTimeoutSeconds not configured", async () => {
+    const capturedTimeouts: number[] = [];
+
+    addSubagentRunForTests({
+      runId: "run-timeout-default",
+      childSessionKey: "agent:main:subagent:timeout-default",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "timeout default test",
+      cleanup: "keep",
+      createdAt: Date.now() - 2_000,
+      startedAt: Date.now() - 1_000,
+    });
+
+    setSubagentControlDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "chat.history") {
+          return { messages: [] } as T;
+        }
+        if (request.method === "agent") {
+          return { runId: "run-timeout-default-followup" } as T;
+        }
+        if (request.method === "agent.wait") {
+          capturedTimeouts.push(request.params?.timeoutMs as number);
+          return { status: "done" } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await sendControlledSubagentMessage({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        // No runTimeoutSeconds configured
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-timeout-default",
+        childSessionKey: "agent:main:subagent:timeout-default",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "timeout default test",
+        cleanup: "keep",
+        createdAt: Date.now() - 2_000,
+        startedAt: Date.now() - 1_000,
+      },
+      message: "continue",
+    });
+
+    expect(result.status).toBe("ok");
+    // Default should be 30000ms
+    expect(capturedTimeouts[0]).toBe(30_000);
+  });
+});

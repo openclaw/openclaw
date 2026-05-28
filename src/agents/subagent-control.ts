@@ -37,6 +37,7 @@ import {
   replaceSubagentRunAfterSteer,
 } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 export const DEFAULT_RECENT_MINUTES = 30;
@@ -45,6 +46,7 @@ export const MAX_STEER_MESSAGE_CHARS = 4_000;
 const STEER_RATE_LIMIT_MS = 2_000;
 const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
+const DEFAULT_CONTROL_TIMEOUT_MS = 30_000;
 
 const steerRateLimit = new Map<string, number>();
 
@@ -679,10 +681,18 @@ export async function sendControlledSubagentMessage(params: {
       runId = responseRunId;
     }
 
+    const configuredTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
+      cfg: params.cfg,
+    });
+    const controlTimeoutMs =
+      configuredTimeoutSeconds > 0
+        ? Math.floor(configuredTimeoutSeconds * 1000) + 5_000 // +5s buffer
+        : DEFAULT_CONTROL_TIMEOUT_MS;
+
     const result = await waitForAgentRunAndReadUpdatedAssistantReply({
       runId,
       sessionKey: targetSessionKey,
-      timeoutMs: 30_000,
+      timeoutMs: controlTimeoutMs,
       limit: SUBAGENT_REPLY_HISTORY_LIMIT,
       baseline: baselineReply,
       callGateway: subagentControlDeps.callGateway,
