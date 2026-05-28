@@ -34,27 +34,24 @@ function toAgentToolResult(params: {
           text: `structuredContent:\n${JSON.stringify(params.result.structuredContent, null, 2)}`,
         } as const)
       : null;
-  const normalizedContent: AgentToolResult<unknown>["content"] =
-    content.length > 0
-      ? structuredContentBlock
-        ? [...content, structuredContentBlock]
-        : content
-      : structuredContentBlock
-        ? [structuredContentBlock]
-        : ([
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  status: params.result.isError === true ? "error" : "ok",
-                  server: params.serverName,
-                  tool: params.toolName,
-                },
-                null,
-                2,
-              ),
-            },
-          ] as AgentToolResult<unknown>["content"]);
+  const normalizedContent: AgentToolResult<unknown>["content"] = structuredContentBlock
+    ? [structuredContentBlock]
+    : content.length > 0
+      ? content
+      : ([
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                status: params.result.isError === true ? "error" : "ok",
+                server: params.serverName,
+                tool: params.toolName,
+              },
+              null,
+              2,
+            ),
+          },
+        ] as AgentToolResult<unknown>["content"]);
   const details: Record<string, unknown> = {
     mcpServer: params.serverName,
     mcpTool: params.toolName,

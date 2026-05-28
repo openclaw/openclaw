@@ -106,9 +106,8 @@ describe("createBundleMcpToolRuntime", () => {
 
     const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
 
-    expectTextContentBlock(result.content[0], "pong");
     expectTextContentBlock(
-      result.content[1],
+      result.content[0],
       `structuredContent:\n${JSON.stringify(
         {
           threadId: "019e6cdb-8e7f-7cb2-891f-9edb689f6fc7",
@@ -118,6 +117,7 @@ describe("createBundleMcpToolRuntime", () => {
         2,
       )}`,
     );
+    expect(result.content).toHaveLength(1);
     expect(result.details).toEqual({
       mcpServer: "bundleProbe",
       mcpTool: "bundle_probe",
