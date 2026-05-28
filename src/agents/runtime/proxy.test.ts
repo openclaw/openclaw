@@ -153,6 +153,41 @@ describe("streamProxy", () => {
     });
   });
 
+  it("preserves proxy replacement text deltas", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        responseFromText(
+          [
+            { type: "start" },
+            { type: "text_start", contentIndex: 0 },
+            { type: "text_delta", contentIndex: 0, delta: "Draft" },
+            { type: "text_delta", contentIndex: 0, delta: "Corrected", replace: true },
+            { type: "text_end", contentIndex: 0 },
+            { type: "done", reason: "stop", usage },
+          ]
+            .map((event) => `data: ${JSON.stringify(event)}`)
+            .join("\n"),
+        ),
+      ),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    const replacement = events.find((event) => event.type === "text_delta" && event.replace);
+    expect(replacement?.partial.content).toEqual([{ type: "text", text: "Corrected" }]);
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "Corrected" }],
+    });
+  });
+
   it("returns an error result when EOF arrives without a terminal event", async () => {
     vi.stubGlobal(
       "fetch",

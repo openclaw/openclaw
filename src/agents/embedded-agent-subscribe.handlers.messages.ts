@@ -562,6 +562,7 @@ export function handleMessageUpdate(
     content,
     accumulatedText: ctx.state.deltaBuffer,
   });
+  const isReplacementDelta = evtType === "text_delta" && assistantRecord?.replace === true;
 
   const partialAssistant =
     assistantRecord?.partial && typeof assistantRecord.partial === "object"
@@ -597,8 +598,18 @@ export function handleMessageUpdate(
   const phaseAwareVisibleText = shouldUsePhaseAwareBlockReply
     ? coerceChatContentText(extractAssistantVisibleText(partialAssistant)).trim()
     : "";
+  const isUnphasedReplacementDelta = isReplacementDelta && !shouldUsePhaseAwareBlockReply;
 
   if (chunk) {
+    if (isUnphasedReplacementDelta) {
+      ctx.state.deltaBuffer = "";
+      ctx.state.blockBuffer = "";
+      ctx.blockChunker?.reset();
+      ctx.state.partialBlockState.thinking = false;
+      ctx.state.partialBlockState.final = false;
+      ctx.state.partialBlockState.inlineCode = createInlineCodeState();
+      ctx.state.partialBlockState.pendingTagFragment = undefined;
+    }
     ctx.state.deltaBuffer += chunk;
     if (!shouldUsePhaseAwareBlockReply) {
       appendBlockReplyChunk(ctx, chunk);
@@ -611,9 +622,7 @@ export function handleMessageUpdate(
   }
   const wasThinking = ctx.state.partialBlockState.thinking;
   let visibleDelta = "";
-  let next = shouldUsePhaseAwareBlockReply
-    ? coerceChatContentText(extractAssistantVisibleText(partialAssistant)).trim()
-    : "";
+  let next = phaseAwareVisibleText;
   let nextRawStreamText = next;
   if (!next && deliveryPhase !== "final_answer") {
     const pendingTagFragment = ctx.state.partialBlockState.pendingTagFragment;
@@ -660,9 +669,7 @@ export function handleMessageUpdate(
       final: evtType === "text_end",
     });
   }
-  const isReplacementDelta =
-    !shouldUsePhaseAwareBlockReply && evtType === "text_delta" && assistantRecord?.replace === true;
-  if (isReplacementDelta) {
+  if (isUnphasedReplacementDelta) {
     next = visibleDelta.trim();
     nextRawStreamText = visibleDelta;
   }
@@ -694,7 +701,8 @@ export function handleMessageUpdate(
       shouldEmit = false;
     } else {
       replace =
-        isReplacementDelta || Boolean(previousCleaned && !cleanedText.startsWith(previousCleaned));
+        isUnphasedReplacementDelta ||
+        Boolean(previousCleaned && !cleanedText.startsWith(previousCleaned));
       deltaText = replace ? "" : cleanedText.slice(previousCleaned.length);
       shouldEmit = replace
         ? cleanedText !== previousCleaned || hasMedia || hasAudio

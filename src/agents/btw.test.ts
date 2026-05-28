@@ -552,6 +552,31 @@ describe("runBtwSideQuestion", () => {
     });
   });
 
+  it("uses replacement text deltas as the current BTW answer", async () => {
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "text_delta",
+          contentIndex: 0,
+          delta: "Draft answer",
+          partial: { role: "assistant", content: [] },
+        },
+        {
+          type: "text_delta",
+          contentIndex: 0,
+          delta: "Corrected answer",
+          replace: true,
+          partial: { role: "assistant", content: [] },
+        },
+        createDoneEvent("Corrected answer"),
+      ]),
+    );
+
+    const result = await runSideQuestion();
+
+    expect(result).toEqual({ text: "Corrected answer" });
+  });
+
   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {
     const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Codex side answer." });
     registerAgentHarness({
