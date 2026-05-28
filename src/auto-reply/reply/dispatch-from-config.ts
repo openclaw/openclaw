@@ -1364,8 +1364,9 @@ export async function dispatchReplyFromConfig(
   const sendBindingNotice = async (
     payload: ReplyPayload,
     mode: "additive" | "terminal",
+    options?: { allowSuppressedAutomaticDelivery?: boolean },
   ): Promise<boolean> => {
-    if (suppressAutomaticSourceDelivery) {
+    if (suppressAutomaticSourceDelivery && options?.allowSuppressedAutomaticDelivery !== true) {
       return false;
     }
     const result = await routeReplyToOriginating(payload);
@@ -1622,7 +1623,9 @@ export async function dispatchReplyFromConfig(
       switch (targetedClaimOutcome.status) {
         case "handled": {
           if (targetedClaimOutcome.result.reply) {
-            await sendBindingNotice(targetedClaimOutcome.result.reply, "terminal");
+            await sendBindingNotice(targetedClaimOutcome.result.reply, "terminal", {
+              allowSuppressedAutomaticDelivery: true,
+            });
           }
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
