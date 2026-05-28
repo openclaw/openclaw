@@ -1,4 +1,4 @@
-import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawConfig, ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 
 const noopAuth = async () => ({ profiles: [] });
@@ -122,7 +122,7 @@ export function createGoogleVertexProvider(): ProviderPlugin {
                   },
                 },
               },
-            },
+            } as Partial<OpenClawConfig>,
             notes: [
               `Project: ${project}, Location: ${location}`,
               "Credentials will be resolved via Application Default Credentials (ADC).",
