@@ -20,11 +20,11 @@ inputs:
     required: false
     default: "true"
   use-actions-cache:
-    description: Whether to restore and save the pnpm store with actions/cache.
+    description: Whether to restore the pnpm store with actions/cache.
     required: false
     default: "true"
   save-actions-cache:
-    description: Whether to save the pnpm store with actions/cache after install.
+    description: Whether to save the pnpm store with actions/cache after install when no exact cache restored.
     required: false
     default: "false"
 runs:

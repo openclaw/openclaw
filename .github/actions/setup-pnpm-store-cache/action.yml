@@ -14,7 +14,7 @@ inputs:
     required: false
     default: ""
   use-actions-cache:
-    description: Whether actions/cache should cache the pnpm store.
+    description: Whether actions/cache should restore the pnpm store.
     required: false
     default: "true"
 outputs:
