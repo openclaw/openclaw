@@ -294,14 +294,14 @@ type WebFetchRuntimeParams = {
   providerCacheKey?: string;
   lookupFn?: LookupFn;
   resolveProviderFallback: () => Promise<WebFetchProviderFallback>;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 };
 
 // Fail-open progress emit. onUpdate is declared `void`-returning but may throw
 // synchronously when the runtime subscriber has already torn down; that must
 // never break the fetch result. We swallow the error here so callers can stay
 // in a single try/finally without spreading defensive guards.
-function emitWebFetchProgressSafely(onUpdate: AgentToolUpdateCallback<unknown>): void {
+function emitWebFetchProgressSafely(onUpdate: AgentToolUpdateCallback): void {
   try {
     onUpdate({
       content: [{ type: "text", text: WEB_FETCH_PROGRESS_TEXT }],
@@ -315,9 +315,7 @@ function emitWebFetchProgressSafely(onUpdate: AgentToolUpdateCallback<unknown>):
 // Schedule a single delayed progress emit and return a cleanup function the
 // caller invokes in finally. Cleared cleanly on success, error, abort, or any
 // throw from the surrounding network/extract work.
-function scheduleWebFetchProgressTimer(
-  onUpdate: AgentToolUpdateCallback<unknown> | undefined,
-): () => void {
+function scheduleWebFetchProgressTimer(onUpdate: AgentToolUpdateCallback | undefined): () => void {
   if (!onUpdate) {
     return () => undefined;
   }

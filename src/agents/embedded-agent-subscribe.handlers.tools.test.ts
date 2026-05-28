@@ -2120,6 +2120,63 @@ describe("handleToolExecutionUpdate non-exec progress", () => {
     dispose();
   });
 
+  it("suppresses the legacy stream:tool partialResult bridge when web_fetch progressText is surfaced", async () => {
+    resetAgentEventsForTest();
+    const { events, dispose } = captureItemEvents();
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "web_fetch",
+        toolCallId: "wf-bridge",
+        args: { url: "https://example.com/slow" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "wf-bridge",
+        partialResult: {
+          content: [{ type: "text", text: "Fetching web page…" }],
+        },
+      } as never,
+    );
+
+    // Channel-visible progress is surfaced via the kind:"tool" item event.
+    const itemUpdateEvent = requireEvent(
+      events,
+      (evt) =>
+        evt.stream === "item" &&
+        (evt.data as { itemId?: string; phase?: string })?.itemId === "tool:wf-bridge" &&
+        (evt.data as { phase?: string }).phase === "update",
+      "web_fetch tool item update",
+    );
+    expect((itemUpdateEvent.data as { progressText?: string }).progressText).toBe(
+      "Fetching web page…",
+    );
+
+    // The legacy stream:"tool" phase:"update" partialResult bridge MUST NOT
+    // fire for this same tool call. Downstream runners convert that bridge
+    // into an extra `onToolStart` render which would produce a bare "Web
+    // Fetch" row alongside the new progress draft (ClawSweeper round 4 P1).
+    const bridgeBypass = events.find(
+      (evt) =>
+        evt.stream === "tool" &&
+        (evt.data as { phase?: string; toolCallId?: string; partialResult?: unknown })?.phase ===
+          "update" &&
+        (evt.data as { toolCallId?: string }).toolCallId === "wf-bridge" &&
+        (evt.data as { partialResult?: unknown }).partialResult !== undefined,
+    );
+    expect(bridgeBypass).toBeUndefined();
+
+    dispose();
+  });
+
   it("preserves the existing exec command-output progress flow (regression)", async () => {
     resetAgentEventsForTest();
     const { events, dispose } = captureItemEvents();

@@ -1090,7 +1090,25 @@ export function handleToolExecutionUpdate(
   const sanitized = sanitizeToolResult(partial);
   const isExecTool = isExecToolName(toolName);
   const liveResult = isExecTool ? capLiveExecResult(sanitized) : sanitized;
-  const emitDetailedLiveUpdate = !isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId);
+  // Allow-listed non-exec tools surface their first text content block as
+  // channel-visible `progressText`. Channel renderers already consume this
+  // field for exec command output via `kind:"command"`; we reuse the same
+  // contract for the existing `kind:"tool"` item, which keeps channel-side
+  // code untouched. Non-allow-listed non-exec tools never populate this
+  // field — their `partialResult` may carry URLs, bodies, or tokens that
+  // must not leak into a draft.
+  const nonExecProgressText =
+    !isExecTool && NON_EXEC_PROGRESS_SAFE_TOOLS.has(toolName)
+      ? extractLiveNonExecProgressText(sanitized)
+      : undefined;
+  // When we surface a non-exec progress milestone via item `progressText`,
+  // suppress the legacy `stream:"tool"` `partialResult` bridge: downstream
+  // runners convert that bridge into an extra `onToolStart` event which
+  // renders a bare `Web Fetch` row alongside the new progress draft. The
+  // bridge stays for exec and for non-allow-list non-exec tools (ACP / TUI /
+  // gateway consumers preserve their existing partials there).
+  const emitDetailedLiveUpdate =
+    nonExecProgressText === undefined && (!isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId));
   if (emitDetailedLiveUpdate) {
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -1103,17 +1121,6 @@ export function handleToolExecutionUpdate(
       },
     });
   }
-  // Allow-listed non-exec tools surface their first text content block as
-  // channel-visible `progressText`. Channel renderers already consume this
-  // field for exec command output via `kind:"command"`; we reuse the same
-  // contract for the existing `kind:"tool"` item, which keeps channel-side
-  // code untouched. Non-allow-listed non-exec tools never populate this
-  // field — their `partialResult` may carry URLs, bodies, or tokens that
-  // must not leak into a draft.
-  const nonExecProgressText =
-    !isExecTool && NON_EXEC_PROGRESS_SAFE_TOOLS.has(toolName)
-      ? extractLiveNonExecProgressText(sanitized)
-      : undefined;
   const storedMeta = ctx.state.toolMetaById.get(toolCallId)?.meta;
   // Channel draft formatter precedence is `meta ?? summary ?? progressText`
   // (src/plugin-sdk/channel-streaming.ts:423). When we surface a non-exec
