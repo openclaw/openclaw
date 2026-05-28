@@ -51,6 +51,18 @@ function makeToolRuntime(
       },
       tools,
     }),
+    peekCatalog: () => ({
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        [serverName]: {
+          serverName,
+          launchSummary: serverName,
+          toolCount: tools.length,
+        },
+      },
+      tools,
+    }),
     callTool: async () => ({
       content: [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],
       isError: false,
