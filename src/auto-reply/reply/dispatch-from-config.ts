@@ -1506,13 +1506,10 @@ export async function dispatchReplyFromConfig(
     }
   };
 
-  const sendBindingNotice = async (
+  const deliverBindingPayload = async (
     payload: ReplyPayload,
     mode: "additive" | "terminal",
   ): Promise<boolean> => {
-    if (suppressAutomaticSourceDelivery) {
-      return false;
-    }
     const result = await routeReplyToOriginating(payload, {
       kind: mode === "terminal" ? "final" : "tool",
     });
@@ -1528,6 +1525,15 @@ export async function dispatchReplyFromConfig(
     return mode === "additive"
       ? dispatcher.sendToolResult(payload)
       : dispatcher.sendFinalReply(payload);
+  };
+  const sendBindingNotice = async (
+    payload: ReplyPayload,
+    mode: "additive" | "terminal",
+  ): Promise<boolean> => {
+    if (suppressAutomaticSourceDelivery) {
+      return false;
+    }
+    return await deliverBindingPayload(payload, mode);
   };
 
   const pluginOwnedBindingRecord =
@@ -1769,7 +1775,10 @@ export async function dispatchReplyFromConfig(
       switch (targetedClaimOutcome.status) {
         case "handled": {
           if (targetedClaimOutcome.result.reply) {
-            await sendBindingNotice(targetedClaimOutcome.result.reply, "terminal");
+            // A bound plugin's reply is the explicit output for this claimed turn,
+            // not an automatic agent final; message-tool-only suppression must not
+            // turn a successful binding into a silent channel response.
+            await deliverBindingPayload(targetedClaimOutcome.result.reply, "terminal");
           }
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });

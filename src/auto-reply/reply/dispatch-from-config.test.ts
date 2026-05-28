@@ -7130,6 +7130,81 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("delivers plugin-owned binding replies under message-tool-only source delivery", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true, reply: { text: "Codex native reply" } },
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-message-tool-reply",
+      targetSessionKey: "plugin-binding:codex:abc123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:reply-test",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/tmp/plugin",
+      },
+    } satisfies SessionBindingRecord);
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:reply-test",
+      To: "discord:channel:reply-test",
+      AccountId: "default",
+      ChatType: "channel",
+      Body: "observed message",
+      SessionKey: "agent:main:discord:channel:reply-test",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        messages: {
+          groupChat: { visibleReplies: "message_tool" },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-message-tool-reply");
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+      "openclaw-codex-app-server",
+      expect.objectContaining({ channel: "discord", content: "observed message" }),
+      expect.objectContaining({
+        pluginBinding: expect.objectContaining({ bindingId: "binding-message-tool-reply" }),
+      }),
+    );
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Codex native reply" });
+  });
+
   it("keeps unmentioned plugin-bound fallback from ordinary group agent dispatch", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
