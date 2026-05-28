@@ -988,7 +988,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         `📌 Session selected: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`,
         "⚠️ Reason: session override",
         `⚠️ This session is pinned to ${selectedModelLabel}; config primary ${configuredDefaultModelLabel} will apply to new/unpinned sessions.`,
-        `↩️ Clear with: /model ${configuredDefaultModelLabel} or /reset`,
+        `↩️ Clear with: /model ${configuredDefaultModelLabel}`,
         "📖 Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
       ]
     : [`🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`];

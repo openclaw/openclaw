@@ -858,7 +858,7 @@
       "properties": {
         "activeMinutes": {
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         },
         "agentId": {
           "maxLength": 64,
@@ -883,11 +883,11 @@
         },
         "limit": {
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         },
         "messageLimit": {
           "minimum": 0,
-          "type": "number"
+          "type": "integer"
         },
         "search": {
           "minLength": 1,
@@ -909,7 +909,7 @@
         },
         "limit": {
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         },
         "sessionKey": {
           "type": "string"
@@ -1078,7 +1078,7 @@
         },
         "recentMinutes": {
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         }
       },
       "type": "object"
