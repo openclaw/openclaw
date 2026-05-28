@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createClaudeAppServerAgentHarness } from "./harness.js";
+import { buildClaudeProvider } from "./provider.js";
 import { createClaudeCommand } from "./src/commands.js";
 
 export default definePluginEntry({
@@ -32,6 +33,7 @@ export default definePluginEntry({
     api.registerAgentHarness(
       createClaudeAppServerAgentHarness({ resolvePluginConfig: resolveCurrentPluginConfig }),
     );
+    api.registerProvider(buildClaudeProvider({ pluginConfig: api.pluginConfig }));
     api.registerCommand(createClaudeCommand({ pluginConfig: api.pluginConfig }));
   },
 });

@@ -1,7 +1,11 @@
 {
   "id": "claude",
   "name": "Claude",
-  "description": "Claude app-server harness. Delegates Anthropic-provider turns to a local @zeroaltitude/openclaw-claude-bridge process, mirroring the codex-app-server pattern. Exposes OpenClaw dynamic tools to Claude inside the turn.",
+  "description": "Claude app-server harness and Claude-managed Anthropic model catalog. Delegates Anthropic-provider turns to a local @zeroaltitude/openclaw-claude-bridge process, mirroring the codex-app-server pattern. Exposes OpenClaw dynamic tools to Claude inside the turn.",
+  "providers": ["claude"],
+  "providerCatalogEntry": "./provider-discovery.ts",
+  "syntheticAuthRefs": ["claude"],
+  "nonSecretAuthMarkers": ["claude-app-server"],
   "activation": {
     "onStartup": false,
     "onAgentHarnesses": ["claude-bridge"]

@@ -12,7 +12,17 @@
 
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
 
-const DEFAULT_CLAUDE_PROVIDER_IDS = new Set(["anthropic"]);
+// The bridge runs Anthropic turns for both:
+//  - the `anthropic` provider (legacy: bridge is the harness for any
+//    anthropic config — Claude CLI, setup-token, API key all flow through
+//    it today), and
+//  - the new `claude` provider registered by this extension (a sibling of
+//    `codex`, surfaced in the model picker via the wizard contribution in
+//    provider.ts).
+// Keeping both bound to the same harness means picking "Claude app-server"
+// in the picker activates the bridge, and existing anthropic users keep
+// their current routing unchanged.
+const DEFAULT_CLAUDE_PROVIDER_IDS = new Set(["anthropic", "claude"]);
 
 export function createClaudeAppServerAgentHarness(options?: {
   id?: string;
