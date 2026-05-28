@@ -1,6 +1,9 @@
-import { EventEmitter } from "node:events";
 import { createHmac } from "node:crypto";
+import { EventEmitter } from "node:events";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createRuntimeTaskFlow } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -560,9 +563,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         id: "evt-1",
       },
     });
-    const goodSignature = createHmac("sha256", "signing-secret")
-      .update(rawBody)
-      .digest("hex");
+    const goodSignature = createHmac("sha256", "signing-secret").update(rawBody).digest("hex");
 
     const acceptedReq = createRawJsonRequest({
       path: target.path,
@@ -939,6 +940,58 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     });
   });
 
+  it("sends completion delivery to exec commands through stdin", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "openclaw-webhook-exec-"));
+    try {
+      const scriptPath = join(tempDir, "capture.mjs");
+      const outputPath = join(tempDir, "out.json");
+      await writeFile(
+        scriptPath,
+        `import { writeFileSync } from "node:fs";
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => input += chunk);
+process.stdin.on("end", () => {
+  writeFileSync(process.argv[2], JSON.stringify({ args: process.argv.slice(3), input }));
+});
+`,
+        "utf8",
+      );
+      const target: WebhookTarget = {
+        routeId: "exec",
+        path: "/plugins/webhooks/exec",
+        dispatchMode: "deliver",
+        auth: {
+          mode: "header",
+          header: "x-hook-token",
+          secret: "shared-secret",
+        },
+        delivery: {
+          mode: "exec",
+          command: process.execPath,
+          args: [scriptPath, outputPath, "{MergeRequest.Number}"],
+          textTemplate: "Review {MergeRequest.Number}",
+        },
+      };
+      const handler = createHandlerWithTarget(target);
+
+      const res = await dispatchJsonRequest({
+        handler,
+        path: target.path,
+        headers: { "x-hook-token": "shared-secret" },
+        body: {
+          MergeRequest: { Number: 9 },
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const output = JSON.parse(await readFile(outputPath, "utf8"));
+      expect(output).toEqual({ args: ["9"], input: "Review 9" });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("lets channel delivery resolve a default target when to is omitted", async () => {
     const resolveTarget = vi.fn(() => ({ ok: true as const, to: "home-chat" }));
     const sendText = vi.fn(async () => ({
@@ -1143,7 +1196,13 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "event.event_type" },
         idempotency: { payloadPath: "event.id", ttlMs: 60_000 },
         prompt: "Handle PagerDuty {event.data.id}: {event.data.title}",
-        body: { event: { id: "pd-event-1", event_type: "incident.triggered", data: { id: "P123", title: "API latency" } } },
+        body: {
+          event: {
+            id: "pd-event-1",
+            event_type: "incident.triggered",
+            data: { id: "P123", title: "API latency" },
+          },
+        },
         expectPrompt: "Handle PagerDuty P123: API latency",
       },
       {
@@ -1154,7 +1213,11 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { header: "x-sentry-hook-resource" },
         idempotency: { payloadPath: "id", ttlMs: 60_000 },
         prompt: "Investigate Sentry {project_slug}: {event.title}",
-        body: { id: "sentry-event-1", project_slug: "api", event: { title: "TypeError in checkout" } },
+        body: {
+          id: "sentry-event-1",
+          project_slug: "api",
+          event: { title: "TypeError in checkout" },
+        },
         expectPrompt: "Investigate Sentry api: TypeError in checkout",
       },
       {
@@ -1176,7 +1239,11 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "type" },
         idempotency: { payloadPath: "id", ttlMs: 60_000 },
         prompt: "Follow up Stripe {type} for {data.object.customer}",
-        body: { id: "evt_stripe_1", type: "invoice.payment_failed", data: { object: { customer: "cus_123" } } },
+        body: {
+          id: "evt_stripe_1",
+          type: "invoice.payment_failed",
+          data: { object: { customer: "cus_123" } },
+        },
         expectPrompt: "Follow up Stripe invoice.payment_failed for cus_123",
       },
       {
@@ -1198,7 +1265,12 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "subscriptionType" },
         idempotency: { payloadPath: "eventId", ttlMs: 60_000 },
         prompt: "Update HubSpot deal {objectId}: {propertyName}",
-        body: { eventId: "hubspot-event-1", subscriptionType: "deal.propertyChange", objectId: "deal-9", propertyName: "dealstage" },
+        body: {
+          eventId: "hubspot-event-1",
+          subscriptionType: "deal.propertyChange",
+          objectId: "deal-9",
+          propertyName: "dealstage",
+        },
         expectPrompt: "Update HubSpot deal deal-9: dealstage",
       },
       {
@@ -1209,7 +1281,11 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "ChangeEventHeader.entityName" },
         idempotency: { payloadPath: "ChangeEventHeader.commitNumber", ttlMs: 60_000 },
         prompt: "Review Salesforce {ChangeEventHeader.entityName} {CaseNumber}: {Subject}",
-        body: { ChangeEventHeader: { entityName: "CaseChangeEvent", commitNumber: "sf-commit-1" }, CaseNumber: "00042", Subject: "Renewal risk" },
+        body: {
+          ChangeEventHeader: { entityName: "CaseChangeEvent", commitNumber: "sf-commit-1" },
+          CaseNumber: "00042",
+          Subject: "Renewal risk",
+        },
         expectPrompt: "Review Salesforce CaseChangeEvent 00042: Renewal risk",
       },
       {
@@ -1220,7 +1296,12 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "event.name" },
         idempotency: { payloadPath: "sys_id", ttlMs: 60_000 },
         prompt: "Act on ServiceNow {number}: {short_description}",
-        body: { sys_id: "snow-event-1", event: { name: "incident.updated" }, number: "INC001", short_description: "VPN outage" },
+        body: {
+          sys_id: "snow-event-1",
+          event: { name: "incident.updated" },
+          number: "INC001",
+          short_description: "VPN outage",
+        },
         expectPrompt: "Act on ServiceNow INC001: VPN outage",
       },
       {
@@ -1231,7 +1312,11 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "type" },
         idempotency: { payloadPath: "id", ttlMs: 60_000 },
         prompt: "Summarize Zendesk ticket {ticket.id}: {ticket.subject}",
-        body: { id: "zd-ticket-1", type: "ticket.updated", ticket: { id: 88, subject: "Refund request" } },
+        body: {
+          id: "zd-ticket-1",
+          type: "ticket.updated",
+          ticket: { id: 88, subject: "Refund request" },
+        },
         expectPrompt: "Summarize Zendesk ticket 88: Refund request",
       },
       {
@@ -1242,7 +1327,12 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "type" },
         idempotency: { payloadPath: "event_id", ttlMs: 60_000 },
         prompt: "Process Slack workflow {workflow.name} from {user.id}",
-        body: { event_id: "slack-event-1", type: "workflow_step", workflow: { name: "Approve deploy" }, user: { id: "U123" } },
+        body: {
+          event_id: "slack-event-1",
+          type: "workflow_step",
+          workflow: { name: "Approve deploy" },
+          user: { id: "U123" },
+        },
         expectPrompt: "Process Slack workflow Approve deploy from U123",
       },
       {
@@ -1253,7 +1343,11 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "eventType" },
         idempotency: { payloadPath: "triggerId", ttlMs: 60_000 },
         prompt: "Handle Teams approval {approval.id}: {approval.title}",
-        body: { triggerId: "teams-trigger-1", eventType: "approval.requested", approval: { id: "APR-1", title: "Vendor spend" } },
+        body: {
+          triggerId: "teams-trigger-1",
+          eventType: "approval.requested",
+          approval: { id: "APR-1", title: "Vendor spend" },
+        },
         expectPrompt: "Handle Teams approval APR-1: Vendor spend",
       },
       {
@@ -1264,7 +1358,11 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "type" },
         idempotency: { payloadPath: "id", ttlMs: 60_000 },
         prompt: "Review Notion page {entity.id}: {entity.title}",
-        body: { id: "notion-event-1", type: "page.updated", entity: { id: "page-1", title: "Launch plan" } },
+        body: {
+          id: "notion-event-1",
+          type: "page.updated",
+          entity: { id: "page-1", title: "Launch plan" },
+        },
         expectPrompt: "Review Notion page page-1: Launch plan",
       },
       {
@@ -1275,7 +1373,13 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "action" },
         idempotency: { payloadPath: "webhook.id", ttlMs: 60_000 },
         prompt: "Inspect Airtable {base.id}/{table.id}: {record.id}",
-        body: { action: "record.created", webhook: { id: "airtable-webhook-1" }, base: { id: "app123" }, table: { id: "tbl123" }, record: { id: "rec123" } },
+        body: {
+          action: "record.created",
+          webhook: { id: "airtable-webhook-1" },
+          base: { id: "app123" },
+          table: { id: "tbl123" },
+          record: { id: "rec123" },
+        },
         expectPrompt: "Inspect Airtable app123/tbl123: rec123",
       },
       {
@@ -1286,7 +1390,12 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "eventType" },
         idempotency: { payloadPath: "responseId", ttlMs: 60_000 },
         prompt: "Process Google Forms {formId}: {answers.summary}",
-        body: { eventType: "form.submit", responseId: "forms-response-1", formId: "form-9", answers: { summary: "Access request" } },
+        body: {
+          eventType: "form.submit",
+          responseId: "forms-response-1",
+          formId: "form-9",
+          answers: { summary: "Access request" },
+        },
         expectPrompt: "Process Google Forms form-9: Access request",
       },
       {
@@ -1297,7 +1406,11 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "event" },
         idempotency: { payloadPath: "build.id", ttlMs: 60_000 },
         prompt: "Investigate Jenkins {job.name} build {build.number}: {build.status}",
-        body: { event: "build.completed", job: { name: "deploy-prod" }, build: { id: "jenkins-build-1", number: 321, status: "FAILURE" } },
+        body: {
+          event: "build.completed",
+          job: { name: "deploy-prod" },
+          build: { id: "jenkins-build-1", number: 321, status: "FAILURE" },
+        },
         expectPrompt: "Investigate Jenkins deploy-prod build 321: FAILURE",
       },
       {
@@ -1308,7 +1421,13 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "event" },
         idempotency: { payloadPath: "app.metadata.uid", ttlMs: 60_000 },
         prompt: "Repair Argo CD {app.metadata.name}: {app.status.sync.status}",
-        body: { event: "app.sync.failed", app: { metadata: { uid: "argo-app-1", name: "payments" }, status: { sync: { status: "OutOfSync" } } } },
+        body: {
+          event: "app.sync.failed",
+          app: {
+            metadata: { uid: "argo-app-1", name: "payments" },
+            status: { sync: { status: "OutOfSync" } },
+          },
+        },
         expectPrompt: "Repair Argo CD payments: OutOfSync",
       },
       {
@@ -1319,7 +1438,11 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         eventConfig: { payloadPath: "status" },
         idempotency: { payloadPath: "groupKey", ttlMs: 60_000 },
         prompt: "Correlate Alertmanager {commonLabels.alertname}: {status}",
-        body: { status: "firing", groupKey: "alert-group-1", commonLabels: { alertname: "HighErrorRate" } },
+        body: {
+          status: "firing",
+          groupKey: "alert-group-1",
+          commonLabels: { alertname: "HighErrorRate" },
+        },
         expectPrompt: "Correlate Alertmanager HighErrorRate: firing",
       },
     ];

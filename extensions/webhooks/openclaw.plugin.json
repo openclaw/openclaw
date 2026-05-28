@@ -48,7 +48,15 @@
           "delayMs": { "type": "integer", "minimum": 0 },
           "nameTemplate": { "type": "string", "minLength": 1 },
           "tagTemplate": { "type": "string", "minLength": 1 },
-          "agentId": { "type": "string", "minLength": 1 }
+          "agentId": { "type": "string", "minLength": 1 },
+          "onCompletion": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "deliver": { "$ref": "#/$defs/deliverTarget" }
+            },
+            "required": ["deliver"]
+          }
         }
       },
       "taskflowRunTask": {
@@ -137,6 +145,26 @@
               },
               "silent": { "type": "boolean" }
             }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": { "type": "string", "enum": ["exec"] },
+              "command": { "type": "string", "minLength": 1 },
+              "args": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              },
+              "cwd": { "type": "string", "minLength": 1 },
+              "textTemplate": { "type": "string", "minLength": 1 },
+              "timeoutMs": { "type": "integer", "exclusiveMinimum": 0 }
+            },
+            "required": ["mode", "command"]
           }
         ]
       },

@@ -235,6 +235,103 @@ describe("resolveWebhooksPluginConfig", () => {
     ]);
   });
 
+  it("normalizes agent completion delivery routes", () => {
+    const routes = resolveWebhooksPluginConfig({
+      pluginConfig: {
+        routes: {
+          codebase: {
+            sessionKey: "agent:reviewer:codebase",
+            auth: {
+              mode: "header",
+              header: "x-vecode-hook-id",
+              secret: "hook-secret",
+            },
+            dispatch: {
+              mode: "agent",
+              agent: {
+                deliveryMode: "none",
+                onCompletion: {
+                  deliver: {
+                    mode: "channel",
+                    channel: "codebase",
+                    to: "{Repository.Path}",
+                    threadId: "{MergeRequest.Number}",
+                    textTemplate: "{completionText}",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(routes[0]).toMatchObject({
+      routeId: "codebase",
+      dispatchMode: "agent",
+      agent: {
+        deliveryMode: "none",
+        onCompletion: {
+          delivery: {
+            mode: "channel",
+            channel: "codebase",
+            to: "{Repository.Path}",
+            threadId: "{MergeRequest.Number}",
+            textTemplate: "{completionText}",
+          },
+        },
+      },
+    });
+  });
+
+  it("normalizes exec completion delivery routes", () => {
+    const routes = resolveWebhooksPluginConfig({
+      pluginConfig: {
+        routes: {
+          codebase: {
+            sessionKey: "agent:reviewer:codebase",
+            auth: {
+              mode: "header",
+              header: "x-vecode-hook-id",
+              secret: "hook-secret",
+            },
+            dispatch: {
+              mode: "agent",
+              agent: {
+                onCompletion: {
+                  deliver: {
+                    mode: "exec",
+                    command: "bytedcli",
+                    args: ["--json", "codebase", "mr", "review", "{MergeRequest.Number}"],
+                    cwd: "/tmp/repo",
+                    textTemplate: "{completionText}",
+                    timeoutMs: 10000,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(routes[0]).toMatchObject({
+      dispatchMode: "agent",
+      agent: {
+        onCompletion: {
+          delivery: {
+            mode: "exec",
+            command: "bytedcli",
+            args: ["--json", "codebase", "mr", "review", "{MergeRequest.Number}"],
+            cwd: "/tmp/repo",
+            textTemplate: "{completionText}",
+            timeoutMs: 10000,
+          },
+        },
+      },
+    });
+  });
+
   it("normalizes Hermes-style string delivery routes", () => {
     const routes = resolveWebhooksPluginConfig({
       pluginConfig: {

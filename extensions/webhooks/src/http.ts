@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -40,6 +41,13 @@ type ScheduleSessionTurn = (params: {
   delayMs: number;
   deleteAfterRun?: boolean;
 }) => Promise<{ id: string; pluginId: string; sessionKey: string; kind: string } | undefined>;
+
+export type WebhookAgentCompletionDispatch = {
+  routeId: string;
+  sessionKey: string;
+  delivery: ConfiguredWebhookDeliveryConfig;
+  context: WebhookDispatchContext;
+};
 
 type WebhookIdempotencyStore = {
   registerIfAbsent: (
@@ -394,6 +402,7 @@ type WebhookDispatchContext = {
   body: unknown;
   rawBody: string;
   headers: Record<string, string>;
+  completionText?: string;
 };
 
 const DEFAULT_EVENT_HEADERS = [
@@ -737,6 +746,70 @@ function renderDeliveryField(
   return value;
 }
 
+function renderExecArgs(
+  args: readonly string[] | undefined,
+  context: WebhookDispatchContext,
+): string[] {
+  return (args ?? []).map((arg) => renderTemplate(arg, context));
+}
+
+function renderExecEnv(
+  env: Record<string, string> | undefined,
+  context: WebhookDispatchContext,
+): Record<string, string> | undefined {
+  if (!env) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(env).map(([key, value]) => [key, renderTemplate(value, context)]),
+  );
+}
+
+async function runExecDelivery(params: {
+  delivery: Extract<ConfiguredWebhookDeliveryConfig, { mode: "exec" }>;
+  context: WebhookDispatchContext;
+  text: string;
+}): Promise<{
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}> {
+  const args = renderExecArgs(params.delivery.args, params.context);
+  const env = renderExecEnv(params.delivery.env, params.context);
+  const timeoutMs = params.delivery.timeoutMs ?? 30_000;
+  return await new Promise((resolve, reject) => {
+    const child = spawn(params.delivery.command, args, {
+      cwd: params.delivery.cwd,
+      env: env ? { ...process.env, ...env } : process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error(`exec delivery timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (exitCode, signal) => {
+      clearTimeout(timer);
+      resolve({ exitCode, signal, stdout, stderr });
+    });
+    child.stdin.end(params.text);
+  });
+}
+
 function renderTemplateExpression(params: {
   match: string;
   rawExpression: string;
@@ -794,6 +867,11 @@ function renderOptionalTemplate(
 
 function resolveTemplateValue(path: string, context: WebhookDispatchContext): unknown {
   switch (path) {
+    case "completion":
+    case "completionText":
+    case "result":
+    case "resultText":
+      return context.completionText;
     case "body":
     case "payload":
       return context.body;
@@ -824,7 +902,10 @@ function resolveTemplateValue(path: string, context: WebhookDispatchContext): un
     return context.headers[path.slice("header.".length).toLowerCase()];
   }
   if (path.startsWith("event.")) {
-    const eventMetadata = readTemplatePath({ type: context.eventType }, path.slice("event.".length));
+    const eventMetadata = readTemplatePath(
+      { type: context.eventType },
+      path.slice("event.".length),
+    );
     return eventMetadata !== undefined ? eventMetadata : readTemplatePath(context.body, path);
   }
   return readTemplatePath(context.body, path);
@@ -1352,6 +1433,7 @@ async function executeAgentDispatch(params: {
   target: AgentWebhookTarget;
   context: WebhookDispatchContext;
   scheduleSessionTurn?: ScheduleSessionTurn;
+  onAgentCompletionDispatch?: (dispatch: WebhookAgentCompletionDispatch) => void | Promise<void>;
   logger?: WebhookLogger;
 }): Promise<{ statusCode: number; body: unknown }> {
   const { target, context } = params;
@@ -1383,6 +1465,14 @@ async function executeAgentDispatch(params: {
     ...(name ? { name } : {}),
     ...(tag ? { tag } : {}),
   };
+  if (target.agent.onCompletion) {
+    await params.onAgentCompletionDispatch?.({
+      routeId: target.routeId,
+      sessionKey: target.sessionKey,
+      delivery: target.agent.onCompletion.delivery,
+      context,
+    });
+  }
   void scheduler(scheduleRequest).then(
     (handle) => {
       if (!handle) {
@@ -1421,6 +1511,7 @@ async function executeAgentDispatch(params: {
         action: "agent_dispatch",
         sessionKey: target.sessionKey,
         accepted: true,
+        ...(target.agent.onCompletion ? { completionDelivery: true } : {}),
       },
     },
   };
@@ -1451,6 +1542,47 @@ async function executeDeliveryDispatch(params: {
         result: {
           action: "deliver",
           mode: "log",
+          ...(context.eventType ? { eventType: context.eventType } : {}),
+          ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
+        },
+      },
+    };
+  }
+
+  if (target.delivery.mode === "exec") {
+    const text =
+      renderOptionalTemplate(target.delivery.textTemplate, context) ??
+      renderOptionalTemplate(target.prompt, context) ??
+      buildDefaultWebhookPrompt(context);
+    const result = await runExecDelivery({
+      delivery: target.delivery,
+      context,
+      text,
+    });
+    if (result.exitCode !== 0) {
+      return {
+        statusCode: 502,
+        body: {
+          ok: false,
+          routeId: target.routeId,
+          code: "exec_delivery_failed",
+          error: `exec delivery exited ${String(result.exitCode ?? result.signal ?? "unknown")}`,
+        },
+      };
+    }
+    params.logger?.info?.("[webhooks] exec delivery completed", {
+      routeId: target.routeId,
+      eventType: context.eventType,
+      idempotencyKey: context.idempotencyKey,
+    });
+    return {
+      statusCode: 200,
+      body: {
+        ok: true,
+        routeId: target.routeId,
+        result: {
+          action: "deliver",
+          mode: "exec",
           ...(context.eventType ? { eventType: context.eventType } : {}),
           ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
         },
@@ -1576,12 +1708,51 @@ async function executeDeliveryDispatch(params: {
   };
 }
 
+export async function deliverWebhookCompletion(params: {
+  routeId: string;
+  delivery: ConfiguredWebhookDeliveryConfig;
+  context: WebhookDispatchContext;
+  completionText: string;
+  loadChannelOutboundAdapter?: LoadChannelOutboundAdapter;
+  logger?: WebhookLogger;
+  cfg: OpenClawConfig;
+}): Promise<void> {
+  const completionText = params.completionText.trim();
+  if (!completionText) {
+    return;
+  }
+  const result = await executeDeliveryDispatch({
+    target: {
+      routeId: params.routeId,
+      path: "",
+      dispatchMode: "deliver",
+      auth: { mode: "bearer", secret: "unused", prefix: "Bearer" },
+      delivery: params.delivery,
+    },
+    context: {
+      ...params.context,
+      completionText,
+    },
+    loadChannelOutboundAdapter: params.loadChannelOutboundAdapter,
+    logger: params.logger,
+    cfg: params.cfg,
+  });
+  if (result.statusCode >= 400) {
+    throw new Error(
+      `webhook completion delivery failed for ${params.routeId}: ${String(
+        (result.body as { error?: unknown }).error ?? result.statusCode,
+      )}`,
+    );
+  }
+}
+
 export function createTaskFlowWebhookRequestHandler(params: {
   cfg: OpenClawConfig;
   targetsByPath: Map<string, WebhookTarget[]>;
   inFlightLimiter?: WebhookInFlightLimiter;
   idempotencyStore?: WebhookIdempotencyStore;
   scheduleSessionTurn?: ScheduleSessionTurn;
+  onAgentCompletionDispatch?: (dispatch: WebhookAgentCompletionDispatch) => void | Promise<void>;
   loadChannelOutboundAdapter?: LoadChannelOutboundAdapter;
   logger?: WebhookLogger;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
@@ -1732,6 +1903,7 @@ export function createTaskFlowWebhookRequestHandler(params: {
               target,
               context: dispatchContext,
               scheduleSessionTurn: params.scheduleSessionTurn,
+              onAgentCompletionDispatch: params.onAgentCompletionDispatch,
               logger: params.logger,
             });
             writeJson(res, outcome.statusCode, outcome.body);

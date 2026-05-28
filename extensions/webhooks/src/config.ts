@@ -40,6 +40,12 @@ const webhookDispatchConfigSchema = z
         nameTemplate: z.string().trim().min(1).optional(),
         tagTemplate: z.string().trim().min(1).optional(),
         agentId: z.string().trim().min(1).optional(),
+        onCompletion: z
+          .object({
+            deliver: z.lazy(() => webhookDeliveryConfigSchema),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
@@ -75,10 +81,7 @@ const webhookDispatchConfigSchema = z
 
 const webhookDeliverTargetSchema = z.string().trim().min(1);
 
-const templatedNumberOrStringSchema = z.union([
-  z.string().trim().min(1),
-  z.number().finite(),
-]);
+const templatedNumberOrStringSchema = z.union([z.string().trim().min(1), z.number().finite()]);
 
 const webhookDeliveryConfigSchema = z.union([
   webhookDeliverTargetSchema,
@@ -91,6 +94,17 @@ const webhookDeliveryConfigSchema = z.union([
       accountId: z.string().trim().min(1).optional(),
       threadId: templatedNumberOrStringSchema.optional(),
       silent: z.boolean().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal("exec"),
+      command: z.string().trim().min(1),
+      args: z.array(z.string()).optional(),
+      env: z.record(z.string(), z.string()).optional(),
+      cwd: z.string().trim().min(1).optional(),
+      textTemplate: z.string().trim().min(1).optional(),
+      timeoutMs: z.number().int().positive().optional(),
     })
     .strict(),
 ]);
@@ -232,6 +246,9 @@ export type ConfiguredWebhookAgentDispatchConfig = {
   nameTemplate?: string;
   tagTemplate?: string;
   agentId?: string;
+  onCompletion?: {
+    delivery: ConfiguredWebhookDeliveryConfig;
+  };
 };
 
 export type ConfiguredWebhookDeliveryConfig =
@@ -246,6 +263,15 @@ export type ConfiguredWebhookDeliveryConfig =
       accountId?: string;
       threadId?: string | number;
       silent?: boolean;
+    }
+  | {
+      mode: "exec";
+      command: string;
+      args?: string[];
+      env?: Record<string, string>;
+      cwd?: string;
+      textTemplate?: string;
+      timeoutMs?: number;
     };
 
 type ConfiguredWebhookRouteBase = {
@@ -302,9 +328,7 @@ function resolveRawDispatchMode(route: {
   return route.dispatch.mode;
 }
 
-function normalizeAuth(
-  route: RawWebhookRouteConfig,
-): ConfiguredWebhookAuth {
+function normalizeAuth(route: RawWebhookRouteConfig): ConfiguredWebhookAuth {
   if (!route.auth) {
     return {
       mode: "bearer",
@@ -335,15 +359,14 @@ function normalizeStringTemplate(value: string | number | boolean | undefined): 
   return String(value).trim() || undefined;
 }
 
-function normalizeDeliveryConfig(
+function normalizeDeliveryConfigFromInput(
   routeId: string,
-  route: RawWebhookRouteConfig,
+  raw: z.infer<typeof webhookDeliveryConfigSchema> | undefined,
+  extra: z.infer<typeof webhookDeliveryExtraConfigSchema> = {},
 ): ConfiguredWebhookDeliveryConfig | undefined {
-  const raw = route.deliver;
   if (!raw) {
     return undefined;
   }
-  const extra = route.deliverExtra ?? route.deliver_extra ?? {};
   if (typeof raw === "string") {
     const channel = raw.trim();
     if (channel === "log") {
@@ -378,10 +401,19 @@ function normalizeDeliveryConfig(
   if (mode === "log") {
     return { mode: "log" };
   }
+  if (mode === "exec") {
+    return {
+      mode: "exec",
+      command: raw.command,
+      ...(raw.args ? { args: raw.args } : {}),
+      ...(raw.env ? { env: raw.env } : {}),
+      ...(raw.cwd ? { cwd: raw.cwd } : {}),
+      ...(raw.textTemplate ? { textTemplate: raw.textTemplate } : {}),
+      ...(raw.timeoutMs ? { timeoutMs: raw.timeoutMs } : {}),
+    };
+  }
   if (!raw.channel) {
-    throw new Error(
-      `webhooks.routes.${routeId}.deliver requires channel for channel delivery.`,
-    );
+    throw new Error(`webhooks.routes.${routeId}.deliver requires channel for channel delivery.`);
   }
   return {
     mode: "channel",
@@ -419,6 +451,17 @@ function normalizeDeliveryConfig(
         ? { silent: extra.silent }
         : {}),
   };
+}
+
+function normalizeDeliveryConfig(
+  routeId: string,
+  route: RawWebhookRouteConfig,
+): ConfiguredWebhookDeliveryConfig | undefined {
+  return normalizeDeliveryConfigFromInput(
+    routeId,
+    route.deliver,
+    route.deliverExtra ?? route.deliver_extra ?? {},
+  );
 }
 
 function normalizeTaskFlowTemplateConfig(
@@ -460,8 +503,10 @@ function normalizeTaskFlowTemplateConfig(
 
 function normalizeAgentDispatchConfig(
   route: RawWebhookRouteConfig,
+  routeId: string,
 ): ConfiguredWebhookAgentDispatchConfig {
   const raw = route.dispatch.agent;
+  const completionDelivery = normalizeDeliveryConfigFromInput(routeId, raw?.onCompletion?.deliver);
   return {
     ...(raw?.messageTemplate ? { messageTemplate: raw.messageTemplate } : {}),
     deliveryMode: raw?.deliveryMode ?? "announce",
@@ -469,6 +514,7 @@ function normalizeAgentDispatchConfig(
     ...(raw?.nameTemplate ? { nameTemplate: raw.nameTemplate } : {}),
     ...(raw?.tagTemplate ? { tagTemplate: raw.tagTemplate } : {}),
     ...(raw?.agentId ? { agentId: raw.agentId } : {}),
+    ...(completionDelivery ? { onCompletion: { delivery: completionDelivery } } : {}),
   };
 }
 
@@ -545,7 +591,7 @@ export function resolveWebhooksPluginConfig(params: {
         ...base,
         dispatchMode: "agent",
         sessionKey: route.sessionKey as string,
-        agent: normalizeAgentDispatchConfig(route),
+        agent: normalizeAgentDispatchConfig(route, routeId),
       });
       continue;
     }

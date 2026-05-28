@@ -11,6 +11,7 @@ function createApi(params?: {
   scheduleSessionTurn?: ReturnType<typeof vi.fn>;
   loadAdapter?: ReturnType<typeof vi.fn>;
   openKeyedStore?: ReturnType<typeof vi.fn>;
+  registerAgentEventSubscription?: ReturnType<typeof vi.fn>;
 }): OpenClawPluginApi {
   return createTestPluginApi({
     id: "webhooks",
@@ -33,7 +34,18 @@ function createApi(params?: {
       state: {
         openKeyedStore: params?.openKeyedStore ?? vi.fn(),
       },
+      events: {
+        onAgentEvent: vi.fn(() => () => {}),
+      },
     } as unknown as OpenClawPluginApi["runtime"],
+    agent: {
+      events: {
+        registerAgentEventSubscription: params?.registerAgentEventSubscription ?? vi.fn(),
+      },
+    } as unknown as OpenClawPluginApi["agent"],
+    runContext: {
+      setRunContext: vi.fn(() => true),
+    } as unknown as OpenClawPluginApi["runContext"],
     session: {
       workflow: {
         scheduleSessionTurn: params?.scheduleSessionTurn ?? vi.fn(async () => undefined),
@@ -57,6 +69,31 @@ function requireFirstRouteRegistration(mock: ReturnType<typeof vi.fn>) {
     throw new Error("expected webhook route registration");
   }
   return call[0] as Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
+}
+
+function createMemoryKeyedStore<T>() {
+  const entries = new Map<string, T>();
+  return {
+    register: vi.fn(async (key: string, value: T) => {
+      entries.set(key, value);
+    }),
+    registerIfAbsent: vi.fn(async (key: string, value: T) => {
+      if (entries.has(key)) {
+        return false;
+      }
+      entries.set(key, value);
+      return true;
+    }),
+    lookup: vi.fn(async (key: string) => entries.get(key)),
+    consume: vi.fn(async (key: string) => {
+      const value = entries.get(key);
+      entries.delete(key);
+      return value;
+    }),
+    delete: vi.fn(async (key: string) => entries.delete(key)),
+    entries: vi.fn(async () => []),
+    clear: vi.fn(async () => entries.clear()),
+  };
 }
 
 describe("webhooks plugin registration", () => {
@@ -154,6 +191,157 @@ describe("webhooks plugin registration", () => {
     const route = requireFirstRouteRegistration(registerHttpRoute);
     expect(route.path).toBe("/plugins/webhooks/incidents");
     expect(route.handler).toBeTypeOf("function");
+  });
+
+  it("registers completion delivery for agent routes and binds webhook context to started runs", async () => {
+    const registerHttpRoute = vi.fn();
+    const registerAgentEventSubscription = vi.fn();
+    const scheduleSessionTurn = vi.fn(async () => ({
+      id: "job-1",
+      pluginId: "webhooks",
+      sessionKey: "agent:reviewer:codebase",
+      kind: "agentTurn",
+    }));
+    const sendText = vi.fn(async () => ({ ok: true }));
+    const loadAdapter = vi.fn(async () => ({
+      sendText,
+    }));
+    const keyedStore = createMemoryKeyedStore<unknown>();
+    const openKeyedStore = vi.fn(() => keyedStore);
+
+    plugin.register(
+      createApi({
+        pluginConfig: {
+          routes: {
+            codebase: {
+              sessionKey: "agent:reviewer:codebase",
+              auth: {
+                mode: "header",
+                header: "x-vecode-hook-id",
+                secret: "hook-secret",
+              },
+              dispatch: {
+                mode: "agent",
+                agent: {
+                  deliveryMode: "none",
+                  onCompletion: {
+                    deliver: {
+                      mode: "channel",
+                      channel: "codebase",
+                      to: "{Repository.Path}",
+                      threadId: "{MergeRequest.Number}",
+                      textTemplate: "{completionText}",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        registerHttpRoute,
+        scheduleSessionTurn,
+        registerAgentEventSubscription,
+        loadAdapter,
+        openKeyedStore,
+      }),
+    );
+
+    expect(registerAgentEventSubscription).toHaveBeenCalledTimes(1);
+    const route = requireFirstRouteRegistration(registerHttpRoute);
+    const req = {
+      method: "POST",
+      url: "/plugins/webhooks/codebase",
+      headers: {
+        "content-type": "application/json",
+        "x-vecode-hook-id": "hook-secret",
+      },
+      socket: { remoteAddress: "127.0.0.1" },
+      on(event: string, handler: (chunk?: Buffer) => void) {
+        if (event === "data") {
+          setImmediate(() =>
+            handler(
+              Buffer.from(
+                JSON.stringify({
+                  Repository: { Path: "iaasng/openclaw-session-search" },
+                  MergeRequest: { Number: 9 },
+                }),
+              ),
+            ),
+          );
+        }
+        if (event === "end") {
+          setImmediate(() => handler());
+        }
+        return this;
+      },
+      destroy() {
+        return this;
+      },
+    };
+    const res = {
+      statusCode: 0,
+      headers: {} as Record<string, string>,
+      body: "",
+      setHeader(name: string, value: string) {
+        this.headers[name] = value;
+      },
+      end(body?: string) {
+        this.body = body ?? "";
+      },
+    };
+    await route.handler(req as never, res as never);
+    expect(res.statusCode).toBe(202);
+    expect(scheduleSessionTurn).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(keyedStore.register).toHaveBeenCalledTimes(1));
+    expect(openKeyedStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        namespace: "webhook-agent-completion",
+      }),
+    );
+
+    const subscription = registerAgentEventSubscription.mock.calls[0]?.[0];
+    const contextStore = new Map<string, unknown>();
+    const ctx = {
+      getRunContext: (namespace: string) => contextStore.get(namespace),
+      setRunContext: (namespace: string, value: unknown) => contextStore.set(namespace, value),
+      clearRunContext: (namespace?: string) =>
+        namespace ? contextStore.delete(namespace) : contextStore.clear(),
+    };
+    await subscription.handle(
+      {
+        runId: "run-1",
+        stream: "lifecycle",
+        sessionKey: "agent:reviewer:codebase",
+        data: { phase: "start" },
+      },
+      ctx,
+    );
+    expect(keyedStore.consume).toHaveBeenCalledWith("agent:reviewer:codebase");
+    expect(contextStore.get("agent-completion-delivery")).toEqual(
+      expect.objectContaining({
+        routeId: "codebase",
+        sessionKey: "agent:reviewer:codebase",
+        body: {
+          Repository: { Path: "iaasng/openclaw-session-search" },
+          MergeRequest: { Number: 9 },
+        },
+      }),
+    );
+    await subscription.handle(
+      { runId: "run-1", stream: "assistant", data: { delta: "Review " } },
+      ctx,
+    );
+    await subscription.handle({ runId: "run-1", stream: "assistant", data: { delta: "ok" } }, ctx);
+    await subscription.handle({ runId: "run-1", stream: "lifecycle", data: { phase: "end" } }, ctx);
+
+    expect(loadAdapter).toHaveBeenCalledWith("codebase");
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "iaasng/openclaw-session-search",
+        text: "Review ok",
+        threadId: "9",
+      }),
+    );
   });
 
   it("registers deliver routes without binding TaskFlow sessions", () => {
