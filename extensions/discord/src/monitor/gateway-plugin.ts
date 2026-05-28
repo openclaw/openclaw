@@ -256,7 +256,18 @@ export function waitForDiscordGatewayPluginRegistration(
   return registrationPromises.get(plugin as discordGateway.GatewayPlugin);
 }
 
+// Stagger reconnect base delay by accountId to avoid thundering herd on multi-account setups.
+// Each account gets a deterministic 0-4999ms offset based on a hash of its id.
+function staggeredBaseDelay(accountId: string): number {
+  let hash = 0;
+  for (let i = 0; i < accountId.length; i++) {
+    hash = (hash * 31 + accountId.charCodeAt(i)) >>> 0;
+  }
+  return hash % 5000;
+}
+
 export function createDiscordGatewayPlugin(params: {
+  accountId?: string;
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
   testing?: CreateDiscordGatewayPluginTestingOptions;
@@ -271,6 +282,7 @@ export function createDiscordGatewayPlugin(params: {
     configuredTimeoutMs: params.discordConfig?.gatewayInfoTimeoutMs,
     env: process.env,
   });
+  const baseDelay = params.accountId ? staggeredBaseDelay(params.accountId) : 0;
   let fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled);
   let wsAgent: DiscordGatewayWebSocketAgent = new HttpsAgent({
     lookup: discordDnsLookup,
@@ -293,7 +305,7 @@ export function createDiscordGatewayPlugin(params: {
 
   return createGatewayPlugin({
     options: {
-      reconnect: { maxAttempts: 50 },
+      reconnect: { maxAttempts: 50, baseDelay },
       intents,
       // OpenClaw registers its own async interaction listener.
       autoInteractions: false,
