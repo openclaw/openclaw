@@ -805,18 +805,18 @@ export function renderAgentSkills(params: {
       ${params.error
         ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
         : nothing}
-
       ${architectureTotal > 0
         ? html`
             <div class="agent-skills-architecture" style="margin-top: 14px;">
-              <div class="label">Architecture Agents</div>
+              <div class="label">${t("agents.skillsPanel.architectureTitle")}</div>
               <div class="card-sub">
-                Skill-declared agent interfaces from <span class="mono">agents/openai.yaml</span>.
+                ${t("agents.skillsPanel.architectureInterfacesFrom")}
+                <span class="mono">${t("agents.skillsPanel.architectureManifestPath")}</span>.
                 <span class="mono">${architectureSkills.length}/${architectureTotal}</span>
               </div>
               ${architectureSkills.length === 0
                 ? html`<div class="muted" style="margin-top: 10px">
-                    No architecture agents match the current filter.
+                    ${t("agents.skillsPanel.architectureNoMatch")}
                   </div>`
                 : html`
                     <div class="list skills-grid" style="margin-top: 10px;">
@@ -870,15 +870,17 @@ function renderArchitectureSkillAgent(
     <div class="list-item agent-skill-row">
       <div class="list-main">
         <div class="list-title">${agentInterface.displayName}</div>
-        <div class="list-sub">${agentInterface.shortDescription ?? "Skill-declared agent surface."}</div>
+        <div class="list-sub">
+          ${agentInterface.shortDescription ?? t("agents.skillsPanel.architectureSurfaceFallback")}
+        </div>
         <div class="chip-row" style="margin-top: 6px;">
-          <span class="chip">architecture agent</span>
+          <span class="chip">${t("agents.skillsPanel.architectureChip")}</span>
           <span class="chip mono" translate="no">${skillName}</span>
         </div>
         ${agentInterface.defaultPrompt
           ? html`
               <div class="muted" style="margin-top: 6px;">
-                Default prompt: ${agentInterface.defaultPrompt}
+                ${t("agents.skillsPanel.defaultPromptLabel")} ${agentInterface.defaultPrompt}
               </div>
             `
           : nothing}

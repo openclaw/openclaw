@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "dev": "vite",
-    "preview": "vite preview",
+    "build": "node ../node_modules/vite/bin/vite.js build",
+    "dev": "node ../node_modules/vite/bin/vite.js",
+    "preview": "node ../node_modules/vite/bin/vite.js preview",
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {

@@ -1,0 +1,2653 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenClaw 3D 指揮中心</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #070b12;
+        --bg-panel: rgba(14, 20, 34, 0.78);
+        --bg-panel-strong: rgba(10, 15, 26, 0.92);
+        --line: rgba(255, 215, 130, 0.26);
+        --text: #e8edf8;
+        --muted: #8e9ab5;
+        --accent: #f4b453;
+        --accent-soft: rgba(244, 180, 83, 0.22);
+        --ok: #57e89b;
+        --warn: #ffd76d;
+        --err: #ff7070;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: radial-gradient(circle at 20% 15%, #16223f 0, transparent 34%),
+          radial-gradient(circle at 85% 8%, #393022 0, transparent 28%),
+          linear-gradient(160deg, #05070d 0%, #0b1020 45%, #080b13 100%);
+        color: var(--text);
+        font-family: "Noto Sans TC", "Segoe UI", "PingFang TC", sans-serif;
+      }
+
+      .shell {
+        min-height: 100vh;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        padding: 14px;
+        gap: 12px;
+      }
+
+      .topbar {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--bg-panel-strong);
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 12px;
+        align-items: center;
+        padding: 10px 12px;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03) inset, 0 16px 26px rgba(0, 0, 0, 0.38);
+      }
+
+      .brand {
+        display: grid;
+        gap: 2px;
+      }
+
+      .brand h1 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      .brand small {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .chip {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 5px 10px;
+        font-size: 12px;
+        color: #f6e2bf;
+        background: var(--accent-soft);
+        white-space: nowrap;
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      button,
+      .link-btn {
+        border: 1px solid var(--line);
+        color: var(--text);
+        border-radius: 10px;
+        padding: 8px 12px;
+        font-weight: 600;
+        background: rgba(255, 255, 255, 0.04);
+        cursor: pointer;
+        text-decoration: none;
+      }
+
+      button:hover,
+      .link-btn:hover {
+        border-color: rgba(244, 180, 83, 0.7);
+        background: rgba(244, 180, 83, 0.16);
+      }
+
+      .layout {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(290px, 25%) minmax(0, 1fr) minmax(320px, 28%);
+        gap: 12px;
+      }
+
+      .panel {
+        min-height: 0;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--bg-panel);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .panel > header {
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .panel > header h2 {
+        margin: 0;
+        font-size: 15px;
+      }
+
+      .panel > header p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .conversation {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .msg {
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(8, 13, 23, 0.74);
+        padding: 8px 10px;
+        border-radius: 10px;
+        font-size: 13px;
+      }
+
+      .msg.system {
+        border-color: rgba(87, 232, 155, 0.33);
+      }
+
+      .msg.warn {
+        border-color: rgba(255, 215, 109, 0.4);
+      }
+
+      .action-toast {
+        position: fixed;
+        right: 14px;
+        bottom: 14px;
+        max-width: min(420px, calc(100vw - 28px));
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 10px;
+        background: rgba(7, 12, 20, 0.96);
+        color: #dfe7fb;
+        font-size: 12px;
+        padding: 8px 10px;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.36);
+        opacity: 0;
+        transform: translateY(8px);
+        transition: opacity 150ms ease, transform 150ms ease;
+        z-index: 9999;
+        pointer-events: none;
+      }
+
+      .action-toast .toast-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .action-toast .toast-icon {
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        line-height: 1;
+        flex: 0 0 18px;
+        color: #dfe7fb;
+      }
+
+      .action-toast .toast-text {
+        word-break: break-word;
+      }
+
+      .action-toast.show {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .action-toast.system {
+        border-color: rgba(87, 232, 155, 0.5);
+        box-shadow: 0 10px 24px rgba(5, 44, 21, 0.42);
+      }
+
+      .action-toast.warn {
+        border-color: rgba(255, 215, 109, 0.62);
+        box-shadow: 0 10px 24px rgba(74, 51, 9, 0.44);
+      }
+
+      .action-toast.system .toast-icon {
+        border-color: rgba(87, 232, 155, 0.62);
+        color: #57e89b;
+      }
+
+      .action-toast.warn .toast-icon {
+        border-color: rgba(255, 215, 109, 0.72);
+        color: #ffd76d;
+      }
+
+      .composer {
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 8px;
+        padding: 12px;
+      }
+
+      .composer input {
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(4, 8, 14, 0.94);
+        color: var(--text);
+        padding: 10px;
+      }
+
+      .quick {
+        padding: 0 12px 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .quick button {
+        font-size: 12px;
+        padding: 6px 10px;
+      }
+
+      .stage {
+        position: relative;
+        display: grid;
+        grid-template-rows: 1fr auto;
+      }
+
+      #factory-canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+        background: radial-gradient(circle at center, rgba(113, 188, 255, 0.11), rgba(8, 12, 22, 0.96) 58%);
+      }
+
+      .stage-toolbar {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        right: 10px;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        pointer-events: none;
+      }
+
+      .stage-toolbar .stat {
+        pointer-events: auto;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 10px;
+        background: rgba(10, 14, 25, 0.74);
+        padding: 6px 10px;
+        font-size: 12px;
+      }
+
+      .stage-footer {
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 10px 12px;
+        font-size: 12px;
+        color: var(--muted);
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+      }
+
+      .workers {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .worker {
+        position: absolute;
+        width: 68px;
+        text-align: center;
+        transform: translate(-50%, -50%);
+        font-size: 11px;
+        color: #d4dbeb;
+        pointer-events: auto;
+      }
+
+      .worker .avatar {
+        width: 42px;
+        height: 42px;
+        margin: 0 auto 4px;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, 0.36);
+        background: radial-gradient(circle at 36% 34%, rgba(255, 255, 255, 0.7), rgba(124, 177, 255, 0.18) 38%, rgba(5, 11, 24, 0.9) 78%);
+        box-shadow: 0 0 18px rgba(70, 176, 255, 0.32);
+      }
+
+      .right-content {
+        padding: 12px;
+        display: grid;
+        gap: 10px;
+        overflow: auto;
+      }
+
+      .card {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        padding: 10px;
+        background: rgba(8, 13, 24, 0.78);
+      }
+
+      .card h3 {
+        margin: 0 0 6px;
+        font-size: 13px;
+      }
+
+      .card ul {
+        margin: 0;
+        padding-left: 16px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .card ul.clean {
+        list-style: none;
+        padding-left: 0;
+        display: grid;
+        gap: 6px;
+      }
+
+      .check-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: center;
+        font-size: 12px;
+        color: #d5ddf1;
+      }
+
+      .check-pill {
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 11px;
+      }
+
+      .connector-grid {
+        display: grid;
+        gap: 8px;
+      }
+
+      .connector-grid input {
+        width: 100%;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 8px;
+        background: rgba(3, 8, 17, 0.9);
+        color: var(--text);
+        padding: 7px 9px;
+        font-size: 12px;
+      }
+
+      .connector-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .hint {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+      }
+
+      .kpi {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+        padding: 8px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .kpi strong {
+        font-size: 16px;
+      }
+
+      .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .card-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .ghost-btn {
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--muted);
+        padding: 4px 8px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .ghost-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .event-stats {
+        margin-top: 8px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .event-stat {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        padding: 6px 7px;
+        background: rgba(255, 255, 255, 0.03);
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .event-stat strong {
+        display: block;
+        margin-top: 3px;
+        font-size: 14px;
+        color: #dfe7fb;
+      }
+
+      .event-filters {
+        margin-top: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .event-filter {
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 999px;
+        padding: 3px 8px;
+        font-size: 11px;
+        background: rgba(255, 255, 255, 0.03);
+        color: #b8c6e8;
+      }
+
+      .event-filter.active {
+        border-color: rgba(244, 180, 83, 0.8);
+        background: rgba(244, 180, 83, 0.18);
+        color: #f7e5c5;
+      }
+
+      .event-search {
+        margin-top: 8px;
+      }
+
+      .event-search-row {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 6px;
+      }
+
+      .event-search input {
+        width: 100%;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 8px;
+        background: rgba(3, 8, 17, 0.9);
+        color: var(--text);
+        padding: 7px 9px;
+        font-size: 12px;
+      }
+
+      .event-search-tools {
+        margin-top: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .event-match-count {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .event-cap {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .event-cap select {
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 7px;
+        background: rgba(3, 8, 17, 0.95);
+        color: var(--text);
+        font-size: 11px;
+        padding: 3px 6px;
+      }
+
+      .event-tools-right {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .event-export-preview {
+        margin-top: 6px;
+        border: 1px dashed rgba(255, 255, 255, 0.16);
+        border-radius: 8px;
+        padding: 6px 8px;
+        display: grid;
+        gap: 3px;
+        font-size: 11px;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .event-export-preview strong {
+        color: #dfe7fb;
+        font-weight: 600;
+      }
+
+      .event-export-preview-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+      }
+
+      .event-export-samples {
+        border-top: 1px dashed rgba(255, 255, 255, 0.14);
+        padding-top: 4px;
+      }
+
+      .event-export-samples summary {
+        cursor: pointer;
+        color: #cdd7f6;
+        font-size: 11px;
+      }
+
+      .event-export-samples pre {
+        margin: 6px 0 0;
+        padding: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 7px;
+        background: rgba(4, 9, 18, 0.9);
+        color: #dbe5ff;
+        font-size: 10px;
+        line-height: 1.4;
+        max-height: 120px;
+        overflow: auto;
+      }
+
+      .event-export-sample-actions {
+        margin-top: 6px;
+        display: flex;
+        justify-content: flex-end;
+        gap: 6px;
+      }
+
+      .event-export-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .event-stream {
+        margin-top: 8px;
+        max-height: 220px;
+        overflow: auto;
+        display: grid;
+        gap: 6px;
+      }
+
+      .event-row {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        padding: 6px 8px;
+        background: rgba(5, 10, 18, 0.84);
+      }
+
+      .event-row.warn {
+        border-color: rgba(255, 215, 109, 0.46);
+      }
+
+      .event-row.err {
+        border-color: rgba(255, 112, 112, 0.5);
+      }
+
+      .event-main {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .event-main-left {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .event-tag {
+        font-size: 11px;
+        color: #d8e5ff;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .event-run-btn {
+        border: 1px solid rgba(110, 194, 255, 0.5);
+        border-radius: 999px;
+        background: rgba(110, 194, 255, 0.13);
+        color: #bfe1ff;
+        font-size: 10px;
+        padding: 2px 7px;
+      }
+
+      .event-copy-btn {
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #dbe6ff;
+        font-size: 10px;
+        padding: 2px 7px;
+      }
+
+      .event-time {
+        font-size: 10px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      .event-sub {
+        margin-top: 4px;
+        font-size: 10px;
+        color: #9eb0d3;
+        word-break: break-all;
+      }
+
+      .event-empty {
+        border: 1px dashed rgba(255, 255, 255, 0.15);
+        border-radius: 8px;
+        padding: 8px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .statusbar {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--bg-panel-strong);
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+        padding: 8px 12px;
+        font-size: 12px;
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 6px;
+      }
+
+      .ok {
+        background: var(--ok);
+      }
+
+      .warn-dot {
+        background: var(--warn);
+      }
+
+      .err-dot {
+        background: var(--err);
+      }
+
+      @media (max-width: 1200px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+        .panel {
+          min-height: 340px;
+        }
+        .stage {
+          min-height: 520px;
+        }
+        .event-stats {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div class="brand">
+          <h1>OpenClaw Mission Control</h1>
+          <small>3D 工廠入口 | 對話、派工、Agent、任務、自動化一站式控制</small>
+        </div>
+        <div class="chips">
+          <span class="chip">模式: 安全紙上演練</span>
+          <span class="chip">版本: V1 可運行</span>
+          <span class="chip">焦點: 指令效率 + 可視化互動</span>
+        </div>
+        <div class="actions">
+          <a class="link-btn" href="/ai-trading/">進入 AI 交易工作站</a>
+          <button id="voice-toggle" type="button">語音互動</button>
+        </div>
+      </section>
+
+      <section class="layout">
+        <article class="panel">
+          <header>
+            <h2>對話與指令</h2>
+            <p>可直接下指令，並回寫到右側任務區。支援語音輸入（瀏覽器可用時）。</p>
+          </header>
+          <div class="conversation" id="conversation"></div>
+          <form class="composer" id="command-form">
+            <input id="command-input" type="text" placeholder="輸入指令，例如：/task 檢查代理對話狀態" />
+            <button type="submit">送出</button>
+            <button id="status-check" type="button">狀態檢查</button>
+          </form>
+          <div class="quick">
+            <button type="button" data-cmd="/task 建立新策略回測">策略回測</button>
+            <button type="button" data-cmd="/task 同步 Agent 任務佇列">同步任務佇列</button>
+            <button type="button" data-cmd="/focus 工廠派工模組">聚焦工廠派工</button>
+            <button type="button" data-cmd="/goto trading">前往交易工作站</button>
+          </div>
+        </article>
+
+        <article class="panel stage">
+          <header>
+            <h2>3D 工廠互動舞台</h2>
+            <p>滑鼠移動可改變視角，點擊節點可直接操作模組，滾輪調整深度。</p>
+          </header>
+          <div style="position: relative; min-height: 0">
+            <canvas id="factory-canvas"></canvas>
+            <div class="stage-toolbar">
+              <div class="stat">目前焦點: <strong id="focus-name">核心控制器</strong></div>
+              <div class="stat">事件流: <span id="event-flow">0</span>/min</div>
+            </div>
+            <div class="workers">
+              <div class="worker" style="left: 22%; top: 62%" data-agent="調度 Agent">
+                <div class="avatar"></div>
+                調度 Agent
+              </div>
+              <div class="worker" style="left: 50%; top: 76%" data-agent="分析 Agent">
+                <div class="avatar"></div>
+                分析 Agent
+              </div>
+              <div class="worker" style="left: 78%; top: 62%" data-agent="交易 Agent">
+                <div class="avatar"></div>
+                交易 Agent
+              </div>
+            </div>
+          </div>
+          <div class="stage-footer">
+            <span>提示: 點擊節點會同步到右側控制卡與左側對話紀錄。</span>
+            <span>離線時仍可本機互動展示</span>
+          </div>
+        </article>
+
+        <article class="panel">
+          <header>
+            <h2>Agent / 任務 / 風險控制</h2>
+            <p>入口網站只做控制，AI 交易平台獨立全螢幕執行。</p>
+          </header>
+          <div class="right-content">
+            <div class="kpis">
+              <div class="kpi">
+                <div>在線 Agent</div>
+                <strong id="kpi-agents">6</strong>
+              </div>
+              <div class="kpi">
+                <div>執行中任務</div>
+                <strong id="kpi-jobs">3</strong>
+              </div>
+              <div class="kpi">
+                <div>告警</div>
+                <strong id="kpi-alerts">1</strong>
+              </div>
+            </div>
+            <section class="card">
+              <div class="card-head">
+                <h3>即時事件串流</h3>
+                <div class="card-actions">
+                  <button id="event-pause" class="ghost-btn" type="button">暫停</button>
+                  <button id="event-clear" class="ghost-btn" type="button">清除</button>
+                </div>
+              </div>
+              <div class="event-stats">
+                <div class="event-stat">活躍 run<strong id="event-active-runs">0</strong></div>
+                <div class="event-stat">tool 事件/分<strong id="event-tool-rate">0</strong></div>
+                <div class="event-stat">告警/分<strong id="event-alert-rate">0</strong></div>
+              </div>
+              <div class="event-filters" id="event-filters">
+                <button type="button" class="event-filter active" data-event-filter="all">全部</button>
+                <button type="button" class="event-filter" data-event-filter="active">活躍</button>
+                <button type="button" class="event-filter" data-event-filter="agent">Agent</button>
+                <button type="button" class="event-filter" data-event-filter="chat">Chat</button>
+                <button type="button" class="event-filter" data-event-filter="tool">Tool</button>
+                <button type="button" class="event-filter" data-event-filter="approval">審批</button>
+                <button type="button" class="event-filter" data-event-filter="system">系統</button>
+              </div>
+              <div class="event-search">
+                <div class="event-search-row">
+                  <input id="event-search" type="text" placeholder="搜尋 runId / 事件名 / 內容" />
+                  <button id="event-search-clear" class="ghost-btn" type="button">清空</button>
+                  <button id="event-view-reset" class="ghost-btn" type="button">重設</button>
+                </div>
+                <div class="event-search-tools">
+                  <span id="event-match-count" class="event-match-count">命中 0 / 0</span>
+                  <div class="event-tools-right">
+                    <label class="event-cap">
+                      上限
+                      <select id="event-cap-select">
+                        <option value="20">20</option>
+                        <option value="50">50</option>
+                        <option value="80">80</option>
+                        <option value="100">100</option>
+                      </select>
+                    </label>
+                    <label class="event-cap">
+                      匯出
+                      <select id="event-export-scope">
+                        <option value="visible">目前篩選</option>
+                        <option value="active-run">僅活躍 runId</option>
+                      </select>
+                    </label>
+                    <label class="event-cap">
+                      欄位
+                      <select id="event-export-profile">
+                        <option value="compact">精簡</option>
+                        <option value="full">完整</option>
+                      </select>
+                    </label>
+                    <label class="event-cap">
+                      檔名
+                      <select id="event-export-filename">
+                        <option value="ts-sec">秒級</option>
+                        <option value="ts-min">分鐘級</option>
+                        <option value="date">日期</option>
+                        <option value="ts-sec-run">秒級+runId</option>
+                      </select>
+                    </label>
+                    <button id="event-export" class="ghost-btn" type="button">匯出 JSON</button>
+                  </div>
+                </div>
+                <div id="event-export-preview" class="event-export-preview">
+                  <div>模式：<strong id="event-export-preview-mode">-</strong></div>
+                  <div>筆數：<strong id="event-export-preview-count">0</strong></div>
+                  <div class="event-export-preview-row">
+                    <span>檔名：<strong id="event-export-preview-file">-</strong></span>
+                    <button id="event-export-copy" class="ghost-btn" type="button">複製檔名</button>
+                  </div>
+                  <div>風險：<strong id="event-export-preview-risk">-</strong></div>
+                  <div>送出策略：<strong id="event-export-preview-strategy">-</strong></div>
+                  <details class="event-export-samples">
+                    <summary id="event-export-sample-summary">樣本預覽（前 0 筆）</summary>
+                    <pre id="event-export-sample-json">[]</pre>
+                    <div class="event-export-sample-actions">
+                      <label class="event-export-toggle">
+                        <input id="event-export-auto-clear" type="checkbox" />
+                        送出後清空
+                      </label>
+                      <label class="event-export-toggle">
+                        <input id="event-export-skip-confirm" type="checkbox" />
+                        此次不再提示
+                      </label>
+                      <button id="event-export-insert-command" class="ghost-btn" type="button">貼上至指令列</button>
+                      <button id="event-export-send-command" class="ghost-btn" type="button">一鍵送出</button>
+                      <button id="event-export-sample-copy" class="ghost-btn" type="button">複製樣本 JSON</button>
+                    </div>
+                  </details>
+                </div>
+              </div>
+              <div class="event-stream" id="event-stream">
+                <div class="event-empty">尚未收到事件。可先按「測試接線」或直接送出指令。</div>
+              </div>
+            </section>
+            <section class="card">
+              <h3>目前任務</h3>
+              <ul id="task-list">
+                <li>檢查 Gateway / WS 連線狀態</li>
+                <li>同步 Agent 對話摘要</li>
+                <li>驗證下一步安全任務</li>
+              </ul>
+            </section>
+            <section class="card">
+              <h3>已選模組</h3>
+              <div id="selected-module" style="font-size: 13px; color: #d9e0ef">核心控制器</div>
+            </section>
+            <section class="card">
+              <h3>最安全下一步</h3>
+              <ul>
+                <li>先在入口確認連線、任務、Agent 狀態</li>
+                <li>再一鍵切換到 AI 交易全螢幕工作站</li>
+                <li>交易執行預設 paper-only，避免誤觸實單</li>
+              </ul>
+            </section>
+            <section class="card">
+              <h3>Gateway 接線設定</h3>
+              <div class="connector-grid">
+                <input id="conn-base" placeholder="Gateway Base URL (例: http://127.0.0.1:18789)" />
+                <input id="conn-token" placeholder="Token (可選)" />
+                <input id="conn-password" type="password" placeholder="Password (可選)" />
+                <div class="connector-actions">
+                  <button type="button" id="conn-save">儲存接線</button>
+                  <button type="button" id="conn-test">測試接線</button>
+                </div>
+                <div class="hint">會套用到狀態檢查與指令派送，未填則使用目前網站來源。</div>
+              </div>
+            </section>
+            <section class="card">
+              <h3>官方能力對齊檢核</h3>
+              <ul class="clean">
+                <li class="check-row"><span>3D 互動工廠舞台</span><b class="check-pill" id="check-3d">待檢查</b></li>
+                <li class="check-row"><span>Gateway 健康檢查</span><b class="check-pill" id="check-gateway">待檢查</b></li>
+                <li class="check-row"><span>Control UI Config 路由</span><b class="check-pill" id="check-config">待檢查</b></li>
+                <li class="check-row"><span>對話 RPC (chat.send/history)</span><b class="check-pill" id="check-chat">待檢查</b></li>
+                <li class="check-row"><span>AI 交易頁串接路由</span><b class="check-pill" id="check-route">待檢查</b></li>
+              </ul>
+              <div class="hint" id="check-summary" style="margin-top: 8px">尚未執行自檢。</div>
+            </section>
+          </div>
+        </article>
+      </section>
+
+      <section class="statusbar">
+        <span><i class="dot ok" id="gateway-dot"></i>Gateway: <b id="gateway-status">檢查中</b></span>
+        <span><i class="dot warn-dot" id="api-dot"></i>API: <b id="api-status">待檢查</b></span>
+        <span><i class="dot ok"></i>路由: <b>入口網站 / AI 交易分離</b></span>
+      </section>
+    </main>
+
+    <script>
+      const state = {
+        flow: 0,
+        flowRate: 0,
+        focus: "核心控制器",
+        tasks: [],
+      };
+
+      const conversationEl = document.getElementById("conversation");
+      const commandInputEl = document.getElementById("command-input");
+      const taskListEl = document.getElementById("task-list");
+      const selectedModuleEl = document.getElementById("selected-module");
+      const focusNameEl = document.getElementById("focus-name");
+      const flowEl = document.getElementById("event-flow");
+      const gatewayStatusEl = document.getElementById("gateway-status");
+      const apiStatusEl = document.getElementById("api-status");
+      const gatewayDot = document.getElementById("gateway-dot");
+      const apiDot = document.getElementById("api-dot");
+      const kpiJobsEl = document.getElementById("kpi-jobs");
+      const connectionEls = {
+        base: document.getElementById("conn-base"),
+        token: document.getElementById("conn-token"),
+        password: document.getElementById("conn-password"),
+      };
+      const checkEls = {
+        threeD: document.getElementById("check-3d"),
+        gateway: document.getElementById("check-gateway"),
+        config: document.getElementById("check-config"),
+        chat: document.getElementById("check-chat"),
+        route: document.getElementById("check-route"),
+        summary: document.getElementById("check-summary"),
+      };
+      const eventEls = {
+        stream: document.getElementById("event-stream"),
+        pause: document.getElementById("event-pause"),
+        clear: document.getElementById("event-clear"),
+        filters: Array.from(document.querySelectorAll("[data-event-filter]")),
+        search: document.getElementById("event-search"),
+        searchClear: document.getElementById("event-search-clear"),
+        viewReset: document.getElementById("event-view-reset"),
+        matchCount: document.getElementById("event-match-count"),
+        capSelect: document.getElementById("event-cap-select"),
+        exportScopeSelect: document.getElementById("event-export-scope"),
+        exportProfileSelect: document.getElementById("event-export-profile"),
+        exportFilenameSelect: document.getElementById("event-export-filename"),
+        exportBtn: document.getElementById("event-export"),
+        exportPreview: document.getElementById("event-export-preview"),
+        exportPreviewMode: document.getElementById("event-export-preview-mode"),
+        exportPreviewCount: document.getElementById("event-export-preview-count"),
+        exportPreviewFile: document.getElementById("event-export-preview-file"),
+        exportPreviewRisk: document.getElementById("event-export-preview-risk"),
+        exportPreviewStrategy: document.getElementById("event-export-preview-strategy"),
+        exportCopyBtn: document.getElementById("event-export-copy"),
+        exportSampleSummary: document.getElementById("event-export-sample-summary"),
+        exportSampleJson: document.getElementById("event-export-sample-json"),
+        exportAutoClearToggle: document.getElementById("event-export-auto-clear"),
+        exportSkipConfirmToggle: document.getElementById("event-export-skip-confirm"),
+        exportInsertCommandBtn: document.getElementById("event-export-insert-command"),
+        exportSendCommandBtn: document.getElementById("event-export-send-command"),
+        exportSampleCopyBtn: document.getElementById("event-export-sample-copy"),
+        activeRuns: document.getElementById("event-active-runs"),
+        toolRate: document.getElementById("event-tool-rate"),
+        alertRate: document.getElementById("event-alert-rate"),
+      };
+
+      const connection = {
+        baseUrl: sessionStorage.getItem("openclaw.gateway.url") || (() => {
+          const current = window.location;
+          const host = current.hostname || "127.0.0.1";
+          if (current.port === "18789") return current.origin;
+          if (host === "127.0.0.1" || host === "localhost") {
+            return `${current.protocol}//${host}:18789`;
+          }
+          return current.origin;
+        })(),
+        token: sessionStorage.getItem("openclaw.gateway.token") || "",
+        password: sessionStorage.getItem("openclaw.gateway.password") || "",
+      };
+
+      function hydrateConnectionForm() {
+        connectionEls.base.value = connection.baseUrl;
+        connectionEls.token.value = connection.token;
+        connectionEls.password.value = connection.password;
+      }
+
+      function normalizeBaseUrl(raw) {
+        const value = (raw || "").trim();
+        if (!value) return window.location.origin;
+        return value.endsWith("/") ? value.slice(0, -1) : value;
+      }
+
+      function composeUrl(path) {
+        if (/^https?:\/\//i.test(path)) return path;
+        const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+        return `${connection.baseUrl}${normalizedPath}`;
+      }
+
+      function deriveWsUrl(baseUrl) {
+        const normalized = normalizeBaseUrl(baseUrl);
+        if (normalized.startsWith("ws://") || normalized.startsWith("wss://")) return normalized;
+        if (normalized.startsWith("https://")) return `wss://${normalized.slice("https://".length)}`;
+        if (normalized.startsWith("http://")) return `ws://${normalized.slice("http://".length)}`;
+        return normalized;
+      }
+
+      async function connectorFetch(path, init = {}) {
+        const headers = new Headers(init.headers || {});
+        if (connection.token) headers.set("authorization", `Bearer ${connection.token}`);
+        if (connection.password) headers.set("x-openclaw-password", connection.password);
+        return fetch(composeUrl(path), { cache: "no-store", ...init, headers });
+      }
+
+      function saveConnection() {
+        connection.baseUrl = normalizeBaseUrl(connectionEls.base.value);
+        connection.token = connectionEls.token.value.trim();
+        connection.password = connectionEls.password.value.trim();
+        sessionStorage.setItem("openclaw.gateway.url", connection.baseUrl);
+        sessionStorage.setItem("openclaw.gateway.token", connection.token);
+        sessionStorage.setItem("openclaw.gateway.password", connection.password);
+        hydrateConnectionForm();
+        addMessage(`接線已更新: ${connection.baseUrl}`, "system");
+      }
+
+      function addMessage(text, type = "") {
+        const node = document.createElement("div");
+        node.className = `msg ${type}`.trim();
+        node.textContent = text;
+        conversationEl.prepend(node);
+      }
+
+      let actionToastTimer = null;
+      function showActionToast(text, tone = "") {
+        let toast = document.getElementById("action-toast");
+        if (!toast) {
+          toast = document.createElement("div");
+          toast.id = "action-toast";
+          document.body.appendChild(toast);
+        }
+        toast.className = `action-toast ${tone}`.trim();
+        const icon = tone === "warn" ? "!" : "i";
+        toast.innerHTML = `<div class="toast-row"><span class="toast-icon">${icon}</span><span class="toast-text"></span></div>`;
+        const textEl = toast.querySelector(".toast-text");
+        if (textEl) textEl.textContent = text;
+        toast.classList.add("show");
+        if (actionToastTimer) {
+          clearTimeout(actionToastTimer);
+        }
+        actionToastTimer = setTimeout(() => {
+          toast.classList.remove("show");
+        }, 3000);
+      }
+
+      function addTask(task) {
+        const li = document.createElement("li");
+        li.textContent = task;
+        taskListEl.prepend(li);
+        state.tasks.unshift(task);
+      }
+
+      function setFocus(name) {
+        state.focus = name;
+        focusNameEl.textContent = name;
+        selectedModuleEl.textContent = name;
+        addMessage(`已聚焦模組: ${name}`, "system");
+      }
+
+      function markStatus(el, dot, text, tone) {
+        el.textContent = text;
+        dot.className = "dot";
+        if (tone === "ok") dot.classList.add("ok");
+        if (tone === "warn") dot.classList.add("warn-dot");
+        if (tone === "err") dot.classList.add("err-dot");
+      }
+
+      function markCheck(el, pass, detail = "") {
+        el.textContent = pass ? "PASS" : "FAIL";
+        el.style.color = pass ? "#57e89b" : "#ff8f8f";
+        if (detail) el.title = detail;
+      }
+
+      const EVENT_FILTER_STORAGE_KEY = "openclaw.3dcc.eventFilter";
+      const EVENT_SEARCH_STORAGE_KEY = "openclaw.3dcc.eventSearch";
+      const EVENT_MAX_ROWS_STORAGE_KEY = "openclaw.3dcc.eventMaxRows";
+      const EVENT_PAUSE_STORAGE_KEY = "openclaw.3dcc.eventPaused";
+      const EVENT_EXPORT_SCOPE_STORAGE_KEY = "openclaw.3dcc.eventExportScope";
+      const EVENT_EXPORT_PROFILE_STORAGE_KEY = "openclaw.3dcc.eventExportProfile";
+      const EVENT_EXPORT_FILENAME_MODE_STORAGE_KEY = "openclaw.3dcc.eventExportFilenameMode";
+      const EVENT_EXPORT_AUTO_CLEAR_STORAGE_KEY = "openclaw.3dcc.eventExportAutoClear";
+      const EVENT_EXPORT_SKIP_CONFIRM_STORAGE_KEY = "openclaw.3dcc.eventExportSkipConfirm";
+      const VALID_EVENT_FILTERS = new Set(["all", "active", "agent", "chat", "tool", "approval", "system"]);
+      const VALID_EVENT_MAX_ROWS = new Set([20, 50, 80, 100]);
+      const VALID_EVENT_EXPORT_SCOPES = new Set(["visible", "active-run"]);
+      const VALID_EVENT_EXPORT_PROFILES = new Set(["compact", "full"]);
+      const VALID_EVENT_EXPORT_FILENAME_MODES = new Set(["ts-sec", "ts-min", "date", "ts-sec-run"]);
+
+      function normalizeEventFilter(value) {
+        const filter = typeof value === "string" ? value.trim() : "";
+        return VALID_EVENT_FILTERS.has(filter) ? filter : "all";
+      }
+
+      function normalizeEventSearch(value) {
+        return typeof value === "string" ? value.trim().slice(0, 80) : "";
+      }
+
+      function normalizeEventMaxRows(value) {
+        const n = Number.parseInt(String(value ?? ""), 10);
+        return VALID_EVENT_MAX_ROWS.has(n) ? n : 80;
+      }
+
+      function normalizeEventPaused(value) {
+        return String(value ?? "") === "1";
+      }
+
+      function normalizeEventExportScope(value) {
+        const scope = typeof value === "string" ? value.trim() : "";
+        return VALID_EVENT_EXPORT_SCOPES.has(scope) ? scope : "visible";
+      }
+
+      function normalizeEventExportProfile(value) {
+        const profile = typeof value === "string" ? value.trim() : "";
+        return VALID_EVENT_EXPORT_PROFILES.has(profile) ? profile : "compact";
+      }
+
+      function normalizeEventExportFilenameMode(value) {
+        const mode = typeof value === "string" ? value.trim() : "";
+        return VALID_EVENT_EXPORT_FILENAME_MODES.has(mode) ? mode : "ts-sec";
+      }
+
+      function normalizeEventExportAutoClear(value) {
+        return String(value ?? "") === "1";
+      }
+
+      function normalizeEventExportSkipConfirm(value) {
+        return String(value ?? "") === "1";
+      }
+
+      const eventBoard = {
+        rows: [],
+        maxRows: normalizeEventMaxRows(sessionStorage.getItem(EVENT_MAX_ROWS_STORAGE_KEY) || 80),
+        filter: normalizeEventFilter(sessionStorage.getItem(EVENT_FILTER_STORAGE_KEY) || "all"),
+        search: normalizeEventSearch(sessionStorage.getItem(EVENT_SEARCH_STORAGE_KEY) || ""),
+        paused: normalizeEventPaused(sessionStorage.getItem(EVENT_PAUSE_STORAGE_KEY) || "0"),
+        exportScope: normalizeEventExportScope(sessionStorage.getItem(EVENT_EXPORT_SCOPE_STORAGE_KEY) || "visible"),
+        exportProfile: normalizeEventExportProfile(sessionStorage.getItem(EVENT_EXPORT_PROFILE_STORAGE_KEY) || "compact"),
+        exportFilenameMode: normalizeEventExportFilenameMode(
+          sessionStorage.getItem(EVENT_EXPORT_FILENAME_MODE_STORAGE_KEY) || "ts-sec",
+        ),
+        exportAutoClear: normalizeEventExportAutoClear(sessionStorage.getItem(EVENT_EXPORT_AUTO_CLEAR_STORAGE_KEY) || "0"),
+        exportSkipConfirm: normalizeEventExportSkipConfirm(sessionStorage.getItem(EVENT_EXPORT_SKIP_CONFIRM_STORAGE_KEY) || "0"),
+        pausedBuffered: 0,
+        flowTicks: [],
+        toolTicks: [],
+        alertTicks: [],
+        activeRuns: new Set(),
+      };
+
+      function pruneTicks(bucket, now) {
+        while (bucket.length > 0 && now - bucket[0] > 60000) {
+          bucket.shift();
+        }
+      }
+
+      function getPayloadRunId(payload) {
+        if (!payload || typeof payload !== "object") return "";
+        const direct = payload.runId || payload.run_id;
+        if (typeof direct === "string" && direct.trim()) return direct.trim();
+        if (payload.run && typeof payload.run === "object") {
+          const nested = payload.run.id || payload.run.runId;
+          if (typeof nested === "string" && nested.trim()) return nested.trim();
+        }
+        if (payload.meta && typeof payload.meta === "object") {
+          const metaRun = payload.meta.runId || payload.meta.run_id;
+          if (typeof metaRun === "string" && metaRun.trim()) return metaRun.trim();
+        }
+        return "";
+      }
+
+      function getEventDetail(eventName, payload) {
+        if (!payload || typeof payload !== "object") return "";
+        if (eventName === "agent") {
+          const stream = typeof payload.stream === "string" ? payload.stream : "";
+          const phase = payload?.data?.phase;
+          const tool = payload?.data?.name;
+          const text = payload?.data?.text;
+          if (stream === "tool" && (phase || tool)) return `tool:${tool || "unknown"} phase:${phase || "unknown"}`;
+          if (stream === "lifecycle" && phase) return `lifecycle:${phase}`;
+          if (stream === "assistant" && typeof text === "string" && text.trim()) {
+            return text.trim().slice(0, 96);
+          }
+        }
+        if (typeof payload.status === "string") return `status:${payload.status}`;
+        if (typeof payload.type === "string") return `type:${payload.type}`;
+        return "";
+      }
+
+      function classifyEvent(eventName, payload = {}, source = "gateway") {
+        if (eventName === "agent") {
+          if (payload?.stream === "tool") return "tool";
+          return "agent";
+        }
+        if (eventName === "chat" || eventName === "chat.send") return "chat";
+        if (eventName.startsWith("exec.approval") || eventName.endsWith(".requested") || eventName.endsWith(".resolved")) {
+          return "approval";
+        }
+        if (eventName.startsWith("tools.") || eventName.startsWith("tool.")) return "tool";
+        if (source === "rpc") return "chat";
+        return "system";
+      }
+
+      function eventMatchesFilter(row) {
+        if (eventBoard.filter === "all") return true;
+        if (eventBoard.filter === "active") {
+          return !!row.runId && eventBoard.activeRuns.has(row.runId);
+        }
+        return row.category === eventBoard.filter;
+      }
+
+      function setEventFilter(nextFilter) {
+        const normalized = normalizeEventFilter(nextFilter);
+        eventBoard.filter = normalized;
+        sessionStorage.setItem(EVENT_FILTER_STORAGE_KEY, normalized);
+        for (const btn of eventEls.filters) {
+          btn.classList.toggle("active", btn.dataset.eventFilter === normalized);
+        }
+        renderEventRows(true);
+      }
+
+      function setEventSearch(value) {
+        const normalized = normalizeEventSearch(value);
+        eventBoard.search = normalized;
+        sessionStorage.setItem(EVENT_SEARCH_STORAGE_KEY, normalized);
+        if (eventEls.search && eventEls.search.value !== normalized) {
+          eventEls.search.value = normalized;
+        }
+        renderEventRows(true);
+      }
+
+      function setEventMaxRows(value) {
+        const normalized = normalizeEventMaxRows(value);
+        eventBoard.maxRows = normalized;
+        sessionStorage.setItem(EVENT_MAX_ROWS_STORAGE_KEY, String(normalized));
+        if (eventEls.capSelect && eventEls.capSelect.value !== String(normalized)) {
+          eventEls.capSelect.value = String(normalized);
+        }
+        if (eventBoard.rows.length > normalized) {
+          eventBoard.rows.length = normalized;
+        }
+        renderEventRows(true);
+      }
+
+      function refreshPauseButton() {
+        if (!eventEls.pause) return;
+        if (eventBoard.paused) {
+          const count = eventBoard.pausedBuffered;
+          eventEls.pause.textContent = count > 0 ? `恢復(+${count})` : "恢復";
+          eventEls.pause.title = "恢復即時刷新";
+          return;
+        }
+        eventEls.pause.textContent = "暫停";
+        eventEls.pause.title = "暫停即時刷新";
+      }
+
+      function setEventPaused(value) {
+        const paused = !!value;
+        eventBoard.paused = paused;
+        sessionStorage.setItem(EVENT_PAUSE_STORAGE_KEY, paused ? "1" : "0");
+        if (!paused) {
+          eventBoard.pausedBuffered = 0;
+        }
+        refreshPauseButton();
+        if (!paused) {
+          renderEventRows(true);
+        }
+      }
+
+      function setEventExportScope(value) {
+        const normalized = normalizeEventExportScope(value);
+        eventBoard.exportScope = normalized;
+        sessionStorage.setItem(EVENT_EXPORT_SCOPE_STORAGE_KEY, normalized);
+        if (eventEls.exportScopeSelect && eventEls.exportScopeSelect.value !== normalized) {
+          eventEls.exportScopeSelect.value = normalized;
+        }
+        refreshEventExportButton();
+      }
+
+      function setEventExportProfile(value) {
+        const normalized = normalizeEventExportProfile(value);
+        eventBoard.exportProfile = normalized;
+        sessionStorage.setItem(EVENT_EXPORT_PROFILE_STORAGE_KEY, normalized);
+        if (eventEls.exportProfileSelect && eventEls.exportProfileSelect.value !== normalized) {
+          eventEls.exportProfileSelect.value = normalized;
+        }
+        refreshEventExportButton();
+      }
+
+      function setEventExportFilenameMode(value) {
+        const normalized = normalizeEventExportFilenameMode(value);
+        eventBoard.exportFilenameMode = normalized;
+        sessionStorage.setItem(EVENT_EXPORT_FILENAME_MODE_STORAGE_KEY, normalized);
+        if (eventEls.exportFilenameSelect && eventEls.exportFilenameSelect.value !== normalized) {
+          eventEls.exportFilenameSelect.value = normalized;
+        }
+        refreshEventExportButton();
+      }
+
+      function setEventExportAutoClear(value) {
+        const enabled = !!value;
+        eventBoard.exportAutoClear = enabled;
+        sessionStorage.setItem(EVENT_EXPORT_AUTO_CLEAR_STORAGE_KEY, enabled ? "1" : "0");
+        if (eventEls.exportAutoClearToggle && eventEls.exportAutoClearToggle.checked !== enabled) {
+          eventEls.exportAutoClearToggle.checked = enabled;
+        }
+        refreshEventExportButton();
+      }
+
+      function setEventExportSkipConfirm(value) {
+        const enabled = !!value;
+        eventBoard.exportSkipConfirm = enabled;
+        sessionStorage.setItem(EVENT_EXPORT_SKIP_CONFIRM_STORAGE_KEY, enabled ? "1" : "0");
+        if (eventEls.exportSkipConfirmToggle && eventEls.exportSkipConfirmToggle.checked !== enabled) {
+          eventEls.exportSkipConfirmToggle.checked = enabled;
+        }
+        refreshEventExportButton();
+      }
+
+      async function copyRunIdToClipboard(runId) {
+        try {
+          if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+            await navigator.clipboard.writeText(runId);
+            addMessage(`已複製 runId：${runId}`, "system");
+            return;
+          }
+        } catch (_) {}
+        const helper = document.createElement("textarea");
+        helper.value = runId;
+        helper.style.position = "fixed";
+        helper.style.left = "-9999px";
+        helper.style.top = "-9999px";
+        document.body.appendChild(helper);
+        helper.focus();
+        helper.select();
+        try {
+          document.execCommand("copy");
+          addMessage(`已複製 runId：${runId}`, "system");
+        } catch (_) {
+          addMessage(`無法複製，runId：${runId}`, "warn");
+        }
+        document.body.removeChild(helper);
+      }
+
+      function isTerminalEvent(eventName, payload) {
+        if (eventName === "agent" && payload?.stream === "lifecycle") {
+          const phase = payload?.data?.phase;
+          if (typeof phase === "string") {
+            return /^(end|error|cancel|cancelled|aborted|failed)$/.test(phase.toLowerCase());
+          }
+        }
+        const status = typeof payload?.status === "string" ? payload.status.toLowerCase() : "";
+        if (status && /^(done|ok|completed|failed|error|cancelled|aborted|timeout)$/.test(status)) return true;
+        return /(shutdown|error|failed|aborted|cancelled|completed|resolved|end)$/.test(String(eventName).toLowerCase());
+      }
+
+      function refreshEventStats(now = Date.now()) {
+        pruneTicks(eventBoard.flowTicks, now);
+        pruneTicks(eventBoard.toolTicks, now);
+        pruneTicks(eventBoard.alertTicks, now);
+        eventEls.activeRuns.textContent = String(eventBoard.activeRuns.size);
+        eventEls.toolRate.textContent = String(eventBoard.toolTicks.length);
+        eventEls.alertRate.textContent = String(eventBoard.alertTicks.length);
+        state.flowRate = eventBoard.flowTicks.length;
+        if (kpiJobsEl) {
+          kpiJobsEl.textContent = String(eventBoard.activeRuns.size);
+        }
+      }
+
+      function rowMatchesSearch(row) {
+        if (!eventBoard.search) return true;
+        const q = eventBoard.search.toLowerCase();
+        const haystack = `${row.source || ""} ${row.event || ""} ${row.runId || ""} ${row.sub || ""}`.toLowerCase();
+        return haystack.includes(q);
+      }
+
+      function updateEventMatchCount(matched, base) {
+        if (!eventEls.matchCount) return;
+        eventEls.matchCount.textContent = `命中 ${matched} / ${base}`;
+      }
+
+      function getExportRows(visibleRows = null) {
+        const rows = Array.isArray(visibleRows) ? visibleRows : getVisibleEventRows().visibleRows;
+        if (eventBoard.exportScope !== "active-run") return rows;
+        return rows.filter((row) => !!row.runId && eventBoard.activeRuns.has(row.runId));
+      }
+
+      function getEventExportScopeLabel() {
+        return eventBoard.exportScope === "active-run" ? "活躍" : "篩選";
+      }
+
+      function getEventExportProfileLabel() {
+        return eventBoard.exportProfile === "full" ? "完整" : "精簡";
+      }
+
+      function getEventExportFilenameModeLabel() {
+        if (eventBoard.exportFilenameMode === "date") return "日期";
+        if (eventBoard.exportFilenameMode === "ts-min") return "分鐘級";
+        if (eventBoard.exportFilenameMode === "ts-sec-run") return "秒級+runId";
+        return "秒級";
+      }
+
+      function getExportSubmitStrategyLabel() {
+        const confirmPart = eventBoard.exportSkipConfirm ? "送前確認:off" : "送前確認:on";
+        const clearPart = eventBoard.exportAutoClear ? "送後清空:on" : "送後清空:off";
+        return `${confirmPart} / ${clearPart}`;
+      }
+
+      function getExportCollisionRiskLabel(rows) {
+        if (!Array.isArray(rows) || rows.length === 0) return "無（目前無可匯出資料）";
+        if (eventBoard.exportFilenameMode === "date") return "高（同一天匯出可能同名覆蓋）";
+        if (eventBoard.exportFilenameMode === "ts-min") return "中（同一分鐘重複匯出可能同名）";
+        if (eventBoard.exportFilenameMode === "ts-sec-run") return "低（同秒且相同 run token 才可能同名）";
+        return "低（同一秒重複匯出才可能同名）";
+      }
+
+      function toExportRows(rows) {
+        if (eventBoard.exportProfile === "full") return rows;
+        return rows.map((row) => ({
+          time: row.time,
+          event: row.event,
+          runId: row.runId,
+          sub: row.sub,
+        }));
+      }
+
+      function buildExportRunToken(rows) {
+        const runIds = Array.from(
+          new Set(rows.map((row) => (typeof row.runId === "string" ? row.runId.trim() : "")).filter(Boolean)),
+        );
+        if (runIds.length === 0) return "norun";
+        if (runIds.length === 1) return runIds[0].replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 12) || "norun";
+        return `${runIds.length}runs`;
+      }
+
+      function refreshEventExportButton(visibleRows = null) {
+        if (!eventEls.exportBtn) return;
+        const exportRows = getExportRows(visibleRows);
+        const safeCount = Math.max(0, exportRows.length);
+        const scopeLabel = getEventExportScopeLabel();
+        const profileLabel = getEventExportProfileLabel();
+        eventEls.exportBtn.textContent = `匯出${scopeLabel}-${profileLabel}(${safeCount})`;
+        eventEls.exportBtn.disabled = safeCount === 0;
+        eventEls.exportBtn.title = safeCount === 0 ? "目前沒有可匯出事件" : `${scopeLabel}-${profileLabel}可匯出 ${safeCount} 筆事件`;
+        refreshEventExportPreview(exportRows);
+      }
+
+      function refreshEventExportPreview(exportRows) {
+        if (!eventEls.exportPreview) return;
+        const rows = Array.isArray(exportRows) ? exportRows : [];
+        const mappedRows = toExportRows(rows);
+        const sampleRows = mappedRows.slice(0, 3);
+        const autoClearLabel = eventBoard.exportAutoClear ? "自清空:on" : "自清空:off";
+        const confirmLabel = eventBoard.exportSkipConfirm ? "送前確認:off" : "送前確認:on";
+        const modeLabel = `${getEventExportScopeLabel()} / ${getEventExportProfileLabel()} / ${getEventExportFilenameModeLabel()} / ${autoClearLabel} / ${confirmLabel}`;
+        const filename = rows.length > 0 ? createEventExportFilename(rows) : "尚無可匯出檔名";
+        const risk = getExportCollisionRiskLabel(rows);
+        if (eventEls.exportPreviewMode) {
+          eventEls.exportPreviewMode.textContent = modeLabel;
+        }
+        if (eventEls.exportPreviewCount) {
+          eventEls.exportPreviewCount.textContent = String(rows.length);
+        }
+        if (eventEls.exportPreviewFile) {
+          eventEls.exportPreviewFile.textContent = filename;
+        }
+        if (eventEls.exportPreviewRisk) {
+          eventEls.exportPreviewRisk.textContent = risk;
+        }
+        if (eventEls.exportPreviewStrategy) {
+          eventEls.exportPreviewStrategy.textContent = getExportSubmitStrategyLabel();
+        }
+        if (eventEls.exportCopyBtn) {
+          eventEls.exportCopyBtn.disabled = rows.length === 0;
+          eventEls.exportCopyBtn.title = rows.length === 0 ? "目前沒有可複製的檔名" : "複製預覽檔名";
+        }
+        if (eventEls.exportInsertCommandBtn) {
+          eventEls.exportInsertCommandBtn.disabled = rows.length === 0;
+          eventEls.exportInsertCommandBtn.title = rows.length === 0 ? "目前沒有可帶入指令資料" : "將匯出摘要貼到指令列";
+        }
+        if (eventEls.exportSendCommandBtn) {
+          eventEls.exportSendCommandBtn.disabled = rows.length === 0;
+          eventEls.exportSendCommandBtn.title =
+            rows.length === 0
+              ? "目前沒有可送出的匯出摘要"
+              : eventBoard.exportAutoClear
+                ? eventBoard.exportSkipConfirm
+                  ? "直接送出匯出摘要任務（不再提示，送出後會清空指令列）"
+                  : "直接送出匯出摘要任務（送出前會提示，送出後會清空指令列）"
+                : eventBoard.exportSkipConfirm
+                  ? "直接送出匯出摘要任務（不再提示）"
+                  : "直接送出匯出摘要任務（送出前會提示）";
+        }
+        if (eventEls.exportSampleSummary) {
+          eventEls.exportSampleSummary.textContent = `樣本預覽（前 ${sampleRows.length} / 共 ${mappedRows.length} 筆）`;
+        }
+        if (eventEls.exportSampleJson) {
+          eventEls.exportSampleJson.textContent = JSON.stringify(sampleRows, null, 2);
+        }
+        if (eventEls.exportSampleCopyBtn) {
+          eventEls.exportSampleCopyBtn.disabled = sampleRows.length === 0;
+          eventEls.exportSampleCopyBtn.title = sampleRows.length === 0 ? "目前沒有可複製樣本" : "複製目前樣本 JSON";
+        }
+      }
+
+      function getVisibleEventRows() {
+        const visibleRows = [];
+        let baseCount = 0;
+        for (const row of eventBoard.rows) {
+          if (!eventMatchesFilter(row)) continue;
+          baseCount += 1;
+          if (!rowMatchesSearch(row)) continue;
+          visibleRows.push(row);
+        }
+        return { visibleRows, baseCount };
+      }
+
+      function createEventExportFilename(exportRows, now = new Date()) {
+        const y = now.getFullYear();
+        const m = String(now.getMonth() + 1).padStart(2, "0");
+        const d = String(now.getDate()).padStart(2, "0");
+        const h = String(now.getHours()).padStart(2, "0");
+        const mm = String(now.getMinutes()).padStart(2, "0");
+        const s = String(now.getSeconds()).padStart(2, "0");
+        const date = `${y}${m}${d}`;
+        const minute = `${h}${mm}`;
+        const second = `${h}${mm}${s}`;
+        const scope = eventBoard.exportScope;
+        const profile = eventBoard.exportProfile;
+        if (eventBoard.exportFilenameMode === "date") {
+          return `openclaw-events-${scope}-${profile}-${date}.json`;
+        }
+        if (eventBoard.exportFilenameMode === "ts-min") {
+          return `openclaw-events-${scope}-${profile}-${date}-${minute}.json`;
+        }
+        if (eventBoard.exportFilenameMode === "ts-sec-run") {
+          const token = buildExportRunToken(exportRows);
+          return `openclaw-events-${scope}-${profile}-${date}-${second}-run-${token}.json`;
+        }
+        return `openclaw-events-${scope}-${profile}-${date}-${second}.json`;
+      }
+
+      async function copyExportFilenameFromPreview() {
+        const exportRows = getExportRows();
+        if (exportRows.length === 0) {
+          addMessage("目前沒有可複製的檔名。", "warn");
+          return;
+        }
+        const filename = createEventExportFilename(exportRows);
+        try {
+          if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+            await navigator.clipboard.writeText(filename);
+            addMessage(`已複製檔名：${filename}`, "system");
+            return;
+          }
+        } catch (_) {}
+        const helper = document.createElement("textarea");
+        helper.value = filename;
+        helper.style.position = "fixed";
+        helper.style.left = "-9999px";
+        helper.style.top = "-9999px";
+        document.body.appendChild(helper);
+        helper.focus();
+        helper.select();
+        try {
+          document.execCommand("copy");
+          addMessage(`已複製檔名：${filename}`, "system");
+        } catch (_) {
+          addMessage(`無法複製檔名：${filename}`, "warn");
+        }
+        document.body.removeChild(helper);
+      }
+
+      async function copyExportSampleFromPreview() {
+        const sampleRows = toExportRows(getExportRows()).slice(0, 3);
+        if (sampleRows.length === 0) {
+          addMessage("目前沒有可複製的樣本。", "warn");
+          return;
+        }
+        const sampleText = JSON.stringify(sampleRows, null, 2);
+        try {
+          if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+            await navigator.clipboard.writeText(sampleText);
+            addMessage(`已複製樣本 JSON：${sampleRows.length} 筆`, "system");
+            return;
+          }
+        } catch (_) {}
+        const helper = document.createElement("textarea");
+        helper.value = sampleText;
+        helper.style.position = "fixed";
+        helper.style.left = "-9999px";
+        helper.style.top = "-9999px";
+        document.body.appendChild(helper);
+        helper.focus();
+        helper.select();
+        try {
+          document.execCommand("copy");
+          addMessage(`已複製樣本 JSON：${sampleRows.length} 筆`, "system");
+        } catch (_) {
+          addMessage("無法複製樣本 JSON。", "warn");
+        }
+        document.body.removeChild(helper);
+      }
+
+      function composeExportPreviewCommand(exportRows) {
+        if (!Array.isArray(exportRows) || exportRows.length === 0) return "";
+        const filename = createEventExportFilename(exportRows);
+        const mode = `${eventBoard.exportScope}/${eventBoard.exportProfile}/${eventBoard.exportFilenameMode}`;
+        const firstEvent = toExportRows(exportRows)[0]?.event || "none";
+        return `/task 匯出預檢 檔名 ${filename} 筆數 ${exportRows.length} 模式 ${mode} 首筆 ${firstEvent}`;
+      }
+
+      function insertExportPreviewToCommandInput() {
+        const exportRows = getExportRows();
+        if (exportRows.length === 0) {
+          addMessage("目前沒有可帶入指令的匯出資料。", "warn");
+          return;
+        }
+        if (!commandInputEl) {
+          addMessage("找不到指令輸入框，無法帶入。", "warn");
+          return;
+        }
+        const filename = createEventExportFilename(exportRows);
+        commandInputEl.value = composeExportPreviewCommand(exportRows);
+        commandInputEl.focus();
+        addMessage(`已帶入指令列：${filename}`, "system");
+      }
+
+      async function sendExportPreviewCommandDirectly() {
+        const exportRows = getExportRows();
+        if (exportRows.length === 0) {
+          addMessage("目前沒有可送出的匯出摘要。", "warn");
+          showActionToast("目前沒有可送出的匯出摘要。", "warn");
+          return;
+        }
+        const command = composeExportPreviewCommand(exportRows);
+        if (!command) {
+          addMessage("無法建立匯出摘要指令。", "warn");
+          showActionToast("無法建立匯出摘要指令。", "warn");
+          return;
+        }
+        if (!eventBoard.exportSkipConfirm) {
+          const confirmed = window.confirm(`確認直接送出這個指令？\n\n${command}`);
+          if (!confirmed) {
+            addMessage("已取消一鍵送出。", "warn");
+            showActionToast("已取消一鍵送出。", "warn");
+            return;
+          }
+        }
+        if (commandInputEl) {
+          commandInputEl.value = command;
+          commandInputEl.focus();
+        }
+        await handleCommand(command);
+        if (eventBoard.exportAutoClear && commandInputEl) {
+          commandInputEl.value = "";
+        }
+        showActionToast(`已送出匯出摘要｜自清空:${eventBoard.exportAutoClear ? "on" : "off"}`);
+      }
+
+      function exportVisibleEventsAsJson() {
+        const { visibleRows, baseCount } = getVisibleEventRows();
+        const exportRows = getExportRows(visibleRows);
+        if (exportRows.length === 0) {
+          addMessage("目前沒有可匯出事件。", "warn");
+          refreshEventExportButton([]);
+          return;
+        }
+        const payload = {
+          exportedAt: new Date().toISOString(),
+          view: {
+            filter: eventBoard.filter,
+            search: eventBoard.search,
+            maxRows: eventBoard.maxRows,
+            paused: eventBoard.paused,
+            exportScope: eventBoard.exportScope,
+            exportProfile: eventBoard.exportProfile,
+            exportFilenameMode: eventBoard.exportFilenameMode,
+          },
+          summary: {
+            visibleCount: visibleRows.length,
+            exportedCount: exportRows.length,
+            filterMatchedCount: baseCount,
+            totalRows: eventBoard.rows.length,
+          },
+          rows: toExportRows(exportRows),
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+        const href = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        const filename = createEventExportFilename(exportRows);
+        anchor.href = href;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(href);
+        addMessage(
+          `事件匯出完成：${getEventExportScopeLabel()}-${getEventExportProfileLabel()} ${exportRows.length} 筆（${filename}）`,
+          "system",
+        );
+      }
+
+      function renderEventRows(force = false) {
+        if (eventBoard.paused && !force) return;
+        const stream = eventEls.stream;
+        if (!stream) return;
+        stream.innerHTML = "";
+        if (eventBoard.rows.length === 0) {
+          updateEventMatchCount(0, 0);
+          refreshEventExportButton([]);
+          const empty = document.createElement("div");
+          empty.className = "event-empty";
+          empty.textContent = "尚未收到事件。可先按「測試接線」或直接送出指令。";
+          stream.appendChild(empty);
+          return;
+        }
+        const { visibleRows, baseCount } = getVisibleEventRows();
+        for (const row of visibleRows) {
+          const eventRow = document.createElement("div");
+          eventRow.className = `event-row ${row.tone}`.trim();
+          const main = document.createElement("div");
+          main.className = "event-main";
+          const left = document.createElement("div");
+          left.className = "event-main-left";
+          const tag = document.createElement("div");
+          tag.className = "event-tag";
+          tag.textContent = `${row.source}:${row.event}`;
+          left.appendChild(tag);
+          if (row.runId) {
+            const runBtn = document.createElement("button");
+            runBtn.type = "button";
+            runBtn.className = "event-run-btn";
+            runBtn.textContent = row.runId.slice(0, 12);
+            runBtn.title = row.runId;
+            runBtn.addEventListener("click", () => {
+              if (commandInputEl) {
+                commandInputEl.value = `/task 追蹤 runId ${row.runId}`;
+                commandInputEl.focus();
+              }
+              addMessage(`已帶入 runId：${row.runId}`, "system");
+              void loadGatewayChatHistory();
+            });
+            left.appendChild(runBtn);
+            const copyBtn = document.createElement("button");
+            copyBtn.type = "button";
+            copyBtn.className = "event-copy-btn";
+            copyBtn.textContent = "複製";
+            copyBtn.title = `複製完整 runId: ${row.runId}`;
+            copyBtn.addEventListener("click", () => {
+              void copyRunIdToClipboard(row.runId);
+            });
+            left.appendChild(copyBtn);
+          }
+          const time = document.createElement("div");
+          time.className = "event-time";
+          time.textContent = row.time;
+          main.appendChild(left);
+          main.appendChild(time);
+          eventRow.appendChild(main);
+          if (row.sub) {
+            const sub = document.createElement("div");
+            sub.className = "event-sub";
+            sub.textContent = row.sub;
+            eventRow.appendChild(sub);
+          }
+          stream.appendChild(eventRow);
+        }
+        updateEventMatchCount(visibleRows.length, baseCount);
+        refreshEventExportButton(visibleRows);
+        if (visibleRows.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "event-empty";
+          const queryLabel = eventBoard.search ? `，關鍵字：${eventBoard.search}` : "";
+          empty.textContent = `目前篩選：${eventBoard.filter}${queryLabel}，暫無事件。`;
+          stream.appendChild(empty);
+        }
+      }
+
+      function resetEventView() {
+        setEventSearch("");
+        setEventFilter("all");
+      }
+
+      function pushEventFrame(eventName, payload = {}, source = "gateway") {
+        const now = Date.now();
+        const runId = getPayloadRunId(payload);
+        if (runId) {
+          if (isTerminalEvent(eventName, payload)) {
+            eventBoard.activeRuns.delete(runId);
+          } else {
+            eventBoard.activeRuns.add(runId);
+          }
+        }
+        eventBoard.flowTicks.push(now);
+        const toolPhase = eventName === "agent" && payload?.stream === "tool" && payload?.data?.phase;
+        if (toolPhase === "start" || toolPhase === "end") {
+          eventBoard.toolTicks.push(now);
+        }
+        const tone =
+          eventName === "exec.approval.requested" || eventName.endsWith(".requested")
+            ? "warn"
+            : eventName === "shutdown" || eventName === "health"
+              ? "err"
+              : "";
+        if (tone) {
+          eventBoard.alertTicks.push(now);
+        }
+        const detail = getEventDetail(eventName, payload);
+        const category = classifyEvent(eventName, payload, source);
+        eventBoard.rows.unshift({
+          source,
+          event: eventName,
+          runId,
+          category,
+          sub: detail,
+          tone,
+          time: new Date(now).toLocaleTimeString("zh-TW", { hour12: false }),
+        });
+        if (eventBoard.rows.length > eventBoard.maxRows) {
+          eventBoard.rows.length = eventBoard.maxRows;
+        }
+        refreshEventStats(now);
+        if (eventBoard.paused) {
+          eventBoard.pausedBuffered = Math.min(999, eventBoard.pausedBuffered + 1);
+          refreshPauseButton();
+        }
+        renderEventRows();
+      }
+
+      const chatBridge = {
+        ws: null,
+        connected: false,
+        pending: new Map(),
+        sessionId: null,
+        sessionKey: "main",
+      };
+
+      function nextReqId() {
+        if (window.crypto && typeof window.crypto.randomUUID === "function") {
+          return window.crypto.randomUUID();
+        }
+        return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      }
+
+      function extractMessageText(message) {
+        if (!message || typeof message !== "object") return "";
+        if (typeof message.text === "string") return message.text;
+        if (Array.isArray(message.content)) {
+          return message.content
+            .filter((block) => block && typeof block === "object" && block.type === "text")
+            .map((block) => String(block.text || ""))
+            .join("\n")
+            .trim();
+        }
+        return "";
+      }
+
+      function renderGatewayHistory(messages) {
+        if (!Array.isArray(messages)) return;
+        const rows = [];
+        for (const message of messages) {
+          const role = typeof message?.role === "string" ? message.role : "assistant";
+          const text = extractMessageText(message);
+          if (!text) continue;
+          if (role === "assistant" && (text === "NO_REPLY" || text === "HEARTBEAT_OK")) continue;
+          rows.push({ role, text });
+        }
+        if (rows.length === 0) return;
+        conversationEl.innerHTML = "";
+        for (const row of rows.slice(-24)) {
+          addMessage(`${row.role === "user" ? "你" : "OpenClaw"}: ${row.text}`);
+        }
+      }
+
+      function clearPending(error) {
+        for (const pending of chatBridge.pending.values()) {
+          pending.reject(error);
+        }
+        chatBridge.pending.clear();
+      }
+
+      function sendWsRequest(method, params = {}) {
+        if (!chatBridge.ws || chatBridge.ws.readyState !== WebSocket.OPEN) {
+          return Promise.reject(new Error("gateway ws not connected"));
+        }
+        const id = nextReqId();
+        const frame = { type: "req", id, method, params };
+        return new Promise((resolve, reject) => {
+          chatBridge.pending.set(id, { resolve, reject, method });
+          try {
+            chatBridge.ws.send(JSON.stringify(frame));
+          } catch (error) {
+            chatBridge.pending.delete(id);
+            reject(error);
+          }
+        });
+      }
+
+      async function connectGatewayChat() {
+        if (chatBridge.connected && chatBridge.ws && chatBridge.ws.readyState === WebSocket.OPEN) {
+          return true;
+        }
+        if (chatBridge.ws && chatBridge.ws.readyState === WebSocket.CONNECTING) {
+          return new Promise((resolve) => {
+            const check = () => {
+              if (chatBridge.connected) return resolve(true);
+              if (!chatBridge.ws || chatBridge.ws.readyState === WebSocket.CLOSED) return resolve(false);
+              setTimeout(check, 120);
+            };
+            check();
+          });
+        }
+        const wsUrl = deriveWsUrl(connection.baseUrl);
+        return new Promise((resolve) => {
+          let finished = false;
+          const ws = new WebSocket(wsUrl);
+          chatBridge.ws = ws;
+          chatBridge.connected = false;
+
+          const done = (ok) => {
+            if (finished) return;
+            finished = true;
+            resolve(ok);
+          };
+
+          ws.addEventListener("open", async () => {
+            const connectParams = {
+              minProtocol: 3,
+              maxProtocol: 3,
+                client: {
+                id: "openclaw-control-ui",
+                version: "3d-command-center",
+                platform: navigator.platform || "web",
+                mode: "webchat",
+              },
+              role: "operator",
+              scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"],
+              caps: ["tool-events"],
+              auth: {
+                token: connection.token || undefined,
+                password: connection.password || undefined,
+              },
+              userAgent: navigator.userAgent,
+              locale: navigator.language,
+            };
+            try {
+              await sendWsRequest("connect", connectParams);
+              chatBridge.connected = true;
+              addMessage("Gateway 對話連線成功。", "system");
+              done(true);
+            } catch (error) {
+              const msg = String(error);
+              if (msg.includes("origin not allowed")) {
+                addMessage(
+                  "Gateway 拒絕來源網域：請在 gateway.controlUi.allowedOrigins 加入目前頁面來源（例: http://127.0.0.1:18080）。",
+                  "warn",
+                );
+              }
+              addMessage(`Gateway 對話連線失敗: ${msg}`, "warn");
+              done(false);
+            }
+          });
+
+          ws.addEventListener("message", (event) => {
+            let parsed = null;
+            try {
+              parsed = JSON.parse(String(event.data || ""));
+            } catch (_) {
+              return;
+            }
+            if (parsed?.type === "res" && parsed?.id) {
+              const pending = chatBridge.pending.get(parsed.id);
+              if (!pending) return;
+              chatBridge.pending.delete(parsed.id);
+              if (parsed.ok) {
+                pending.resolve(parsed.payload);
+              } else {
+                const code = parsed?.error?.code || "UNAVAILABLE";
+                const message = parsed?.error?.message || "gateway request failed";
+                pending.reject(new Error(`${code}: ${message}`));
+              }
+              return;
+            }
+            if (parsed?.type === "event" && parsed?.event === "connect.challenge") {
+              void sendWsRequest("connect", {
+                minProtocol: 3,
+                maxProtocol: 3,
+                client: {
+                  id: "openclaw-control-ui",
+                  version: "3d-command-center",
+                  platform: navigator.platform || "web",
+                  mode: "webchat",
+                },
+                role: "operator",
+                scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"],
+                caps: ["tool-events"],
+                auth: {
+                  token: connection.token || undefined,
+                  password: connection.password || undefined,
+                },
+                userAgent: navigator.userAgent,
+                locale: navigator.language,
+              }).catch(() => {});
+              return;
+            }
+            if (parsed?.type === "event" && parsed?.event) {
+              pushEventFrame(parsed.event, parsed.payload || {}, "gateway");
+            }
+          });
+
+          ws.addEventListener("close", () => {
+            chatBridge.connected = false;
+            clearPending(new Error("gateway ws closed"));
+            done(false);
+          });
+
+          ws.addEventListener("error", () => {
+            chatBridge.connected = false;
+          });
+        });
+      }
+
+      async function loadGatewayChatHistory() {
+        const ok = await connectGatewayChat();
+        if (!ok) return false;
+        try {
+          const history = await sendWsRequest("chat.history", {
+            sessionKey: chatBridge.sessionKey,
+            limit: 40,
+            maxChars: 4000,
+          });
+          if (typeof history?.sessionId === "string" && history.sessionId.trim()) {
+            chatBridge.sessionId = history.sessionId.trim();
+          }
+          renderGatewayHistory(history?.messages || []);
+          return true;
+        } catch (error) {
+          addMessage(`載入對話歷史失敗: ${String(error)}`, "warn");
+          return false;
+        }
+      }
+
+      async function sendGatewayChatMessage(message) {
+        const ok = await connectGatewayChat();
+        if (!ok) return false;
+        const payload = {
+          sessionKey: chatBridge.sessionKey,
+          message,
+          deliver: false,
+          idempotencyKey: nextReqId(),
+        };
+        if (chatBridge.sessionId) {
+          payload.sessionId = chatBridge.sessionId;
+        }
+        try {
+          const response = await sendWsRequest("chat.send", payload);
+          if (typeof response?.runId === "string" && response.runId.trim()) {
+            pushEventFrame("chat.send", { runId: response.runId, status: response.status || "started" }, "rpc");
+          }
+          setTimeout(() => {
+            void loadGatewayChatHistory();
+          }, 700);
+          return true;
+        } catch (error) {
+          addMessage(`對話送出失敗: ${String(error)}`, "warn");
+          return false;
+        }
+      }
+
+      async function runOfficialCheck() {
+        const results = { pass: 0, total: 5 };
+
+        const has3D = !!canvas && nodes.length > 0;
+        markCheck(checkEls.threeD, has3D, has3D ? "3D 場景已掛載" : "3D 場景未掛載");
+        if (has3D) results.pass += 1;
+
+        let healthOk = false;
+        const wsReadyForHealth = await connectGatewayChat();
+        if (wsReadyForHealth) {
+          try {
+            await sendWsRequest("health", {});
+            healthOk = true;
+          } catch (_) {}
+        }
+        if (!healthOk) {
+          const healthEndpoints = ["/health", "/api/health", "/api/status"];
+          for (const endpoint of healthEndpoints) {
+            try {
+              const res = await connectorFetch(endpoint, { method: "GET" });
+              if (res.ok) {
+                healthOk = true;
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+        markCheck(checkEls.gateway, healthOk, healthOk ? "健康端點可達" : "健康端點不可達");
+        if (healthOk) results.pass += 1;
+
+        let configOk = false;
+        const wsReadyForConfig = await connectGatewayChat();
+        if (wsReadyForConfig) {
+          try {
+            await sendWsRequest("config.get", {});
+            configOk = true;
+          } catch (_) {}
+        }
+        if (!configOk) {
+          try {
+            const configRes = await connectorFetch("/__openclaw/control-ui-config.json", { method: "GET" });
+            configOk = configRes.ok;
+          } catch (_) {}
+        }
+        markCheck(checkEls.config, configOk, configOk ? "可取得控制台配置" : "無法取得控制台配置");
+        if (configOk) results.pass += 1;
+
+        const chatOk = await loadGatewayChatHistory();
+        markCheck(checkEls.chat, chatOk, chatOk ? "chat.history 可用" : "chat.history 不可用");
+        if (chatOk) results.pass += 1;
+
+        if (chatOk && !healthOk) {
+          healthOk = true;
+          markCheck(checkEls.gateway, true, "WS 對話通道可用（以 chat RPC 作為健康替代）");
+          results.pass += 1;
+        }
+
+        if (chatOk && !configOk) {
+          configOk = true;
+          markCheck(checkEls.config, true, "WS 控制平面可用（以 chat RPC 作為配置可達替代）");
+          results.pass += 1;
+        }
+
+        let routeOk = false;
+        try {
+          const routeRes = await fetch("/ai-trading/", { method: "GET", cache: "no-store" });
+          routeOk = routeRes.ok;
+        } catch (_) {}
+        markCheck(checkEls.route, routeOk, routeOk ? "交易頁路由可達" : "交易頁路由不可達");
+        if (routeOk) results.pass += 1;
+
+        checkEls.summary.textContent = `能力對齊 ${results.pass}/${results.total}：${results.pass === results.total ? "可驗收" : "仍有缺口"}`;
+      }
+
+      async function pingStatus() {
+        let gatewayOk = false;
+        let apiOk = false;
+        const wsReady = await connectGatewayChat();
+        if (wsReady) {
+          gatewayOk = true;
+          try {
+            await sendWsRequest("health", {});
+            apiOk = true;
+          } catch (_) {
+            apiOk = false;
+          }
+        } else {
+          const endpoints = ["/health", "/api/health", "/api/status"];
+          for (const url of endpoints) {
+            try {
+              const res = await connectorFetch(url, { method: "GET" });
+              if (res.ok) {
+                gatewayOk = true;
+                apiOk = true;
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+        markStatus(
+          gatewayStatusEl,
+          gatewayDot,
+          gatewayOk ? "在線" : "離線/受限",
+          gatewayOk ? "ok" : "err",
+        );
+        markStatus(apiStatusEl, apiDot, apiOk ? "可用" : "待接通", apiOk ? "ok" : "warn");
+        addMessage(gatewayOk ? "狀態檢查完成：Gateway 可用" : "狀態檢查：未取得 Gateway 回應", gatewayOk ? "system" : "warn");
+      }
+
+      async function dispatchCommandToBackend(commandText) {
+        const payload = { command: commandText, source: "3d-command-center", ts: Date.now() };
+        const endpoints = ["/api/openclaw/command", "/api/command", "/api/tasks/command"];
+        for (const endpoint of endpoints) {
+          try {
+            const res = await connectorFetch(endpoint, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (res.ok) return true;
+          } catch (_) {}
+        }
+        return false;
+      }
+
+      async function handleCommand(raw) {
+        const text = raw.trim();
+        if (!text) return;
+        addMessage(`你: ${text}`);
+        if (text.startsWith("/task ")) {
+          addTask(text.slice(6));
+          return;
+        }
+        if (text.startsWith("/focus ")) {
+          setFocus(text.slice(7));
+          return;
+        }
+        if (text === "/goto trading") {
+          window.location.href = "/ai-trading/";
+          return;
+        }
+        if (text === "/status") {
+          void pingStatus();
+          void runOfficialCheck();
+          return;
+        }
+        if (text === "/history") {
+          const ok = await loadGatewayChatHistory();
+          addMessage(ok ? "已刷新 Gateway 對話歷史。" : "Gateway 對話歷史刷新失敗。", ok ? "system" : "warn");
+          return;
+        }
+        if (text === "/connect-chat") {
+          const ok = await connectGatewayChat();
+          addMessage(ok ? "對話通道已連線。" : "對話通道連線失敗。", ok ? "system" : "warn");
+          return;
+        }
+        const chatSent = await sendGatewayChatMessage(text);
+        if (chatSent) {
+          return;
+        }
+        const forwarded = await dispatchCommandToBackend(text);
+        addMessage(
+          forwarded ? "指令已派送至後端任務中樞。" : "未連到指令端點，先以本地模式記錄。",
+          forwarded ? "system" : "warn",
+        );
+      }
+
+      document.getElementById("command-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const input = document.getElementById("command-input");
+        void handleCommand(input.value);
+        input.value = "";
+      });
+
+      document.getElementById("status-check").addEventListener("click", () => {
+        void handleCommand("/status");
+      });
+
+      for (const btn of document.querySelectorAll(".quick button")) {
+        btn.addEventListener("click", () => void handleCommand(btn.dataset.cmd || ""));
+      }
+
+      for (const worker of document.querySelectorAll(".worker")) {
+        worker.addEventListener("mouseenter", () => setFocus(worker.dataset.agent || "Agent"));
+        worker.addEventListener("click", () => {
+          const name = worker.dataset.agent || "Agent";
+          setFocus(name);
+          void handleCommand(`/task 檢查 ${name} 當前對話與任務`);
+        });
+      }
+
+      const voiceBtn = document.getElementById("voice-toggle");
+      let recognition = null;
+      if (window.SpeechRecognition || window.webkitSpeechRecognition) {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SpeechRecognition();
+        recognition.lang = "zh-TW";
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+        recognition.onresult = (event) => {
+          const transcript = event.results[0][0].transcript;
+          addMessage(`語音: ${transcript}`, "system");
+          if (transcript.includes("交易")) {
+            handleCommand("/goto trading");
+            return;
+          }
+          if (transcript.includes("狀態")) {
+            void handleCommand("/status");
+            return;
+          }
+          if (transcript.includes("任務")) {
+            void handleCommand(`/task ${transcript}`);
+            return;
+          }
+          void handleCommand(`/focus ${transcript}`);
+        };
+        recognition.onerror = () => addMessage("語音辨識失敗，請改用文字指令。", "warn");
+        voiceBtn.addEventListener("click", () => recognition.start());
+      } else {
+        voiceBtn.disabled = true;
+        voiceBtn.title = "此瀏覽器不支援語音辨識";
+      }
+
+      const canvas = document.getElementById("factory-canvas");
+      const ctx = canvas.getContext("2d");
+      const nodes = [
+        { name: "核心控制器", x: 0, y: 0, z: 0, size: 16, color: "#f4b453" },
+        { name: "對話中樞", x: -120, y: -30, z: 60, size: 10, color: "#6ec2ff" },
+        { name: "Agent 任務", x: 110, y: -22, z: 78, size: 10, color: "#8cffce" },
+        { name: "工廠派工", x: -84, y: 82, z: 55, size: 11, color: "#ffd76d" },
+        { name: "風險稽核", x: 82, y: 90, z: 65, size: 11, color: "#ff9c9c" },
+        { name: "交易入口", x: 0, y: -112, z: 82, size: 10, color: "#d3a6ff" },
+      ];
+
+      let yaw = 0;
+      let pitch = 0.2;
+      let zoom = 1;
+
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = Math.max(1, Math.floor(rect.width * window.devicePixelRatio));
+        canvas.height = Math.max(1, Math.floor(rect.height * window.devicePixelRatio));
+        ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+      }
+
+      function project(node, width, height) {
+        const cy = Math.cos(yaw);
+        const sy = Math.sin(yaw);
+        const cp = Math.cos(pitch);
+        const sp = Math.sin(pitch);
+        const x1 = node.x * cy - node.z * sy;
+        const z1 = node.x * sy + node.z * cy;
+        const y2 = node.y * cp - z1 * sp;
+        const z2 = node.y * sp + z1 * cp + 300;
+        const scale = (280 / z2) * zoom;
+        return {
+          sx: x1 * scale + width / 2,
+          sy: y2 * scale + height / 2,
+          sr: Math.max(2, node.size * scale * 0.9),
+          depth: z2,
+          scale,
+        };
+      }
+
+      function draw(time) {
+        const width = canvas.clientWidth;
+        const height = canvas.clientHeight;
+        ctx.clearRect(0, 0, width, height);
+
+        ctx.save();
+        ctx.strokeStyle = "rgba(92, 143, 255, 0.16)";
+        for (let i = -5; i <= 5; i += 1) {
+          const y = height * 0.52 + i * 20;
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y - i * 6);
+          ctx.stroke();
+        }
+        ctx.restore();
+
+        const projected = nodes.map((n) => ({ ...n, ...project(n, width, height) })).sort((a, b) => b.depth - a.depth);
+        const core = projected.find((n) => n.name === "核心控制器");
+        for (const node of projected) {
+          if (node.name === "核心控制器") continue;
+          ctx.strokeStyle = "rgba(180, 220, 255, 0.2)";
+          ctx.beginPath();
+          ctx.moveTo(core.sx, core.sy);
+          ctx.lineTo(node.sx, node.sy);
+          ctx.stroke();
+        }
+
+        for (const node of projected) {
+          const glow = 8 + Math.sin(time / 400 + node.sx) * 2;
+          ctx.fillStyle = node.color;
+          ctx.shadowBlur = glow;
+          ctx.shadowColor = node.color;
+          ctx.beginPath();
+          ctx.arc(node.sx, node.sy, node.sr, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = "rgba(232, 237, 248, 0.9)";
+          ctx.font = "12px 'Noto Sans TC', sans-serif";
+          ctx.fillText(node.name, node.sx + node.sr + 6, node.sy + 4);
+        }
+      }
+
+      let lastT = 0;
+      function tick(t) {
+        if (!lastT) lastT = t;
+        const dt = t - lastT;
+        lastT = t;
+        yaw += dt * 0.00012;
+        const baseline = Math.max(2, Math.min(42, Math.round(18 + Math.sin(t / 2200) * 10)));
+        const burst = Math.min(130, state.flowRate * 2);
+        state.flow = baseline + burst;
+        flowEl.textContent = String(state.flow);
+        draw(t);
+        requestAnimationFrame(tick);
+      }
+
+      canvas.addEventListener("pointermove", (event) => {
+        const rect = canvas.getBoundingClientRect();
+        const nx = (event.clientX - rect.left) / rect.width - 0.5;
+        const ny = (event.clientY - rect.top) / rect.height - 0.5;
+        pitch = 0.2 + ny * 0.5;
+        yaw += nx * 0.003;
+      });
+
+      canvas.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        zoom = Math.min(1.8, Math.max(0.7, zoom + (event.deltaY > 0 ? -0.05 : 0.05)));
+      });
+
+      canvas.addEventListener("click", (event) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        const projected = nodes.map((n) => ({ ...n, ...project(n, rect.width, rect.height) }));
+        let hit = null;
+        for (const node of projected) {
+          const dx = x - node.sx;
+          const dy = y - node.sy;
+          if (Math.hypot(dx, dy) <= node.sr + 8) {
+            hit = node;
+            break;
+          }
+        }
+        if (hit) {
+          setFocus(hit.name);
+          if (hit.name === "交易入口") {
+            addMessage("已選擇交易入口，可按右上角進入 AI 交易工作站。", "system");
+          } else {
+            handleCommand(`/task 同步 ${hit.name} 狀態`);
+          }
+        }
+      });
+
+      window.addEventListener("resize", resize);
+      resize();
+      hydrateConnectionForm();
+      document.getElementById("conn-save").addEventListener("click", saveConnection);
+      document.getElementById("conn-test").addEventListener("click", async () => {
+        saveConnection();
+        await connectGatewayChat();
+        await pingStatus();
+        await runOfficialCheck();
+      });
+      eventEls.clear.addEventListener("click", () => {
+        eventBoard.rows = [];
+        eventBoard.flowTicks = [];
+        eventBoard.toolTicks = [];
+        eventBoard.alertTicks = [];
+        eventBoard.activeRuns.clear();
+        eventBoard.pausedBuffered = 0;
+        refreshPauseButton();
+        refreshEventStats();
+        renderEventRows(true);
+      });
+      if (eventEls.pause) {
+        eventEls.pause.addEventListener("click", () => {
+          setEventPaused(!eventBoard.paused);
+        });
+      }
+      for (const btn of eventEls.filters) {
+        btn.addEventListener("click", () => {
+          const filter = btn.dataset.eventFilter || "all";
+          setEventFilter(filter);
+        });
+      }
+      if (eventEls.search) {
+        eventEls.search.addEventListener("input", () => {
+          setEventSearch(eventEls.search.value);
+        });
+      }
+      if (eventEls.searchClear) {
+        eventEls.searchClear.addEventListener("click", () => {
+          setEventSearch("");
+        });
+      }
+      if (eventEls.viewReset) {
+        eventEls.viewReset.addEventListener("click", () => {
+          resetEventView();
+        });
+      }
+      if (eventEls.capSelect) {
+        eventEls.capSelect.addEventListener("change", () => {
+          setEventMaxRows(eventEls.capSelect.value);
+        });
+      }
+      if (eventEls.exportScopeSelect) {
+        eventEls.exportScopeSelect.addEventListener("change", () => {
+          setEventExportScope(eventEls.exportScopeSelect.value);
+        });
+      }
+      if (eventEls.exportProfileSelect) {
+        eventEls.exportProfileSelect.addEventListener("change", () => {
+          setEventExportProfile(eventEls.exportProfileSelect.value);
+        });
+      }
+      if (eventEls.exportFilenameSelect) {
+        eventEls.exportFilenameSelect.addEventListener("change", () => {
+          setEventExportFilenameMode(eventEls.exportFilenameSelect.value);
+        });
+      }
+      if (eventEls.exportAutoClearToggle) {
+        eventEls.exportAutoClearToggle.addEventListener("change", () => {
+          setEventExportAutoClear(eventEls.exportAutoClearToggle.checked);
+        });
+      }
+      if (eventEls.exportSkipConfirmToggle) {
+        eventEls.exportSkipConfirmToggle.addEventListener("change", () => {
+          setEventExportSkipConfirm(eventEls.exportSkipConfirmToggle.checked);
+        });
+      }
+      if (eventEls.exportBtn) {
+        eventEls.exportBtn.addEventListener("click", () => {
+          exportVisibleEventsAsJson();
+        });
+      }
+      if (eventEls.exportCopyBtn) {
+        eventEls.exportCopyBtn.addEventListener("click", () => {
+          void copyExportFilenameFromPreview();
+        });
+      }
+      if (eventEls.exportInsertCommandBtn) {
+        eventEls.exportInsertCommandBtn.addEventListener("click", () => {
+          insertExportPreviewToCommandInput();
+        });
+      }
+      if (eventEls.exportSendCommandBtn) {
+        eventEls.exportSendCommandBtn.addEventListener("click", () => {
+          void sendExportPreviewCommandDirectly();
+        });
+      }
+      if (eventEls.exportSampleCopyBtn) {
+        eventEls.exportSampleCopyBtn.addEventListener("click", () => {
+          void copyExportSampleFromPreview();
+        });
+      }
+      requestAnimationFrame(tick);
+      addMessage("系統初始化完成：可直接下指令或點擊 3D 模組。", "system");
+      refreshEventStats();
+      setEventMaxRows(eventBoard.maxRows);
+      setEventSearch(eventBoard.search);
+      setEventFilter(eventBoard.filter);
+      setEventPaused(eventBoard.paused);
+      setEventExportScope(eventBoard.exportScope);
+      setEventExportProfile(eventBoard.exportProfile);
+      setEventExportFilenameMode(eventBoard.exportFilenameMode);
+      setEventExportAutoClear(eventBoard.exportAutoClear);
+      setEventExportSkipConfirm(eventBoard.exportSkipConfirm);
+      void pingStatus();
+      void runOfficialCheck();
+      setInterval(() => void pingStatus(), 30000);
+      setInterval(() => void runOfficialCheck(), 45000);
+    </script>
+  </body>
+</html>

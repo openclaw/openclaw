@@ -8,6 +8,7 @@ import type {
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+export type { TradingSnapshotResult } from "../../../src/gateway/server-methods/trading.js";
 
 export type ChannelsStatusSnapshot = {
   ts: number;

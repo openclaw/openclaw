@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenClaw AI 交易工作站</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #05070c;
+        --panel: rgba(14, 18, 30, 0.86);
+        --line: rgba(255, 255, 255, 0.14);
+        --text: #edf2ff;
+        --muted: #97a2bd;
+        --good: #53e59c;
+        --bad: #ff7272;
+        --warn: #ffd775;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: radial-gradient(circle at 25% 12%, #1f213f 0, transparent 32%),
+          radial-gradient(circle at 88% 7%, #40301b 0, transparent 25%),
+          linear-gradient(160deg, #03050a 0%, #0a1020 46%, #05080f 100%);
+        color: var(--text);
+        font-family: "Noto Sans TC", "Segoe UI", "PingFang TC", sans-serif;
+      }
+
+      .page {
+        min-height: 100vh;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        gap: 10px;
+        padding: 12px;
+      }
+
+      .header {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel);
+        padding: 10px 12px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .header h1 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .header small {
+        color: var(--muted);
+      }
+
+      .header .actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      .btn {
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        border-radius: 10px;
+        padding: 8px 12px;
+        text-decoration: none;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .btn:hover {
+        border-color: rgba(255, 255, 255, 0.34);
+      }
+
+      .workspace {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 320px 1fr 360px;
+        grid-template-rows: 1fr 220px;
+        gap: 10px;
+      }
+
+      .card {
+        min-height: 0;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .card header {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 10px;
+      }
+
+      .card header h2 {
+        margin: 0;
+        font-size: 14px;
+      }
+
+      .card header p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .watchlist {
+        padding: 8px 10px;
+        overflow: auto;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+
+      th,
+      td {
+        text-align: left;
+        padding: 6px 4px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      td.pos {
+        color: var(--good);
+      }
+
+      td.neg {
+        color: var(--bad);
+      }
+
+      .chart-wrap {
+        position: relative;
+        min-height: 0;
+      }
+
+      #flow-chart {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      .chart-hud {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        display: flex;
+        gap: 8px;
+      }
+
+      .pill {
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 999px;
+        font-size: 12px;
+        padding: 4px 10px;
+        background: rgba(0, 0, 0, 0.35);
+      }
+
+      .controls {
+        padding: 10px;
+        overflow: auto;
+        display: grid;
+        gap: 10px;
+      }
+
+      .controls label {
+        display: grid;
+        gap: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .controls input,
+      .controls select {
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        background: rgba(4, 8, 14, 0.9);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 8px;
+      }
+
+      .controls .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .status {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+      }
+
+      .ok {
+        background: var(--good);
+      }
+
+      .warn {
+        background: var(--warn);
+      }
+
+      .logs {
+        grid-column: 1 / span 3;
+      }
+
+      .logs-body {
+        padding: 10px;
+        overflow: auto;
+        font-family: Consolas, Menlo, monospace;
+        font-size: 12px;
+        color: #cdd7ef;
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+
+      .chip {
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 999px;
+        padding: 3px 9px;
+        font-size: 11px;
+      }
+
+      @media (max-width: 1320px) {
+        .workspace {
+          grid-template-columns: 1fr;
+          grid-template-rows: 320px 420px 360px 260px;
+        }
+        .logs {
+          grid-column: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="header">
+        <div>
+          <h1>OpenClaw AI 交易工作站</h1>
+          <small>獨立頁面 | 交易專用 | 預設 paper-only（安全模式）</small>
+        </div>
+        <div class="actions">
+          <a class="btn" href="/3d-command-center/">回入口網站</a>
+          <button class="btn" id="btn-run">執行策略</button>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <article class="card">
+          <header>
+            <h2>報價看板</h2>
+            <p>可接即時 API；目前為本機模擬流 + 可掛載後端。</p>
+          </header>
+          <div class="watchlist">
+            <table>
+              <thead>
+                <tr>
+                  <th>商品</th>
+                  <th>現價</th>
+                  <th>漲跌%</th>
+                </tr>
+              </thead>
+              <tbody id="quote-body"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="card">
+          <header>
+            <h2>光流圖表（交易中樞）</h2>
+            <p>光點流代表成交熱度與策略動能，替代入口站中間圖表。</p>
+          </header>
+          <div class="chart-wrap">
+            <canvas id="flow-chart"></canvas>
+            <div class="chart-hud">
+              <span class="pill">成交流速: <b id="flow-speed">0</b></span>
+              <span class="pill">風險指標: <b id="risk-score">0</b></span>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <header>
+            <h2>策略與自動交易控制</h2>
+            <p>統一控制策略、風險、模式（預設 paper-only）。</p>
+          </header>
+          <div class="controls">
+            <div class="status">
+              <span class="chip"><i class="dot ok"></i>Paper</span>
+              <span class="chip"><i class="dot warn"></i>Auto Trader: <b id="auto-state">OFF</b></span>
+              <span class="chip" id="gateway-check">接線: 未檢查</span>
+            </div>
+            <div class="row">
+              <label>
+                Gateway Base URL
+                <input id="gateway-base" placeholder="http://127.0.0.1:18789" />
+              </label>
+              <label>
+                Gateway Token
+                <input id="gateway-token" placeholder="可選" />
+              </label>
+            </div>
+            <label>
+              Gateway Password
+              <input id="gateway-password" type="password" placeholder="可選" />
+            </label>
+            <div class="row">
+              <button class="btn" id="btn-gateway-save">儲存接線</button>
+              <button class="btn" id="btn-gateway-test">測試接線</button>
+            </div>
+            <label>
+              策略
+              <select id="strategy">
+                <option>Trend Fusion V3</option>
+                <option>Mean Revert X</option>
+                <option>Volatility Pulse</option>
+              </select>
+            </label>
+            <div class="row">
+              <label>
+                單筆風險%
+                <input id="risk" type="number" value="0.8" step="0.1" min="0.1" max="5" />
+              </label>
+              <label>
+                最大倉位%
+                <input id="position" type="number" value="30" step="1" min="1" max="100" />
+              </label>
+            </div>
+            <div class="row">
+              <button class="btn" id="btn-autotrade">切換自動交易</button>
+              <button class="btn" id="btn-sync">同步後端狀態</button>
+            </div>
+          </div>
+        </article>
+
+        <article class="card logs">
+          <header>
+            <h2>交易事件與稽核紀錄</h2>
+            <p>所有動作寫入紀錄，便於回溯與驗證。</p>
+          </header>
+          <div class="logs-body" id="logs"></div>
+        </article>
+      </section>
+    </main>
+
+    <script>
+      const quoteBody = document.getElementById("quote-body");
+      const logsEl = document.getElementById("logs");
+      const autoStateEl = document.getElementById("auto-state");
+      const flowSpeedEl = document.getElementById("flow-speed");
+      const riskScoreEl = document.getElementById("risk-score");
+      const btnRun = document.getElementById("btn-run");
+      const btnAuto = document.getElementById("btn-autotrade");
+      const btnSync = document.getElementById("btn-sync");
+      const gatewayCheckEl = document.getElementById("gateway-check");
+      const gatewayFields = {
+        base: document.getElementById("gateway-base"),
+        token: document.getElementById("gateway-token"),
+        password: document.getElementById("gateway-password"),
+      };
+
+      const quotes = [
+        { symbol: "TXF", price: 21384, change: 0.32 },
+        { symbol: "MTX", price: 21400, change: -0.11 },
+        { symbol: "NQ", price: 18562, change: 0.55 },
+        { symbol: "ES", price: 5348, change: 0.18 },
+        { symbol: "CL", price: 79.4, change: -0.24 },
+        { symbol: "GC", price: 2412, change: 0.08 },
+      ];
+
+      const state = {
+        auto: false,
+        flow: 0,
+      };
+
+      const connection = {
+        baseUrl: sessionStorage.getItem("openclaw.gateway.url") || window.location.origin,
+        token: sessionStorage.getItem("openclaw.gateway.token") || "",
+        password: sessionStorage.getItem("openclaw.gateway.password") || "",
+      };
+
+      function normalizeBaseUrl(raw) {
+        const value = (raw || "").trim();
+        if (!value) return window.location.origin;
+        return value.endsWith("/") ? value.slice(0, -1) : value;
+      }
+
+      function hydrateConnectionForm() {
+        gatewayFields.base.value = connection.baseUrl;
+        gatewayFields.token.value = connection.token;
+        gatewayFields.password.value = connection.password;
+      }
+
+      function saveConnection() {
+        connection.baseUrl = normalizeBaseUrl(gatewayFields.base.value);
+        connection.token = gatewayFields.token.value.trim();
+        connection.password = gatewayFields.password.value.trim();
+        sessionStorage.setItem("openclaw.gateway.url", connection.baseUrl);
+        sessionStorage.setItem("openclaw.gateway.token", connection.token);
+        sessionStorage.setItem("openclaw.gateway.password", connection.password);
+        hydrateConnectionForm();
+        log(`接線已更新: ${connection.baseUrl}`);
+      }
+
+      function composeUrl(path) {
+        if (/^https?:\/\//i.test(path)) return path;
+        const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+        return `${connection.baseUrl}${normalizedPath}`;
+      }
+
+      async function connectorFetch(path, init = {}) {
+        const headers = new Headers(init.headers || {});
+        if (connection.token) headers.set("authorization", `Bearer ${connection.token}`);
+        if (connection.password) headers.set("x-openclaw-password", connection.password);
+        return fetch(composeUrl(path), { cache: "no-store", ...init, headers });
+      }
+
+      async function testGateway() {
+        const endpoints = ["/health", "/api/health", "/api/status"];
+        let ok = false;
+        for (const endpoint of endpoints) {
+          try {
+            const res = await connectorFetch(endpoint, { method: "GET" });
+            if (res.ok) {
+              ok = true;
+              break;
+            }
+          } catch (_) {}
+        }
+        gatewayCheckEl.textContent = `接線: ${ok ? "可用" : "受限"}`;
+        gatewayCheckEl.style.color = ok ? "#53e59c" : "#ffd775";
+        log(ok ? "Gateway 接線檢查成功" : "Gateway 接線未通過，維持本機模式");
+      }
+
+      function log(text) {
+        const line = document.createElement("div");
+        line.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+        logsEl.prepend(line);
+      }
+
+      function renderQuotes() {
+        quoteBody.innerHTML = "";
+        for (const row of quotes) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${row.symbol}</td>
+            <td>${row.price.toFixed(2)}</td>
+            <td class="${row.change >= 0 ? "pos" : "neg"}">${row.change >= 0 ? "+" : ""}${row.change.toFixed(2)}</td>
+          `;
+          quoteBody.appendChild(tr);
+        }
+      }
+
+      function updateQuotesTick() {
+        for (const row of quotes) {
+          const drift = (Math.random() - 0.5) * 6;
+          row.price = Math.max(1, row.price + drift);
+          row.change = Math.max(-9.99, Math.min(9.99, row.change + (Math.random() - 0.5) * 0.12));
+        }
+        renderQuotes();
+      }
+
+      async function syncBackend() {
+        try {
+          const res = await connectorFetch("/api/trading/status", { method: "GET" });
+          if (!res.ok) throw new Error("status not ok");
+          const data = await res.json();
+          if (typeof data.autoTrading === "boolean") {
+            state.auto = data.autoTrading;
+            autoStateEl.textContent = state.auto ? "ON" : "OFF";
+          }
+          log("後端狀態同步成功");
+        } catch (_) {
+          log("後端狀態同步失敗，維持本地模式");
+        }
+      }
+
+      async function runStrategy() {
+        const payload = {
+          strategy: document.getElementById("strategy").value,
+          riskPercent: Number(document.getElementById("risk").value),
+          maxPositionPercent: Number(document.getElementById("position").value),
+          mode: "paper",
+        };
+        try {
+          const res = await connectorFetch("/api/trading/strategy/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error("run failed");
+          log(`策略送出成功: ${payload.strategy}`);
+        } catch (_) {
+          log(`策略模擬執行: ${payload.strategy}（本機無後端時）`);
+        }
+      }
+
+      async function toggleAutoTrading() {
+        state.auto = !state.auto;
+        autoStateEl.textContent = state.auto ? "ON" : "OFF";
+        try {
+          const res = await connectorFetch("/api/trading/autotrade/toggle", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: state.auto, mode: "paper" }),
+          });
+          if (!res.ok) throw new Error("toggle failed");
+          log(`後端自動交易切換: ${state.auto ? "ON" : "OFF"}`);
+        } catch (_) {
+          log(`本機自動交易切換: ${state.auto ? "ON" : "OFF"}（尚未串後端）`);
+        }
+      }
+
+      const canvas = document.getElementById("flow-chart");
+      const ctx = canvas.getContext("2d");
+      const particles = Array.from({ length: 120 }, () => ({
+        x: Math.random(),
+        y: Math.random(),
+        z: Math.random(),
+        vx: (Math.random() - 0.5) * 0.0018,
+        vy: (Math.random() - 0.5) * 0.0018,
+      }));
+
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = Math.floor(rect.width * devicePixelRatio);
+        canvas.height = Math.floor(rect.height * devicePixelRatio);
+        ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      }
+
+      function draw(ts) {
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+        ctx.clearRect(0, 0, w, h);
+
+        const grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, "rgba(22, 34, 64, 0.85)");
+        grad.addColorStop(1, "rgba(8, 12, 20, 0.95)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, w, h);
+
+        for (const p of particles) {
+          p.x += p.vx;
+          p.y += p.vy;
+          if (p.x < 0 || p.x > 1) p.vx *= -1;
+          if (p.y < 0 || p.y > 1) p.vy *= -1;
+          const px = p.x * w;
+          const py = p.y * h;
+          const pulse = 0.5 + Math.sin(ts / 500 + p.z * 8) * 0.5;
+          const r = 1 + pulse * 2.8;
+          ctx.fillStyle = `rgba(${180 + Math.floor(pulse * 60)}, ${160 + Math.floor(pulse * 80)}, 255, 0.85)`;
+          ctx.beginPath();
+          ctx.arc(px, py, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        for (let i = 0; i < particles.length; i += 1) {
+          const a = particles[i];
+          for (let j = i + 1; j < particles.length; j += 8) {
+            const b = particles[j];
+            const dx = a.x - b.x;
+            const dy = a.y - b.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < 0.015) {
+              const alpha = 0.17 - d2 * 10;
+              ctx.strokeStyle = `rgba(126, 180, 255, ${Math.max(0, alpha)})`;
+              ctx.beginPath();
+              ctx.moveTo(a.x * w, a.y * h);
+              ctx.lineTo(b.x * w, b.y * h);
+              ctx.stroke();
+            }
+          }
+        }
+
+        state.flow = Math.round(40 + 35 * Math.sin(ts / 1800) + Math.random() * 10);
+        flowSpeedEl.textContent = String(state.flow);
+        riskScoreEl.textContent = String(Math.max(1, Math.round((100 - state.flow) * 0.6)));
+
+        requestAnimationFrame(draw);
+      }
+
+      window.addEventListener("resize", resize);
+      resize();
+      requestAnimationFrame(draw);
+
+      btnRun.addEventListener("click", () => void runStrategy());
+      btnAuto.addEventListener("click", () => void toggleAutoTrading());
+      btnSync.addEventListener("click", () => void syncBackend());
+      document.getElementById("btn-gateway-save").addEventListener("click", saveConnection);
+      document.getElementById("btn-gateway-test").addEventListener("click", async () => {
+        saveConnection();
+        await testGateway();
+        await syncBackend();
+      });
+
+      hydrateConnectionForm();
+      renderQuotes();
+      setInterval(updateQuotesTick, 1200);
+      log("交易工作站啟動完成（paper-only）");
+      void testGateway();
+      void syncBackend();
+    </script>
+  </body>
+</html>
