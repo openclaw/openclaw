@@ -2393,7 +2393,7 @@ public struct SessionsUsageParams: Codable, Sendable {
     public init(
         key: String?,
         agentid: String? = nil,
-        agentscope: String?,
+        agentscope: String? = nil,
         startdate: String?,
         enddate: String?,
         mode: AnyCodable?,

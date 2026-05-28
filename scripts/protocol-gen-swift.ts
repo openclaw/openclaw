@@ -42,7 +42,7 @@ const STRICT_LITERAL_STRUCTS = new Set([
 
 const DEFAULTED_OPTIONAL_INIT_PARAMS: Record<string, Set<string>> = {
   SessionsAbortParams: new Set(["agentId"]),
-  SessionsUsageParams: new Set(["agentId"]),
+  SessionsUsageParams: new Set(["agentId", "agentScope"]),
   ArtifactsListParams: new Set(["agentId"]),
   ArtifactsGetParams: new Set(["agentId"]),
   ArtifactsDownloadParams: new Set(["agentId"]),
