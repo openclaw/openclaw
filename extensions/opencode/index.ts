@@ -8,6 +8,12 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyOpencodeZenConfig, OPENCODE_ZEN_DEFAULT_MODEL } from "./api.js";
 import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import {
+  listOpencodeZenModelCatalogEntries,
+  normalizeOpencodeZenBaseUrl,
+  normalizeOpencodeZenResolvedModel,
+  resolveOpencodeZenModel,
+} from "./provider-catalog.js";
 
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
@@ -68,6 +74,30 @@ export default definePluginEntry({
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
       resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
+      normalizeConfig: ({ providerConfig }) => {
+        const normalizedBaseUrl = normalizeOpencodeZenBaseUrl({
+          api: providerConfig.api,
+          baseUrl: providerConfig.baseUrl,
+        });
+        return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
+          ? { ...providerConfig, baseUrl: normalizedBaseUrl }
+          : undefined;
+      },
+      normalizeResolvedModel: ({ model }) => {
+        const modelNormalized = normalizeOpencodeZenResolvedModel(model);
+        if (modelNormalized) {
+          return modelNormalized;
+        }
+        return undefined;
+      },
+      normalizeTransport: ({ api, baseUrl }) => {
+        const normalizedBaseUrl = normalizeOpencodeZenBaseUrl({ api, baseUrl });
+        return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
+          ? { api, baseUrl: normalizedBaseUrl }
+          : undefined;
+      },
+      resolveDynamicModel: ({ modelId }) => resolveOpencodeZenModel(modelId),
+      augmentModelCatalog: () => listOpencodeZenModelCatalogEntries(),
     });
     api.registerMediaUnderstandingProvider(opencodeMediaUnderstandingProvider);
   },
