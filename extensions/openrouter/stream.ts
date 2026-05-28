@@ -8,6 +8,7 @@ import {
   createPayloadPatchStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { createOpenRouterCostReconciliationWrapper } from "./cost-reconciliation.js";
 import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
 import {
   isOpenRouterProxyReasoningUnsupportedModel,
@@ -228,20 +229,23 @@ export function wrapOpenRouterProviderStream(
     ? injectOpenRouterRouting(ctx.streamFn, providerRouting)
     : ctx.streamFn;
   const wrapStreamFn = OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn ?? undefined;
-  if (!wrapStreamFn) {
-    return createOpenRouterAnthropicPrefillWrapper(
-      createOpenRouterDeepSeekV4ThinkingWrapper(routedStreamFn, ctx.thinkingLevel),
-    );
-  }
-  const wrappedStreamFn =
-    wrapStreamFn({
-      ...ctx,
-      streamFn: routedStreamFn,
-      thinkingLevel: isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId)
-        ? undefined
-        : ctx.thinkingLevel,
-    }) ?? undefined;
-  return createOpenRouterAnthropicPrefillWrapper(
-    createOpenRouterDeepSeekV4ThinkingWrapper(wrappedStreamFn, ctx.thinkingLevel),
-  );
+  const requestWrappedStreamFn = !wrapStreamFn
+    ? createOpenRouterAnthropicPrefillWrapper(
+        createOpenRouterDeepSeekV4ThinkingWrapper(routedStreamFn, ctx.thinkingLevel),
+      )
+    : createOpenRouterAnthropicPrefillWrapper(
+        createOpenRouterDeepSeekV4ThinkingWrapper(
+          wrapStreamFn({
+            ...ctx,
+            streamFn: routedStreamFn,
+            thinkingLevel: isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId)
+              ? undefined
+              : ctx.thinkingLevel,
+          }) ?? undefined,
+          ctx.thinkingLevel,
+        ),
+      );
+  // Reconciliation must wrap the OUTERMOST layer so it observes the final
+  // assistant message produced by every downstream payload-patch wrapper.
+  return createOpenRouterCostReconciliationWrapper(requestWrappedStreamFn);
 }
