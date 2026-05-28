@@ -20,7 +20,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  posix as pathPosix,
+  relative,
+  resolve as pathResolve,
+} from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expandPackageDistImportClosure } from "./lib/package-dist-imports.mjs";
 
@@ -110,6 +118,30 @@ function normalizeRelativePath(filePath) {
   return filePath.replace(/\\/g, "/");
 }
 
+function isPosixAbsolutePath(filePath) {
+  return typeof filePath === "string" && filePath.startsWith("/") && !filePath.startsWith("//");
+}
+
+function joinPostinstallPath(base, ...segments) {
+  return isPosixAbsolutePath(base)
+    ? pathPosix.join(base, ...segments.map((segment) => normalizeRelativePath(String(segment))))
+    : join(base, ...segments);
+}
+
+function dirnamePostinstallPath(filePath) {
+  return isPosixAbsolutePath(filePath) ? pathPosix.dirname(filePath) : dirname(filePath);
+}
+
+function relativePostinstallPath(from, to) {
+  return isPosixAbsolutePath(from) && isPosixAbsolutePath(to)
+    ? pathPosix.relative(from, to)
+    : relative(from, to);
+}
+
+function resolvePostinstallPath(filePath) {
+  return isPosixAbsolutePath(filePath) ? pathPosix.normalize(filePath) : pathResolve(filePath);
+}
+
 function resolvePostinstallOsHomeDir(env, getHomedir = homedir) {
   return env?.HOME?.trim() || env?.USERPROFILE?.trim() || getHomedir();
 }
@@ -119,7 +151,7 @@ function resolvePostinstallTildePath(input, homeDir) {
     return homeDir;
   }
   if (input.startsWith("~/") || input.startsWith("~\\")) {
-    return join(homeDir, input.slice(2));
+    return joinPostinstallPath(homeDir, input.slice(2));
   }
   return input;
 }
@@ -127,18 +159,18 @@ function resolvePostinstallTildePath(input, homeDir) {
 function resolvePostinstallOpenClawHomeDir(env, getHomedir = homedir) {
   const osHome = resolvePostinstallOsHomeDir(env, getHomedir);
   const override = env?.OPENCLAW_HOME?.trim();
-  return override ? pathResolve(resolvePostinstallTildePath(override, osHome)) : osHome;
+  return override ? resolvePostinstallPath(resolvePostinstallTildePath(override, osHome)) : osHome;
 }
 
 function resolvePostinstallUserPath(input, openClawHome) {
-  return pathResolve(resolvePostinstallTildePath(input, openClawHome));
+  return resolvePostinstallPath(resolvePostinstallTildePath(input, openClawHome));
 }
 
 function readInstalledDistInventory(params = {}) {
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const pathExists = params.existsSync ?? existsSync;
   const readFile = params.readFileSync ?? readFileSync;
-  const inventoryPath = join(packageRoot, DIST_INVENTORY_PATH);
+  const inventoryPath = joinPostinstallPath(packageRoot, DIST_INVENTORY_PATH);
   if (!pathExists(inventoryPath)) {
     throw new Error(`missing dist inventory: ${DIST_INVENTORY_PATH}`);
   }
@@ -163,7 +195,7 @@ function resolveInstalledDistRoot(params = {}) {
   const pathExists = params.existsSync ?? existsSync;
   const pathLstat = params.lstatSync ?? lstatSync;
   const resolveRealPath = params.realpathSync ?? realpathSync;
-  const distDir = join(packageRoot, "dist");
+  const distDir = joinPostinstallPath(packageRoot, "dist");
   if (!pathExists(distDir)) {
     return null;
   }
@@ -173,7 +205,7 @@ function resolveInstalledDistRoot(params = {}) {
   }
   const packageRootReal = resolveRealPath(packageRoot);
   const distDirReal = resolveRealPath(distDir);
-  const relativeDistPath = relative(packageRootReal, distDirReal);
+  const relativeDistPath = relativePostinstallPath(packageRootReal, distDirReal);
   if (relativeDistPath !== "dist") {
     throw new Error("unsafe dist root: dist escaped package root");
   }
@@ -182,9 +214,9 @@ function resolveInstalledDistRoot(params = {}) {
 
 function assertSafeInstalledDistPath(relativePath, params) {
   const resolveRealPath = params.realpathSync ?? realpathSync;
-  const candidatePath = join(params.packageRoot, relativePath);
+  const candidatePath = joinPostinstallPath(params.packageRoot, relativePath);
   const candidateRealPath = resolveRealPath(candidatePath);
-  const relativeCandidatePath = relative(params.distDirReal, candidateRealPath);
+  const relativeCandidatePath = relativePostinstallPath(params.distDirReal, candidateRealPath);
   if (relativeCandidatePath.startsWith("..") || isAbsolute(relativeCandidatePath)) {
     throw new Error(`unsafe dist path: ${relativePath}`);
   }
@@ -206,7 +238,7 @@ function listInstalledDistFiles(params = {}) {
       continue;
     }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
-      const entryPath = join(currentDir, entry.name);
+      const entryPath = joinPostinstallPath(currentDir, entry.name);
       if (entry.isSymbolicLink()) {
         throw new Error(
           `unsafe dist entry: ${normalizeRelativePath(relative(packageRoot, entryPath))}`,
@@ -219,7 +251,7 @@ function listInstalledDistFiles(params = {}) {
       if (!entry.isFile()) {
         continue;
       }
-      const relativePath = normalizeRelativePath(relative(packageRoot, entryPath));
+      const relativePath = normalizeRelativePath(relativePostinstallPath(packageRoot, entryPath));
       if (relativePath === DIST_INVENTORY_PATH) {
         continue;
       }
@@ -243,13 +275,15 @@ function pruneEmptyDistDirectories(params = {}) {
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) {
         throw new Error(
-          `unsafe dist entry: ${normalizeRelativePath(relative(packageRoot, join(currentDir, entry.name)))}`,
+          `unsafe dist entry: ${normalizeRelativePath(
+            relativePostinstallPath(packageRoot, joinPostinstallPath(currentDir, entry.name)),
+          )}`,
         );
       }
       if (!entry.isDirectory()) {
         continue;
       }
-      prune(join(currentDir, entry.name));
+      prune(joinPostinstallPath(currentDir, entry.name));
     }
     if (currentDir === distRoot.distDir) {
       return;
@@ -257,16 +291,21 @@ function pruneEmptyDistDirectories(params = {}) {
     const currentStats = pathLstat(currentDir);
     if (!currentStats.isDirectory() || currentStats.isSymbolicLink()) {
       throw new Error(
-        `unsafe dist directory: ${normalizeRelativePath(relative(packageRoot, currentDir))}`,
+        `unsafe dist directory: ${normalizeRelativePath(
+          relativePostinstallPath(packageRoot, currentDir),
+        )}`,
       );
     }
     if (readDir(currentDir).length === 0) {
       removeDirectory(
-        assertSafeInstalledDistPath(normalizeRelativePath(relative(packageRoot, currentDir)), {
-          packageRoot,
-          distDirReal: distRoot.distDirReal,
-          realpathSync: params.realpathSync,
-        }),
+        assertSafeInstalledDistPath(
+          normalizeRelativePath(relativePostinstallPath(packageRoot, currentDir)),
+          {
+            packageRoot,
+            distDirReal: distRoot.distDirReal,
+            realpathSync: params.realpathSync,
+          },
+        ),
       );
     }
   }
@@ -282,7 +321,7 @@ function pruneLegacyInstalledPluginDependencyDirs(params) {
   const readDir = params.readdirSync ?? readdirSync;
   const removePath = params.rmSync ?? rmSync;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const extensionsDir = join(packageRoot, "dist", "extensions");
+  const extensionsDir = joinPostinstallPath(packageRoot, "dist", "extensions");
   const removed = [];
   let pluginEntries;
   try {
@@ -295,7 +334,7 @@ function pruneLegacyInstalledPluginDependencyDirs(params) {
     if (!pluginEntry.isDirectory() || pluginEntry.isSymbolicLink()) {
       continue;
     }
-    const pluginDir = join(extensionsDir, pluginEntry.name);
+    const pluginDir = joinPostinstallPath(extensionsDir, pluginEntry.name);
     let pluginChildren;
     try {
       pluginChildren = readDir(pluginDir, { withFileTypes: true });
@@ -307,7 +346,7 @@ function pruneLegacyInstalledPluginDependencyDirs(params) {
         continue;
       }
       const safePluginDir = assertSafeInstalledDistPath(
-        normalizeRelativePath(relative(packageRoot, pluginDir)),
+        normalizeRelativePath(relativePostinstallPath(packageRoot, pluginDir)),
         {
           packageRoot,
           distDirReal: params.distDirReal,
@@ -315,9 +354,12 @@ function pruneLegacyInstalledPluginDependencyDirs(params) {
         },
       );
       const relativePath = normalizeRelativePath(
-        relative(packageRoot, join(pluginDir, childEntry.name)),
+        relativePostinstallPath(packageRoot, joinPostinstallPath(pluginDir, childEntry.name)),
       );
-      removePath(join(safePluginDir, childEntry.name), { recursive: true, force: true });
+      removePath(joinPostinstallPath(safePluginDir, childEntry.name), {
+        recursive: true,
+        force: true,
+      });
       removed.push(relativePath);
     }
   }
@@ -343,7 +385,7 @@ export function collectLegacyPluginRuntimeDepsStateRoots(params = {}) {
   const stateRoots = [];
   const addStateRoot = (root) => {
     if (root) {
-      stateRoots.push(join(root, LEGACY_PLUGIN_RUNTIME_DEPS_DIR));
+      stateRoots.push(joinPostinstallPath(root, LEGACY_PLUGIN_RUNTIME_DEPS_DIR));
     }
   };
 
@@ -353,22 +395,22 @@ export function collectLegacyPluginRuntimeDepsStateRoots(params = {}) {
   }
   const configPath = env?.OPENCLAW_CONFIG_PATH?.trim();
   if (configPath) {
-    addStateRoot(dirname(resolvePostinstallUserPath(configPath, openClawHome)));
+    addStateRoot(dirnamePostinstallPath(resolvePostinstallUserPath(configPath, openClawHome)));
   }
-  addStateRoot(join(openClawHome, ".openclaw"));
-  addStateRoot(join(openClawHome, ".clawdbot"));
+  addStateRoot(joinPostinstallPath(openClawHome, ".openclaw"));
+  addStateRoot(joinPostinstallPath(openClawHome, ".clawdbot"));
 
   for (const entry of splitPostinstallPathList(env?.STATE_DIRECTORY)) {
     addStateRoot(resolvePostinstallUserPath(entry, openClawHome));
   }
 
-  return [...new Set(stateRoots.map((root) => pathResolve(root)))].toSorted((left, right) =>
-    left.localeCompare(right),
+  return [...new Set(stateRoots.map((root) => resolvePostinstallPath(root)))].toSorted(
+    (left, right) => left.localeCompare(right),
   );
 }
 
 function isPathInsideRoot(candidate, root) {
-  const relativePath = relative(root, candidate);
+  const relativePath = relativePostinstallPath(root, candidate);
   return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 

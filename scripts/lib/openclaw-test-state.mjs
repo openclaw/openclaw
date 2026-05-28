@@ -246,9 +246,19 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/gu, `'\\''`)}'`;
 }
 
+function toBashPathIfNeeded(value) {
+  const stringValue = String(value);
+  if (process.platform !== "win32") {
+    return stringValue;
+  }
+  const normalized = stringValue.replaceAll("\\", "/");
+  const match = /^([A-Za-z]):\/(.*)$/u.exec(normalized);
+  return match ? `/mnt/${match[1].toLowerCase()}/${match[2]}` : stringValue;
+}
+
 function renderExports(env) {
   return Object.entries(env)
-    .map(([key, value]) => `export ${key}=${shellQuote(value)}`)
+    .map(([key, value]) => `export ${key}=${shellQuote(toBashPathIfNeeded(value))}`)
     .join("\n");
 }
 

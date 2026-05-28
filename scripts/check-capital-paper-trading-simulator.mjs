@@ -77,6 +77,35 @@ if (readyCycle.cycle.paperIntent?.price !== 41138.8) {
   throw new Error(`unexpected scaled paper intent price: ${readyCycle.cycle.paperIntent?.price}`);
 }
 
+const txSessionAliasCycle = buildCapitalPaperTradingCycle({
+  readiness: readyReadiness,
+  quoteState: {
+    quote: {
+      ...quoteState.quote,
+      stockNo: "TX06AM",
+      stockName: "台指06",
+      close: "4244200",
+      bid: "4243600",
+      ask: "4244200",
+      message: "decimal=2",
+    },
+  },
+  strategy: {
+    ...strategy,
+    symbol: "TX00AM",
+    marketCode: "TXF",
+    maxSpreadTicks: 40,
+  },
+});
+if (txSessionAliasCycle.cycle.paperIntent?.symbol !== "TX06") {
+  throw new Error(
+    `TX session alias must be normalized to orderable paper symbol, got ${txSessionAliasCycle.cycle.paperIntent?.symbol}`,
+  );
+}
+if (txSessionAliasCycle.cycle.paperIntent?.sourceEvent?.stockNo !== "TX06AM") {
+  throw new Error("paper intent must preserve source callback stockNo");
+}
+
 const blockedCycle = buildCapitalPaperTradingCycle({
   readiness: blockedReadiness,
   quoteState,

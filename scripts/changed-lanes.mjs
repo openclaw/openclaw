@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
@@ -446,7 +448,7 @@ function parseArgs(argv) {
 
 function isDirectRun() {
   const direct = process.argv[1];
-  return Boolean(direct && import.meta.url.endsWith(direct));
+  return Boolean(direct && resolve(direct) === fileURLToPath(import.meta.url));
 }
 
 function printHuman(result) {

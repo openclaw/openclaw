@@ -4,17 +4,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REQUIRED_PACKAGE_SCRIPTS = [
-  "brokerdesk:quote:check",
-  "brokerdesk:quote:read",
-  "brokerdesk:quote:status",
-  "brokerdesk:quote:status:check",
-  "brokerdesk:quote:event",
-  "brokerdesk:quote:event:check",
-  "brokerdesk:quote:pump",
-  "brokerdesk:quote:pump:check",
-  "brokerdesk:quote:validate",
-  "brokerdesk:quote:architecture",
-  "brokerdesk:quote:architecture:check",
+  "capital-hft:quote:check",
+  "capital-hft:quote:read",
+  "capital-hft:quote:status",
+  "capital-hft:quote:status:check",
+  "capital-hft:quote:event",
+  "capital-hft:quote:event:check",
+  "capital-hft:quote:pump",
+  "capital-hft:quote:pump:check",
+  "capital-hft:quote:validate",
+  "capital-hft:quote:architecture",
+  "capital-hft:quote:architecture:check",
 ];
 
 const REQUIRED_FILES = [

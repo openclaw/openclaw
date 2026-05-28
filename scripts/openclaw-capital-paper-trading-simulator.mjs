@@ -107,6 +107,12 @@ function normalizeQuote(quoteState) {
   };
 }
 
+function orderablePaperSymbol(stockNo) {
+  const normalized = stringOr(stockNo).trim().toUpperCase();
+  const txSessionAlias = normalized.match(/^(TX\d{2})(?:AM|PM)$/u);
+  return txSessionAlias?.[1] ?? normalized;
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -198,6 +204,7 @@ function createCycleId(generatedAt, quote) {
 function buildPaperIntent({ cycleId, generatedAt, quote, strategy }) {
   const bid = quote.bid;
   const ask = quote.ask;
+  const symbol = orderablePaperSymbol(quote.stockNo);
   const spread = bid != null && ask != null ? ask - bid : Number.POSITIVE_INFINITY;
   const maxSpread = numberOr(strategy.maxSpreadTicks, 0) * numberOr(strategy.tickSize, 1);
   const validBidAsk = bid != null && ask != null && bid > 0 && ask > 0 && ask >= bid;
@@ -229,7 +236,7 @@ function buildPaperIntent({ cycleId, generatedAt, quote, strategy }) {
       brokerOrderPathEnabled: false,
       provider: "capital",
       strategyName: strategy.strategyName,
-      symbol: quote.stockNo,
+      symbol,
       symbolName: quote.stockName,
       side: "buy",
       orderType: "paper_limit",
@@ -239,6 +246,8 @@ function buildPaperIntent({ cycleId, generatedAt, quote, strategy }) {
       sourceEvent: {
         eventSource: quote.eventSource,
         receivedAt: quote.receivedAt,
+        stockNo: quote.stockNo,
+        orderableSymbol: symbol,
         close: quote.close,
         bid,
         ask,
@@ -253,7 +262,8 @@ function buildExecutionPlan({ quote, strategy, paperIntent, readiness }) {
   const entryStyle = stringOr(strategy?.signalPolicy, "passive_bid_probe");
   const freshQuoteReady = readiness?.ready === true && quote.bid != null && quote.ask != null;
   const entryAction = paperIntent != null ? "place_paper_limit_buy" : "wait_for_fresh_quote";
-  const exitAction = paperIntent != null ? "monitor_fill_then_place_paper_limit_sell" : "wait_for_fresh_quote";
+  const exitAction =
+    paperIntent != null ? "monitor_fill_then_place_paper_limit_sell" : "wait_for_fresh_quote";
   return {
     schema: "openclaw.capital.paper-execution-plan.v1",
     generatedAt: nowIso(),

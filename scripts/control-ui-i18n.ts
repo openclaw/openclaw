@@ -1009,14 +1009,22 @@ async function runProcess(
 }
 
 async function formatGeneratedTypeScript(filePath: string, source: string): Promise<string> {
-  const result = await runProcess(
-    "pnpm",
-    ["exec", "oxfmt", "--stdin-filepath", path.relative(ROOT, filePath)],
-    {
-      input: source,
-      rejectOnFailure: true,
-    },
-  );
+  const relativePath = path.relative(ROOT, filePath);
+  const normalizedPath = relativePath.replaceAll(path.sep, "/");
+  const result =
+    process.platform === "win32"
+      ? await runProcess(
+          "cmd.exe",
+          ["/d", "/s", "/c", `pnpm exec oxfmt --stdin-filepath ${normalizedPath}`],
+          {
+            input: source,
+            rejectOnFailure: true,
+          },
+        )
+      : await runProcess("pnpm", ["exec", "oxfmt", "--stdin-filepath", normalizedPath], {
+          input: source,
+          rejectOnFailure: true,
+        });
   return restoreReplacementCorruptedStringLiterals(source, result.stdout);
 }
 

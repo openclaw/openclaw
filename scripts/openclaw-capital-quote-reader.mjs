@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveBrokerDeskStateDir } from "./lib/brokerdesk-state-dir.mjs";
+import { resolveCapitalHftStateDir } from "./lib/brokerdesk-state-dir.mjs";
+import { buildCapitalContractMonthRouter } from "./openclaw-capital-contract-month-router.mjs";
 
 const OFFICIAL_CAPITAL_QUOTE_EVENTS = new Set([
   "SKQuoteLib.OnNotifyQuote",
@@ -11,15 +12,22 @@ const OFFICIAL_CAPITAL_QUOTE_EVENTS = new Set([
   "SKQuoteLib.OnNotifyQuoteLONG",
   "SKQuoteLib.OnNotifyTicksLONG",
   "SKQuoteLib.OnNotifyBest5LONG",
+  "SKOSQuoteLib.OnNotifyQuote",
+  "SKOSQuoteLib.OnNotifyTicks",
+  "SKOSQuoteLib.OnNotifyBest5",
+  "SKOSQuoteLib.OnNotifyQuoteLONG",
+  "SKOSQuoteLib.OnNotifyTicksLONG",
+  "SKOSQuoteLib.OnNotifyBest5LONG",
 ]);
 
-const DEFAULT_QUOTE_FRESHNESS_SECONDS = 2;
-const DEFAULT_MARKET_REGISTRY_PATH = "D:\\OpenClawData\\trading\\global_futures_market_registry.json";
-const CANONICAL_ONLY_MARKET_HINTS = new Set(["A50", "A50指熱2605", "OJO05", "FA5005"]);
+const DEFAULT_QUOTE_FRESHNESS_SECONDS = 30;
+const DEFAULT_MARKET_REGISTRY_PATH =
+  "D:\\OpenClawData\\trading\\global_futures_market_registry.json";
+const CANONICAL_ONLY_MARKET_HINTS = new Set(["A50", "A50指熱2605", "CN0000"]);
 const FALLBACK_MARKET_PROFILES = {
   A50: {
     marketCode: "A50",
-    runtimeSymbol: "OJO05",
+    runtimeSymbol: "CN0000",
     productName: "A50指熱2605",
     venue: "SGX",
     assetClass: "equity index futures",
@@ -29,13 +37,132 @@ const FALLBACK_MARKET_PROFILES = {
     liveExecutable: false,
     status: "paper_routable",
     notePath: "D:\\OpenClawData\\memory\\TRADE_LOGIC\\MARKET_PROFILE_A50.md",
-    quoteAliases: ["A50", "A50指熱2605", "OJO05", "FA5005"],
+    quoteAliases: ["A50", "A50指熱2605", "CN0000"],
     blockers: ["live_disabled"],
   },
 };
+const QYAPI_QUOTE_ALIASES_BY_MARKET_CODE = {
+  A50: ["CN0000"],
+  BZ: ["BZ0000"],
+  CL: ["CL0000", "QM0000", "MCL0000"],
+  MCL: ["MCL0000", "CL0000", "QM0000"],
+  QM: ["QM0000", "CL0000", "MCL0000"],
+  TXF: ["TX00", "TX00AM", "TX00PM", "TXFR1"],
+  TX06: ["TX06", "TX06AM", "TX06PM"],
+};
+const QYAPI_OS_QUOTE_ALIASES_BY_INSTRUMENT = {
+  "1OZ": ["1OZ0000"],
+  "6A": ["AD0000", "M6A0000"],
+  "6B": ["BP0000", "M6B0000"],
+  "6C": ["CD0000", "MCD0000"],
+  "6E": ["EC0000", "E70000", "M6E0000"],
+  "6J": ["JY0000", "J70000"],
+  "6M": ["MP0000"],
+  "6S": ["SF0000"],
+  A50: ["CN0000"],
+  AD: ["AD0000", "M6A0000"],
+  BP: ["BP0000", "M6B0000"],
+  BZ: ["BZ0000"],
+  C: ["C0000"],
+  CC: ["CC0000"],
+  CD: ["CD0000", "MCD0000"],
+  CL: ["CL0000", "QM0000", "MCL0000"],
+  CN: ["CN0000"],
+  CT: ["CT0000"],
+  DAX: ["DAX0000"],
+  DX: ["DX0000", "DXS0000"],
+  E7: ["E70000", "EC0000", "M6E0000"],
+  EC: ["EC0000", "E70000", "M6E0000"],
+  ES: ["ES0000", "MES0000"],
+  ESB: ["ESB0000"],
+  ESX: ["ESX0000"],
+  FBTP: ["FBTP0000"],
+  FC: ["FC0000"],
+  FESB: ["ESB0000"],
+  FESX: ["ESX0000"],
+  FF: ["FF0000"],
+  FGBL: ["FGBL0000"],
+  FGBM: ["FGBM0000"],
+  FGBS: ["FGBS0000"],
+  FGBX: ["FGBX0000"],
+  FOAT: ["FOAT0000"],
+  FV: ["FV0000"],
+  GC: ["GC0000", "MGC0000", "1OZ0000"],
+  GF: ["FC0000"],
+  HG: ["HG0000", "MHG0000"],
+  HHI: ["HHI0000", "MCH0000"],
+  HO: ["HO0000"],
+  HSI: ["HSI0000", "MHI0000"],
+  J7: ["J70000", "JY0000"],
+  JAM: ["JAM0000"],
+  JAU: ["JAU0000"],
+  JGB: ["JGB0000"],
+  KC: ["KC0000"],
+  KS: ["KS0000", "MKS0000"],
+  LC: ["LC0000"],
+  LE: ["LC0000"],
+  LH: ["LH0000"],
+  M2K: ["M2K0000", "RTY0000"],
+  M6A: ["M6A0000", "AD0000"],
+  M6B: ["M6B0000", "BP0000"],
+  M6E: ["M6E0000", "EC0000", "E70000"],
+  MCD: ["MCD0000", "CD0000"],
+  MCH: ["MCH0000", "HHI0000"],
+  MCL: ["MCL0000", "CL0000", "QM0000"],
+  MES: ["MES0000", "ES0000"],
+  MGC: ["MGC0000", "GC0000", "1OZ0000"],
+  MHG: ["MHG0000", "HG0000"],
+  MHI: ["MHI0000", "HSI0000"],
+  MKS: ["MKS0000", "KS0000"],
+  MNQ: ["MNQ0000", "NQ0000"],
+  MNG: ["MNG0000", "NG0000", "QG0000"],
+  MNIK: ["MNIK0000", "NK0000"],
+  MTWN: ["MTWN0000", "TWN0000"],
+  MYM: ["MYM0000", "YM0000"],
+  NG: ["NG0000", "MNG0000", "QG0000"],
+  NK: ["NK0000", "MNIK0000"],
+  NQ: ["NQ0000", "MNQ0000"],
+  O: ["O0000"],
+  OJ: ["OJF0000"],
+  PA: ["PA0000"],
+  PL: ["PL0000", "PLT0000"],
+  PLT: ["PLT0000", "PL0000"],
+  QG: ["QG0000", "NG0000", "MNG0000"],
+  QM: ["QM0000", "CL0000", "MCL0000"],
+  RB: ["RB0000"],
+  RP: ["RP0000"],
+  RTY: ["RTY0000", "M2K0000"],
+  RY: ["RY0000"],
+  S: ["S0000"],
+  SB: ["SB0000"],
+  SF: ["SF0000"],
+  SG: ["SG0000"],
+  SI: ["SI0000", "SIL0000"],
+  SIL: ["SIL0000", "SI0000"],
+  SM: ["SM0000"],
+  SR1: ["SR10000"],
+  SR3: ["SR30000"],
+  SSI: ["SSI0000"],
+  TN: ["TN0000"],
+  TU: ["TU0000"],
+  TWN: ["TWN0000", "MTWN0000"],
+  TY: ["TY0000"],
+  UB: ["UB0000"],
+  US: ["US0000"],
+  VX: ["VX0000", "VXM0000"],
+  VXM: ["VXM0000", "VX0000"],
+  W: ["W0000"],
+  XAE: ["XAE0000"],
+  XAF: ["XAF0000"],
+  XAI: ["XAI0000"],
+  XAP: ["XAP0000"],
+  XAU: ["XAU0000"],
+  XAV: ["XAV0000"],
+  YM: ["YM0000", "MYM0000"],
+};
 
-function defaultBrokerDeskStateDir(preferCanonical = false) {
-  return resolveBrokerDeskStateDir({ preferCanonical });
+function defaultCapitalHftStateDir(preferCanonical = false) {
+  return resolveCapitalHftStateDir({ preferCanonical });
 }
 
 function quoteFreshnessThresholdSeconds() {
@@ -58,18 +185,37 @@ function sha256Text(text) {
 }
 
 async function readJsonIfExists(filePath) {
-  try {
-    return JSON.parse((await fs.readFile(filePath, "utf8")).replace(/^\uFEFF/, ""));
-  } catch (error) {
-    if (error && error.code === "ENOENT") {
-      return null;
-    }
-    throw new Error(
-      `Invalid JSON: ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
-      {
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const text = (await fs.readFile(filePath, "utf8")).replace(/^\uFEFF/, "");
+      if (text.trim().length === 0) {
+        throw new SyntaxError("empty JSON content");
+      }
+      return JSON.parse(text);
+    } catch (error) {
+      if (error && error.code === "ENOENT") {
+        return null;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      const transientPartialWrite =
+        message.includes("Unexpected end of JSON input") ||
+        message.includes("Unterminated string") ||
+        message.includes("Unexpected end of data") ||
+        message.includes("empty JSON content");
+      if (transientPartialWrite && attempt < maxAttempts) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 40 * attempt);
+        });
+        continue;
+      }
+      if (transientPartialWrite) {
+        return null;
+      }
+      throw new Error(`Invalid JSON: ${filePath}: ${message}`, {
         cause: error,
-      },
-    );
+      });
+    }
   }
 }
 
@@ -104,8 +250,7 @@ function stringOr(value, fallback = "") {
   return typeof value === "string" ? value : fallback;
 }
 
-
-function parseBrokerDeskTimestamp(value) {
+function parseCapitalHftTimestamp(value) {
   if (typeof value !== "string" || value.trim().length === 0) {
     return null;
   }
@@ -129,7 +274,7 @@ function parseBrokerDeskTimestamp(value) {
 }
 
 function quoteEventAgeSeconds(receivedAt) {
-  const received = parseBrokerDeskTimestamp(receivedAt);
+  const received = parseCapitalHftTimestamp(receivedAt);
   if (!received) {
     return null;
   }
@@ -148,11 +293,43 @@ function deriveTaipeiMarketSession(date = new Date()) {
   return { marketSession: "closed", marketSessionLabel: "休市", tradingOpen: false };
 }
 
-function normalizeBridgeState(bridge, backgroundStatus, latestState) {
+function normalizeHftServiceState(hftStatus) {
+  if (!hftStatus || typeof hftStatus !== "object") {
+    return null;
+  }
+  const quoteMonitorConnected = normalizeBool(hftStatus.quoteMonitorConnected);
+  const osQuoteConnected = normalizeBool(hftStatus.osQuoteConnected);
+  const loginConnected =
+    stringOr(hftStatus.loginStatus).toLowerCase() === "connected" ||
+    Number(hftStatus.loginCode) === 0;
+  const subscribedCount =
+    (Array.isArray(hftStatus.subscribedStocks) ? hftStatus.subscribedStocks.length : 0) +
+    (Array.isArray(hftStatus.subscribedOsStocks) ? hftStatus.subscribedOsStocks.length : 0);
+  return {
+    status: loginConnected && (quoteMonitorConnected || osQuoteConnected) ? "connected" : "blocked",
+    overallReady: loginConnected && (quoteMonitorConnected || osQuoteConnected),
+    quoteEventConfirmed: Boolean(
+      hftStatus.quoteStats?.lastQuoteAt || hftStatus.osQuoteStats?.lastQuoteAt,
+    ),
+    brokerActionRequired: false,
+    currentBlockingCode: stringOr(hftStatus.blockerCode, ""),
+    quoteUniverseCount: subscribedCount,
+    lastHeartbeatAt: stringOr(hftStatus.generatedAt, ""),
+    keepAliveUntil: "",
+    capitalAccountSet: Number(hftStatus.accountsCount ?? 0) > 0,
+    capitalAttempted: true,
+    capitalMessage: stringOr(hftStatus.loginMessage, stringOr(hftStatus.loginMethod, "")),
+    lastLogin1115Historical: false,
+  };
+}
+
+function normalizeBridgeState(bridge, backgroundStatus, latestState, hftStatus) {
+  const hftState = normalizeHftServiceState(hftStatus);
   const brokerActionRequired = normalizeBool(
     backgroundStatus?.brokerActionRequired ??
       bridge?.providers?.capital?.brokerActionRequired ??
-      latestState?.brokerActionRequired,
+      latestState?.brokerActionRequired ??
+      hftState?.brokerActionRequired,
   );
   return {
     status:
@@ -160,16 +337,21 @@ function normalizeBridgeState(bridge, backgroundStatus, latestState) {
         ? backgroundStatus.status
         : typeof bridge?.status === "string"
           ? bridge.status
-          : "missing",
+          : typeof hftState?.status === "string"
+            ? hftState.status
+            : "missing",
     overallReady:
-        typeof backgroundStatus?.overallReady === "boolean"
-          ? backgroundStatus.overallReady
-          : normalizeBool(bridge?.overallReady),
-      quoteEventConfirmed: normalizeBool(
-        backgroundStatus?.capital?.quoteEventConfirmed ??
-          bridge?.quoteEventConfirmed ??
-          latestState?.quoteEventConfirmed,
-      ),
+      typeof backgroundStatus?.overallReady === "boolean"
+        ? backgroundStatus.overallReady
+        : typeof bridge?.overallReady === "boolean"
+          ? bridge.overallReady
+          : normalizeBool(hftState?.overallReady),
+    quoteEventConfirmed: normalizeBool(
+      backgroundStatus?.capital?.quoteEventConfirmed ??
+        bridge?.quoteEventConfirmed ??
+        latestState?.quoteEventConfirmed ??
+        hftState?.quoteEventConfirmed,
+    ),
     providers: {
       capital: {
         brokerActionRequired,
@@ -183,45 +365,57 @@ function normalizeBridgeState(bridge, backgroundStatus, latestState) {
           ? bridge.currentBlockingCode
           : typeof latestState?.currentBlockingCode === "string"
             ? latestState.currentBlockingCode
-            : "",
+            : stringOr(hftState?.currentBlockingCode, ""),
     quoteUniverseCount: Number(
-        backgroundStatus?.quoteUniverseCount ?? bridge?.quoteUniverseCount ?? latestState?.quoteUniverseCount ?? 0,
-      ),
-      lastHeartbeatAt:
-        typeof backgroundStatus?.lastHeartbeatAt === "string"
-          ? backgroundStatus.lastHeartbeatAt
-          : typeof bridge?.lastHeartbeatAt === "string"
-            ? bridge.lastHeartbeatAt
-            : typeof latestState?.lastHeartbeatAt === "string"
-              ? latestState.lastHeartbeatAt
-              : "",
-      keepAliveUntil:
-        typeof backgroundStatus?.keepAliveUntil === "string"
-          ? backgroundStatus.keepAliveUntil
-          : typeof bridge?.keepAliveUntil === "string"
-            ? bridge.keepAliveUntil
-            : typeof latestState?.keepAliveUntil === "string"
-              ? latestState.keepAliveUntil
-              : "",
-      capitalAccountSet: normalizeBool(
-        backgroundStatus?.capital?.accountSet ?? bridge?.capital?.accountSet ?? latestState?.capitalAccountSet,
-      ),
-      capitalAttempted: normalizeBool(
-        backgroundStatus?.capital?.attempted ?? bridge?.capital?.attempted ?? latestState?.capitalAttempted,
-      ),
-      capitalMessage:
-        typeof backgroundStatus?.capital?.message === "string"
-          ? backgroundStatus.capital.message
-          : typeof bridge?.capital?.message === "string"
-            ? bridge.capital.message
-            : typeof latestState?.capitalMessage === "string"
-              ? latestState.capitalMessage
-              : "",
-      lastLogin1115Historical: normalizeBool(
-        backgroundStatus?.lastLogin1115Historical ??
-          bridge?.lastLogin1115Historical ??
-          latestState?.lastLogin1115Historical,
-      ),};
+      backgroundStatus?.quoteUniverseCount ??
+        bridge?.quoteUniverseCount ??
+        latestState?.quoteUniverseCount ??
+        hftState?.quoteUniverseCount ??
+        0,
+    ),
+    lastHeartbeatAt:
+      typeof backgroundStatus?.lastHeartbeatAt === "string"
+        ? backgroundStatus.lastHeartbeatAt
+        : typeof bridge?.lastHeartbeatAt === "string"
+          ? bridge.lastHeartbeatAt
+          : typeof latestState?.lastHeartbeatAt === "string"
+            ? latestState.lastHeartbeatAt
+            : stringOr(hftState?.lastHeartbeatAt, ""),
+    keepAliveUntil:
+      typeof backgroundStatus?.keepAliveUntil === "string"
+        ? backgroundStatus.keepAliveUntil
+        : typeof bridge?.keepAliveUntil === "string"
+          ? bridge.keepAliveUntil
+          : typeof latestState?.keepAliveUntil === "string"
+            ? latestState.keepAliveUntil
+            : stringOr(hftState?.keepAliveUntil, ""),
+    capitalAccountSet: normalizeBool(
+      backgroundStatus?.capital?.accountSet ??
+        bridge?.capital?.accountSet ??
+        latestState?.capitalAccountSet ??
+        hftState?.capitalAccountSet,
+    ),
+    capitalAttempted: normalizeBool(
+      backgroundStatus?.capital?.attempted ??
+        bridge?.capital?.attempted ??
+        latestState?.capitalAttempted ??
+        hftState?.capitalAttempted,
+    ),
+    capitalMessage:
+      typeof backgroundStatus?.capital?.message === "string"
+        ? backgroundStatus.capital.message
+        : typeof bridge?.capital?.message === "string"
+          ? bridge.capital.message
+          : typeof latestState?.capitalMessage === "string"
+            ? latestState.capitalMessage
+            : stringOr(hftState?.capitalMessage, ""),
+    lastLogin1115Historical: normalizeBool(
+      backgroundStatus?.lastLogin1115Historical ??
+        bridge?.lastLogin1115Historical ??
+        latestState?.lastLogin1115Historical ??
+        hftState?.lastLogin1115Historical,
+    ),
+  };
 }
 
 function normalizeStockNo(value) {
@@ -246,7 +440,7 @@ function normalizeMarketCode(value) {
   return typeof value === "string" ? value.trim().toUpperCase() : "";
 }
 
-function shouldPreferCanonicalBrokerDeskStateDir(options) {
+function shouldPreferCanonicalCapitalHftStateDir(options) {
   const candidates = [];
   if (typeof options?.marketCode === "string") {
     candidates.push(options.marketCode);
@@ -293,6 +487,7 @@ function resolveQuoteTargetNos({
   quoteAliases,
   marketCode,
   marketRegistry,
+  contractMonthSymbols,
 }) {
   const candidates = [];
   if (Array.isArray(targetStockNos)) {
@@ -301,14 +496,23 @@ function resolveQuoteTargetNos({
   if (Array.isArray(quoteAliases)) {
     candidates.push(...quoteAliases);
   }
+  if (Array.isArray(contractMonthSymbols)) {
+    candidates.push(...contractMonthSymbols);
+  }
   if (targetStockNo) {
     candidates.push(targetStockNo);
   }
   const normalizedMarketCode = normalizeMarketCode(marketCode);
+  if (Array.isArray(QYAPI_QUOTE_ALIASES_BY_MARKET_CODE[normalizedMarketCode])) {
+    candidates.push(...QYAPI_QUOTE_ALIASES_BY_MARKET_CODE[normalizedMarketCode]);
+  }
+  if (Array.isArray(QYAPI_OS_QUOTE_ALIASES_BY_INSTRUMENT[normalizedMarketCode])) {
+    candidates.push(...QYAPI_OS_QUOTE_ALIASES_BY_INSTRUMENT[normalizedMarketCode]);
+  }
   const marketProfile = normalizedMarketCode
-    ? marketRegistry?.markets?.[normalizedMarketCode] ??
+    ? (marketRegistry?.markets?.[normalizedMarketCode] ??
       FALLBACK_MARKET_PROFILES[normalizedMarketCode] ??
-      null
+      null)
     : null;
   if (marketProfile) {
     if (Array.isArray(marketProfile.quoteAliases)) {
@@ -324,24 +528,143 @@ function resolveQuoteTargetNos({
   };
 }
 
+async function resolveContractMonthSymbols(marketCode) {
+  const normalizedMarketCode = normalizeMarketCode(marketCode);
+  if (!normalizedMarketCode) {
+    return [];
+  }
+  try {
+    const router = await buildCapitalContractMonthRouter({ marketCode: normalizedMarketCode });
+    return router.routes
+      .filter((route) => route.routeStatus === "resolved")
+      .flatMap((route) => (Array.isArray(route.selectedSymbols) ? route.selectedSymbols : []));
+  } catch {
+    return [];
+  }
+}
+
 function eventMatchesAnyTarget(event, targetStockNosSet) {
   return targetStockNosSet.has(normalizeStockNo(event?.stockNo));
 }
 
-async function selectLatestQuoteEvent({ latestEvent, eventStreamPath, targetStockNos }) {
+function eventTimeMs(event) {
+  const received = parseCapitalHftTimestamp(event?.receivedAt);
+  return received ? received.getTime() : 0;
+}
+
+function osCacheEntryToQuoteEvent(entry) {
+  if (!entry || typeof entry !== "object" || !entry.symbol) {
+    return null;
+  }
+  return {
+    schema: "openclaw.capital.quote-event.v1",
+    provider: "capital-os",
+    receivedAt: stringOr(entry.time, ""),
+    eventSource: "SKOSQuoteLib.OnNotifyQuoteLONG",
+    message: `收到群益海外報價事件: SKOSQuoteLib.OnNotifyQuoteLONG stockNo=${stringOr(entry.symbol)} name=${stringOr(entry.name)}`,
+    stockNo: stringOr(entry.symbol),
+    stockName: stringOr(entry.name),
+    close: String(entry.price ?? ""),
+    bid: String(entry.bid ?? ""),
+    ask: String(entry.ask ?? ""),
+    qty: String(entry.qty ?? ""),
+  };
+}
+
+function osSymbolCacheEvents(osSymbolCache) {
+  const symbols = osSymbolCache?.symbols;
+  if (!symbols || typeof symbols !== "object") {
+    return [];
+  }
+  return Object.values(symbols).map(osCacheEntryToQuoteEvent).filter(Boolean);
+}
+
+function extractNumericMessageField(event, fieldName) {
+  const text = [event?.rawSummary, event?.message]
+    .filter((value) => typeof value === "string" && value.length > 0)
+    .join(" ");
+  const match = text.match(new RegExp(`(?:^|\\s)${fieldName}=(-?\\d+(?:\\.\\d+)?)`, "u"));
+  if (!match) {
+    return null;
+  }
+  const numeric = Number(match[1]);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function almostEqual(left, right) {
+  return Math.abs(left - right) <= Math.max(1, Math.abs(right) * 1e-9);
+}
+
+function normalizeQuotePrice(event, fieldName, decimal) {
+  const value = event?.[fieldName];
+  const numeric = Number(value);
+  const digits = Number(decimal);
+  if (!Number.isFinite(numeric) || !Number.isInteger(digits) || digits <= 0) {
+    return String(value ?? "");
+  }
+  const scale = 10 ** digits;
+  const rawFromMessage = extractNumericMessageField(event, fieldName);
+  const displayNumeric =
+    Number.isFinite(rawFromMessage) && almostEqual(numeric * scale, rawFromMessage)
+      ? numeric
+      : numeric / scale;
+  return displayNumeric.toFixed(digits);
+}
+
+function normalizeSelectedQuote(selectedEvent) {
+  const decimal = Number(selectedEvent?.decimal);
+  const hasRawDecimal = Number.isInteger(decimal) && decimal > 0;
+  if (!hasRawDecimal) {
+    return {
+      close: selectedEvent?.close ?? "",
+      bid: selectedEvent?.bid ?? "",
+      ask: selectedEvent?.ask ?? "",
+      decimal: selectedEvent?.decimal ?? null,
+      normalizedByDecimal: false,
+    };
+  }
+  return {
+    close: normalizeQuotePrice(selectedEvent, "close", decimal),
+    bid: normalizeQuotePrice(selectedEvent, "bid", decimal),
+    ask: normalizeQuotePrice(selectedEvent, "ask", decimal),
+    rawClose: selectedEvent?.close ?? "",
+    rawBid: selectedEvent?.bid ?? "",
+    rawAsk: selectedEvent?.ask ?? "",
+    decimal,
+    normalizedByDecimal: true,
+  };
+}
+
+function latestEventByTime(events) {
+  return (
+    events.filter(Boolean).toSorted((left, right) => eventTimeMs(right) - eventTimeMs(left))[0] ??
+    null
+  );
+}
+
+async function selectLatestQuoteEvent({
+  latestEvent,
+  latestOsEvent,
+  osSymbolCache,
+  eventStreamPath,
+  targetStockNos,
+}) {
   const normalizedTargetStockNos = normalizeTargetStockNos(targetStockNos ?? []);
   const normalizedTargetStockNosSet = new Set(normalizedTargetStockNos);
   const normalizedLatestStockNo = normalizeStockNo(latestEvent?.stockNo);
+  const normalizedLatestOsStockNo = normalizeStockNo(latestOsEvent?.stockNo);
+  const osCacheEvents = osSymbolCacheEvents(osSymbolCache);
 
   if (normalizedTargetStockNos.length === 0) {
+    const selectedEvent = latestEventByTime([latestEvent, latestOsEvent]);
     return {
-      selectedEvent: latestEvent ?? null,
+      selectedEvent,
       selectedFromEventStream: false,
       targetStockNo: "",
       targetStockNos: [],
-      matched: latestEvent != null,
-      source: latestEvent ? "latest_event" : "missing",
-      reason: latestEvent ? "latest quote event" : "latest quote event missing",
+      matched: selectedEvent != null,
+      source: selectedEvent ? "latest_event" : "missing",
+      reason: selectedEvent ? "latest quote event" : "latest quote event missing",
     };
   }
 
@@ -353,7 +676,38 @@ async function selectLatestQuoteEvent({ latestEvent, eventStreamPath, targetStoc
       targetStockNos: normalizedTargetStockNos,
       matched: latestEvent != null,
       source: latestEvent ? "latest_event" : "missing",
-      reason: latestEvent ? "latest quote event matches target stock" : "latest quote event missing",
+      reason: latestEvent
+        ? "latest quote event matches target stock"
+        : "latest quote event missing",
+    };
+  }
+
+  if (normalizedTargetStockNosSet.has(normalizedLatestOsStockNo)) {
+    return {
+      selectedEvent: latestOsEvent ?? null,
+      selectedFromEventStream: false,
+      targetStockNo: normalizedLatestOsStockNo,
+      targetStockNos: normalizedTargetStockNos,
+      matched: latestOsEvent != null,
+      source: latestOsEvent ? "latest_os_event" : "missing",
+      reason: latestOsEvent
+        ? "latest OS quote event matches target stock"
+        : "latest OS quote event missing",
+    };
+  }
+
+  const osCacheEvent = latestEventByTime(
+    osCacheEvents.filter((event) => eventMatchesAnyTarget(event, normalizedTargetStockNosSet)),
+  );
+  if (osCacheEvent) {
+    return {
+      selectedEvent: osCacheEvent,
+      selectedFromEventStream: false,
+      targetStockNo: normalizeStockNo(osCacheEvent.stockNo),
+      targetStockNos: normalizedTargetStockNos,
+      matched: true,
+      source: "os_symbol_cache",
+      reason: "matched target stockNo from CapitalHftService OS symbol cache",
     };
   }
 
@@ -409,15 +763,29 @@ function buildReaderState({
   bridge,
   latestState,
   latestEvent,
+  latestOsEvent,
+  osSymbolCache,
+  hftStatus,
   selectedEvent,
   selection,
   eventCount,
   latestEventHash,
   eventStreamHash,
+  latestOsEventHash,
+  osSymbolCacheHash,
 }) {
+  const source = hftStatus ? "CapitalHftService" : "CapitalHftService";
+  const latestOverallEvent = latestEventByTime([latestEvent, latestOsEvent]);
+  const osSymbolCount = Number(
+    osSymbolCache?.symbolCount ??
+      (osSymbolCache?.symbols && typeof osSymbolCache.symbols === "object"
+        ? Object.keys(osSymbolCache.symbols).length
+        : 0),
+  );
   const bridgeReady = normalizeBool(bridge?.overallReady);
   const bridgeStatus = typeof bridge?.status === "string" ? bridge.status : "missing";
-  const eventSource = typeof selectedEvent?.eventSource === "string" ? selectedEvent.eventSource : "";
+  const eventSource =
+    typeof selectedEvent?.eventSource === "string" ? selectedEvent.eventSource : "";
   const quoteEventOfficial = OFFICIAL_CAPITAL_QUOTE_EVENTS.has(eventSource);
   const ageSeconds = quoteEventAgeSeconds(selectedEvent?.receivedAt);
   const freshnessThresholdSeconds = quoteFreshnessThresholdSeconds();
@@ -433,26 +801,26 @@ function buildReaderState({
       : typeof latestState?.currentBlockingCode === "string"
         ? latestState.currentBlockingCode
         : "";
+  const normalizedQuote = normalizeSelectedQuote(selectedEvent);
   const quoteEventReady = quoteEventOfficial && quoteEventFreshness === "fresh";
-  const ready =
-    quoteEventReady && bridgeReady && !brokerActionRequired && !currentBlockingCode;
+  const ready = quoteEventReady && bridgeReady && !brokerActionRequired && !currentBlockingCode;
   const status = ready ? "connected" : bridgeStatus === "missing" ? "missing" : "blocked";
   const reason = ready
     ? "群益報價事件已由 OpenClaw reader 收取；目前沒有 active blocking code。"
     : !quoteEventOfficial
-      ? "尚未收取指定 stockNo 的官方 SKQuoteLib 報價事件。"
+      ? "尚未收取指定 stockNo 的官方 SKQuoteLib/SKOSQuoteLib 報價事件。"
       : !bridgeReady
-        ? "報價事件存在，但 BrokerDesk bridge 尚未 connected 或 overallReady=false."
+        ? "報價事件存在，但 CapitalHftService bridge 尚未 connected 或 overallReady=false."
         : !quoteEventReady
-        ? "報價事件存在，但 freshness 尚未達到即時門檻。"
-        : brokerActionRequired || currentBlockingCode
-          ? "報價事件存在，但 BrokerDesk bridge 仍標示 brokerActionRequired 或 currentBlockingCode。"
-          : "BrokerDesk bridge 尚未 connected.";
+          ? "報價事件存在，但 freshness 尚未達到即時門檻。"
+          : brokerActionRequired || currentBlockingCode
+            ? "報價事件存在，但 CapitalHftService bridge 仍標示 brokerActionRequired 或 currentBlockingCode。"
+            : "CapitalHftService bridge 尚未 connected.";
   return {
     schema: "openclaw.capital.quote-reader.v1",
     generatedAt: new Date().toISOString(),
     provider: "capital",
-    source: "BrokerDesk",
+    source,
     sourceStateDir: stateDir,
     readOnly: true,
     loginAttempted: false,
@@ -462,7 +830,7 @@ function buildReaderState({
     ready,
     reason,
     quoteProofStatus: quoteEventOfficial ? "confirmed" : "not_confirmed",
-    quoteEventCount: eventCount,
+    quoteEventCount: eventCount + (Number.isFinite(osSymbolCount) ? osSymbolCount : 0),
     quoteEventAgeSeconds: ageSeconds,
     quoteEventFreshness,
     quoteEventFreshnessThresholdSeconds: freshnessThresholdSeconds,
@@ -471,9 +839,14 @@ function buildReaderState({
       eventSource,
       stockNo: selectedEvent?.stockNo ?? "",
       stockName: selectedEvent?.stockName ?? "",
-      close: selectedEvent?.close ?? "",
-      bid: selectedEvent?.bid ?? "",
-      ask: selectedEvent?.ask ?? "",
+      close: normalizedQuote.close,
+      bid: normalizedQuote.bid,
+      ask: normalizedQuote.ask,
+      rawClose: normalizedQuote.rawClose ?? "",
+      rawBid: normalizedQuote.rawBid ?? "",
+      rawAsk: normalizedQuote.rawAsk ?? "",
+      decimal: normalizedQuote.decimal,
+      normalizedByDecimal: normalizedQuote.normalizedByDecimal,
       qty: selectedEvent?.qty ?? "",
       message: selectedEvent?.message ?? "",
     },
@@ -484,8 +857,8 @@ function buildReaderState({
       source: selection?.source ?? "",
       matched: selection?.matched === true,
       selectedFromEventStream: selection?.selectedFromEventStream === true,
-      latestOverallStockNo: latestEvent?.stockNo ?? "",
-      latestOverallReceivedAt: latestEvent?.receivedAt ?? "",
+      latestOverallStockNo: latestOverallEvent?.stockNo ?? "",
+      latestOverallReceivedAt: latestOverallEvent?.receivedAt ?? "",
     },
     session,
     health: {
@@ -512,8 +885,13 @@ function buildReaderState({
       latestQuoteState: path.join(stateDir, "latest_quote_state.json"),
       latestQuoteEvent: path.join(stateDir, "capital_latest_quote_event.json"),
       quoteEvents: path.join(stateDir, "capital_quote_events.jsonl"),
+      latestOsQuoteEvent: path.join(stateDir, "os_latest_quote_event.json"),
+      osSymbolCache: path.join(stateDir, "os_symbol_cache.json"),
+      hftServiceStatus: path.join(stateDir, "hft_service_status.json"),
       latestQuoteEventSha256: latestEventHash,
       quoteEventsSha256: eventStreamHash,
+      latestOsQuoteEventSha256: latestOsEventHash,
+      osSymbolCacheSha256: osSymbolCacheHash,
     },
   };
 }
@@ -524,7 +902,7 @@ export async function readCapitalQuoteState(options = {}) {
       ? options.stateDir
       : "";
   const stateDir = path.resolve(
-    explicitStateDir || defaultBrokerDeskStateDir(shouldPreferCanonicalBrokerDeskStateDir(options)),
+    explicitStateDir || defaultCapitalHftStateDir(shouldPreferCanonicalCapitalHftStateDir(options)),
   );
   const marketRegistryPath = path.resolve(
     options.marketRegistryPath && String(options.marketRegistryPath).trim().length > 0
@@ -532,30 +910,55 @@ export async function readCapitalQuoteState(options = {}) {
       : defaultMarketRegistryPath(),
   );
   const marketRegistry = await readMarketRegistry(marketRegistryPath);
+  const requestedMarketCode = options.marketCode ?? process.env.OPENCLAW_CAPITAL_MARKET_CODE ?? "";
+  const contractMonthSymbols = await resolveContractMonthSymbols(requestedMarketCode);
   const resolvedTargets = resolveQuoteTargetNos({
     targetStockNo: options.targetStockNo ?? process.env.OPENCLAW_CAPITAL_TARGET_STOCK_NO ?? "",
     targetStockNos: options.targetStockNos ?? [],
     quoteAliases: options.quoteAliases ?? [],
-    marketCode: options.marketCode ?? process.env.OPENCLAW_CAPITAL_MARKET_CODE ?? "",
+    marketCode: requestedMarketCode,
     marketRegistry,
+    contractMonthSymbols,
   });
   const bridgePath = path.join(stateDir, "openclaw_quote_bridge.json");
   const backgroundStatusPath = path.join(stateDir, "background_quotes_status.json");
   const latestStatePath = path.join(stateDir, "latest_quote_state.json");
   const latestEventPath = path.join(stateDir, "capital_latest_quote_event.json");
   const eventStreamPath = path.join(stateDir, "capital_quote_events.jsonl");
-  const [bridge, backgroundStatus, latestState, latestEvent, eventCount, latestEventHash, eventStreamHash] =
-    await Promise.all([
-      readJsonIfExists(bridgePath),
-      readJsonIfExists(backgroundStatusPath),
-      readJsonIfExists(latestStatePath),
-      readJsonIfExists(latestEventPath),
-      countJsonlLines(eventStreamPath),
-      fileHashIfExists(latestEventPath),
-      fileHashIfExists(eventStreamPath),
+  const latestOsEventPath = path.join(stateDir, "os_latest_quote_event.json");
+  const osSymbolCachePath = path.join(stateDir, "os_symbol_cache.json");
+  const hftStatusPath = path.join(stateDir, "hft_service_status.json");
+  const [
+    bridge,
+    backgroundStatus,
+    latestState,
+    latestEvent,
+    latestOsEvent,
+    osSymbolCache,
+    hftStatus,
+    eventCount,
+    latestEventHash,
+    eventStreamHash,
+    latestOsEventHash,
+    osSymbolCacheHash,
+  ] = await Promise.all([
+    readJsonIfExists(bridgePath),
+    readJsonIfExists(backgroundStatusPath),
+    readJsonIfExists(latestStatePath),
+    readJsonIfExists(latestEventPath),
+    readJsonIfExists(latestOsEventPath),
+    readJsonIfExists(osSymbolCachePath),
+    readJsonIfExists(hftStatusPath),
+    countJsonlLines(eventStreamPath),
+    fileHashIfExists(latestEventPath),
+    fileHashIfExists(eventStreamPath),
+    fileHashIfExists(latestOsEventPath),
+    fileHashIfExists(osSymbolCachePath),
   ]);
   const selection = await selectLatestQuoteEvent({
     latestEvent,
+    latestOsEvent,
+    osSymbolCache,
     eventStreamPath,
     targetStockNos: resolvedTargets.targetStockNos,
   });
@@ -563,14 +966,19 @@ export async function readCapitalQuoteState(options = {}) {
   selection.targetStockNos = resolvedTargets.targetStockNos;
   return buildReaderState({
     stateDir,
-    bridge: normalizeBridgeState(bridge, backgroundStatus, latestState),
+    bridge: normalizeBridgeState(bridge, backgroundStatus, latestState, hftStatus),
     latestState,
     latestEvent,
+    latestOsEvent,
+    osSymbolCache,
+    hftStatus,
     selectedEvent: selection.selectedEvent,
     selection,
     eventCount,
     latestEventHash,
     eventStreamHash,
+    latestOsEventHash,
+    osSymbolCacheHash,
   });
 }
 

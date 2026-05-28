@@ -1,5 +1,10 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import process from "node:process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,9 +45,79 @@ async function readTextWithRetry(filePath, label, attempts = 5, delayMs = 100) {
   throw new Error(`${label} not readable: ${filePath}`, { cause: lastError });
 }
 
+function normalizePathForMatch(value) {
+  return String(value ?? "")
+    .replaceAll("\\", "/")
+    .toLowerCase();
+}
+
+async function readWindowsProcess(pid) {
+  const command = [
+    '$process = Get-CimInstance Win32_Process -Filter "ProcessId = ' +
+      pid +
+      '" -ErrorAction SilentlyContinue;',
+    "if ($null -eq $process) {",
+    "  Write-Output '{}';",
+    "} else {",
+    "  $process | Select-Object ProcessId,Name,CommandLine | ConvertTo-Json -Depth 4 -Compress;",
+    "}",
+  ].join(" ");
+  const powershellPath = path.join(
+    process.env.SystemRoot || "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  const { stdout } = await execFileAsync(
+    powershellPath,
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+    { windowsHide: true, timeout: 10_000 },
+  );
+  const parsed = JSON.parse(stdout.trim() || "{}");
+  if (!parsed?.ProcessId) {
+    return { exists: false, commandLine: "", name: "" };
+  }
+  return {
+    exists: true,
+    commandLine: String(parsed.CommandLine ?? ""),
+    name: String(parsed.Name ?? ""),
+  };
+}
+
+async function readPosixProcess(pid) {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return { exists: false, commandLine: "", name: "" };
+  }
+  try {
+    const cmdline = await fs.readFile(`/proc/${pid}/cmdline`, "utf8");
+    return {
+      exists: true,
+      commandLine: cmdline.replaceAll("\0", " ").trim(),
+      name: "",
+    };
+  } catch {
+    return { exists: true, commandLine: "", name: "" };
+  }
+}
+
+async function readProcessInfo(pid) {
+  if (process.platform === "win32") {
+    return readWindowsProcess(pid);
+  }
+  return readPosixProcess(pid);
+}
+
 async function main() {
   const repoRoot = process.cwd();
-  const servicePath = path.join(repoRoot, ".openclaw", "service", "auto-trading-watch-service.json");
+  const servicePath = path.join(
+    repoRoot,
+    ".openclaw",
+    "service",
+    "auto-trading-watch-service.json",
+  );
   const pidPath = path.join(repoRoot, ".openclaw", "service", "auto-trading-watch-service.pid");
   const service = await readJsonWithRetry(servicePath, "auto trading watch service");
   const pidText = await readTextWithRetry(pidPath, "auto trading watch pid");
@@ -63,8 +138,28 @@ async function main() {
   if (service.watchScript !== path.join(repoRoot, "scripts", "openclaw-auto-trading-watch.mjs")) {
     throw new Error(`unexpected daemon watch script: ${service.watchScript}`);
   }
+  const processInfo = await readProcessInfo(pid);
+  if (!processInfo.exists) {
+    throw new Error(`daemon pid is not alive: ${pid}`);
+  }
+  const commandLine = normalizePathForMatch(processInfo.commandLine);
+  const expectedScript = normalizePathForMatch(service.watchScript);
+  if (
+    commandLine &&
+    !commandLine.includes(expectedScript) &&
+    !commandLine.includes(path.basename(expectedScript))
+  ) {
+    throw new Error(`daemon pid does not run watch script: ${pid}`);
+  }
 
-  process.stdout.write("AUTO_TRADING_WATCH_DAEMON_CHECK=OK\n");
+  process.stdout.write(
+    [
+      "AUTO_TRADING_WATCH_DAEMON_CHECK=OK",
+      `pid=${pid}`,
+      `process=${processInfo.name || "unknown"}`,
+      `watchScript=${service.watchScript}`,
+    ].join("\n") + "\n",
+  );
 }
 
 await main().catch((error) => {

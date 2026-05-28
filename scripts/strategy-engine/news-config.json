@@ -1,0 +1,86 @@
+{
+  "_comment": "新聞策略 API 設定 — 填入真實 API Key 後才會啟用",
+  "newsApiKey": "YOUR_NEWSAPI_KEY",
+  "avApiKey": "YOUR_AV_KEY",
+  "fmpApiKey": "YOUR_FMP_KEY",
+  "cryptoPanicKey": "",
+  "intervalMs": 300000,
+
+  "strategies": [
+    {
+      "name": "BTC_News_Sentiment",
+      "class": "CryptoNewsStrategy",
+      "instrument": "BTC-USDT-SWAP",
+      "broker": "okx",
+      "auto": false,
+      "maxQty": 0.01,
+      "params": {
+        "coins": ["BTC", "bitcoin", "crypto"],
+        "windowMins": 30,
+        "bullishThreshold": 8,
+        "bearishThreshold": -8,
+        "minArticles": 1,
+        "cooldownMins": 60
+      }
+    },
+    {
+      "name": "ETH_News_Sentiment",
+      "class": "CryptoNewsStrategy",
+      "instrument": "ETH-USDT-SWAP",
+      "broker": "okx",
+      "auto": false,
+      "maxQty": 0.1,
+      "params": {
+        "coins": ["ETH", "ethereum"],
+        "windowMins": 30,
+        "bullishThreshold": 6,
+        "bearishThreshold": -6,
+        "minArticles": 1,
+        "cooldownMins": 60
+      }
+    },
+    {
+      "name": "TX_EconCalendar",
+      "class": "EconomicCalendarStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": {
+        "preMinutes": 5,
+        "postMinutes": 2,
+        "holdMins": 15,
+        "countries": ["US", "USD"]
+      }
+    },
+    {
+      "name": "ES_EconCalendar",
+      "class": "EconomicCalendarStrategy",
+      "instrument": "CME,ES0000",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": {
+        "preMinutes": 5,
+        "postMinutes": 2,
+        "holdMins": 15,
+        "countries": ["US", "USD"]
+      }
+    },
+    {
+      "name": "General_News_Multi",
+      "class": "NewsSentimentStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": {
+        "keywords": ["Taiwan", "TSMC", "semiconductor", "Fed", "tariff", "trade"],
+        "windowMins": 60,
+        "bullishThreshold": 5,
+        "bearishThreshold": -5,
+        "minArticles": 2
+      }
+    }
+  ]
+}

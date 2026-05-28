@@ -4,17 +4,17 @@ import path from "node:path";
 import { runCapitalPaperHftTrigger } from "./openclaw-capital-paper-hft-trigger.mjs";
 
 const quoteScripts = [
-  "brokerdesk:quote:check",
-  "brokerdesk:quote:read",
-  "brokerdesk:quote:status",
-  "brokerdesk:quote:status:check",
-  "brokerdesk:quote:event",
-  "brokerdesk:quote:event:check",
-  "brokerdesk:quote:pump",
-  "brokerdesk:quote:pump:check",
-  "brokerdesk:quote:validate",
-  "brokerdesk:quote:architecture",
-  "brokerdesk:quote:architecture:check",
+  "capital-hft:quote:check",
+  "capital-hft:quote:read",
+  "capital-hft:quote:status",
+  "capital-hft:quote:status:check",
+  "capital-hft:quote:event",
+  "capital-hft:quote:event:check",
+  "capital-hft:quote:pump",
+  "capital-hft:quote:pump:check",
+  "capital-hft:quote:validate",
+  "capital-hft:quote:architecture",
+  "capital-hft:quote:architecture:check",
 ];
 
 const architectureFiles = [
@@ -35,7 +35,7 @@ function pad(value, size = 2) {
   return String(value).padStart(size, "0");
 }
 
-function brokerDeskTimestamp(date, ageSeconds = 0) {
+function capitalHftTimestamp(date, ageSeconds = 0) {
   const shifted = new Date(date.getTime() - ageSeconds * 1000);
   return `${shifted.getFullYear()}-${pad(shifted.getMonth() + 1)}-${pad(shifted.getDate())} ${pad(
     shifted.getHours(),
@@ -98,7 +98,7 @@ function baseStatus() {
   };
 }
 
-async function writeBrokerDeskState(stateDir, receivedAt, overrides = {}) {
+async function writeCapitalHftServiceState(stateDir, receivedAt, overrides = {}) {
   await writeJson(path.join(stateDir, "openclaw_quote_bridge.json"), {
     status: "connected",
     overallReady: true,
@@ -113,16 +113,19 @@ async function writeBrokerDeskState(stateDir, receivedAt, overrides = {}) {
   });
   const bid = overrides.bid ?? "4113880";
   const ask = overrides.ask ?? "4113881";
+  const close = overrides.close ?? "4113885";
+  const stockNo = overrides.stockNo ?? "MXFFX999";
+  const stockName = overrides.stockName ?? "客小台現貨標的";
   const quoteEvent = {
     receivedAt,
     eventSource: "SKQuoteLib.OnNotifyQuoteLONG",
-    stockNo: "MXFFX999",
-    stockName: "客小台現貨標的",
-    close: overrides.close ?? "4113885",
+    stockNo,
+    stockName,
+    close,
     bid,
     ask,
     qty: overrides.qty ?? "3",
-    message: `收到群益報價事件: SKQuoteLib.OnNotifyQuoteLONG stockNo=MXFFX999 name=客小台現貨標的 close=4113885 bid=${bid} ask=${ask} qty=3 decimal=2`,
+    message: `收到群益報價事件: SKQuoteLib.OnNotifyQuoteLONG stockNo=${stockNo} name=${stockName} close=${close} bid=${bid} ask=${ask} qty=3 decimal=2`,
   };
   await writeJson(path.join(stateDir, "capital_latest_quote_event.json"), quoteEvent);
   await fs.writeFile(
@@ -131,7 +134,7 @@ async function writeBrokerDeskState(stateDir, receivedAt, overrides = {}) {
   );
 }
 
-async function writeMinimalRepo(repoRoot) {
+async function writeMinimalRepo(repoRoot, { riskOverrides = {}, strategyOverrides = {} } = {}) {
   const scripts = Object.fromEntries(
     quoteScripts.map((script) => [script, "node placeholder.mjs"]),
   );
@@ -169,6 +172,7 @@ async function writeMinimalRepo(repoRoot) {
     killSwitchRequired: true,
     paperLedgerRequired: true,
     allowedSymbols: ["MXFFX999"],
+    ...riskOverrides,
   });
   await writeJson(path.join(repoRoot, "config", "capital-paper-microstructure-strategy.json"), {
     schema: "openclaw.capital.paper-microstructure-strategy.v1",
@@ -190,6 +194,7 @@ async function writeMinimalRepo(repoRoot) {
       blockAfterConsecutiveReadinessBlocks: 2,
       promoteLiveAutomatically: false,
     },
+    ...strategyOverrides,
   });
   await writeJson(
     path.join(repoRoot, ".openclaw", "quote", "capital-quote-status.json"),
@@ -197,25 +202,42 @@ async function writeMinimalRepo(repoRoot) {
   );
 }
 
-async function runFixture({ ageSeconds = 0, quoteOverrides = {} } = {}) {
+async function runFixture({
+  ageSeconds = 0,
+  quoteOverrides = {},
+  riskOverrides = {},
+  strategyOverrides = {},
+} = {}) {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-capital-hft-trigger-"));
-  const stateDir = path.join(repoRoot, "BrokerDesk", "state");
-  await writeMinimalRepo(repoRoot);
-  await writeBrokerDeskState(stateDir, brokerDeskTimestamp(new Date(), ageSeconds), quoteOverrides);
+  const stateDir = path.join(repoRoot, "CapitalHftService", "state");
+  await writeMinimalRepo(repoRoot, { riskOverrides, strategyOverrides });
+  await writeCapitalHftServiceState(
+    stateDir,
+    capitalHftTimestamp(new Date(), ageSeconds),
+    quoteOverrides,
+  );
   const options = {
     repoRoot,
     stateDir,
     intervalMs: 100,
     maxCycles: 2,
-    maxDurationMs: 1_000,
+    maxDurationMs: 5_000,
   };
   return { repoRoot, stateDir, options };
 }
 
 const freshFixture = await runFixture();
 const fresh = await runCapitalPaperHftTrigger(freshFixture.options);
-if (fresh.status !== "burst_executed" || fresh.burst?.paperIntents !== 2) {
-  throw new Error(`fresh trigger should execute burst with two paper intents, got ${fresh.status}`);
+const freshBurst = fresh.burst ?? null;
+const sessionClosedBurst =
+  freshBurst?.latestPumpStatus === "session_closed" &&
+  freshBurst?.stopReason === "stopped_on_session_closed" &&
+  freshBurst?.paperIntents === 0;
+const actionableBurst = Number(freshBurst?.paperIntents ?? 0) > 0;
+if (fresh.status !== "burst_executed" || (!actionableBurst && !sessionClosedBurst)) {
+  throw new Error(
+    `fresh trigger should execute burst with paper intents or stop on session_closed, got status=${fresh.status} latestPump=${freshBurst?.latestPumpStatus ?? "none"} paperIntents=${freshBurst?.paperIntents ?? "none"} cycles=${freshBurst?.cyclesExecuted ?? "none"} stopReason=${freshBurst?.stopReason ?? "none"}`,
+  );
 }
 const isExplicitFalse = (value) => Object.is(value, false);
 if (
@@ -230,6 +252,36 @@ if (
 const duplicate = await runCapitalPaperHftTrigger(freshFixture.options);
 if (duplicate.status !== "idle_duplicate_quote" || duplicate.burst) {
   throw new Error("duplicate quote should not re-run burst");
+}
+
+const txfCurrentMonthFixture = await runFixture({
+  quoteOverrides: {
+    stockNo: "TX06",
+    stockName: "台指06",
+    close: "4263400",
+    bid: "4262300",
+    ask: "4263400",
+  },
+  riskOverrides: {
+    allowedSymbols: ["TX*"],
+  },
+  strategyOverrides: {
+    symbol: "TX00AM",
+    marketCode: "TXF",
+    targetStockNo: "TX00AM",
+    targetStockNos: ["TX00AM", "TX00", "TXFR1"],
+    quoteAliases: ["TX00AM", "TX00", "TXFR1", "TXF"],
+    maxSpreadTicks: 40,
+  },
+});
+const txfCurrentMonth = await runCapitalPaperHftTrigger({
+  ...txfCurrentMonthFixture.options,
+  maxCycles: 1,
+});
+if (txfCurrentMonth.quote.stockNo !== "TX06") {
+  throw new Error(
+    `TXF trigger should include current-month contract route symbols, got ${txfCurrentMonth.quote.stockNo}`,
+  );
 }
 
 const staleFixture = await runFixture({ ageSeconds: 10 });

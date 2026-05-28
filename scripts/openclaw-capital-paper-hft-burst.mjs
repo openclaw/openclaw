@@ -182,7 +182,7 @@ export async function runCapitalPaperHftBurst(options = {}) {
     nextSafeTask:
       paperIntents > 0
         ? "觀察 paper intents 與 learning registry；仍不得啟用真實下單。"
-        : "等待 fresh SKQuoteLib bid/ask quote callback 後重跑 brokerdesk:paper-hft:burst。",
+        : "等待 fresh SKQuoteLib bid/ask quote callback 後重跑 capital-hft:paper-hft:burst。",
   };
   await writeJsonWithSha(reportPath, burstReport);
   await appendJsonLine(streamPath, burstReport);

@@ -19,8 +19,21 @@ async function readText(filePath, label) {
 
 async function main() {
   const repoRoot = process.cwd();
-  const skillPath = path.join(repoRoot, ".agents", "skills", "openclaw-7x24-monitoring", "SKILL.md");
-  const skillMetaPath = path.join(repoRoot, ".agents", "skills", "openclaw-7x24-monitoring", "agents", "openai.yaml");
+  const skillPath = path.join(
+    repoRoot,
+    ".agents",
+    "skills",
+    "openclaw-7x24-monitoring",
+    "SKILL.md",
+  );
+  const skillMetaPath = path.join(
+    repoRoot,
+    ".agents",
+    "skills",
+    "openclaw-7x24-monitoring",
+    "agents",
+    "openai.yaml",
+  );
   const assistantSkillPath = path.join(repoRoot, "skills", "auto-trading-assistant", "SKILL.md");
   const quoteStatusPath = path.join(repoRoot, ".openclaw", "quote", "capital-quote-status.json");
   const watchStatePath = path.join(repoRoot, ".openclaw", "ui", "auto-trading-watch-state.json");
@@ -48,18 +61,23 @@ async function main() {
   if (typeof quoteStatus.quoteProof?.latestStock !== "string") {
     throw new Error("missing latest trade quote");
   }
-  if (quoteStatus.completion?.openClawReady !== true || quoteStatus.completion?.openClawCompleted !== true) {
+  if (
+    quoteStatus.completion?.openClawReady !== true ||
+    quoteStatus.completion?.openClawCompleted !== true
+  ) {
     throw new Error("openclaw completion is not ready");
   }
   if (quoteStatus.diagnostics?.selectedStock?.selectedFromEventStream !== true) {
     throw new Error("quote selection is not coming from event stream");
   }
-  const entrypoints = Array.isArray(watchState.assistant?.entrypoints) ? watchState.assistant.entrypoints : [];
-  if (!entrypoints.includes("pnpm brokerdesk:auto-trading-watch")) {
-    throw new Error("assistant entrypoints missing brokerdesk:auto-trading-watch");
+  const entrypoints = Array.isArray(watchState.assistant?.entrypoints)
+    ? watchState.assistant.entrypoints
+    : [];
+  if (!entrypoints.includes("pnpm capital-hft:auto-trading-watch")) {
+    throw new Error("assistant entrypoints missing capital-hft:auto-trading-watch");
   }
-  if (!entrypoints.includes("pnpm brokerdesk:auto-trading-watch:daemon")) {
-    throw new Error("assistant entrypoints missing brokerdesk:auto-trading-watch:daemon");
+  if (!entrypoints.includes("pnpm capital-hft:auto-trading-watch:daemon")) {
+    throw new Error("assistant entrypoints missing capital-hft:auto-trading-watch:daemon");
   }
   if (typeof watchState.assistant?.nextSafeTask !== "string") {
     throw new Error("missing assistant next safe task");
@@ -68,7 +86,8 @@ async function main() {
     throw new Error("missing tick diagnostic status");
   }
 
-  const freshnessStatus = quoteStatus.quoteProof.freshnessStatus ?? quoteStatus.quoteProof.freshness ?? "";
+  const freshnessStatus =
+    quoteStatus.quoteProof.freshnessStatus ?? quoteStatus.quoteProof.freshness ?? "";
   const latestTradeQuote = quoteStatus.quoteProof.latestStock;
   const freshTradeQuote = freshnessStatus === "fresh" ? latestTradeQuote : "";
   const freshQuoteAvailable = freshTradeQuote !== "";

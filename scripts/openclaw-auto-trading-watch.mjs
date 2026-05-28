@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import chokidar from "chokidar";
-import { performance } from "node:perf_hooks";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { runAutoTradingTickDiagnostic } from "./openclaw-auto-trading-tick-diagnostic.mjs";
+import chokidar from "chokidar";
+import { resolveCapitalHftStateDir } from "./lib/brokerdesk-state-dir.mjs";
 import { runAutoTradingLearningSnapshot } from "./openclaw-auto-trading-learning-snapshot.mjs";
+import { runAutoTradingTickDiagnostic } from "./openclaw-auto-trading-tick-diagnostic.mjs";
 import { runCapitalPaperAutomationLoop } from "./openclaw-capital-paper-automation-loop.mjs";
-import { resolveBrokerDeskStateDir } from "./lib/brokerdesk-state-dir.mjs";
 
 const DEFAULT_DEBOUNCE_MS = 1;
 
-function defaultBrokerDeskStateDir() {
-  return resolveBrokerDeskStateDir();
+function defaultCapitalHftStateDir() {
+  return resolveCapitalHftStateDir();
 }
 
 function numberOr(value, fallback) {
@@ -77,6 +77,14 @@ async function writeJsonWithSha(filePath, value) {
   await fs.writeFile(`${filePath}.sha256`, `${sha256Text(text)}\n`, "ascii");
 }
 
+async function readJsonOptional(filePath) {
+  try {
+    return JSON.parse((await fs.readFile(filePath, "utf8")).replace(/^\uFEFF/, ""));
+  } catch {
+    return null;
+  }
+}
+
 function formatRefreshLine(report, tickDiagnostic, triggerPath, daemon) {
   const latestOverallQuote = tickDiagnostic?.latestOverallQuote ?? {};
   const latestTradeQuote = tickDiagnostic?.latestTradeQuote ?? {};
@@ -111,6 +119,7 @@ function formatRefreshLine(report, tickDiagnostic, triggerPath, daemon) {
 }
 
 async function runRefresh(repoRoot, stateDir, debounceMs, jsonMode, triggerPath) {
+  const previousWatchState = await readJsonOptional(defaultWatchStatePath(repoRoot));
   const result = await runCapitalPaperAutomationLoop({
     repoRoot,
     stateDir,
@@ -142,14 +151,32 @@ async function runRefresh(repoRoot, stateDir, debounceMs, jsonMode, triggerPath)
     assistant: {
       status: assistantState.status ?? "",
       name: assistantState.assistant?.name ?? "類高頻自動交易助手",
+      fastOrderPaperPattern:
+        assistantState.summary?.fastOrderPaperPattern ??
+        assistantState.fastOrderPaperPattern?.pattern ??
+        "no-paper-execution",
+      fastOrderPaperSuccessCount: Number.isFinite(
+        Number(assistantState.summary?.fastOrderPaperSuccessCount),
+      )
+        ? Number(assistantState.summary.fastOrderPaperSuccessCount)
+        : 0,
+      fastOrderPaperFailureCount: Number.isFinite(
+        Number(assistantState.summary?.fastOrderPaperFailureCount),
+      )
+        ? Number(assistantState.summary.fastOrderPaperFailureCount)
+        : 0,
+      latestFastOrderStatus:
+        assistantState.summary?.latestFastOrderStatus ??
+        assistantState.fastOrderPaperPattern?.latestStatus ??
+        "none",
       entrypoints: Array.isArray(assistantState.assistant?.entrypoints)
         ? Array.from(
             new Set([
               ...assistantState.assistant.entrypoints,
-              "pnpm brokerdesk:auto-trading-watch:daemon-check",
+              "pnpm capital-hft:auto-trading-watch:daemon-check",
             ]),
           )
-        : ["pnpm brokerdesk:auto-trading-watch:daemon-check"],
+        : ["pnpm capital-hft:auto-trading-watch:daemon-check"],
       nextSafeTask: assistantState.nextSafeTask ?? result.report.nextSafeTask ?? "",
     },
     loop: {
@@ -169,6 +196,11 @@ async function runRefresh(repoRoot, stateDir, debounceMs, jsonMode, triggerPath)
       nextSafeTask: serviceState.nextSafeTask ?? "",
     },
     execution: assistantState.execution ?? {},
+    ...(previousWatchState?.telegramPaperLoopLearningRefresh
+      ? {
+          telegramPaperLoopLearningRefresh: previousWatchState.telegramPaperLoopLearningRefresh,
+        }
+      : {}),
     files: {
       reportPath: result.report.files.reportPath,
       assistantStatePath: result.report.files.assistantStatePath,
@@ -190,16 +222,25 @@ async function runRefresh(repoRoot, stateDir, debounceMs, jsonMode, triggerPath)
   });
   const { report } = result;
   if (jsonMode) {
-    process.stdout.write(`${JSON.stringify({ triggerPath, report, watchState, tickDiagnostic: tickDiagnostic.report, learningSnapshot: learningSnapshot.report }, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ triggerPath, report, watchState, tickDiagnostic: tickDiagnostic.report, learningSnapshot: learningSnapshot.report }, null, 2)}\n`,
+    );
   } else {
-    process.stdout.write(`${formatRefreshLine(report, tickDiagnostic.report, triggerPath, watchState.daemon)}\n`);
+    process.stdout.write(
+      `${formatRefreshLine(report, tickDiagnostic.report, triggerPath, watchState.daemon)}\n`,
+    );
   }
-  return { report, watchState, tickDiagnostic: tickDiagnostic.report, learningSnapshot: learningSnapshot.report };
+  return {
+    report,
+    watchState,
+    tickDiagnostic: tickDiagnostic.report,
+    learningSnapshot: learningSnapshot.report,
+  };
 }
 
 export async function runAutoTradingWatch(options = {}) {
   const repoRoot = path.resolve(options.repoRoot ?? process.cwd());
-  const stateDir = path.resolve(options.stateDir || defaultBrokerDeskStateDir());
+  const stateDir = path.resolve(options.stateDir || defaultCapitalHftStateDir());
   const debounceMs = Math.max(1, Math.floor(numberOr(options.debounceMs, DEFAULT_DEBOUNCE_MS)));
   const once = options.once === true;
   const jsonMode = options.json === true;
@@ -286,7 +327,7 @@ export async function runAutoTradingWatch(options = {}) {
   };
 
   process.stdout.write(
-    `[auto-trading-watch] watching ${targets.length} BrokerDesk files under ${stateDir}\n`,
+    `[auto-trading-watch] watching ${targets.length} CapitalHftService files under ${stateDir}\n`,
   );
   await refresh("startup");
 

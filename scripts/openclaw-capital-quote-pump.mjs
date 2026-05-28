@@ -29,6 +29,10 @@ function defaultRiskConfigPath(repoRoot) {
   return path.join(repoRoot, "config", "capital-paper-hft-risk-controls.json");
 }
 
+function defaultStrategyPath(repoRoot) {
+  return path.join(repoRoot, "config", "capital-paper-microstructure-strategy.json");
+}
+
 function sha256Text(text) {
   return crypto.createHash("sha256").update(text).digest("hex").toUpperCase();
 }
@@ -62,9 +66,43 @@ function stringOr(value, fallback = "") {
   return typeof value === "string" ? value : fallback;
 }
 
+function arrayOr(value, fallback = []) {
+  return Array.isArray(value) ? value : fallback;
+}
+
+function resolvePumpTargets(options, strategy) {
+  const optionTargetStockNos = arrayOr(options.targetStockNos);
+  const optionQuoteAliases = arrayOr(options.quoteAliases);
+  const targetStockNo = stringOr(
+    options.targetStockNo,
+    stringOr(strategy?.targetStockNo, stringOr(strategy?.symbol)),
+  );
+  const targetStockNos =
+    optionTargetStockNos.length > 0
+      ? optionTargetStockNos
+      : arrayOr(strategy?.targetStockNos, targetStockNo ? [targetStockNo] : []);
+  return {
+    marketCode: stringOr(
+      options.marketCode,
+      stringOr(strategy?.marketCode, stringOr(strategy?.symbol)),
+    ),
+    targetStockNo,
+    targetStockNos,
+    quoteAliases:
+      optionQuoteAliases.length > 0
+        ? optionQuoteAliases
+        : arrayOr(strategy?.quoteAliases, targetStockNos),
+  };
+}
+
 function derivePumpStatus(baseStatus, readerState, maxQuoteAgeSeconds) {
-  const baseIsPreviousPump = baseStatus?.source === "BrokerDesk quote pump";
-  const baseReady = baseIsPreviousPump ? true : baseStatus?.ready === true;
+  const baseIsPreviousPump = baseStatus?.source === "CapitalHftService quote pump";
+  const baseReady =
+    baseIsPreviousPump ||
+    baseStatus?.ready === true ||
+    (baseStatus?.source === "CapitalHftService quote state" &&
+      baseStatus?.bridge?.ready === true &&
+      baseStatus?.guard?.active !== true);
   const queueCompleted = bool(baseStatus?.completion?.queueCompleted);
   const openClawReady = bool(baseStatus?.completion?.openClawReady);
   const openClawCompleted = bool(baseStatus?.completion?.openClawCompleted);
@@ -79,13 +117,17 @@ function derivePumpStatus(baseStatus, readerState, maxQuoteAgeSeconds) {
   const bid = Number(rawBid);
   const ask = Number(rawAsk);
   const bidAskUsable =
-    Number.isFinite(bid) &&
-    Number.isFinite(ask) &&
-    bid > 0 &&
-    ask > 0 &&
-    ask >= bid;
+    Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0 && ask >= bid;
   const quoteFreshnessStatus =
     Number.isFinite(quoteAgeSeconds) && quoteAgeSeconds <= maxQuoteAgeSeconds ? "fresh" : "stale";
+  const readerBridgeReady =
+    readerState?.health?.bridgeReady === true || readerState?.health?.overallReady === true;
+  const readerCoreReady =
+    readerState?.ready === true ||
+    (readerState?.quoteProofStatus === "confirmed" &&
+      readerBridgeReady &&
+      readerState?.health?.brokerActionRequired !== true &&
+      !readerState?.health?.currentBlockingCode);
   const blockers = [];
   if (guardActive) {
     blockers.push(guardLastCode === "1115" ? "cooldown_1115" : "guard_active");
@@ -93,7 +135,7 @@ function derivePumpStatus(baseStatus, readerState, maxQuoteAgeSeconds) {
   if (!queueCompleted || !openClawReady || !openClawCompleted || !allReadOnlyMonitorsReady) {
     blockers.push("queue_or_monitor_incomplete");
   }
-  if (!baseReady || readerState?.ready !== true) {
+  if (!baseReady || !readerCoreReady) {
     blockers.push("reader_not_ready");
   }
   if (!tradingOpen) {
@@ -114,18 +156,18 @@ function derivePumpStatus(baseStatus, readerState, maxQuoteAgeSeconds) {
   } else if (!queueCompleted || !openClawReady || !openClawCompleted || !allReadOnlyMonitorsReady) {
     status = "incomplete";
     reason = "群益全商品 read-only 報價輪替或 OpenClaw monitor 尚未完成。";
-  } else if (!baseReady || readerState?.ready !== true) {
+  } else if (quoteFreshnessStatus !== "fresh") {
+    status = "stale";
+    reason = "CapitalHftService 最新 quote event 未達 HFT freshness gate；不得產生 paper intent。";
+  } else if (!baseReady || !readerCoreReady) {
     status = "blocked";
-    reason = "BrokerDesk reader 未達 connected/ready；不得把報價交給策略。";
+    reason = "CapitalHftService reader 未達 connected/ready；不得把報價交給策略。";
   } else if (!tradingOpen) {
     status = "session_closed";
     reason = "目前不在台指日盤 / 夜盤交易時段；不得產生 paper intent。";
-  } else if (quoteFreshnessStatus !== "fresh") {
-    status = "stale";
-    reason = "BrokerDesk 最新 quote event 未達 HFT freshness gate；不得產生 paper intent。";
   } else {
     status = "ready";
-    reason = "BrokerDesk 最新 quote event 已通過 OpenClaw HFT freshness gate。";
+    reason = "CapitalHftService 最新 quote event 已通過 OpenClaw HFT freshness gate。";
   }
 
   const strategyReady = status === "ready";
@@ -133,7 +175,7 @@ function derivePumpStatus(baseStatus, readerState, maxQuoteAgeSeconds) {
     schema: "openclaw.capital.quote-status.v1",
     generatedAt: new Date().toISOString(),
     provider: "capital",
-    source: "BrokerDesk quote pump",
+    source: "CapitalHftService quote pump",
     readOnly: true,
     loginAttempted: false,
     liveTradingEnabled: false,
@@ -218,7 +260,7 @@ function derivePumpStatus(baseStatus, readerState, maxQuoteAgeSeconds) {
     nextSafeTask:
       status === "ready"
         ? "執行 paper HFT readiness 與 paper trading simulator；仍禁止真實下單。"
-        : "等待 BrokerDesk 寫入更新的 quote event；不要登入、不要推進 StartIndex。",
+        : "等待 CapitalHftService 寫入更新的 quote event；不要登入、不要推進 StartIndex。",
     files: {
       dashboard: stringOr(baseStatus?.files?.dashboard),
       sourceDashboardPath: stringOr(baseStatus?.files?.sourceDashboardPath),
@@ -231,7 +273,10 @@ function derivePumpStatus(baseStatus, readerState, maxQuoteAgeSeconds) {
 export async function runCapitalQuotePump(options = {}) {
   const repoRoot = path.resolve(options.repoRoot ?? process.cwd());
   const riskConfigPath = path.resolve(options.riskConfigPath || defaultRiskConfigPath(repoRoot));
+  const strategyPath = path.resolve(options.strategyPath || defaultStrategyPath(repoRoot));
   const riskConfig = (await readJsonIfExists(riskConfigPath)) ?? {};
+  const strategy = (await readJsonIfExists(strategyPath)) ?? {};
+  const targets = resolvePumpTargets(options, strategy);
   const maxQuoteAgeSeconds = numberOr(
     options.maxQuoteAgeSeconds,
     riskConfig.maxDecisionQuoteAgeSeconds ?? 2,
@@ -243,10 +288,10 @@ export async function runCapitalQuotePump(options = {}) {
   const baseStatus = (await readJsonIfExists(baseStatusPath)) ?? {};
   const readerState = await readCapitalQuoteState({
     stateDir: options.stateDir || undefined,
-    targetStockNo: options.targetStockNo || "",
-    targetStockNos: options.targetStockNos || [],
-    quoteAliases: options.quoteAliases || [],
-    marketCode: options.marketCode || "",
+    targetStockNo: targets.targetStockNo,
+    targetStockNos: targets.targetStockNos,
+    quoteAliases: targets.quoteAliases,
+    marketCode: targets.marketCode,
     marketRegistryPath: options.marketRegistryPath || undefined,
   });
   await writeCapitalQuoteState(readerState, readerStatePath);
@@ -283,11 +328,12 @@ export async function runCapitalQuotePump(options = {}) {
       runtimeEventPath: eventFiles.latestPath,
       runtimeEventStreamPath: eventFiles.streamPath,
       riskConfigPath,
+      strategyPath,
       reportPath,
     },
     nextSafeTask:
       pumpedStatus.status === "ready"
-        ? "執行 pnpm brokerdesk:paper-hft:readiness 與 pnpm brokerdesk:paper-trade:simulate。"
+        ? "執行 pnpm capital-hft:paper-hft:readiness 與 pnpm capital-hft:paper-trade:simulate。"
         : "等待新報價 callback 後重跑 pump；禁止用 stale quote 產生 paper intent。",
   };
   const reportText = `${JSON.stringify(report, null, 2)}\n`;
@@ -307,6 +353,7 @@ function parseArgs(argv) {
     marketCode: "",
     marketRegistryPath: "",
     riskConfigPath: "",
+    strategyPath: "",
     baseStatusPath: "",
     readerStatePath: "",
     reportPath: "",
@@ -365,6 +412,10 @@ function parseArgs(argv) {
       options.riskConfigPath = argv[++index] ?? options.riskConfigPath;
     } else if (arg.startsWith("--risk-config=")) {
       options.riskConfigPath = arg.slice("--risk-config=".length);
+    } else if (arg === "--strategy") {
+      options.strategyPath = argv[++index] ?? options.strategyPath;
+    } else if (arg.startsWith("--strategy=")) {
+      options.strategyPath = arg.slice("--strategy=".length);
     } else if (arg === "--status") {
       options.baseStatusPath = argv[++index] ?? options.baseStatusPath;
     } else if (arg.startsWith("--status=")) {
@@ -429,4 +480,3 @@ if (invokedPath === fileURLToPath(import.meta.url)) {
     process.exitCode = 1;
   });
 }
-

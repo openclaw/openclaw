@@ -5,6 +5,13 @@ function tomlString(value: string): string {
   return JSON.stringify(value);
 }
 
+function resolveProjectPath(projectPath: string): string {
+  if (projectPath.startsWith("/") && !projectPath.startsWith("//")) {
+    return path.posix.normalize(projectPath);
+  }
+  return path.resolve(projectPath);
+}
+
 export function buildCiSafeCodexConfig(params: {
   projectPath: string;
   approvalPolicy?: string;
@@ -14,7 +21,7 @@ export function buildCiSafeCodexConfig(params: {
   if (!params.projectPath || typeof params.projectPath !== "string") {
     throw new Error("projectPath is required.");
   }
-  const resolvedProjectPath = path.resolve(params.projectPath);
+  const resolvedProjectPath = resolveProjectPath(params.projectPath);
   const approvalPolicy = params.approvalPolicy ?? "never";
   const modelReasoningEffort = params.modelReasoningEffort ?? "low";
   const sandboxMode = params.sandboxMode ?? "workspace-write";

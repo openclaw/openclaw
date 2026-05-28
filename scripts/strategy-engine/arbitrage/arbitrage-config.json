@@ -1,0 +1,105 @@
+{
+  "_comment": "套利策略設定，全部預設 auto:false（訊號模式）",
+  "scanMs": 2000,
+
+  "strategies": [
+    {
+      "_comment": "── 配對交易 ─────────────────────────────",
+      "name": "BTC_ETH_Pairs",
+      "class": "PairsTradingStrategy",
+      "auto": false,
+      "legA": { "instrument": "BTC-USDT-SWAP", "broker": "okx", "maxQty": 0.01 },
+      "legB": { "instrument": "ETH-USDT-SWAP", "broker": "okx", "maxQty": 0.1 },
+      "params": {
+        "lookback": 60,
+        "entryZ": 2.0,
+        "exitZ": 0.5,
+        "stopZ": 3.5,
+        "useLog": true,
+        "minHalfLife": 1,
+        "maxHalfLife": 30
+      }
+    },
+    {
+      "name": "ES_NQ_Pairs",
+      "class": "PairsTradingStrategy",
+      "auto": false,
+      "legA": { "instrument": "CME,ES0000", "broker": "capital", "maxQty": 1 },
+      "legB": { "instrument": "CME,NQ0000", "broker": "capital", "maxQty": 1 },
+      "params": {
+        "lookback": 60,
+        "entryZ": 2.0,
+        "exitZ": 0.5,
+        "stopZ": 3.5,
+        "useLog": true,
+        "minHalfLife": 1,
+        "maxHalfLife": 20
+      }
+    },
+    {
+      "_comment": "── 跨期套利 ─────────────────────────────",
+      "name": "TX_CalendarSpread",
+      "class": "CalendarSpreadStrategy",
+      "auto": false,
+      "legA": { "instrument": "TX00", "broker": "capital", "maxQty": 1 },
+      "legB": { "instrument": "TX02", "broker": "capital", "maxQty": 1 },
+      "params": { "lookback": 20, "entryZ": 1.5, "exitZ": 0.3 }
+    },
+    {
+      "name": "BTC_FutureSpot_CalSpread",
+      "class": "CalendarSpreadStrategy",
+      "auto": false,
+      "legA": { "instrument": "BTC-USDT-SWAP", "broker": "okx", "maxQty": 0.01 },
+      "legB": { "instrument": "BTC-USDT-250328", "broker": "okx", "maxQty": 0.01 },
+      "params": { "lookback": 20, "entryZ": 1.5, "exitZ": 0.3 }
+    },
+    {
+      "_comment": "── 期現套利 ─────────────────────────────",
+      "name": "BTC_FuturesCash",
+      "class": "FuturesCashArbitrageStrategy",
+      "auto": false,
+      "legA": { "instrument": "BTC-USDT-SWAP", "broker": "okx", "maxQty": 0.01 },
+      "legB": { "instrument": "BTC-USDT", "broker": "okx", "maxQty": 0.01 },
+      "params": {
+        "lookback": 30,
+        "entryZ": 2.0,
+        "exitZ": 0.5,
+        "stopZ": 3.5,
+        "daysToExpiry": 0,
+        "fundingRate": 0.0001
+      }
+    },
+    {
+      "_comment": "── 跨交易所套利 ─────────────────────────",
+      "name": "BTC_CrossExchange_OKX_Binance",
+      "class": "CrossExchangeArbitrageStrategy",
+      "auto": false,
+      "exchangeA": { "id": "okx", "apiKey": "", "secret": "", "sandbox": true },
+      "exchangeB": { "id": "binance", "apiKey": "", "secret": "", "sandbox": true },
+      "params": {
+        "symbol": "BTC/USDT",
+        "feePct": 0.001,
+        "minSpreadPct": 0.003,
+        "cooldownSec": 30,
+        "qty": 0.01
+      }
+    },
+    {
+      "_comment": "── 三角套利 ─────────────────────────────",
+      "name": "BTC_ETH_Triangular_OKX",
+      "class": "TriangularArbitrageStrategy",
+      "auto": false,
+      "params": {
+        "exchangeId": "okx",
+        "triA": "BTC/USDT",
+        "triB": "ETH/BTC",
+        "triC": "ETH/USDT",
+        "feePct": 0.001,
+        "minProfit": 0.002,
+        "cooldownSec": 60,
+        "qty": 0.01,
+        "sandbox": true
+      }
+    }
+  ]
+}

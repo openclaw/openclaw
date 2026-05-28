@@ -1,0 +1,12 @@
+{
+  "_comment": "填入對應的 Token/Key 後自動啟用該管道，留 YOUR_ 開頭則跳過",
+  "lineNotifyToken": "YOUR_LINE_NOTIFY_TOKEN",
+  "lineChannelToken": "YOUR_CHANNEL_ACCESS_TOKEN",
+  "lineUserId": "YOUR_LINE_USER_ID",
+  "telegramToken": "YOUR_BOT_TOKEN",
+  "telegramChatId": "YOUR_CHAT_ID",
+  "discordWebhook": "YOUR_WEBHOOK_URL",
+  "onlyAuto": false,
+  "minQty": 0,
+  "cooldownMs": 2000
+}

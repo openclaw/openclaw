@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix, win32 } from "node:path";
 
 export const WORKSPACE_TEMPLATE_PACK_PATHS = [
   "docs/reference/templates/AGENTS.md",
@@ -25,6 +25,16 @@ const REQUIRED_BOOTSTRAP_WORKSPACE_FILES = [
 
 const WORKSPACE_BOOTSTRAP_SMOKE_TIMEOUT_MS = 15_000;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
+
+function joinPathLike(basePath, ...segments) {
+  if (basePath.startsWith("/") && !basePath.startsWith("//")) {
+    return posix.join(basePath, ...segments);
+  }
+  if (/^[A-Za-z]:[\\/]/.test(basePath) || basePath.includes("\\")) {
+    return win32.join(basePath, ...segments);
+  }
+  return join(basePath, ...segments);
+}
 
 export function createWorkspaceBootstrapSmokeEnv(env, homeDir, overrides = {}) {
   const allowlistedEnvEntries = [
@@ -59,8 +69,8 @@ export function createWorkspaceBootstrapSmokeEnv(env, homeDir, overrides = {}) {
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
     AWS_EC2_METADATA_DISABLED: "true",
-    AWS_SHARED_CREDENTIALS_FILE: join(homeDir, ".aws", "credentials"),
-    AWS_CONFIG_FILE: join(homeDir, ".aws", "config"),
+    AWS_SHARED_CREDENTIALS_FILE: joinPathLike(homeDir, ".aws", "credentials"),
+    AWS_CONFIG_FILE: joinPathLike(homeDir, ".aws", "config"),
     ...overrides,
   };
 }

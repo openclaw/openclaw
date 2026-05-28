@@ -9,6 +9,10 @@ function defaultRiskConfigPath(repoRoot) {
   return path.join(repoRoot, "config", "capital-paper-hft-risk-controls.json");
 }
 
+function defaultStrategyPath(repoRoot) {
+  return path.join(repoRoot, "config", "capital-paper-microstructure-strategy.json");
+}
+
 function defaultOutputDir(repoRoot) {
   return path.join(repoRoot, ".openclaw", "trading");
 }
@@ -28,6 +32,14 @@ function sha256Text(text) {
 function numberOr(value, fallback) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function stringOr(value, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
+
+function arrayOr(value, fallback = []) {
+  return Array.isArray(value) ? value : fallback;
 }
 
 async function readJson(filePath, fallback = null) {
@@ -136,18 +148,26 @@ export async function runCapitalPaperHftTrigger(options = {}) {
   const repoRoot = path.resolve(options.repoRoot ?? process.cwd());
   const outputDir = path.resolve(options.outputDir || defaultOutputDir(repoRoot));
   const riskConfigPath = path.resolve(options.riskConfigPath || defaultRiskConfigPath(repoRoot));
+  const strategyPath = path.resolve(options.strategyPath || defaultStrategyPath(repoRoot));
   const statePath = path.resolve(options.statePath || defaultTriggerStatePath(repoRoot));
   const reportPath = path.resolve(options.reportPath || defaultTriggerReportPath(repoRoot));
   const streamPath = path.join(path.dirname(reportPath), "capital-paper-hft-triggers.jsonl");
-  const [riskControls, previousState] = await Promise.all([
+  const [riskControls, previousState, strategy] = await Promise.all([
     readJson(riskConfigPath, {}),
     readJson(statePath, {}),
+    readJson(strategyPath, {}),
   ]);
   const maxQuoteAgeSeconds = numberOr(
     options.maxQuoteAgeSeconds,
     riskControls.maxDecisionQuoteAgeSeconds ?? 2,
   );
-  const readerState = await readCapitalQuoteState({ stateDir: options.stateDir || undefined });
+  const readerState = await readCapitalQuoteState({
+    stateDir: options.stateDir || undefined,
+    targetStockNo: stringOr(strategy.targetStockNo, stringOr(strategy.symbol)),
+    targetStockNos: arrayOr(strategy.targetStockNos),
+    quoteAliases: arrayOr(strategy.quoteAliases),
+    marketCode: stringOr(strategy.marketCode, stringOr(strategy.symbol)),
+  });
   const identity = quoteIdentity(readerState);
   const actionability = quoteIsActionable(readerState, maxQuoteAgeSeconds);
   const report = buildBaseReport({
@@ -208,6 +228,7 @@ export async function runCapitalPaperHftTrigger(options = {}) {
     reportPath,
     streamPath,
     riskConfigPath,
+    strategyPath,
     outputDir,
   };
   await writeJsonWithSha(statePath, nextState);
@@ -221,6 +242,7 @@ function parseArgs(argv) {
     repoRoot: process.cwd(),
     stateDir: "",
     riskConfigPath: "",
+    strategyPath: "",
     outputDir: "",
     statePath: "",
     reportPath: "",
@@ -245,6 +267,10 @@ function parseArgs(argv) {
       options.riskConfigPath = argv[++index] ?? options.riskConfigPath;
     } else if (arg.startsWith("--risk-config=")) {
       options.riskConfigPath = arg.slice("--risk-config=".length);
+    } else if (arg === "--strategy") {
+      options.strategyPath = argv[++index] ?? options.strategyPath;
+    } else if (arg.startsWith("--strategy=")) {
+      options.strategyPath = arg.slice("--strategy=".length);
     } else if (arg === "--output-dir") {
       options.outputDir = argv[++index] ?? options.outputDir;
     } else if (arg.startsWith("--output-dir=")) {

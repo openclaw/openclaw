@@ -28,6 +28,41 @@ function Test-ProcessAlive {
   }
 }
 
+function Get-ProcessCommandLine {
+  param([int]$ProcessId)
+  try {
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+    if ($null -eq $process) {
+      return ""
+    }
+    return [string]$process.CommandLine
+  } catch {
+    return ""
+  }
+}
+
+function Test-WatchProcess {
+  param([int]$ProcessId)
+  $commandLine = (Get-ProcessCommandLine -ProcessId $ProcessId).Replace("\", "/").ToLowerInvariant()
+  $expectedScript = $watchScript.Replace("\", "/").ToLowerInvariant()
+  return -not [string]::IsNullOrWhiteSpace($commandLine) -and $commandLine.Contains($expectedScript)
+}
+
+function Stop-WatchProcess {
+  param([int]$ProcessId)
+  if (-not (Test-WatchProcess -ProcessId $ProcessId)) {
+    throw "Refusing to stop pid $ProcessId because it is not running $watchScript"
+  }
+  Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+  for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
+    Start-Sleep -Milliseconds 100
+    if (-not (Test-ProcessAlive -ProcessId $ProcessId)) {
+      return
+    }
+  }
+  throw "Timed out while stopping existing auto-trading watch pid $ProcessId"
+}
+
 $scriptRoot = Split-Path -Parent $PSCommandPath
 if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
   $RepoRoot = (Resolve-Path (Join-Path $scriptRoot "..")).Path
@@ -75,21 +110,30 @@ $launchPlan = @{
 }
 
 if (Test-Path -LiteralPath $pidPath) {
+  $existingPid = 0
   try {
     $existingPid = [int]((Get-Content -LiteralPath $pidPath -Raw).Trim())
-    if ($existingPid -gt 0 -and (Test-ProcessAlive -ProcessId $existingPid) -and -not $Force) {
-      $launchPlan.status = "running"
-      $launchPlan.pid = $existingPid
-      $launchPlan.generatedAt = (Get-Date).ToString("o")
-      New-Item -ItemType Directory -Path $serviceDir -Force | Out-Null
-      New-Item -ItemType Directory -Path $logDir -Force | Out-Null
-      $launchJson = $launchPlan | ConvertTo-Json -Depth 6
-      Set-Content -LiteralPath $statePath -Value ($launchJson + "`n") -Encoding UTF8
-      Write-Output $launchJson
-      exit 0
+    if ($existingPid -gt 0 -and (Test-ProcessAlive -ProcessId $existingPid)) {
+      if (-not $Force) {
+        $launchPlan.status = "running"
+        $launchPlan.pid = $existingPid
+        $launchPlan.generatedAt = (Get-Date).ToString("o")
+        New-Item -ItemType Directory -Path $serviceDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+        $launchJson = $launchPlan | ConvertTo-Json -Depth 6
+        Set-Content -LiteralPath $statePath -Value ($launchJson + "`n") -Encoding UTF8
+        Write-Output $launchJson
+        exit 0
+      }
+      if (-not $Preview) {
+        Stop-WatchProcess -ProcessId $existingPid
+      }
     }
   } catch {
-    # Fall through and relaunch.
+    if ($Force -and -not $Preview -and $existingPid -gt 0 -and (Test-ProcessAlive -ProcessId $existingPid)) {
+      throw
+    }
+    # Fall through and relaunch when the pid file is stale or unreadable.
   }
 }
 

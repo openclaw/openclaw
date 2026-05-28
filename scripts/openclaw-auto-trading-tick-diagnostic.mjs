@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { performance } from "node:perf_hooks";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { resolveCapitalHftStateDir } from "./lib/brokerdesk-state-dir.mjs";
 import { readCapitalQuoteStatus } from "./openclaw-capital-quote-status.mjs";
-import { resolveBrokerDeskStateDir } from "./lib/brokerdesk-state-dir.mjs";
+
+const STABLE_TICK_FRESHNESS_SECONDS = 30;
 
 function defaultDashboardPath(repoRoot) {
   return path.join(repoRoot, ".openclaw", "quote", "capital-automation-health-dashboard.json");
@@ -19,7 +21,7 @@ function defaultServiceStatePath(repoRoot) {
 }
 
 function defaultLatestQuoteEventPath() {
-  return path.join(resolveBrokerDeskStateDir(), "capital_latest_quote_event.json");
+  return path.join(resolveCapitalHftStateDir(), "capital_latest_quote_event.json");
 }
 
 function defaultOutputPath(repoRoot) {
@@ -62,6 +64,15 @@ async function readOptionalJson(filePath, fallback) {
     return JSON.parse((await fs.readFile(filePath, "utf8")).replace(/^\uFEFF/, ""));
   } catch (error) {
     if (error?.code === "ENOENT") {
+      return fallback;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      message.includes("Unexpected end of JSON input") ||
+      message.includes("Unterminated string") ||
+      message.includes("Unexpected end of data") ||
+      message.includes("empty JSON content")
+    ) {
       return fallback;
     }
     throw error;
@@ -170,7 +181,9 @@ export function buildTickDiagnostic({
     2,
   );
   const monitorRunning =
-    monitorFreshnessStatus === "fresh" && monitorAgeSeconds >= 0 && monitorAgeSeconds <= monitorMaxFreshSeconds;
+    monitorFreshnessStatus === "fresh" &&
+    monitorAgeSeconds >= 0 &&
+    monitorAgeSeconds <= monitorMaxFreshSeconds;
   const realtimeRunning =
     realtimeFreshnessStatus === "fresh" &&
     realtimeAgeSeconds >= 0 &&
@@ -179,8 +192,14 @@ export function buildTickDiagnostic({
     selectedQuote?.receivedAt,
     quoteStatus?.diagnostics?.latestQuote?.receivedAt ?? latestQuoteEvent?.receivedAt ?? "",
   );
-  const callbackBid = stringOr(selectedQuote?.bid, quoteStatus?.diagnostics?.latestQuote?.bid ?? "");
-  const callbackAsk = stringOr(selectedQuote?.ask, quoteStatus?.diagnostics?.latestQuote?.ask ?? "");
+  const callbackBid = stringOr(
+    selectedQuote?.bid,
+    quoteStatus?.diagnostics?.latestQuote?.bid ?? "",
+  );
+  const callbackAsk = stringOr(
+    selectedQuote?.ask,
+    quoteStatus?.diagnostics?.latestQuote?.ask ?? "",
+  );
   const callbackStockNo = stringOr(
     selectedQuote?.stockNo,
     quoteStatus?.diagnostics?.latestQuote?.stockNo ?? "",
@@ -197,7 +216,10 @@ export function buildTickDiagnostic({
     selectedQuote?.message,
     quoteStatus?.diagnostics?.latestQuote?.message ?? "",
   );
-  const callbackQty = stringOr(selectedQuote?.qty, quoteStatus?.diagnostics?.latestQuote?.qty ?? "");
+  const callbackQty = stringOr(
+    selectedQuote?.qty,
+    quoteStatus?.diagnostics?.latestQuote?.qty ?? "",
+  );
   const callbackLogFile = stringOr(
     latestQuoteEvent?.sourceLogFile,
     quoteStatus?.diagnostics?.latestQuote?.sourceLogFile ?? "",
@@ -219,12 +241,14 @@ export function buildTickDiagnostic({
     label: stringOr(quoteStatus?.session?.marketSessionLabel, "未知"),
     tradingOpen: quoteStatus?.session?.tradingOpen === true,
   };
-    const bridgeSource = quoteStatus?.bridge ?? quoteStatus?.health ?? {};
+  const bridgeSource = quoteStatus?.bridge ?? quoteStatus?.health ?? {};
   const bridge = {
     status: stringOr(bridgeSource?.status ?? bridgeSource?.bridgeStatus, "unknown"),
     ready: bool(bridgeSource?.ready ?? bridgeSource?.bridgeReady),
     overallReady: bool(bridgeSource?.overallReady ?? bridgeSource?.overallReady),
-    quoteEventConfirmed: bool(bridgeSource?.quoteEventConfirmed ?? bridgeSource?.quoteEventConfirmed),
+    quoteEventConfirmed: bool(
+      bridgeSource?.quoteEventConfirmed ?? bridgeSource?.quoteEventConfirmed,
+    ),
     lastHeartbeatAt: stringOr(bridgeSource?.lastHeartbeatAt, ""),
     keepAliveUntil: stringOr(bridgeSource?.keepAliveUntil, ""),
     brokerActionRequired: bool(bridgeSource?.brokerActionRequired),
@@ -329,7 +353,7 @@ export function buildTickDiagnostic({
         ? "即時 tick 已運行，持續 heartbeat 監看，不要啟用真實下單。"
         : monitorRunning
           ? "監看層正常，但即時 tick 尚未恢復；等待新的 SKQuoteLib callback。"
-          : "先修復 BrokerDesk 報價來源，再等待新的 SKQuoteLib callback。",
+          : "先修復 CapitalHftService 報價來源，再等待新的 SKQuoteLib callback。",
     },
     files: {
       dashboardPath,
@@ -351,9 +375,11 @@ export async function runAutoTradingTickDiagnostic(options = {}) {
   const reportPath = path.resolve(options.reportPath || defaultOutputPath(repoRoot));
   const markdownPath = path.resolve(options.markdownPath || defaultMarkdownPath(repoRoot));
 
-  const serviceStatePath = path.resolve(options.serviceStatePath || defaultServiceStatePath(repoRoot));
+  const serviceStatePath = path.resolve(
+    options.serviceStatePath || defaultServiceStatePath(repoRoot),
+  );
   const [dashboard, latestQuoteEvent, serviceState] = await Promise.all([
-    readJson(dashboardPath, "brokerdesk automation health dashboard"),
+    readJson(dashboardPath, "capital-hft automation health dashboard"),
     readOptionalJson(latestQuoteEventPath, {}),
     readOptionalJson(serviceStatePath, {}),
   ]);
@@ -361,7 +387,7 @@ export async function runAutoTradingTickDiagnostic(options = {}) {
     dashboardPath,
     repoRoot,
     stateDir: path.dirname(latestQuoteEventPath),
-    maxFreshAgeSeconds: 2,
+    maxFreshAgeSeconds: STABLE_TICK_FRESHNESS_SECONDS,
     marketCode: "TXF",
     targetStockNo: "TX00AM",
     targetStockNos: ["TX00AM", "TX00", "TXFR1"],

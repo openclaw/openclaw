@@ -1,0 +1,84 @@
+{
+  "schema": "openclaw.strategy-engine.equity-sizer-config.v1",
+  "domestic": {
+    "fallbackEquity": 500000,
+    "currency": "TWD",
+    "riskPct": 0.02,
+    "method": "atr",
+    "stopMultiple": 2,
+    "maxPositionPct": 0.25,
+    "maxContracts": 10
+  },
+  "overseas": {
+    "fallbackEquity": 20000,
+    "currency": "USD",
+    "riskPct": 0.03,
+    "method": "kelly",
+    "stopMultiple": 1.5,
+    "maxPositionPct": 0.3,
+    "maxContracts": 8
+  },
+  "instruments": {
+    "CN": {
+      "riskPct": 0.03,
+      "maxContracts": 8,
+      "note": "A50 主力"
+    },
+    "TX": {
+      "riskPct": 0.02,
+      "maxContracts": 5
+    },
+    "ES": {
+      "riskPct": 0.02,
+      "maxContracts": 3
+    },
+    "NQ": {
+      "riskPct": 0.02,
+      "maxContracts": 2
+    },
+    "CL": {
+      "riskPct": 0.02,
+      "maxContracts": 3
+    },
+    "GC": {
+      "riskPct": 0.02,
+      "maxContracts": 3
+    }
+  },
+  "pollIntervalMs": 60000,
+  "lifecycle": {
+    "enabled": true,
+    "defaultHoldingMode": "day_trade",
+    "session": {
+      "flatBeforeClose": true,
+      "closeTime": "13:25",
+      "tz": "Asia/Taipei",
+      "forceFlatPolicy": "smart",
+      "graceMinutes": 3,
+      "blockNewEntryBeforeCloseMinutes": 5,
+      "blockAddOnBeforeCloseMinutes": 5,
+      "smartMinProfitPct": 0.6,
+      "smartRequireTrendIntact": true
+    },
+    "holdOvernight": {
+      "enabled": true,
+      "minProfitPct": 1.2,
+      "minBarsHeld": 5,
+      "maxBarsHeld": 240,
+      "moveStopToBreakeven": true
+    },
+    "addOn": {
+      "enabled": true,
+      "minProfitPct": 0.6,
+      "scaleFactor": 0.5,
+      "maxAddCount": 2,
+      "requireTrendIntact": true,
+      "requirePrevAddProfit": true
+    }
+  },
+  "risk": {
+    "riskPerTradePct": 0.5,
+    "maxMarginUtilPct": 60
+  },
+  "note": "riskPct = 單筆最大虧損佔權益比例，maxPositionPct = 單一商品最大佔用保證金比例"
+}

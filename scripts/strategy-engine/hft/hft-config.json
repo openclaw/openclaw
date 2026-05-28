@@ -1,0 +1,126 @@
+{
+  "_comment": "高頻交易模組設定 — 全部預設 dryRun:true + auto:false",
+  "loopMs": 10,
+  "reportMs": 5000,
+  "dryRun": true,
+
+  "risk": {
+    "maxLongQty": 3,
+    "maxShortQty": 3,
+    "maxNetQty": 3,
+    "maxDailyLoss": -50000,
+    "maxDailyProfit": 100000,
+    "maxOrdersPerSec": 10,
+    "maxOrdersPerMin": 120,
+    "maxSpreadPct": 0.005
+  },
+
+  "okxWs": {
+    "authProfile": "okx-public-demo-env",
+    "authRequired": false,
+    "sandbox": true,
+    "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+  },
+
+  "strategies": [
+    {
+      "_comment": "── Tick 動量策略 ────────────────────────",
+      "name": "TX_TickMomentum",
+      "class": "TickMomentumStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "params": {
+        "lookback": 50,
+        "momentumThresh": 0.65,
+        "volumeThresh": 1.5,
+        "holdMs": 10000,
+        "stopTicks": 3,
+        "orderQty": 1,
+        "cooldownMs": 3000
+      }
+    },
+    {
+      "_comment": "── 高頻均值回歸 ─────────────────────────",
+      "name": "TX_MeanReversionHft",
+      "class": "MeanReversionHftStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "params": {
+        "vwapWindow": 200,
+        "stdDevWindow": 100,
+        "entryZ": 2.0,
+        "exitZ": 0.5,
+        "stopZ": 3.5,
+        "holdMs": 30000,
+        "orderQty": 1,
+        "cooldownMs": 1000
+      }
+    },
+    {
+      "_comment": "── 訂單簿不平衡策略 ─────────────────────",
+      "name": "BTC_OrderImbalance",
+      "class": "OrderImbalanceStrategy",
+      "instrument": "BTC/USDT:USDT",
+      "broker": "okx",
+      "auto": false,
+      "params": {
+        "imbalanceThreshold": 0.6,
+        "holdMs": 5000,
+        "stopTicks": 20,
+        "orderQty": 0.01,
+        "minSpreadPct": 0.0002,
+        "cooldownMs": 2000
+      }
+    },
+    {
+      "_comment": "── 做市商策略 ───────────────────────────",
+      "name": "BTC_MarketMaking",
+      "class": "MarketMakingStrategy",
+      "instrument": "BTC/USDT:USDT",
+      "broker": "okx",
+      "auto": false,
+      "params": {
+        "baseSpreadPct": 0.001,
+        "orderQty": 0.01,
+        "maxInventory": 0.05,
+        "inventorySkew": 0.5,
+        "volMultiplier": 2.0,
+        "requoteMs": 500
+      }
+    },
+    {
+      "_comment": "── TWAP 執行算法（大單拆單示例）──────────",
+      "name": "TX_TWAP_Executor",
+      "class": "TwapVwapExecutor",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "params": {
+        "mode": "twap",
+        "totalQty": 10,
+        "slices": 10,
+        "intervalMs": 30000,
+        "direction": "buy",
+        "maxSlippage": 0.001
+      }
+    },
+    {
+      "_comment": "── VWAP 執行算法 ────────────────────────",
+      "name": "BTC_VWAP_Executor",
+      "class": "TwapVwapExecutor",
+      "instrument": "BTC/USDT:USDT",
+      "broker": "okx",
+      "auto": false,
+      "params": {
+        "mode": "vwap",
+        "totalQty": 0.1,
+        "slices": 10,
+        "intervalMs": 60000,
+        "direction": "buy",
+        "maxSlippage": 0.001
+      }
+    }
+  ]
+}

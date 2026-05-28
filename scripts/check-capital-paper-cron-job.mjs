@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const DEFAULT_JOB_NAME = "Capital paper HFT trigger";
-const EXPECTED_ENTRYPOINT = "pnpm brokerdesk:paper-hft:trigger";
+const EXPECTED_ENTRYPOINT = "pnpm capital-hft:paper-hft:trigger";
 const EXPECTED_EVERY_MS = 30 * 60 * 1000;
 
 function defaultCronDir(repoRoot) {
@@ -141,7 +141,7 @@ function buildCapitalPaperCronJobCheckReport({
     checks,
     "cron:single-entrypoint",
     payloadMessage.includes(EXPECTED_ENTRYPOINT),
-    "Cron job uses brokerdesk:paper-hft:trigger as the single entrypoint",
+    "Cron job uses capital-hft:paper-hft:trigger as the single entrypoint",
   );
   addCheck(
     checks,

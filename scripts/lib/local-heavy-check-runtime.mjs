@@ -247,7 +247,11 @@ export function acquireLocalHeavyCheckLockSync(params) {
     } catch (error) {
       if (!isAlreadyExistsError(error)) {
         const code = error && typeof error === "object" ? error.code : "UNKNOWN";
-        if (process.platform === "win32" && (code === "EPERM" || code === "EACCES") && locksDir !== fallbackLocksDir) {
+        if (
+          process.platform === "win32" &&
+          (code === "EPERM" || code === "EACCES") &&
+          locksDir !== fallbackLocksDir
+        ) {
           locksDir = fallbackLocksDir;
           lockDir = path.join(locksDir, `${params.lockName ?? "heavy-check"}.lock`);
           ownerPath = path.join(lockDir, "owner.json");
@@ -344,10 +348,17 @@ function cleanupLegacyLockDirs(locksDir, staleLockMs) {
     }
 
     const owner = readOwnerFile(path.join(legacyLockDir, "owner.json"));
-    if (shouldReclaimLock({ owner, lockDir: legacyLockDir, staleLockMs })) {
+    if (shouldReclaimLegacyLock({ owner, lockDir: legacyLockDir, staleLockMs })) {
       fs.rmSync(legacyLockDir, { recursive: true, force: true });
     }
   }
+}
+
+function shouldReclaimLegacyLock({ owner, lockDir, staleLockMs }) {
+  if (owner && typeof owner.pid === "number" && !isProcessAlive(owner.pid)) {
+    return true;
+  }
+  return shouldReclaimLock({ owner, lockDir, staleLockMs });
 }
 
 function insertBeforeSeparator(args, ...items) {
@@ -404,13 +415,12 @@ function isAlreadyExistsError(error) {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "EEXIST");
 }
 
-
 function isPermissionDeniedError(error) {
   return Boolean(
     error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error.code === "EPERM" || error.code === "EACCES"),
+    typeof error === "object" &&
+    "code" in error &&
+    (error.code === "EPERM" || error.code === "EACCES"),
   );
 }
 function shouldReclaimLock({ owner, lockDir, staleLockMs }) {
@@ -485,10 +495,7 @@ function probeProcessExists(pid) {
   if (result.status !== 0) {
     return false;
   }
-  return result.stdout
-    .trim()
-    .split(/\s+/u)
-    .includes(String(pid));
+  return result.stdout.trim().split(/\s+/u).includes(String(pid));
 }
 function describeOwner(owner) {
   if (!owner || typeof owner !== "object") {

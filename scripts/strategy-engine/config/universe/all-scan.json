@@ -1,0 +1,15 @@
+{
+  "schema": "openclaw.quote-universe-plan.v1",
+  "generatedAt": "2026-05-26T02:37:10.693Z",
+  "source": {
+    "stockList": "/sessions/epic-vibrant-maxwell/mnt/群益及元大API/CapitalHftService/hft_stock_list.json",
+    "osList": "/sessions/epic-vibrant-maxwell/mnt/群益及元大API/CapitalHftService/hft_os_product_list.json"
+  },
+  "tier": "all-scan",
+  "description": "分批輪詢 — 全商品 freshness/availability/liquidity 掃描，非即時 tick",
+  "domesticCount": 5634,
+  "overseasCount": 1250,
+  "totalPool": 6884,
+  "batchSize": 50,
+  "scanIntervalMs": 60000
+}

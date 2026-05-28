@@ -1,0 +1,25 @@
+{
+  "schema": "openclaw.quote-universe-plan.v1",
+  "generatedAt": "2026-05-26T02:37:10.693Z",
+  "source": {
+    "stockList": "/sessions/epic-vibrant-maxwell/mnt/群益及元大API/CapitalHftService/hft_stock_list.json",
+    "osList": "/sessions/epic-vibrant-maxwell/mnt/群益及元大API/CapitalHftService/hft_os_product_list.json"
+  },
+  "tier": "core",
+  "description": "即時 tick — 最重要的少量商品，永遠在線",
+  "domestic": ["TX00", "TX06"],
+  "overseas": [
+    "ES0000",
+    "NQ0000",
+    "YM0000",
+    "CL0000",
+    "GC0000",
+    "SI0000",
+    "CN0000",
+    "NK0000",
+    "DAX0000",
+    "HSI0000"
+  ],
+  "okx": ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "BTC-USDT", "ETH-USDT"],
+  "totalLiveTick": 16
+}

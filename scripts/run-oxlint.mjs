@@ -172,6 +172,7 @@ async function prepareExtensionPackageBoundaryArtifacts(env) {
       bin: process.execPath,
       args: PREPARE_EXTENSION_BOUNDARY_ARGS,
       env,
+      shell: false,
     });
 
     if (status !== 0) {

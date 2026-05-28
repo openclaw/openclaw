@@ -41,19 +41,23 @@ const PIPELINE = [
   },
   {
     cmd: "report-model-backed-dialogue-controlled-executor-intake-activation-preflight-coverage",
-    inputSuffix: "-model-backed-dialogue-controlled-executor-intake-activation-preflight-report.json",
+    inputSuffix:
+      "-model-backed-dialogue-controlled-executor-intake-activation-preflight-report.json",
   },
   {
     cmd: "report-model-backed-dialogue-controlled-executor-intake-activation-final-readiness-summary",
-    inputSuffix: "-model-backed-dialogue-controlled-executor-intake-activation-preflight-coverage-report.json",
+    inputSuffix:
+      "-model-backed-dialogue-controlled-executor-intake-activation-preflight-coverage-report.json",
   },
   {
     cmd: "report-model-backed-dialogue-controlled-executor-intake-activation-final-readiness-summary-coverage",
-    inputSuffix: "-model-backed-dialogue-controlled-executor-intake-activation-final-readiness-summary-report.json",
+    inputSuffix:
+      "-model-backed-dialogue-controlled-executor-intake-activation-final-readiness-summary-report.json",
   },
   {
     cmd: "report-model-backed-dialogue-controlled-executor-intake-activation-execution-manifest-proposal",
-    inputSuffix: "-model-backed-dialogue-controlled-executor-intake-activation-final-readiness-summary-coverage-report.json",
+    inputSuffix:
+      "-model-backed-dialogue-controlled-executor-intake-activation-final-readiness-summary-coverage-report.json",
   },
   {
     cmd: "report-model-backed-dialogue-controlled-executor-intake-activation-execution-manifest-proposal-coverage",
@@ -193,30 +197,26 @@ async function runOpenClaw(args, { allowFailure = false } = {}) {
   });
 
   if (status !== 0 && !allowFailure) {
-    throw new Error(`node ${OPENCLAW_ENTRY} ${args.join(" ")} failed with exit code ${String(status)}`);
+    throw new Error(
+      `node ${OPENCLAW_ENTRY} ${args.join(" ")} failed with exit code ${String(status)}`,
+    );
   }
   return { status };
 }
 
 async function ensureAutoTradingDaemon() {
-  const checkArgs = ["brokerdesk:auto-trading-watch:daemon-check"];
+  const checkArgs = ["capital-hft:auto-trading-watch:daemon-check"];
   const first = await runPnpm(checkArgs, { allowFailure: true });
   if (first.status === 0) {
     return "running";
   }
-  await runPnpm(["brokerdesk:auto-trading-watch:daemon"]);
+  await runPnpm(["capital-hft:auto-trading-watch:daemon"]);
   await runPnpm(checkArgs);
   return "started";
 }
 
 async function runHermesStep(cmd, inputRel) {
-  await runOpenClaw([
-    "hermes",
-    cmd,
-    inputRel,
-    "--output-dir",
-    STATE_DIR_REL,
-  ]);
+  await runOpenClaw(["hermes", cmd, inputRel, "--output-dir", STATE_DIR_REL]);
 }
 
 async function runDecisionWithCoverage(repoRoot) {
@@ -225,13 +225,7 @@ async function runDecisionWithCoverage(repoRoot) {
 
   for (let attempt = 1; attempt <= MAX_DECIDE_ATTEMPTS; attempt += 1) {
     const before = new Set(await listDecisionFiles(stateDir));
-    await runOpenClaw([
-      "hermes",
-      "decide",
-      "--output-dir",
-      STATE_DIR_REL,
-      MODEL_REQUEST,
-    ]);
+    await runOpenClaw(["hermes", "decide", "--output-dir", STATE_DIR_REL, MODEL_REQUEST]);
 
     const after = await listDecisionFiles(stateDir);
     const created = after.filter((name) => !before.has(name));
@@ -355,8 +349,12 @@ async function buildAndWriteFinalReport(repoRoot, traceId, daemonState, optional
 
   const decisionCoverage = await readStatus("-model-backed-dialogue-decision-coverage-report.json");
   const handoffPlan = await readStatus("-model-backed-dialogue-decision-handoff-plan.json");
-  const intakeCoverage = await readStatus("-model-backed-dialogue-handoff-intake-coverage-report.json");
-  const intakeSummary = await readStatus("-model-backed-dialogue-intake-release-summary-report.json");
+  const intakeCoverage = await readStatus(
+    "-model-backed-dialogue-handoff-intake-coverage-report.json",
+  );
+  const intakeSummary = await readStatus(
+    "-model-backed-dialogue-intake-release-summary-report.json",
+  );
   const decisionReport = await readStatus(
     "-model-backed-dialogue-controlled-executor-intake-activation-execution-manifest-next-safe-task-decision-report.json",
   );
@@ -364,10 +362,7 @@ async function buildAndWriteFinalReport(repoRoot, traceId, daemonState, optional
     "-model-backed-dialogue-controlled-executor-intake-activation-execution-manifest-activation-readiness-delta-report.json",
   );
 
-  const finalReportPath = path.join(
-    stateDir,
-    `${traceId}-autonomous-oneclick-report.md`,
-  );
+  const finalReportPath = path.join(stateDir, `${traceId}-autonomous-oneclick-report.md`);
 
   const lines = [
     "# OpenClaw Hermes Autonomous One-Click Report",

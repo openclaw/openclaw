@@ -11,6 +11,7 @@ const targets = [
   "src",
   "extensions",
   "scripts",
+  "tools",
   "packages",
   "ui",
   "apps",

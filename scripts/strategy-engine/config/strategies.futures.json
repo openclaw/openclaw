@@ -1,0 +1,421 @@
+{
+  "$schema": "openclaw.strategy-engine.config.v1",
+  "pollMs": 1000,
+  "dryRun": true,
+  "dedupeMs": 5000,
+  "strategies": [
+    {
+      "name": "momentum_twf_tx",
+      "class": "MomentumStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_twf_tx",
+      "class": "MeanReversionStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_twf_tx",
+      "class": "BreakoutStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_twf_cnf",
+      "class": "MomentumStrategy",
+      "instrument": "CNF00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_twf_cnf",
+      "class": "MeanReversionStrategy",
+      "instrument": "CNF00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_twf_cnf",
+      "class": "BreakoutStrategy",
+      "instrument": "CNF00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_os_es",
+      "class": "MomentumStrategy",
+      "instrument": "ES0000",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.4,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_os_es",
+      "class": "MeanReversionStrategy",
+      "instrument": "ES0000",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_os_es",
+      "class": "BreakoutStrategy",
+      "instrument": "ES0000",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_os_cn",
+      "class": "MomentumStrategy",
+      "instrument": "CN0000",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.4,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_os_cn",
+      "class": "MeanReversionStrategy",
+      "instrument": "CN0000",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_os_cn",
+      "class": "BreakoutStrategy",
+      "instrument": "CN0000",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "tradingagents_tx",
+      "class": "TradingAgentsStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "ticker": "TX00",
+        "fallbackTicker": "^TWII",
+        "serviceHost": "127.0.0.1",
+        "servicePort": 8390,
+        "cooldownMs": 300000,
+        "qty": 1
+      }
+    },
+    {
+      "name": "tradingagents_es",
+      "class": "TradingAgentsStrategy",
+      "instrument": "ES0000",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "ticker": "ES0000",
+        "fallbackTicker": "^GSPC",
+        "serviceHost": "127.0.0.1",
+        "servicePort": 8390,
+        "cooldownMs": 300000,
+        "qty": 1
+      }
+    },
+    {
+      "name": "ea_rsima_tx",
+      "class": "EaRsiMaStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 10,
+        "slowPeriod": 30,
+        "rsiPeriod": 14,
+        "overbought": 70,
+        "oversold": 30,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_rsima_es",
+      "class": "EaRsiMaStrategy",
+      "instrument": "ES0000",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 10,
+        "slowPeriod": 30,
+        "rsiPeriod": 14,
+        "overbought": 70,
+        "oversold": 30,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_macd_tx",
+      "class": "EaMacdStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 12,
+        "slowPeriod": 26,
+        "signalPeriod": 9,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_macd_es",
+      "class": "EaMacdStrategy",
+      "instrument": "ES0000",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 12,
+        "slowPeriod": 26,
+        "signalPeriod": 9,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_bb_tx",
+      "class": "EaBollingerStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "stdDev": 2,
+        "squeezeThreshold": 0.5,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_bb_es",
+      "class": "EaBollingerStrategy",
+      "instrument": "ES0000",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "stdDev": 2,
+        "squeezeThreshold": 0.5,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_scalp_tx",
+      "class": "EaScalpingStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "tickWindow": 50,
+        "momentumThreshold": 0.3,
+        "cooldownMs": 10000,
+        "stopLoss": 0.5,
+        "takeProfit": 0.8
+      }
+    },
+    {
+      "name": "ea_scalp_es",
+      "class": "EaScalpingStrategy",
+      "instrument": "ES0000",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "tickWindow": 50,
+        "momentumThreshold": 0.3,
+        "cooldownMs": 10000,
+        "stopLoss": 0.5,
+        "takeProfit": 0.8
+      }
+    },
+    {
+      "name": "ea_trend_tx",
+      "class": "EaTrendFollowStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 10,
+        "slowPeriod": 50,
+        "atrPeriod": 14,
+        "atrMultiplier": 2,
+        "cooldownMs": 60000,
+        "stopLoss": 3,
+        "takeProfit": 8
+      }
+    },
+    {
+      "name": "ea_trend_es",
+      "class": "EaTrendFollowStrategy",
+      "instrument": "ES0000",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 10,
+        "slowPeriod": 50,
+        "atrPeriod": 14,
+        "atrMultiplier": 2,
+        "cooldownMs": 60000,
+        "stopLoss": 3,
+        "takeProfit": 8
+      }
+    },
+    {
+      "name": "ea_grid_tx",
+      "class": "EaGridScalpStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "gridSpacing": 0.5,
+        "gridLevels": 5,
+        "scalpThreshold": 0.2,
+        "cooldownMs": 5000,
+        "stopLoss": 1.5,
+        "takeProfit": 1
+      }
+    },
+    {
+      "name": "ea_grid_es",
+      "class": "EaGridScalpStrategy",
+      "instrument": "ES0000",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "gridSpacing": 0.5,
+        "gridLevels": 5,
+        "scalpThreshold": 0.2,
+        "cooldownMs": 5000,
+        "stopLoss": 1.5,
+        "takeProfit": 1
+      }
+    },
+    {
+      "name": "simons_statarb_tx",
+      "class": "SimonsStatArbStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "zScorePeriod": 50,
+        "zScoreEntry": 2,
+        "zScoreExit": 0.3,
+        "hurstPeriod": 100,
+        "hurstThreshold": 0.45
+      }
+    },
+    {
+      "name": "simons_hmm_tx",
+      "class": "SimonsHmmRegimeStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "volLookback": 30,
+        "volLowThreshold": 0.3,
+        "volHighThreshold": 0.85
+      }
+    },
+    {
+      "name": "simons_pattern_tx",
+      "class": "SimonsPatternRecognitionStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "kernelBandwidth": 8,
+        "kernelLookback": 40,
+        "residualEntry": 2.2
+      }
+    },
+    {
+      "name": "simons_momdecay_tx",
+      "class": "SimonsMomentumDecayStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "ultraShortPeriod": 3,
+        "shortPeriod": 8,
+        "mediumPeriod": 21,
+        "decayThreshold": 0.6
+      }
+    },
+    {
+      "name": "simons_combiner_tx",
+      "class": "SimonsSignalCombinerStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "minSignals": 3,
+        "kellyThreshold": 0.15
+      }
+    }
+  ],
+  "profile": "futures"
+}

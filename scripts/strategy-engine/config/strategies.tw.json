@@ -1,0 +1,4263 @@
+{
+  "$schema": "openclaw.strategy-engine.config.v1",
+  "pollMs": 1000,
+  "dryRun": true,
+  "dedupeMs": 5000,
+  "strategies": [
+    {
+      "name": "momentum_tw_2330",
+      "class": "MomentumStrategy",
+      "instrument": "2330",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2330",
+      "class": "MeanReversionStrategy",
+      "instrument": "2330",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2330",
+      "class": "BreakoutStrategy",
+      "instrument": "2330",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2317",
+      "class": "MomentumStrategy",
+      "instrument": "2317",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2317",
+      "class": "MeanReversionStrategy",
+      "instrument": "2317",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2317",
+      "class": "BreakoutStrategy",
+      "instrument": "2317",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2454",
+      "class": "MomentumStrategy",
+      "instrument": "2454",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2454",
+      "class": "MeanReversionStrategy",
+      "instrument": "2454",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2454",
+      "class": "BreakoutStrategy",
+      "instrument": "2454",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2308",
+      "class": "MomentumStrategy",
+      "instrument": "2308",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2308",
+      "class": "MeanReversionStrategy",
+      "instrument": "2308",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2308",
+      "class": "BreakoutStrategy",
+      "instrument": "2308",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2881",
+      "class": "MomentumStrategy",
+      "instrument": "2881",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2881",
+      "class": "MeanReversionStrategy",
+      "instrument": "2881",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2881",
+      "class": "BreakoutStrategy",
+      "instrument": "2881",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2882",
+      "class": "MomentumStrategy",
+      "instrument": "2882",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2882",
+      "class": "MeanReversionStrategy",
+      "instrument": "2882",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2882",
+      "class": "BreakoutStrategy",
+      "instrument": "2882",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2303",
+      "class": "MomentumStrategy",
+      "instrument": "2303",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2303",
+      "class": "MeanReversionStrategy",
+      "instrument": "2303",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2303",
+      "class": "BreakoutStrategy",
+      "instrument": "2303",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2412",
+      "class": "MomentumStrategy",
+      "instrument": "2412",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2412",
+      "class": "MeanReversionStrategy",
+      "instrument": "2412",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2412",
+      "class": "BreakoutStrategy",
+      "instrument": "2412",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2886",
+      "class": "MomentumStrategy",
+      "instrument": "2886",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2886",
+      "class": "MeanReversionStrategy",
+      "instrument": "2886",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2886",
+      "class": "BreakoutStrategy",
+      "instrument": "2886",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3711",
+      "class": "MomentumStrategy",
+      "instrument": "3711",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3711",
+      "class": "MeanReversionStrategy",
+      "instrument": "3711",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3711",
+      "class": "BreakoutStrategy",
+      "instrument": "3711",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2891",
+      "class": "MomentumStrategy",
+      "instrument": "2891",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2891",
+      "class": "MeanReversionStrategy",
+      "instrument": "2891",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2891",
+      "class": "BreakoutStrategy",
+      "instrument": "2891",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_1301",
+      "class": "MomentumStrategy",
+      "instrument": "1301",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_1301",
+      "class": "MeanReversionStrategy",
+      "instrument": "1301",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_1301",
+      "class": "BreakoutStrategy",
+      "instrument": "1301",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_1303",
+      "class": "MomentumStrategy",
+      "instrument": "1303",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_1303",
+      "class": "MeanReversionStrategy",
+      "instrument": "1303",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_1303",
+      "class": "BreakoutStrategy",
+      "instrument": "1303",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2002",
+      "class": "MomentumStrategy",
+      "instrument": "2002",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2002",
+      "class": "MeanReversionStrategy",
+      "instrument": "2002",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2002",
+      "class": "BreakoutStrategy",
+      "instrument": "2002",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_1326",
+      "class": "MomentumStrategy",
+      "instrument": "1326",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_1326",
+      "class": "MeanReversionStrategy",
+      "instrument": "1326",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_1326",
+      "class": "BreakoutStrategy",
+      "instrument": "1326",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2884",
+      "class": "MomentumStrategy",
+      "instrument": "2884",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2884",
+      "class": "MeanReversionStrategy",
+      "instrument": "2884",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2884",
+      "class": "BreakoutStrategy",
+      "instrument": "2884",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_5880",
+      "class": "MomentumStrategy",
+      "instrument": "5880",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_5880",
+      "class": "MeanReversionStrategy",
+      "instrument": "5880",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_5880",
+      "class": "BreakoutStrategy",
+      "instrument": "5880",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2892",
+      "class": "MomentumStrategy",
+      "instrument": "2892",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2892",
+      "class": "MeanReversionStrategy",
+      "instrument": "2892",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2892",
+      "class": "BreakoutStrategy",
+      "instrument": "2892",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3034",
+      "class": "MomentumStrategy",
+      "instrument": "3034",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3034",
+      "class": "MeanReversionStrategy",
+      "instrument": "3034",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3034",
+      "class": "BreakoutStrategy",
+      "instrument": "3034",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2357",
+      "class": "MomentumStrategy",
+      "instrument": "2357",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2357",
+      "class": "MeanReversionStrategy",
+      "instrument": "2357",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2357",
+      "class": "BreakoutStrategy",
+      "instrument": "2357",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_5871",
+      "class": "MomentumStrategy",
+      "instrument": "5871",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_5871",
+      "class": "MeanReversionStrategy",
+      "instrument": "5871",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_5871",
+      "class": "BreakoutStrategy",
+      "instrument": "5871",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2382",
+      "class": "MomentumStrategy",
+      "instrument": "2382",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2382",
+      "class": "MeanReversionStrategy",
+      "instrument": "2382",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2382",
+      "class": "BreakoutStrategy",
+      "instrument": "2382",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2880",
+      "class": "MomentumStrategy",
+      "instrument": "2880",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2880",
+      "class": "MeanReversionStrategy",
+      "instrument": "2880",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2880",
+      "class": "BreakoutStrategy",
+      "instrument": "2880",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2887",
+      "class": "MomentumStrategy",
+      "instrument": "2887",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2887",
+      "class": "MeanReversionStrategy",
+      "instrument": "2887",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2887",
+      "class": "BreakoutStrategy",
+      "instrument": "2887",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6505",
+      "class": "MomentumStrategy",
+      "instrument": "6505",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6505",
+      "class": "MeanReversionStrategy",
+      "instrument": "6505",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6505",
+      "class": "BreakoutStrategy",
+      "instrument": "6505",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2345",
+      "class": "MomentumStrategy",
+      "instrument": "2345",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2345",
+      "class": "MeanReversionStrategy",
+      "instrument": "2345",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2345",
+      "class": "BreakoutStrategy",
+      "instrument": "2345",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3231",
+      "class": "MomentumStrategy",
+      "instrument": "3231",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3231",
+      "class": "MeanReversionStrategy",
+      "instrument": "3231",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3231",
+      "class": "BreakoutStrategy",
+      "instrument": "3231",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2603",
+      "class": "MomentumStrategy",
+      "instrument": "2603",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2603",
+      "class": "MeanReversionStrategy",
+      "instrument": "2603",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2603",
+      "class": "BreakoutStrategy",
+      "instrument": "2603",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3037",
+      "class": "MomentumStrategy",
+      "instrument": "3037",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3037",
+      "class": "MeanReversionStrategy",
+      "instrument": "3037",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3037",
+      "class": "BreakoutStrategy",
+      "instrument": "3037",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2327",
+      "class": "MomentumStrategy",
+      "instrument": "2327",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2327",
+      "class": "MeanReversionStrategy",
+      "instrument": "2327",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2327",
+      "class": "BreakoutStrategy",
+      "instrument": "2327",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_4904",
+      "class": "MomentumStrategy",
+      "instrument": "4904",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_4904",
+      "class": "MeanReversionStrategy",
+      "instrument": "4904",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_4904",
+      "class": "BreakoutStrategy",
+      "instrument": "4904",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3045",
+      "class": "MomentumStrategy",
+      "instrument": "3045",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3045",
+      "class": "MeanReversionStrategy",
+      "instrument": "3045",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3045",
+      "class": "BreakoutStrategy",
+      "instrument": "3045",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_1101",
+      "class": "MomentumStrategy",
+      "instrument": "1101",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_1101",
+      "class": "MeanReversionStrategy",
+      "instrument": "1101",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_1101",
+      "class": "BreakoutStrategy",
+      "instrument": "1101",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_1216",
+      "class": "MomentumStrategy",
+      "instrument": "1216",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_1216",
+      "class": "MeanReversionStrategy",
+      "instrument": "1216",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_1216",
+      "class": "BreakoutStrategy",
+      "instrument": "1216",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2395",
+      "class": "MomentumStrategy",
+      "instrument": "2395",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2395",
+      "class": "MeanReversionStrategy",
+      "instrument": "2395",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2395",
+      "class": "BreakoutStrategy",
+      "instrument": "2395",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2207",
+      "class": "MomentumStrategy",
+      "instrument": "2207",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2207",
+      "class": "MeanReversionStrategy",
+      "instrument": "2207",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2207",
+      "class": "BreakoutStrategy",
+      "instrument": "2207",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6415",
+      "class": "MomentumStrategy",
+      "instrument": "6415",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6415",
+      "class": "MeanReversionStrategy",
+      "instrument": "6415",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6415",
+      "class": "BreakoutStrategy",
+      "instrument": "6415",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3661",
+      "class": "MomentumStrategy",
+      "instrument": "3661",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3661",
+      "class": "MeanReversionStrategy",
+      "instrument": "3661",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3661",
+      "class": "BreakoutStrategy",
+      "instrument": "3661",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2379",
+      "class": "MomentumStrategy",
+      "instrument": "2379",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2379",
+      "class": "MeanReversionStrategy",
+      "instrument": "2379",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2379",
+      "class": "BreakoutStrategy",
+      "instrument": "2379",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6669",
+      "class": "MomentumStrategy",
+      "instrument": "6669",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6669",
+      "class": "MeanReversionStrategy",
+      "instrument": "6669",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6669",
+      "class": "BreakoutStrategy",
+      "instrument": "6669",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2301",
+      "class": "MomentumStrategy",
+      "instrument": "2301",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2301",
+      "class": "MeanReversionStrategy",
+      "instrument": "2301",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2301",
+      "class": "BreakoutStrategy",
+      "instrument": "2301",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3529",
+      "class": "MomentumStrategy",
+      "instrument": "3529",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3529",
+      "class": "MeanReversionStrategy",
+      "instrument": "3529",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3529",
+      "class": "BreakoutStrategy",
+      "instrument": "3529",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_8046",
+      "class": "MomentumStrategy",
+      "instrument": "8046",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_8046",
+      "class": "MeanReversionStrategy",
+      "instrument": "8046",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_8046",
+      "class": "BreakoutStrategy",
+      "instrument": "8046",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_5347",
+      "class": "MomentumStrategy",
+      "instrument": "5347",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_5347",
+      "class": "MeanReversionStrategy",
+      "instrument": "5347",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_5347",
+      "class": "BreakoutStrategy",
+      "instrument": "5347",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2383",
+      "class": "MomentumStrategy",
+      "instrument": "2383",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2383",
+      "class": "MeanReversionStrategy",
+      "instrument": "2383",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2383",
+      "class": "BreakoutStrategy",
+      "instrument": "2383",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3443",
+      "class": "MomentumStrategy",
+      "instrument": "3443",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3443",
+      "class": "MeanReversionStrategy",
+      "instrument": "3443",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3443",
+      "class": "BreakoutStrategy",
+      "instrument": "3443",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6488",
+      "class": "MomentumStrategy",
+      "instrument": "6488",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6488",
+      "class": "MeanReversionStrategy",
+      "instrument": "6488",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6488",
+      "class": "BreakoutStrategy",
+      "instrument": "6488",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2356",
+      "class": "MomentumStrategy",
+      "instrument": "2356",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2356",
+      "class": "MeanReversionStrategy",
+      "instrument": "2356",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2356",
+      "class": "BreakoutStrategy",
+      "instrument": "2356",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3017",
+      "class": "MomentumStrategy",
+      "instrument": "3017",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3017",
+      "class": "MeanReversionStrategy",
+      "instrument": "3017",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3017",
+      "class": "BreakoutStrategy",
+      "instrument": "3017",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6770",
+      "class": "MomentumStrategy",
+      "instrument": "6770",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6770",
+      "class": "MeanReversionStrategy",
+      "instrument": "6770",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6770",
+      "class": "BreakoutStrategy",
+      "instrument": "6770",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3105",
+      "class": "MomentumStrategy",
+      "instrument": "3105",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3105",
+      "class": "MeanReversionStrategy",
+      "instrument": "3105",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3105",
+      "class": "BreakoutStrategy",
+      "instrument": "3105",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2344",
+      "class": "MomentumStrategy",
+      "instrument": "2344",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2344",
+      "class": "MeanReversionStrategy",
+      "instrument": "2344",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2344",
+      "class": "BreakoutStrategy",
+      "instrument": "2344",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_8150",
+      "class": "MomentumStrategy",
+      "instrument": "8150",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_8150",
+      "class": "MeanReversionStrategy",
+      "instrument": "8150",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_8150",
+      "class": "BreakoutStrategy",
+      "instrument": "8150",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6239",
+      "class": "MomentumStrategy",
+      "instrument": "6239",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6239",
+      "class": "MeanReversionStrategy",
+      "instrument": "6239",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6239",
+      "class": "BreakoutStrategy",
+      "instrument": "6239",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2449",
+      "class": "MomentumStrategy",
+      "instrument": "2449",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2449",
+      "class": "MeanReversionStrategy",
+      "instrument": "2449",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2449",
+      "class": "BreakoutStrategy",
+      "instrument": "2449",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3515",
+      "class": "MomentumStrategy",
+      "instrument": "3515",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3515",
+      "class": "MeanReversionStrategy",
+      "instrument": "3515",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3515",
+      "class": "BreakoutStrategy",
+      "instrument": "3515",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6285",
+      "class": "MomentumStrategy",
+      "instrument": "6285",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6285",
+      "class": "MeanReversionStrategy",
+      "instrument": "6285",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6285",
+      "class": "BreakoutStrategy",
+      "instrument": "6285",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2408",
+      "class": "MomentumStrategy",
+      "instrument": "2408",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2408",
+      "class": "MeanReversionStrategy",
+      "instrument": "2408",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2408",
+      "class": "BreakoutStrategy",
+      "instrument": "2408",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_5274",
+      "class": "MomentumStrategy",
+      "instrument": "5274",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_5274",
+      "class": "MeanReversionStrategy",
+      "instrument": "5274",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_5274",
+      "class": "BreakoutStrategy",
+      "instrument": "5274",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3592",
+      "class": "MomentumStrategy",
+      "instrument": "3592",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3592",
+      "class": "MeanReversionStrategy",
+      "instrument": "3592",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3592",
+      "class": "BreakoutStrategy",
+      "instrument": "3592",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6547",
+      "class": "MomentumStrategy",
+      "instrument": "6547",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6547",
+      "class": "MeanReversionStrategy",
+      "instrument": "6547",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6547",
+      "class": "BreakoutStrategy",
+      "instrument": "6547",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_4966",
+      "class": "MomentumStrategy",
+      "instrument": "4966",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_4966",
+      "class": "MeanReversionStrategy",
+      "instrument": "4966",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_4966",
+      "class": "BreakoutStrategy",
+      "instrument": "4966",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6533",
+      "class": "MomentumStrategy",
+      "instrument": "6533",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6533",
+      "class": "MeanReversionStrategy",
+      "instrument": "6533",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6533",
+      "class": "BreakoutStrategy",
+      "instrument": "6533",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2376",
+      "class": "MomentumStrategy",
+      "instrument": "2376",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2376",
+      "class": "MeanReversionStrategy",
+      "instrument": "2376",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2376",
+      "class": "BreakoutStrategy",
+      "instrument": "2376",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3023",
+      "class": "MomentumStrategy",
+      "instrument": "3023",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3023",
+      "class": "MeanReversionStrategy",
+      "instrument": "3023",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3023",
+      "class": "BreakoutStrategy",
+      "instrument": "3023",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6446",
+      "class": "MomentumStrategy",
+      "instrument": "6446",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6446",
+      "class": "MeanReversionStrategy",
+      "instrument": "6446",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6446",
+      "class": "BreakoutStrategy",
+      "instrument": "6446",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2059",
+      "class": "MomentumStrategy",
+      "instrument": "2059",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2059",
+      "class": "MeanReversionStrategy",
+      "instrument": "2059",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2059",
+      "class": "BreakoutStrategy",
+      "instrument": "2059",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3533",
+      "class": "MomentumStrategy",
+      "instrument": "3533",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3533",
+      "class": "MeanReversionStrategy",
+      "instrument": "3533",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3533",
+      "class": "BreakoutStrategy",
+      "instrument": "3533",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6409",
+      "class": "MomentumStrategy",
+      "instrument": "6409",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6409",
+      "class": "MeanReversionStrategy",
+      "instrument": "6409",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6409",
+      "class": "BreakoutStrategy",
+      "instrument": "6409",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3596",
+      "class": "MomentumStrategy",
+      "instrument": "3596",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3596",
+      "class": "MeanReversionStrategy",
+      "instrument": "3596",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3596",
+      "class": "BreakoutStrategy",
+      "instrument": "3596",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6414",
+      "class": "MomentumStrategy",
+      "instrument": "6414",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6414",
+      "class": "MeanReversionStrategy",
+      "instrument": "6414",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6414",
+      "class": "BreakoutStrategy",
+      "instrument": "6414",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2049",
+      "class": "MomentumStrategy",
+      "instrument": "2049",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2049",
+      "class": "MeanReversionStrategy",
+      "instrument": "2049",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2049",
+      "class": "BreakoutStrategy",
+      "instrument": "2049",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_5269",
+      "class": "MomentumStrategy",
+      "instrument": "5269",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_5269",
+      "class": "MeanReversionStrategy",
+      "instrument": "5269",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_5269",
+      "class": "BreakoutStrategy",
+      "instrument": "5269",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2883",
+      "class": "MomentumStrategy",
+      "instrument": "2883",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2883",
+      "class": "MeanReversionStrategy",
+      "instrument": "2883",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2883",
+      "class": "BreakoutStrategy",
+      "instrument": "2883",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2885",
+      "class": "MomentumStrategy",
+      "instrument": "2885",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2885",
+      "class": "MeanReversionStrategy",
+      "instrument": "2885",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2885",
+      "class": "BreakoutStrategy",
+      "instrument": "2885",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2888",
+      "class": "MomentumStrategy",
+      "instrument": "2888",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2888",
+      "class": "MeanReversionStrategy",
+      "instrument": "2888",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2888",
+      "class": "BreakoutStrategy",
+      "instrument": "2888",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2890",
+      "class": "MomentumStrategy",
+      "instrument": "2890",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2890",
+      "class": "MeanReversionStrategy",
+      "instrument": "2890",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2890",
+      "class": "BreakoutStrategy",
+      "instrument": "2890",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_5876",
+      "class": "MomentumStrategy",
+      "instrument": "5876",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_5876",
+      "class": "MeanReversionStrategy",
+      "instrument": "5876",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_5876",
+      "class": "BreakoutStrategy",
+      "instrument": "5876",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2838",
+      "class": "MomentumStrategy",
+      "instrument": "2838",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2838",
+      "class": "MeanReversionStrategy",
+      "instrument": "2838",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2838",
+      "class": "BreakoutStrategy",
+      "instrument": "2838",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2801",
+      "class": "MomentumStrategy",
+      "instrument": "2801",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2801",
+      "class": "MeanReversionStrategy",
+      "instrument": "2801",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2801",
+      "class": "BreakoutStrategy",
+      "instrument": "2801",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2834",
+      "class": "MomentumStrategy",
+      "instrument": "2834",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2834",
+      "class": "MeanReversionStrategy",
+      "instrument": "2834",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2834",
+      "class": "BreakoutStrategy",
+      "instrument": "2834",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2609",
+      "class": "MomentumStrategy",
+      "instrument": "2609",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2609",
+      "class": "MeanReversionStrategy",
+      "instrument": "2609",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2609",
+      "class": "BreakoutStrategy",
+      "instrument": "2609",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2615",
+      "class": "MomentumStrategy",
+      "instrument": "2615",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2615",
+      "class": "MeanReversionStrategy",
+      "instrument": "2615",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2615",
+      "class": "BreakoutStrategy",
+      "instrument": "2615",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2610",
+      "class": "MomentumStrategy",
+      "instrument": "2610",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2610",
+      "class": "MeanReversionStrategy",
+      "instrument": "2610",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2610",
+      "class": "BreakoutStrategy",
+      "instrument": "2610",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2618",
+      "class": "MomentumStrategy",
+      "instrument": "2618",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2618",
+      "class": "MeanReversionStrategy",
+      "instrument": "2618",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2618",
+      "class": "BreakoutStrategy",
+      "instrument": "2618",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2006",
+      "class": "MomentumStrategy",
+      "instrument": "2006",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2006",
+      "class": "MeanReversionStrategy",
+      "instrument": "2006",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2006",
+      "class": "BreakoutStrategy",
+      "instrument": "2006",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2014",
+      "class": "MomentumStrategy",
+      "instrument": "2014",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2014",
+      "class": "MeanReversionStrategy",
+      "instrument": "2014",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2014",
+      "class": "BreakoutStrategy",
+      "instrument": "2014",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2015",
+      "class": "MomentumStrategy",
+      "instrument": "2015",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2015",
+      "class": "MeanReversionStrategy",
+      "instrument": "2015",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2015",
+      "class": "BreakoutStrategy",
+      "instrument": "2015",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2024",
+      "class": "MomentumStrategy",
+      "instrument": "2024",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2024",
+      "class": "MeanReversionStrategy",
+      "instrument": "2024",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2024",
+      "class": "BreakoutStrategy",
+      "instrument": "2024",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_1402",
+      "class": "MomentumStrategy",
+      "instrument": "1402",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_1402",
+      "class": "MeanReversionStrategy",
+      "instrument": "1402",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_1402",
+      "class": "BreakoutStrategy",
+      "instrument": "1402",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_1504",
+      "class": "MomentumStrategy",
+      "instrument": "1504",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_1504",
+      "class": "MeanReversionStrategy",
+      "instrument": "1504",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_1504",
+      "class": "BreakoutStrategy",
+      "instrument": "1504",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_1605",
+      "class": "MomentumStrategy",
+      "instrument": "1605",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_1605",
+      "class": "MeanReversionStrategy",
+      "instrument": "1605",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_1605",
+      "class": "BreakoutStrategy",
+      "instrument": "1605",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2105",
+      "class": "MomentumStrategy",
+      "instrument": "2105",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2105",
+      "class": "MeanReversionStrategy",
+      "instrument": "2105",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2105",
+      "class": "BreakoutStrategy",
+      "instrument": "2105",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2201",
+      "class": "MomentumStrategy",
+      "instrument": "2201",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2201",
+      "class": "MeanReversionStrategy",
+      "instrument": "2201",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2201",
+      "class": "BreakoutStrategy",
+      "instrument": "2201",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2231",
+      "class": "MomentumStrategy",
+      "instrument": "2231",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2231",
+      "class": "MeanReversionStrategy",
+      "instrument": "2231",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2231",
+      "class": "BreakoutStrategy",
+      "instrument": "2231",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_9904",
+      "class": "MomentumStrategy",
+      "instrument": "9904",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_9904",
+      "class": "MeanReversionStrategy",
+      "instrument": "9904",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_9904",
+      "class": "BreakoutStrategy",
+      "instrument": "9904",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_9910",
+      "class": "MomentumStrategy",
+      "instrument": "9910",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_9910",
+      "class": "MeanReversionStrategy",
+      "instrument": "9910",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_9910",
+      "class": "BreakoutStrategy",
+      "instrument": "9910",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2313",
+      "class": "MomentumStrategy",
+      "instrument": "2313",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2313",
+      "class": "MeanReversionStrategy",
+      "instrument": "2313",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2313",
+      "class": "BreakoutStrategy",
+      "instrument": "2313",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2314",
+      "class": "MomentumStrategy",
+      "instrument": "2314",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2314",
+      "class": "MeanReversionStrategy",
+      "instrument": "2314",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2314",
+      "class": "BreakoutStrategy",
+      "instrument": "2314",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2353",
+      "class": "MomentumStrategy",
+      "instrument": "2353",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2353",
+      "class": "MeanReversionStrategy",
+      "instrument": "2353",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2353",
+      "class": "BreakoutStrategy",
+      "instrument": "2353",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2377",
+      "class": "MomentumStrategy",
+      "instrument": "2377",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2377",
+      "class": "MeanReversionStrategy",
+      "instrument": "2377",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2377",
+      "class": "BreakoutStrategy",
+      "instrument": "2377",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3044",
+      "class": "MomentumStrategy",
+      "instrument": "3044",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3044",
+      "class": "MeanReversionStrategy",
+      "instrument": "3044",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3044",
+      "class": "BreakoutStrategy",
+      "instrument": "3044",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3189",
+      "class": "MomentumStrategy",
+      "instrument": "3189",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3189",
+      "class": "MeanReversionStrategy",
+      "instrument": "3189",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3189",
+      "class": "BreakoutStrategy",
+      "instrument": "3189",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6279",
+      "class": "MomentumStrategy",
+      "instrument": "6279",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6279",
+      "class": "MeanReversionStrategy",
+      "instrument": "6279",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6279",
+      "class": "BreakoutStrategy",
+      "instrument": "6279",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_8210",
+      "class": "MomentumStrategy",
+      "instrument": "8210",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_8210",
+      "class": "MeanReversionStrategy",
+      "instrument": "8210",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_8210",
+      "class": "BreakoutStrategy",
+      "instrument": "8210",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_4743",
+      "class": "MomentumStrategy",
+      "instrument": "4743",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_4743",
+      "class": "MeanReversionStrategy",
+      "instrument": "4743",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_4743",
+      "class": "BreakoutStrategy",
+      "instrument": "4743",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6472",
+      "class": "MomentumStrategy",
+      "instrument": "6472",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6472",
+      "class": "MeanReversionStrategy",
+      "instrument": "6472",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6472",
+      "class": "BreakoutStrategy",
+      "instrument": "6472",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_1760",
+      "class": "MomentumStrategy",
+      "instrument": "1760",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_1760",
+      "class": "MeanReversionStrategy",
+      "instrument": "1760",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_1760",
+      "class": "BreakoutStrategy",
+      "instrument": "1760",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_4137",
+      "class": "MomentumStrategy",
+      "instrument": "4137",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_4137",
+      "class": "MeanReversionStrategy",
+      "instrument": "4137",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_4137",
+      "class": "BreakoutStrategy",
+      "instrument": "4137",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_6952",
+      "class": "MomentumStrategy",
+      "instrument": "6952",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_6952",
+      "class": "MeanReversionStrategy",
+      "instrument": "6952",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_6952",
+      "class": "BreakoutStrategy",
+      "instrument": "6952",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2912",
+      "class": "MomentumStrategy",
+      "instrument": "2912",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2912",
+      "class": "MeanReversionStrategy",
+      "instrument": "2912",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2912",
+      "class": "BreakoutStrategy",
+      "instrument": "2912",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2915",
+      "class": "MomentumStrategy",
+      "instrument": "2915",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2915",
+      "class": "MeanReversionStrategy",
+      "instrument": "2915",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2915",
+      "class": "BreakoutStrategy",
+      "instrument": "2915",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_9921",
+      "class": "MomentumStrategy",
+      "instrument": "9921",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_9921",
+      "class": "MeanReversionStrategy",
+      "instrument": "9921",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_9921",
+      "class": "BreakoutStrategy",
+      "instrument": "9921",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_8454",
+      "class": "MomentumStrategy",
+      "instrument": "8454",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_8454",
+      "class": "MeanReversionStrategy",
+      "instrument": "8454",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_8454",
+      "class": "BreakoutStrategy",
+      "instrument": "8454",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2542",
+      "class": "MomentumStrategy",
+      "instrument": "2542",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2542",
+      "class": "MeanReversionStrategy",
+      "instrument": "2542",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2542",
+      "class": "BreakoutStrategy",
+      "instrument": "2542",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_2548",
+      "class": "MomentumStrategy",
+      "instrument": "2548",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_2548",
+      "class": "MeanReversionStrategy",
+      "instrument": "2548",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_2548",
+      "class": "BreakoutStrategy",
+      "instrument": "2548",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "momentum_tw_3708",
+      "class": "MomentumStrategy",
+      "instrument": "3708",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "threshold": 0.5,
+        "atrPeriod": 14
+      }
+    },
+    {
+      "name": "mean_revert_tw_3708",
+      "class": "MeanReversionStrategy",
+      "instrument": "3708",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "zScore": 2
+      }
+    },
+    {
+      "name": "breakout_tw_3708",
+      "class": "BreakoutStrategy",
+      "instrument": "3708",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "multiplier": 1.5
+      }
+    },
+    {
+      "name": "ea_rsima_2330",
+      "class": "EaRsiMaStrategy",
+      "instrument": "2330",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 10,
+        "slowPeriod": 30,
+        "rsiPeriod": 14,
+        "overbought": 70,
+        "oversold": 30,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_rsima_2317",
+      "class": "EaRsiMaStrategy",
+      "instrument": "2317",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 10,
+        "slowPeriod": 30,
+        "rsiPeriod": 14,
+        "overbought": 70,
+        "oversold": 30,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_rsima_2454",
+      "class": "EaRsiMaStrategy",
+      "instrument": "2454",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 10,
+        "slowPeriod": 30,
+        "rsiPeriod": 14,
+        "overbought": 70,
+        "oversold": 30,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_macd_2330",
+      "class": "EaMacdStrategy",
+      "instrument": "2330",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 12,
+        "slowPeriod": 26,
+        "signalPeriod": 9,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_macd_2317",
+      "class": "EaMacdStrategy",
+      "instrument": "2317",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 12,
+        "slowPeriod": 26,
+        "signalPeriod": 9,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_macd_2454",
+      "class": "EaMacdStrategy",
+      "instrument": "2454",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 12,
+        "slowPeriod": 26,
+        "signalPeriod": 9,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_bb_2330",
+      "class": "EaBollingerStrategy",
+      "instrument": "2330",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "stdDev": 2,
+        "squeezeThreshold": 0.5,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_bb_2317",
+      "class": "EaBollingerStrategy",
+      "instrument": "2317",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "stdDev": 2,
+        "squeezeThreshold": 0.5,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_bb_2454",
+      "class": "EaBollingerStrategy",
+      "instrument": "2454",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "period": 20,
+        "stdDev": 2,
+        "squeezeThreshold": 0.5,
+        "cooldownMs": 30000,
+        "stopLoss": 2,
+        "takeProfit": 4
+      }
+    },
+    {
+      "name": "ea_scalp_2330",
+      "class": "EaScalpingStrategy",
+      "instrument": "2330",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "tickWindow": 50,
+        "momentumThreshold": 0.3,
+        "cooldownMs": 10000,
+        "stopLoss": 0.5,
+        "takeProfit": 0.8
+      }
+    },
+    {
+      "name": "ea_scalp_2317",
+      "class": "EaScalpingStrategy",
+      "instrument": "2317",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "tickWindow": 50,
+        "momentumThreshold": 0.3,
+        "cooldownMs": 10000,
+        "stopLoss": 0.5,
+        "takeProfit": 0.8
+      }
+    },
+    {
+      "name": "ea_scalp_2454",
+      "class": "EaScalpingStrategy",
+      "instrument": "2454",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "tickWindow": 50,
+        "momentumThreshold": 0.3,
+        "cooldownMs": 10000,
+        "stopLoss": 0.5,
+        "takeProfit": 0.8
+      }
+    },
+    {
+      "name": "ea_trend_2330",
+      "class": "EaTrendFollowStrategy",
+      "instrument": "2330",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 10,
+        "slowPeriod": 50,
+        "atrPeriod": 14,
+        "atrMultiplier": 2,
+        "cooldownMs": 60000,
+        "stopLoss": 3,
+        "takeProfit": 8
+      }
+    },
+    {
+      "name": "ea_trend_2317",
+      "class": "EaTrendFollowStrategy",
+      "instrument": "2317",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 10,
+        "slowPeriod": 50,
+        "atrPeriod": 14,
+        "atrMultiplier": 2,
+        "cooldownMs": 60000,
+        "stopLoss": 3,
+        "takeProfit": 8
+      }
+    },
+    {
+      "name": "ea_trend_2454",
+      "class": "EaTrendFollowStrategy",
+      "instrument": "2454",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "fastPeriod": 10,
+        "slowPeriod": 50,
+        "atrPeriod": 14,
+        "atrMultiplier": 2,
+        "cooldownMs": 60000,
+        "stopLoss": 3,
+        "takeProfit": 8
+      }
+    },
+    {
+      "name": "ea_grid_2330",
+      "class": "EaGridScalpStrategy",
+      "instrument": "2330",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "gridSpacing": 0.5,
+        "gridLevels": 5,
+        "scalpThreshold": 0.2,
+        "cooldownMs": 5000,
+        "stopLoss": 1.5,
+        "takeProfit": 1
+      }
+    },
+    {
+      "name": "ea_grid_2317",
+      "class": "EaGridScalpStrategy",
+      "instrument": "2317",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "gridSpacing": 0.5,
+        "gridLevels": 5,
+        "scalpThreshold": 0.2,
+        "cooldownMs": 5000,
+        "stopLoss": 1.5,
+        "takeProfit": 1
+      }
+    },
+    {
+      "name": "ea_grid_2454",
+      "class": "EaGridScalpStrategy",
+      "instrument": "2454",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "gridSpacing": 0.5,
+        "gridLevels": 5,
+        "scalpThreshold": 0.2,
+        "cooldownMs": 5000,
+        "stopLoss": 1.5,
+        "takeProfit": 1
+      }
+    }
+  ],
+  "profile": "tw"
+}

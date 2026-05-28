@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { build } from "tsdown";
 import {
   collectPluginSourceEntries,
   collectTopLevelPublicSurfaceEntries,
@@ -247,6 +246,7 @@ export async function buildPluginNpmRuntime(params) {
   }
 
   fs.rmSync(plan.outDir, { recursive: true, force: true });
+  const { build } = await import("tsdown");
   await build({
     clean: false,
     config: false,

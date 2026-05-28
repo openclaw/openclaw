@@ -4,17 +4,17 @@ import path from "node:path";
 import { runCapitalPaperAutomationLoop } from "./openclaw-capital-paper-automation-loop.mjs";
 
 const quoteScripts = [
-  "brokerdesk:quote:check",
-  "brokerdesk:quote:read",
-  "brokerdesk:quote:status",
-  "brokerdesk:quote:status:check",
-  "brokerdesk:quote:event",
-  "brokerdesk:quote:event:check",
-  "brokerdesk:quote:pump",
-  "brokerdesk:quote:pump:check",
-  "brokerdesk:quote:validate",
-  "brokerdesk:quote:architecture",
-  "brokerdesk:quote:architecture:check",
+  "capital-hft:quote:check",
+  "capital-hft:quote:read",
+  "capital-hft:quote:status",
+  "capital-hft:quote:status:check",
+  "capital-hft:quote:event",
+  "capital-hft:quote:event:check",
+  "capital-hft:quote:pump",
+  "capital-hft:quote:pump:check",
+  "capital-hft:quote:validate",
+  "capital-hft:quote:architecture",
+  "capital-hft:quote:architecture:check",
 ];
 
 const architectureFiles = [
@@ -35,7 +35,7 @@ function pad(value, size = 2) {
   return String(value).padStart(size, "0");
 }
 
-function brokerDeskTimestamp(date, ageSeconds = 0) {
+function capitalHftTimestamp(date, ageSeconds = 0) {
   const shifted = new Date(date.getTime() - ageSeconds * 1000);
   return `${shifted.getFullYear()}-${pad(shifted.getMonth() + 1)}-${pad(shifted.getDate())} ${pad(
     shifted.getHours(),
@@ -105,7 +105,7 @@ function baseStatus() {
   };
 }
 
-async function writeBrokerDeskState(stateDir, receivedAt) {
+async function writeCapitalHftServiceState(stateDir, receivedAt) {
   await writeJson(path.join(stateDir, "openclaw_quote_bridge.json"), {
     status: "connected",
     overallReady: true,
@@ -209,9 +209,9 @@ async function writeMinimalRepo(repoRoot) {
 
 async function runFixture(ageSeconds) {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-capital-paper-loop-"));
-  const stateDir = path.join(repoRoot, "BrokerDesk", "state");
+  const stateDir = path.join(repoRoot, "CapitalHftService", "state");
   await writeMinimalRepo(repoRoot);
-  await writeBrokerDeskState(stateDir, brokerDeskTimestamp(new Date(), ageSeconds));
+  await writeCapitalHftServiceState(stateDir, capitalHftTimestamp(new Date(), ageSeconds));
   return runCapitalPaperAutomationLoop({
     repoRoot,
     stateDir,
@@ -248,6 +248,40 @@ if (freshAssistantState.status !== fresh.report.status) {
   );
 }
 await fs.access(`${fresh.report.files.assistantStatePath}.sha256`);
+const freshCanonicalStrategyPath = path.join(
+  path.dirname(fresh.report.files.reportPath),
+  "capital-strategy-engine-latest.json",
+);
+try {
+  await fs.access(freshCanonicalStrategyPath);
+  throw new Error("paper loop must not write the standalone strategy-engine latest report");
+} catch (err) {
+  if (err?.code !== "ENOENT") {
+    throw err;
+  }
+}
+await fs.access(
+  path.join(
+    path.dirname(fresh.report.files.reportPath),
+    "capital-paper-loop-strategy-engine-latest.json",
+  ),
+);
+const freshActivePaperIntents = await fs.readFile(
+  path.join(path.dirname(fresh.report.files.reportPath), "capital-paper-intents.jsonl"),
+  "utf8",
+);
+if (!freshActivePaperIntents.trim()) {
+  throw new Error("paper loop strategy engine must not clear active paper intents");
+}
+if (fresh.report.learning.paperEvaluation?.staleSource !== false) {
+  throw new Error("paper loop must refresh fill simulation/evaluator before auto-review");
+}
+if (
+  fresh.report.learning.autoReview?.status &&
+  fresh.report.learning.paperEvaluation?.blockers?.includes("stale_fill_simulation_source_empty")
+) {
+  throw new Error("paper loop auto-review must not be based on stale fill simulation evidence");
+}
 
 const stale = await runFixture(10);
 if (stale.report.status !== "blocked_readiness") {

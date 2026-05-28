@@ -4,17 +4,17 @@ import path from "node:path";
 import { runCapitalPaperHftBurst } from "./openclaw-capital-paper-hft-burst.mjs";
 
 const quoteScripts = [
-  "brokerdesk:quote:check",
-  "brokerdesk:quote:read",
-  "brokerdesk:quote:status",
-  "brokerdesk:quote:status:check",
-  "brokerdesk:quote:event",
-  "brokerdesk:quote:event:check",
-  "brokerdesk:quote:pump",
-  "brokerdesk:quote:pump:check",
-  "brokerdesk:quote:validate",
-  "brokerdesk:quote:architecture",
-  "brokerdesk:quote:architecture:check",
+  "capital-hft:quote:check",
+  "capital-hft:quote:read",
+  "capital-hft:quote:status",
+  "capital-hft:quote:status:check",
+  "capital-hft:quote:event",
+  "capital-hft:quote:event:check",
+  "capital-hft:quote:pump",
+  "capital-hft:quote:pump:check",
+  "capital-hft:quote:validate",
+  "capital-hft:quote:architecture",
+  "capital-hft:quote:architecture:check",
 ];
 
 const architectureFiles = [
@@ -35,7 +35,7 @@ function pad(value, size = 2) {
   return String(value).padStart(size, "0");
 }
 
-function brokerDeskTimestamp(date, ageSeconds = 0) {
+function capitalHftTimestamp(date, ageSeconds = 0) {
   const shifted = new Date(date.getTime() - ageSeconds * 1000);
   return `${shifted.getFullYear()}-${pad(shifted.getMonth() + 1)}-${pad(shifted.getDate())} ${pad(
     shifted.getHours(),
@@ -101,7 +101,7 @@ function baseStatus() {
   };
 }
 
-async function writeBrokerDeskState(stateDir, receivedAt, bid = "4113880", ask = "4113881") {
+async function writeCapitalHftServiceState(stateDir, receivedAt, bid = "4113880", ask = "4113881") {
   await writeJson(path.join(stateDir, "openclaw_quote_bridge.json"), {
     status: "connected",
     overallReady: true,
@@ -200,9 +200,9 @@ async function writeMinimalRepo(repoRoot) {
 
 async function runFixture(ageSeconds) {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-capital-hft-burst-"));
-  const stateDir = path.join(repoRoot, "BrokerDesk", "state");
+  const stateDir = path.join(repoRoot, "CapitalHftService", "state");
   await writeMinimalRepo(repoRoot);
-  await writeBrokerDeskState(stateDir, brokerDeskTimestamp(new Date(), ageSeconds));
+  await writeCapitalHftServiceState(stateDir, capitalHftTimestamp(new Date(), ageSeconds));
   return runCapitalPaperHftBurst({
     repoRoot,
     stateDir,

@@ -1,0 +1,117 @@
+{
+  "_comment": "IB TWS 連線設定範本，複製為 ib-config.json 後修改",
+  "host": "127.0.0.1",
+  "port": 7496,
+  "_port_note": "TWS=7496 / IB Gateway=4001 / 紙上交易 TWS=7497 / 紙上交易 Gateway=4002",
+  "clientId": 1,
+  "paper": true,
+  "reconnectMs": 5000,
+
+  "contracts": [
+    {
+      "symbol": "ES",
+      "expiry": "20250620",
+      "exchange": "CME",
+      "subscribeQuote": true,
+      "subscribeBar": true
+    },
+    {
+      "symbol": "NQ",
+      "expiry": "20250620",
+      "exchange": "CME",
+      "subscribeQuote": true,
+      "subscribeBar": true
+    },
+    {
+      "symbol": "GC",
+      "expiry": "20250626",
+      "exchange": "COMEX",
+      "subscribeQuote": true,
+      "subscribeBar": false
+    },
+    {
+      "symbol": "CL",
+      "expiry": "20250520",
+      "exchange": "NYMEX",
+      "subscribeQuote": true,
+      "subscribeBar": false
+    },
+    {
+      "symbol": "MES",
+      "expiry": "20250620",
+      "exchange": "CME",
+      "subscribeQuote": true,
+      "subscribeBar": true
+    }
+  ],
+
+  "strategies": [
+    {
+      "class": "OpeningRangeBreakoutStrategy",
+      "name": "ES_ORB_5min",
+      "instrument": "ES",
+      "broker": "ib",
+      "auto": false,
+      "maxQty": 1,
+      "params": {
+        "orbBars": 6,
+        "atrMultiple": 0.2,
+        "rrRatio": 2,
+        "sessionOpen": "21:30"
+      }
+    },
+    {
+      "class": "OpeningRangeBreakoutStrategy",
+      "name": "NQ_ORB_5min",
+      "instrument": "NQ",
+      "broker": "ib",
+      "auto": false,
+      "maxQty": 1,
+      "params": {
+        "orbBars": 6,
+        "atrMultiple": 0.2,
+        "rrRatio": 2.5,
+        "sessionOpen": "21:30"
+      }
+    },
+    {
+      "class": "OvernightGapFadeStrategy",
+      "name": "ES_GapFade",
+      "instrument": "ES",
+      "broker": "ib",
+      "auto": false,
+      "maxQty": 1,
+      "params": {
+        "minGapPct": 0.003,
+        "maxGapPct": 0.015,
+        "holdBars": 12,
+        "gapSession": "08:00"
+      }
+    },
+    {
+      "class": "CommoditySeasonalityStrategy",
+      "name": "CL_Seasonality",
+      "instrument": "CL",
+      "broker": "ib",
+      "auto": false,
+      "maxQty": 1,
+      "params": {
+        "maPeriod": 20,
+        "atrStop": 2
+      }
+    },
+    {
+      "class": "VixMeanReversionStrategy",
+      "name": "ES_VixReversion",
+      "instrument": "ES",
+      "broker": "ib",
+      "auto": false,
+      "maxQty": 1,
+      "params": {
+        "vixHigh": 25,
+        "vixLow": 12,
+        "holdBars": 5
+      }
+    }
+  ]
+}

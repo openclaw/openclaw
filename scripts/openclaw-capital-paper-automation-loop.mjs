@@ -2,23 +2,28 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runBarAccumulator } from "./openclaw-capital-bar-accumulator.mjs";
+import {
+  runCapitalPaperAssistantState,
+  writeCapitalPaperAssistantState,
+} from "./openclaw-capital-paper-assistant-state.mjs";
+import { runCapitalPaperAutoReview } from "./openclaw-capital-paper-auto-review.mjs";
+import { runCapitalPaperFillSimulation } from "./openclaw-capital-paper-fill-simulator.mjs";
 import {
   readCapitalPaperHftReadinessReport,
   writeCapitalPaperHftReadinessReport,
 } from "./openclaw-capital-paper-hft-readiness.mjs";
+import { runCapitalPaperStrategyEvaluator } from "./openclaw-capital-paper-strategy-evaluator.mjs";
 import {
   buildCapitalPaperTradingCycle,
   writeCapitalPaperTradingCycle,
 } from "./openclaw-capital-paper-trading-simulator.mjs";
 import {
-  runCapitalPaperAssistantState,
-  writeCapitalPaperAssistantState,
-} from "./openclaw-capital-paper-assistant-state.mjs";
-import {
   buildCapitalQuoteArchitectureReport,
   writeCapitalQuoteArchitectureReport,
 } from "./openclaw-capital-quote-architecture.mjs";
 import { runCapitalQuotePump } from "./openclaw-capital-quote-pump.mjs";
+import { runStrategyEngine } from "./openclaw-capital-strategy-engine.mjs";
 
 function defaultArchitectureReportPath(repoRoot) {
   return path.join(repoRoot, ".openclaw", "quote", "capital-quote-architecture-report.json");
@@ -50,6 +55,13 @@ function defaultAssistantStatePath(repoRoot) {
 
 function defaultAliasAssistantStatePath(repoRoot) {
   return path.join(repoRoot, ".openclaw", "ui", "auto-trading-assistant-state.json");
+}
+
+export function strategyEngineSymbolForPaperConfig(strategy = {}) {
+  const raw = strategy.strategySymbol || strategy.targetStockNo || strategy.symbol || "tx-front";
+  const normalized = String(raw).trim().toUpperCase();
+  const legacySessionAlias = normalized.match(/^(?<base>TX\d{2})(?:AM|PM)$/u);
+  return legacySessionAlias?.groups?.base ?? raw;
 }
 
 function sha256Text(text) {
@@ -113,7 +125,7 @@ function loopStatus({ pumpReport, architectureReport, readinessReport, tradingCy
 
 function loopNextSafeTask(report) {
   if (report.status === "paper_intent_created") {
-    return "持續由 heartbeat 重跑 brokerdesk:paper-loop；累積 paper learning，不啟用真實下單。";
+    return "持續由 heartbeat 重跑 capital-hft:paper-loop；累積 paper learning，不啟用真實下單。";
   }
   if (report.status === "blocked_1115") {
     return "等待 guard cooldown 到期；禁止登入、禁止推進 StartIndex，只更新 OpenClaw 狀態。";
@@ -122,7 +134,7 @@ function loopNextSafeTask(report) {
     return "等待台指日盤 / 夜盤交易時段開啟；不要用休市 tick 產生 paper intent。";
   }
   if (report.pump.status === "stale") {
-    return "等待 BrokerDesk 寫入新的 SKQuoteLib quote callback，再重跑 paper loop。";
+    return "等待 CapitalHftService 寫入新的 SKQuoteLib quote callback，再重跑 paper loop。";
   }
   if (report.readiness.ready !== true) {
     return "修正 readiness failed gates；仍禁止 broker write path。";
@@ -145,15 +157,25 @@ export async function runCapitalPaperAutomationLoop(options = {}) {
   );
   const streamPath = path.join(path.dirname(reportPath), "capital-paper-automation-loops.jsonl");
   const strategy = await readJson(strategyPath, "Capital paper microstructure strategy");
+  const useAnyFreshAllowedSymbol = strategy.useAnyFreshAllowedSymbol === true;
+  const strategyEngineSymbol = strategyEngineSymbolForPaperConfig(strategy);
 
   const pump = await runCapitalQuotePump({
     repoRoot,
     stateDir: options.stateDir || undefined,
     riskConfigPath,
-    targetStockNo: strategy.targetStockNo || strategy.symbol || "",
-    targetStockNos: Array.isArray(strategy.targetStockNos) ? strategy.targetStockNos : [],
-    quoteAliases: Array.isArray(strategy.quoteAliases) ? strategy.quoteAliases : [],
-    marketCode: strategy.marketCode || options.marketCode || "",
+    targetStockNo: useAnyFreshAllowedSymbol ? "" : strategy.targetStockNo || strategy.symbol || "",
+    targetStockNos: useAnyFreshAllowedSymbol
+      ? []
+      : Array.isArray(strategy.targetStockNos)
+        ? strategy.targetStockNos
+        : [],
+    quoteAliases: useAnyFreshAllowedSymbol
+      ? []
+      : Array.isArray(strategy.quoteAliases)
+        ? strategy.quoteAliases
+        : [],
+    marketCode: useAnyFreshAllowedSymbol ? "" : strategy.marketCode || options.marketCode || "",
     maxQuoteAgeSeconds: options.maxQuoteAgeSeconds,
   });
 
@@ -244,6 +266,11 @@ export async function runCapitalPaperAutomationLoop(options = {}) {
       paperEligible: trading.learningRegistry.paperEligible,
       liveEligible: trading.learningRegistry.liveEligible,
       counters: trading.learningRegistry.counters,
+      autoReview: {
+        status: "",
+        promoted: false,
+        liveStillBlocked: true,
+      },
     },
     files: {
       reportPath,
@@ -262,6 +289,103 @@ export async function runCapitalPaperAutomationLoop(options = {}) {
     },
   };
   report.nextSafeTask = loopNextSafeTask(report);
+
+  // K 棒累積器：每日保存分鐘棒到歷史資料庫
+  const barAccResult = await runBarAccumulator({
+    repoRoot,
+    symbol: strategyEngineSymbol,
+  }).catch(() => ({ status: "error", newMinuteBars: 0, totalMinuteBars: 0, totalDays: 0 }));
+  report.barAccumulator = {
+    status: barAccResult.status ?? "error",
+    newBars: barAccResult.newMinuteBars ?? 0,
+    totalBars: barAccResult.totalMinuteBars ?? 0,
+    totalDays: barAccResult.totalDays ?? 0,
+    newDates: barAccResult.newDates ?? [],
+  };
+
+  // 策略引擎：從 tick 流產生方向性信號（ORB/EMA/VWAP），寫入獨立 intents 檔
+  const strategyEngineResult = await runStrategyEngine({
+    repoRoot,
+    symbol: strategyEngineSymbol,
+    intentsPath: path.join(outputDir, "capital-paper-loop-strategy-intents.jsonl"),
+    reportPath: path.join(outputDir, "capital-paper-loop-strategy-engine-latest.json"),
+    appendIntents: false, // 每次重跑從 tick 流重新生成
+  }).catch((err) => ({
+    status: "error",
+    error: err instanceof Error ? err.message : String(err),
+    stats: { totalTicks: 0, barsBuilt: 0, signalsGenerated: 0, intentsWritten: 0 },
+    safetyLock: {
+      allowLiveTrading: false,
+      writeBrokerOrders: false,
+      promoteLiveAutomatically: false,
+    },
+  }));
+  report.strategy = {
+    status: strategyEngineResult.status ?? "error",
+    ticks: strategyEngineResult.stats?.totalTicks ?? 0,
+    bars: strategyEngineResult.stats?.barsBuilt ?? 0,
+    signals: strategyEngineResult.stats?.signalsGenerated ?? 0,
+    byType: strategyEngineResult.stats?.byStrategy ?? { orb: 0, ema: 0, vwap: 0 },
+    dayRange: strategyEngineResult.market?.dayRange ?? 0,
+    lastPrice: strategyEngineResult.market?.lastPrice ?? 0,
+    liveStillBlocked: strategyEngineResult.safetyLock?.allowLiveTrading === false,
+    error: strategyEngineResult.error ?? "",
+  };
+
+  let paperFillSimulation = null;
+  let paperEvaluation = null;
+  if (trading.cycle.status === "paper_intent_created") {
+    paperFillSimulation = await runCapitalPaperFillSimulation({
+      repoRoot,
+      intentsPath: path.join(outputDir, "capital-paper-intents.jsonl"),
+      generatedCurrentIntentsPath: path.join(outputDir, "capital-paper-intents.jsonl"),
+      outputPath: path.join(outputDir, "capital-paper-fill-simulation.json"),
+    });
+    paperEvaluation = await runCapitalPaperStrategyEvaluator({
+      repoRoot,
+      simulationPath: path.join(outputDir, "capital-paper-fill-simulation.json"),
+      currentIntentsPath: path.join(outputDir, "capital-paper-intents.jsonl"),
+      outputPath: path.join(outputDir, "capital-paper-strategy-evaluation.json"),
+    });
+  }
+
+  report.learning.paperFillSimulation = paperFillSimulation
+    ? {
+        status: paperFillSimulation.status ?? "",
+        sourceRecordCount: paperFillSimulation.source?.sourceRecordCount ?? 0,
+        staleSource: false,
+      }
+    : {
+        status: "",
+        sourceRecordCount: 0,
+        staleSource: false,
+      };
+  report.learning.paperEvaluation = paperEvaluation
+    ? {
+        status: paperEvaluation.status ?? "",
+        recommendation: paperEvaluation.recommendation ?? "",
+        staleSource: paperEvaluation.source?.staleSimulationSource === true,
+        blockers: Array.isArray(paperEvaluation.blockers)
+          ? paperEvaluation.blockers.map((blocker) => blocker.id).filter(Boolean)
+          : [],
+      }
+    : {
+        status: "",
+        recommendation: "",
+        staleSource: false,
+        blockers: [],
+      };
+
+  // 自動審查：僅在有 paper intent 時嘗試晉升 candidate → approved_paper
+  const autoReview = await runCapitalPaperAutoReview({
+    repoRoot,
+    writeState: trading.cycle.status === "paper_intent_created",
+  }).catch(() => ({ status: "error", promoted: false, safetyChecks: { liveStillBlocked: true } }));
+  report.learning.autoReview = {
+    status: autoReview.status ?? "",
+    promoted: autoReview.promoted,
+    liveStillBlocked: autoReview.safetyChecks?.liveStillBlocked ?? true,
+  };
 
   await writeJsonWithSha(reportPath, report);
   await appendJsonLine(streamPath, report);

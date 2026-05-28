@@ -60,6 +60,11 @@ function stringOr(value, fallback = "") {
   return typeof value === "string" ? value : fallback;
 }
 
+function numberOr(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
 async function readJsonLines(filePath) {
   try {
     const text = await fs.readFile(filePath, "utf8");
@@ -71,7 +76,10 @@ async function readJsonLines(filePath) {
         try {
           return JSON.parse(line);
         } catch (error) {
-          throw new Error(`Invalid JSONL line ${index + 1} in ${filePath}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+          throw new Error(
+            `Invalid JSONL line ${index + 1} in ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error },
+          );
         }
       });
   } catch (error) {
@@ -86,7 +94,9 @@ function buildHistorySummary(records, loopState, streamPath) {
   const recent = records.slice(-10);
   const recentStatuses = recent.map((record) => String(record?.status ?? ""));
   const recentReadinessStatuses = recent.map((record) => String(record?.readiness?.status ?? ""));
-  const recentPaperIntentFlags = recent.map((record) => record?.trading?.paperIntentCreated === true);
+  const recentPaperIntentFlags = recent.map(
+    (record) => record?.trading?.paperIntentCreated === true,
+  );
   const tailStatus = String(loopState?.status ?? recent.at(-1)?.status ?? "");
   let currentStatusStreak = 0;
   for (let index = records.length - 1; index >= 0; index -= 1) {
@@ -95,8 +105,14 @@ function buildHistorySummary(records, loopState, streamPath) {
     }
     currentStatusStreak += 1;
   }
-  const paperIntentCount = records.reduce((count, record) => count + (record?.trading?.paperIntentCreated === true ? 1 : 0), 0);
-  const blockedReadinessCount = records.reduce((count, record) => count + (String(record?.status ?? "") === "blocked_readiness" ? 1 : 0), 0);
+  const paperIntentCount = records.reduce(
+    (count, record) => count + (record?.trading?.paperIntentCreated === true ? 1 : 0),
+    0,
+  );
+  const blockedReadinessCount = records.reduce(
+    (count, record) => count + (String(record?.status ?? "") === "blocked_readiness" ? 1 : 0),
+    0,
+  );
   return {
     streamPath,
     totalRecords: records.length,
@@ -130,7 +146,9 @@ function deriveBlockerFocus(watchState, assistantState, loopState) {
 }
 
 function renderLearningSummary(report) {
-  const recentStatuses = Array.isArray(report?.history?.recentStatuses) ? report.history.recentStatuses : [];
+  const recentStatuses = Array.isArray(report?.history?.recentStatuses)
+    ? report.history.recentStatuses
+    : [];
   const recentReadinessStatuses = Array.isArray(report?.history?.recentReadinessStatuses)
     ? report.history.recentReadinessStatuses
     : [];
@@ -145,6 +163,12 @@ function renderLearningSummary(report) {
     `- bidAskUsable: \`${report?.evolution?.bidAskUsable === true}\``,
     `- paperIntents: \`${report?.evolution?.paperIntents ?? 0}\``,
     `- paperEligible: \`${report?.evolution?.paperEligible === true}\``,
+    `- fastOrderPaperPattern: \`${report?.assistant?.fastOrderPaperPattern ?? ""}\``,
+    `- fastOrderPaperSuccessCount: \`${report?.assistant?.fastOrderPaperSuccessCount ?? 0}\``,
+    `- fastOrderPaperFailureCount: \`${report?.assistant?.fastOrderPaperFailureCount ?? 0}\``,
+    `- latestFastOrderStatus: \`${report?.assistant?.latestFastOrderStatus ?? ""}\``,
+    `- fastOrderBrokerCommandEnabled: \`${report?.fastOrderPaperPattern?.brokerCommandEnabled === true}\``,
+    `- fastOrderSentBrokerOrder: \`${report?.fastOrderPaperPattern?.sentBrokerOrder === true}\``,
     `- promoted: \`${report?.evolution?.promoted === true}\``,
     `- executionStatus: \`${report?.execution?.status ?? ""}\``,
     `- entrySide: \`${report?.execution?.entry?.side ?? ""}\``,
@@ -162,6 +186,10 @@ function renderLearningSummary(report) {
     "- daemonPid: " + (report?.daemon?.pid ?? 0),
     "- daemonWatchScript: " + (report?.daemon?.watchScript ?? ""),
     "- daemonNextSafeTask: " + (report?.daemon?.nextSafeTask ?? ""),
+    "- collaborationActors: " +
+      (Array.isArray(report?.collaboration?.actors) ? report.collaboration.actors.join(",") : ""),
+    "- collaborationLearningMode: " + (report?.collaboration?.learningMode ?? ""),
+    "- collaborationSafetyBoundary: " + (report?.collaboration?.safetyBoundary ?? ""),
     `- nextSafeTask: ${report?.recommendation?.nextSafeTask ?? ""}`,
     "",
     "## 最近狀態",
@@ -204,6 +232,33 @@ export function buildAutoTradingLearningSnapshot({
     : [];
   const quote = assistantState?.quote ?? {};
   const summary = assistantState?.summary ?? {};
+  const rawFastOrderPaperPattern =
+    assistantState?.fastOrderPaperPattern &&
+    typeof assistantState.fastOrderPaperPattern === "object"
+      ? assistantState.fastOrderPaperPattern
+      : {};
+  const fastOrderPaperPattern = {
+    ...rawFastOrderPaperPattern,
+    pattern: stringOr(
+      rawFastOrderPaperPattern.pattern,
+      stringOr(summary.fastOrderPaperPattern, "no-paper-execution"),
+    ),
+    successCount: numberOr(
+      rawFastOrderPaperPattern.successCount,
+      numberOr(summary.fastOrderPaperSuccessCount, 0),
+    ),
+    failureCount: numberOr(
+      rawFastOrderPaperPattern.failureCount,
+      numberOr(summary.fastOrderPaperFailureCount, 0),
+    ),
+    latestStatus: stringOr(
+      rawFastOrderPaperPattern.latestStatus,
+      stringOr(summary.latestFastOrderStatus, "none"),
+    ),
+    brokerCommandEnabled: false,
+    sentBrokerOrder: false,
+    submissionCommand: "",
+  };
   const tickDiagnostic = watchState?.tickDiagnostic ?? {};
   const nextSafeTask =
     assistantState?.recommendation?.nextSafeTask ||
@@ -227,6 +282,10 @@ export function buildAutoTradingLearningSnapshot({
     assistant: {
       name: assistantState?.assistant?.name ?? "類高頻自動交易助手",
       status: assistantState?.status ?? "",
+      fastOrderPaperPattern: fastOrderPaperPattern.pattern,
+      fastOrderPaperSuccessCount: fastOrderPaperPattern.successCount,
+      fastOrderPaperFailureCount: fastOrderPaperPattern.failureCount,
+      latestFastOrderStatus: fastOrderPaperPattern.latestStatus,
       nextSafeTask,
     },
     watch: {
@@ -260,6 +319,14 @@ export function buildAutoTradingLearningSnapshot({
       watchScript: stringOr(daemonState?.watchScript, ""),
       nextSafeTask: stringOr(daemonState?.nextSafeTask, ""),
     },
+    collaboration: {
+      actors: ["openclaw", "claude", "codex"],
+      learningMode: "heartbeat_snapshot_feedback",
+      memoryFeedbackTarget: "openclaw.auto_trading.learning_snapshot",
+      safetyBoundary: "paper_only_until_live_gates_pass",
+      appliedLearning:
+        "Record automation outcomes, blockers, and next safe task for future OpenClaw/Claude/Codex coordination.",
+    },
     evolution: {
       blockerFocus: deriveBlockerFocus(watchState, assistantState, loopState),
       blockers,
@@ -270,8 +337,13 @@ export function buildAutoTradingLearningSnapshot({
       consecutiveReadyCycles: summary.consecutiveReadyCycles ?? 0,
       paperIntents: summary.paperIntents ?? 0,
       paperEligible: summary.paperEligible === true,
+      fastOrderPaperPattern: fastOrderPaperPattern.pattern,
+      fastOrderPaperSuccessCount: fastOrderPaperPattern.successCount,
+      fastOrderPaperFailureCount: fastOrderPaperPattern.failureCount,
+      latestFastOrderStatus: fastOrderPaperPattern.latestStatus,
       promoted: assistantState?.promotion?.promoted === true,
     },
+    fastOrderPaperPattern,
     execution: assistantState?.execution ?? {},
     history,
     files: {
@@ -289,9 +361,7 @@ export function buildAutoTradingLearningSnapshot({
 
 export async function runAutoTradingLearningSnapshot(options = {}) {
   const repoRoot = path.resolve(options.repoRoot ?? process.cwd());
-  const snapshotPath = path.resolve(
-    options.snapshotPath || defaultLearningSnapshotPath(repoRoot),
-  );
+  const snapshotPath = path.resolve(options.snapshotPath || defaultLearningSnapshotPath(repoRoot));
   const summaryPath = defaultLearningSummaryPath(repoRoot);
   const watchStatePath = path.join(repoRoot, ".openclaw", "ui", "auto-trading-watch-state.json");
   const assistantStatePath = path.join(
@@ -306,12 +376,14 @@ export async function runAutoTradingLearningSnapshot(options = {}) {
     "trading",
     "capital-paper-automation-loop-latest.json",
   );
-  const watchState = options.watchState ?? (await readJson(watchStatePath, "auto trading watch state"));
+  const watchState =
+    options.watchState ?? (await readJson(watchStatePath, "auto trading watch state"));
   const assistantState =
     options.assistantState ?? (await readJson(assistantStatePath, "canonical assistant state"));
   const loopState = options.loopState ?? (await readJson(loopReportPath, "loop state"));
   const daemonStatePath = defaultDaemonStatePath(repoRoot);
-  const daemonState = options.daemonState ?? (await readJson(daemonStatePath, "auto trading watch daemon state"));
+  const daemonState =
+    options.daemonState ?? (await readJson(daemonStatePath, "auto trading watch daemon state"));
   const loopStreamPath = defaultLoopStreamPath(repoRoot);
   const loopRecords = options.loopRecords ?? (await readJsonLines(loopStreamPath));
   const report = buildAutoTradingLearningSnapshot({
@@ -407,4 +479,3 @@ if (invokedPath === fileURLToPath(import.meta.url)) {
     process.exitCode = 1;
   });
 }
-

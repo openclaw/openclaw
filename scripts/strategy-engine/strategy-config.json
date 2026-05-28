@@ -1,0 +1,347 @@
+{
+  "dryRun": true,
+  "pollMs": 1000,
+  "strategies": [
+    {
+      "name": "TX_MaCross_5_20",
+      "class": "MaCrossStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "fast": 5, "slow": 20 }
+    },
+    {
+      "name": "TX_Supertrend",
+      "class": "SupertrendStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "period": 10, "multiplier": 3 }
+    },
+    {
+      "name": "TX_PSAR",
+      "class": "PsarStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "step": 0.02, "max": 0.2 }
+    },
+    {
+      "name": "TX_ChandelierExit",
+      "class": "ChandelierExitStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "period": 22, "multiplier": 3 }
+    },
+    {
+      "name": "TX_Ichimoku",
+      "class": "IchimokuStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "conversion": 9, "base": 26, "span": 52, "displacement": 26 }
+    },
+    {
+      "name": "TX_RSI_14",
+      "class": "RsiStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "period": 14, "oversold": 30, "overbought": 70 }
+    },
+    {
+      "name": "TX_KD",
+      "class": "StochasticStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "period": 9, "signalK": 3, "signalD": 3, "oversold": 20, "overbought": 80 }
+    },
+    {
+      "name": "TX_CCI_20",
+      "class": "CciStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "period": 20 }
+    },
+    {
+      "name": "TX_BB_Revert",
+      "class": "BollingerBandStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "period": 20, "stdDev": 2, "mode": "revert" }
+    },
+    {
+      "name": "TX_Breakout_20",
+      "class": "BreakoutStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "lookback": 20 }
+    },
+    {
+      "name": "BTC_MACD",
+      "class": "MacdStrategy",
+      "instrument": "BTC-USDT-SWAP",
+      "broker": "okx",
+      "auto": false,
+      "maxQty": 0.01,
+      "params": { "fast": 12, "slow": 26, "signal": 9 }
+    },
+    {
+      "name": "BTC_RSI",
+      "class": "RsiStrategy",
+      "instrument": "BTC-USDT-SWAP",
+      "broker": "okx",
+      "auto": false,
+      "maxQty": 0.01,
+      "params": { "period": 14, "oversold": 30, "overbought": 70 }
+    },
+    {
+      "name": "BTC_AO",
+      "class": "AwesomeOscillatorStrategy",
+      "instrument": "BTC-USDT-SWAP",
+      "broker": "okx",
+      "auto": false,
+      "maxQty": 0.01,
+      "params": { "fast": 5, "slow": 34 }
+    },
+    {
+      "name": "ETH_Supertrend",
+      "class": "SupertrendStrategy",
+      "instrument": "ETH-USDT-SWAP",
+      "broker": "okx",
+      "auto": false,
+      "maxQty": 0.1,
+      "params": { "period": 10, "multiplier": 3 }
+    },
+    {
+      "name": "ES_RSI",
+      "class": "RsiStrategy",
+      "instrument": "CME,ES0000",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "period": 14, "oversold": 30, "overbought": 70 }
+    },
+    {
+      "name": "ES_MaCross",
+      "class": "MaCrossStrategy",
+      "instrument": "CME,ES0000",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "fast": 5, "slow": 20 }
+    },
+    {
+      "name": "TX_Turtle_S2",
+      "class": "TurtleStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "system": 2, "entry": 55, "exit": 20 }
+    },
+    {
+      "name": "TX_Turtle_S1",
+      "class": "TurtleStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "system": 1, "entry": 20, "exit": 10 }
+    },
+    {
+      "name": "TX_ADX_DI",
+      "class": "AdxDiStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "period": 14, "threshold": 25 }
+    },
+    {
+      "name": "TX_WilliamsR",
+      "class": "WilliamsRStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "period": 14, "oversold": -80, "overbought": -20 }
+    },
+    {
+      "name": "TX_VWAP",
+      "class": "VwapStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "deviation": 0 }
+    },
+    {
+      "name": "TX_ORB",
+      "class": "OpeningRangeBreakoutStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "sessionStartHour": 8, "sessionEndHour": 13, "rangeMins": 30 }
+    },
+    {
+      "name": "TX_PivotReversal",
+      "class": "PivotReversalStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "leftBars": 4, "rightBars": 2 }
+    },
+    {
+      "name": "TX_ThreeBar",
+      "class": "ThreeBarReversalStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "minBodyRatio": 0.6 }
+    },
+    {
+      "name": "TX_Elder3Screen",
+      "class": "ElderTripleScreenStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": {
+        "macdFast": 26,
+        "macdSlow": 52,
+        "macdSignal": 18,
+        "stochPeriod": 5,
+        "stochD": 3,
+        "oversold": 30,
+        "overbought": 70
+      }
+    },
+    {
+      "name": "BTC_DCA",
+      "class": "DcaDipperStrategy",
+      "instrument": "BTC-USDT-SWAP",
+      "broker": "okx",
+      "auto": false,
+      "maxQty": 0.01,
+      "params": { "rsiPeriod": 14, "oversold": 35, "exitRsi": 60, "dipPct": 0.02, "maxEntries": 3 }
+    },
+    {
+      "name": "BTC_WilliamsR",
+      "class": "WilliamsRStrategy",
+      "instrument": "BTC-USDT-SWAP",
+      "broker": "okx",
+      "auto": false,
+      "maxQty": 0.01,
+      "params": { "period": 14, "oversold": -80, "overbought": -20 }
+    },
+    {
+      "name": "ES_Turtle_S1",
+      "class": "TurtleStrategy",
+      "instrument": "CME,ES0000",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "system": 1, "entry": 20, "exit": 10 }
+    },
+    {
+      "name": "ES_ORB",
+      "class": "OpeningRangeBreakoutStrategy",
+      "instrument": "CME,ES0000",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": { "sessionStartHour": 21, "sessionEndHour": 6, "rangeMins": 30 }
+    },
+    {
+      "name": "TX_VolumeProfile",
+      "class": "VolumeProfileStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": {
+        "lookbackBars": 100,
+        "tickSize": 1,
+        "pocBreakMult": 1.5,
+        "rebalanceN": 20,
+        "volAvgPeriod": 20,
+        "deltaLookback": 5
+      }
+    },
+    {
+      "name": "TX_SMC",
+      "class": "SmcStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": {
+        "bosLookback": 20,
+        "obLookback": 30,
+        "fvgLookback": 10,
+        "swLookback": 15,
+        "retestTol": 0.003
+      }
+    },
+    {
+      "name": "TX_Harmonic",
+      "class": "HarmonicPatternStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "auto": false,
+      "maxQty": 1,
+      "params": {
+        "swingBars": 5,
+        "lookback": 100,
+        "targetRr": 1.618,
+        "tolerance": 0.06
+      }
+    },
+    {
+      "name": "BTC_VolumeProfile",
+      "class": "VolumeProfileStrategy",
+      "instrument": "BTC-USDT-SWAP",
+      "broker": "okx",
+      "auto": false,
+      "maxQty": 0.01,
+      "params": {
+        "lookbackBars": 100,
+        "tickSize": 10,
+        "pocBreakMult": 1.5,
+        "rebalanceN": 20
+      }
+    },
+    {
+      "name": "BTC_SMC",
+      "class": "SmcStrategy",
+      "instrument": "BTC-USDT-SWAP",
+      "broker": "okx",
+      "auto": false,
+      "maxQty": 0.01,
+      "params": {
+        "bosLookback": 20,
+        "obLookback": 30,
+        "retestTol": 0.005
+      }
+    }
+  ]
+}

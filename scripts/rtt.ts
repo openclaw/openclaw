@@ -61,6 +61,14 @@ function resolveHome(input: string) {
   return input;
 }
 
+function resolveCliPath(input: string) {
+  const expanded = resolveHome(input);
+  if (expanded.startsWith("/") && !expanded.startsWith("//")) {
+    return path.posix.normalize(expanded);
+  }
+  return path.resolve(expanded);
+}
+
 function parseArgs(argv: string[]) {
   let spec: string | undefined;
   let packageTgz: string | undefined;
@@ -87,7 +95,7 @@ function parseArgs(argv: string[]) {
       if (!value.trim()) {
         throw new Error("--package-tgz requires a path.");
       }
-      packageTgz = path.resolve(resolveHome(value));
+      packageTgz = resolveCliPath(value);
       continue;
     }
     if (arg === "--runs") {
@@ -141,8 +149,8 @@ function parseArgs(argv: string[]) {
       runs,
       samples,
       sampleTimeoutMs,
-      harnessRoot: path.resolve(resolveHome(harnessRoot)),
-      output: path.resolve(resolveHome(output)),
+      harnessRoot: resolveCliPath(harnessRoot),
+      output: resolveCliPath(output),
       scenarios: DEFAULT_SCENARIOS,
       timeoutMs,
     },

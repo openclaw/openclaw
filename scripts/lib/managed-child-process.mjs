@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { extname } from "node:path";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const FORCE_KILL_DELAY_MS = 5_000;
@@ -37,6 +38,26 @@ function terminateManagedChild(child, signal = "SIGTERM") {
     return;
   }
 
+  if (process.platform === "win32") {
+    try {
+      const taskkillArgs = [
+        ...(signal === "SIGKILL" ? ["/F"] : []),
+        "/T",
+        "/PID",
+        String(child.pid),
+      ];
+      const result = spawnSync("taskkill", taskkillArgs, {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      if (!result.error && result.status === 0) {
+        return;
+      }
+    } catch {
+      // Fall back to direct process termination below.
+    }
+  }
+
   child.kill(signal);
 }
 
@@ -58,7 +79,7 @@ export async function runManagedCommand({
   cwd,
   env,
   stdio = "inherit",
-  shell = process.platform === "win32",
+  shell = shouldUseManagedCommandShell(bin),
   onReady,
 }) {
   const child = spawn(bin, args, {
@@ -100,6 +121,17 @@ export async function runManagedCommand({
       process.off(signal, forwardSignal);
     }
   }
+}
+
+export function shouldUseManagedCommandShell(bin, platform = process.platform) {
+  if (platform !== "win32") {
+    return false;
+  }
+  const extension = extname(bin).toLowerCase();
+  if (extension === ".exe" || extension === ".com") {
+    return false;
+  }
+  return true;
 }
 
 function signalNumberFor(signal) {

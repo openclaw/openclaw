@@ -20,15 +20,20 @@ const dashboardPath = path.join(quoteDir, "capital-automation-health-dashboard.j
 const quoteStatusPath = path.join(quoteDir, "capital-quote-status.json");
 const latestQuoteEventPath = path.join(
   tempRoot,
-  "BrokerDesk",
+  "CapitalHftService",
   "state",
   "capital_latest_quote_event.json",
 );
-const serviceStatePath = path.join(repoRoot, ".openclaw", "service", "auto-trading-watch-service.json");
+const serviceStatePath = path.join(
+  repoRoot,
+  ".openclaw",
+  "service",
+  "auto-trading-watch-service.json",
+);
 await fs.mkdir(path.dirname(latestQuoteEventPath), { recursive: true });
 
 const dashboard = {
-  schema: "brokerdesk.capital.automation-health-dashboard.v1",
+  schema: "capital-hft.capital.automation-health-dashboard.v1",
   generatedAt: new Date().toISOString(),
   readOnly: true,
   liveTradingEnabled: false,
@@ -42,7 +47,7 @@ const dashboard = {
     currentBlockingCode: "",
     lastLogin1115Historical: false,
   },
-  brokerDeskQueue: {
+  capitalHftQueue: {
     completed: true,
     nextStartIndex: 14622,
     lastRunStatus: "subscription-window-accepted",
@@ -84,7 +89,7 @@ const quoteStatus = {
   schema: "openclaw.capital.quote-status.v1",
   generatedAt: new Date().toISOString(),
   provider: "capital",
-  source: "BrokerDesk health dashboard",
+  source: "CapitalHftService health dashboard",
   readOnly: true,
   loginAttempted: false,
   liveTradingEnabled: false,
@@ -150,7 +155,7 @@ const quoteStatus = {
       qty: "0",
     },
   },
-  nextSafeTask: "等待 BrokerDesk 寫入更新的 quote event；不要登入、不要推進 StartIndex。",
+  nextSafeTask: "等待 CapitalHftService 寫入更新的 quote event；不要登入、不要推進 StartIndex。",
   files: {
     dashboard: "",
     sourceDashboardPath: dashboardPath,
@@ -161,7 +166,7 @@ const quoteStatus = {
 };
 
 const latestQuoteEvent = {
-  schema: "brokerdesk.capital.quote-event.v1",
+  schema: "capital-hft.capital.quote-event.v1",
   provider: "capital",
   receivedAt: "2026-05-06 23:23:19.384",
   eventSource: "SKQuoteLib.OnNotifyQuoteLONG",
@@ -172,23 +177,20 @@ const latestQuoteEvent = {
   bid: "0",
   ask: "0",
   qty: "0",
-  sourceLogFile: "D:\\群益及元大API\\BrokerDesk\\logs\\background-quotes\\20260506.log",
+  sourceLogFile: "D:\\群益及元大API\\CapitalHftService\\logs\\background-quotes\\20260506.log",
   sourceLogLine: 83012,
 };
 
 await writeJson(dashboardPath, dashboard);
 await writeJson(quoteStatusPath, quoteStatus);
 await writeJson(latestQuoteEventPath, latestQuoteEvent);
-await writeJson(
-  path.join(tempRoot, "BrokerDesk", "state", "openclaw_quote_bridge.json"),
-  {
-    status: "connected",
-    overallReady: true,
-    providers: { capital: { brokerActionRequired: false } },
-    currentBlockingCode: "",
-    quoteUniverseCount: 18404,
-  },
-);
+await writeJson(path.join(tempRoot, "CapitalHftService", "state", "openclaw_quote_bridge.json"), {
+  status: "connected",
+  overallReady: true,
+  providers: { capital: { brokerActionRequired: false } },
+  currentBlockingCode: "",
+  quoteUniverseCount: 18404,
+});
 
 const report = await runAutoTradingTickDiagnostic({
   repoRoot,
@@ -212,7 +214,7 @@ if (!Object.is(report.report.bridge.ready, true) || report.report.bridge.status 
 if (!report.report.tick.monitorRunning || report.report.tick.realtimeRunning) {
   throw new Error(`unexpected tick flags: ${JSON.stringify(report.report.tick)}`);
 }
-if (!report.report.latestCallback.sourceLogFile.includes("BrokerDesk")) {
+if (!report.report.latestCallback.sourceLogFile.includes("CapitalHftService")) {
   throw new Error("latest callback source log file missing");
 }
 if (report.report.freshQuoteAvailable) {
@@ -225,7 +227,12 @@ const direct = buildTickDiagnostic({
   dashboard,
   quoteStatus,
   latestQuoteEvent,
-  serviceState: { status: "running", pid: 1234, watchScript: "D:/OpenClaw/scripts/openclaw-auto-trading-watch.mjs", nextSafeTask: "keep running" },
+  serviceState: {
+    status: "running",
+    pid: 1234,
+    watchScript: "D:/OpenClaw/scripts/openclaw-auto-trading-watch.mjs",
+    nextSafeTask: "keep running",
+  },
   dashboardPath,
   quoteStatusPath,
   latestQuoteEventPath,

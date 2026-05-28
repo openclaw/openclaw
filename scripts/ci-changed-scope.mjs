@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean }} ChangedScope */
 /** @typedef {{ runFastOnly: boolean; runPluginContracts: boolean; runCiRouting: boolean }} NodeFastScope */
@@ -288,7 +290,7 @@ export function writeGitHubOutput(
 
 function isDirectRun() {
   const direct = process.argv[1];
-  return Boolean(direct && import.meta.url.endsWith(direct));
+  return Boolean(direct && resolve(direct) === fileURLToPath(import.meta.url));
 }
 
 /** @param {string[]} argv */

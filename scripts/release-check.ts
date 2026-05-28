@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, posix, resolve, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import {
@@ -248,8 +248,18 @@ function resolveGlobalRoot(prefixDir: string, cwd: string): string {
 
 function resolveInstalledBinaryPath(prefixDir: string): string {
   return process.platform === "win32"
-    ? join(prefixDir, "openclaw.cmd")
-    : join(prefixDir, "bin", "openclaw");
+    ? win32.join(prefixDir, "openclaw.cmd")
+    : posix.join(prefixDir.replaceAll("\\", "/"), "bin", "openclaw");
+}
+
+function joinPathLike(basePath: string, ...segments: string[]): string {
+  if (basePath.startsWith("/") && !basePath.startsWith("//")) {
+    return posix.join(basePath, ...segments);
+  }
+  if (/^[A-Za-z]:[\\/]/.test(basePath) || basePath.includes("\\")) {
+    return win32.join(basePath, ...segments);
+  }
+  return join(basePath, ...segments);
 }
 
 export function createPackedBundledPluginPostinstallEnv(
@@ -277,7 +287,7 @@ export function createPackedCliSmokeEnv(
   ] as const;
   const windowsRoot = env.SystemRoot ?? env.WINDIR ?? "C:\\Windows";
   const nodeBinDir = dirname(process.execPath);
-  const trustedCmdPath = join(windowsRoot, "System32", "cmd.exe");
+  const trustedCmdPath = win32.join(windowsRoot, "System32", "cmd.exe");
   const safePath =
     process.platform === "win32"
       ? `${nodeBinDir};${windowsRoot}\\System32;${windowsRoot}`
@@ -295,11 +305,11 @@ export function createPackedCliSmokeEnv(
     HOME: homeDir,
     USERPROFILE: homeDir,
     ComSpec: trustedCmdPath,
-    APPDATA: homeDir ? join(homeDir, "AppData", "Roaming") : undefined,
-    LOCALAPPDATA: homeDir ? join(homeDir, "AppData", "Local") : undefined,
+    APPDATA: homeDir ? joinPathLike(homeDir, "AppData", "Roaming") : undefined,
+    LOCALAPPDATA: homeDir ? joinPathLike(homeDir, "AppData", "Local") : undefined,
     AWS_EC2_METADATA_DISABLED: "true",
-    AWS_SHARED_CREDENTIALS_FILE: homeDir ? join(homeDir, ".aws", "credentials") : undefined,
-    AWS_CONFIG_FILE: homeDir ? join(homeDir, ".aws", "config") : undefined,
+    AWS_SHARED_CREDENTIALS_FILE: homeDir ? joinPathLike(homeDir, ".aws", "credentials") : undefined,
+    AWS_CONFIG_FILE: homeDir ? joinPathLike(homeDir, ".aws", "config") : undefined,
     OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
     OPENCLAW_NO_ONBOARD: "1",
     OPENCLAW_SERVICE_REPAIR_POLICY: "external",
@@ -434,7 +444,7 @@ function runPackedCliSmoke(params: {
     OPENAI_API_KEY: "sk-openclaw-release-check",
   });
   const windowsRoot = env.SystemRoot ?? env.WINDIR ?? "C:\\Windows";
-  const trustedCmdPath = join(windowsRoot, "System32", "cmd.exe");
+  const trustedCmdPath = win32.join(windowsRoot, "System32", "cmd.exe");
 
   for (const args of PACKED_CLI_SMOKE_COMMANDS) {
     if (process.platform === "win32") {

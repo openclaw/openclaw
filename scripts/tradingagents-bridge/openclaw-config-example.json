@@ -1,0 +1,49 @@
+{
+  "$schema": "openclaw.strategy-engine.strategies.v1",
+  "$comment": "將此策略加入 scripts/strategy-engine/config/strategies.json 的 strategies 陣列",
+  "strategies_to_add": [
+    {
+      "name": "tradingagents_nvda",
+      "class": "TradingAgentsStrategy",
+      "instrument": "NVDA",
+      "broker": "okx",
+      "enabled": true,
+      "params": {
+        "ticker": "NVDA",
+        "serviceHost": "127.0.0.1",
+        "servicePort": 8390,
+        "cooldownMs": 300000,
+        "qty": 1
+      }
+    },
+    {
+      "name": "tradingagents_btc",
+      "class": "TradingAgentsStrategy",
+      "instrument": "BTC-USDT",
+      "broker": "okx",
+      "enabled": true,
+      "params": {
+        "ticker": "BTC-USD",
+        "serviceHost": "127.0.0.1",
+        "servicePort": 8390,
+        "cooldownMs": 600000,
+        "qty": 0.01
+      }
+    },
+    {
+      "name": "tradingagents_tx",
+      "class": "TradingAgentsStrategy",
+      "instrument": "TX00",
+      "broker": "capital",
+      "enabled": true,
+      "params": {
+        "ticker": "TX00",
+        "fallbackTicker": "^TWII",
+        "serviceHost": "127.0.0.1",
+        "servicePort": 8390,
+        "cooldownMs": 300000,
+        "qty": 1
+      }
+    }
+  ]
+}

@@ -24,6 +24,10 @@ function isMainModule() {
   return process.argv[1] ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) : false;
 }
 
+function relativeRepoPath(rootDir, filePath) {
+  return (path.relative(rootDir, filePath) || filePath).replaceAll(path.sep, "/");
+}
+
 function isBuiltinSpecifier(specifier) {
   return specifier.startsWith("node:") || module.isBuiltin(specifier);
 }
@@ -76,7 +80,7 @@ function walkStaticImportGraph(params) {
       source = fsImpl.readFileSync(filePath, "utf8");
     } catch {
       errors.push(
-        `CLI bootstrap import guard could not read ${path.relative(rootDir, filePath) || filePath}. Run pnpm build first.`,
+        `CLI bootstrap import guard could not read ${relativeRepoPath(rootDir, filePath)}. Run pnpm build first.`,
       );
       continue;
     }
@@ -91,7 +95,7 @@ function walkStaticImportGraph(params) {
       const resolved = resolveRelativeImport(filePath, specifier, fsImpl);
       if (!resolved) {
         errors.push(
-          `CLI bootstrap import guard could not resolve "${specifier}" from ${path.relative(
+          `CLI bootstrap import guard could not resolve "${specifier}" from ${relativeRepoPath(
             rootDir,
             filePath,
           )}.`,
@@ -118,7 +122,7 @@ export function collectCliBootstrapExternalImportErrors(params = {}) {
     roots: entrypoints,
     onExternalSpecifier: ({ filePath, specifier, errors: graphErrors }) => {
       graphErrors.push(
-        `CLI bootstrap static graph imports external package "${specifier}" from ${path.relative(
+        `CLI bootstrap static graph imports external package "${specifier}" from ${relativeRepoPath(
           rootDir,
           filePath,
         )}.`,
@@ -177,7 +181,7 @@ export function collectGatewayRunChunkBudgetErrors(params = {}) {
 
   const errors = [];
   for (const { filePath, source } of chunks) {
-    const relativePath = path.relative(rootDir, filePath) || filePath;
+    const relativePath = relativeRepoPath(rootDir, filePath);
     let size = Buffer.byteLength(source, "utf8");
     try {
       size = fsImpl.statSync(filePath).size;
@@ -201,7 +205,7 @@ export function collectGatewayRunChunkBudgetErrors(params = {}) {
           specifier,
           errors: graphErrors,
         }) => {
-          const resolvedRelativePath = path.relative(rootDir, resolved) || resolved;
+          const resolvedRelativePath = relativeRepoPath(rootDir, resolved);
           const coldPath = [specifier, resolvedRelativePath].find((candidate) =>
             GATEWAY_RUN_FORBIDDEN_STATIC_IMPORTS.some((forbidden) => candidate.includes(forbidden)),
           );
@@ -209,9 +213,10 @@ export function collectGatewayRunChunkBudgetErrors(params = {}) {
             return;
           }
           graphErrors.push(
-            `Gateway run chunk ${relativePath} static graph imports cold path "${coldPath}" from ${
-              path.relative(rootDir, importerPath) || importerPath
-            }.`,
+            `Gateway run chunk ${relativePath} static graph imports cold path "${coldPath}" from ${relativeRepoPath(
+              rootDir,
+              importerPath,
+            )}.`,
           );
         },
       }),

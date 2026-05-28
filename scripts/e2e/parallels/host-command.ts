@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type SpawnOptions } from "node:child_process";
+import { statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,13 +24,94 @@ export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
+function isFile(filePath: string): boolean {
+  try {
+    return statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function resolveWindowsExecutable(command: string, env: NodeJS.ProcessEnv): string {
+  if (
+    process.platform !== "win32" ||
+    command.includes("/") ||
+    command.includes("\\") ||
+    path.isAbsolute(command)
+  ) {
+    return command;
+  }
+  if (path.extname(command)) {
+    return command;
+  }
+
+  const pathValue = env.PATH ?? env.Path ?? process.env.PATH ?? process.env.Path ?? "";
+  const pathExtRaw =
+    env.PATHEXT ??
+    env.Pathext ??
+    process.env.PATHEXT ??
+    process.env.Pathext ??
+    ".EXE;.CMD;.BAT;.COM";
+  const extensions = pathExtRaw
+    .split(";")
+    .map((ext) => ext.trim())
+    .filter(Boolean)
+    .map((ext) => (ext.startsWith(".") ? ext : `.${ext}`));
+
+  for (const dir of pathValue.split(path.delimiter).filter(Boolean)) {
+    for (const ext of extensions) {
+      const candidates = [ext, ext.toLowerCase(), ext.toUpperCase()];
+      for (const candidateExt of candidates) {
+        const candidate = path.join(dir, `${command}${candidateExt}`);
+        if (isFile(candidate)) {
+          return candidate;
+        }
+      }
+    }
+  }
+  return command;
+}
+
+function isWindowsBatchCommand(command: string): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  const ext = path.extname(command).toLowerCase();
+  return ext === ".cmd" || ext === ".bat";
+}
+
+function quoteWindowsCmdArg(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+function resolveSpawnCommand(command: string, args: string[], env: NodeJS.ProcessEnv) {
+  const resolvedCommand = resolveWindowsExecutable(command, env);
+  if (!isWindowsBatchCommand(resolvedCommand)) {
+    return { command: resolvedCommand, args };
+  }
+
+  return {
+    command: process.env.ComSpec ?? "cmd.exe",
+    args: [
+      "/d",
+      "/s",
+      "/c",
+      `call ${[resolvedCommand, ...args].map(quoteWindowsCmdArg).join(" ")}`,
+    ],
+    windowsVerbatimArguments: true,
+  };
+}
+
 export function run(command: string, args: string[], options: RunOptions = {}): CommandResult {
-  const result = spawnSync(command, args, {
+  const env = { ...process.env, ...options.env };
+  const spawnCommand = resolveSpawnCommand(command, args, env);
+  const result = spawnSync(spawnCommand.command, spawnCommand.args, {
     cwd: options.cwd ?? repoRoot,
     encoding: "utf8",
-    env: { ...process.env, ...options.env },
+    env,
     input: options.input,
     maxBuffer: 50 * 1024 * 1024,
+    windowsVerbatimArguments: spawnCommand.windowsVerbatimArguments,
     stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
     timeout: options.timeoutMs,
   });

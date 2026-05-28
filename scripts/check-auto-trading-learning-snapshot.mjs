@@ -39,7 +39,12 @@ async function main() {
     "service",
     "auto-trading-watch-service.json",
   );
-  const loopPath = path.join(repoRoot, ".openclaw", "trading", "capital-paper-automation-loop-latest.json");
+  const loopPath = path.join(
+    repoRoot,
+    ".openclaw",
+    "trading",
+    "capital-paper-automation-loop-latest.json",
+  );
   const snapshot = await readJson(snapshotPath, "auto trading learning snapshot");
   const watchState = await readJson(watchStatePath, "auto trading watch state");
   const assistantState = await readJson(assistantStatePath, "canonical assistant state");
@@ -62,17 +67,31 @@ async function main() {
   if (snapshot.evolution?.blockerFocus !== "freshness_recovery") {
     throw new Error(`unexpected blocker focus: ${snapshot.evolution?.blockerFocus}`);
   }
-  if (!Array.isArray(snapshot.history?.recentStatuses) || snapshot.history.recentStatuses.length === 0) {
+  if (
+    !Array.isArray(snapshot.history?.recentStatuses) ||
+    snapshot.history.recentStatuses.length === 0
+  ) {
     throw new Error("missing history window");
   }
   if (snapshot.history.recentStatuses.at(-1) !== loopState.status) {
-    throw new Error(`history tail mismatch: ${snapshot.history.recentStatuses.at(-1)} != ${loopState.status}`);
+    throw new Error(
+      `history tail mismatch: ${snapshot.history.recentStatuses.at(-1)} != ${loopState.status}`,
+    );
   }
   if (snapshot.history.currentStatusStreak < 1) {
     throw new Error(`unexpected status streak: ${snapshot.history.currentStatusStreak}`);
   }
   if (snapshot.recommendation?.nextSafeTask !== assistantState.recommendation?.nextSafeTask) {
     throw new Error("next safe task should mirror assistant recommendation");
+  }
+  if (snapshot.assistant?.fastOrderPaperPattern !== assistantState.summary?.fastOrderPaperPattern) {
+    throw new Error("snapshot fast-order paper pattern should mirror assistant summary");
+  }
+  if (snapshot.fastOrderPaperPattern?.sentBrokerOrder !== false) {
+    throw new Error("snapshot fast-order paper pattern must not send broker orders");
+  }
+  if (snapshot.fastOrderPaperPattern?.brokerCommandEnabled !== false) {
+    throw new Error("snapshot fast-order paper pattern must keep broker command disabled");
   }
   if (typeof snapshot.tickDiagnostic?.status !== "string") {
     throw new Error("missing snapshot tick diagnostic status");
@@ -81,10 +100,25 @@ async function main() {
     throw new Error("snapshot tick diagnostic should mirror watch tick diagnostic");
   }
   if (snapshot.daemon?.status !== serviceState.status) {
-    throw new Error(`snapshot daemon status mismatch: ${snapshot.daemon?.status} != ${serviceState.status}`);
+    throw new Error(
+      `snapshot daemon status mismatch: ${snapshot.daemon?.status} != ${serviceState.status}`,
+    );
   }
   if (snapshot.daemon?.pid !== serviceState.pid) {
     throw new Error(`snapshot daemon pid mismatch: ${snapshot.daemon?.pid} != ${serviceState.pid}`);
+  }
+  if (!Array.isArray(snapshot.collaboration?.actors)) {
+    throw new Error("missing collaboration actors");
+  }
+  for (const actor of ["openclaw", "claude", "codex"]) {
+    if (!snapshot.collaboration.actors.includes(actor)) {
+      throw new Error(`missing collaboration actor: ${actor}`);
+    }
+  }
+  if (snapshot.collaboration?.safetyBoundary !== "paper_only_until_live_gates_pass") {
+    throw new Error(
+      `unexpected collaboration safety boundary: ${snapshot.collaboration?.safetyBoundary}`,
+    );
   }
   if (snapshot.files?.serviceStatePath !== serviceStatePath) {
     throw new Error(`unexpected service state path: ${snapshot.files?.serviceStatePath}`);
@@ -106,6 +140,12 @@ async function main() {
   }
   if (!summary.includes("tickDiagnosticStatus")) {
     throw new Error("summary tick diagnostic line missing");
+  }
+  if (!summary.includes("collaborationSafetyBoundary")) {
+    throw new Error("summary collaboration safety boundary line missing");
+  }
+  if (!summary.includes("fastOrderPaperPattern")) {
+    throw new Error("summary fast-order paper pattern line missing");
   }
   process.stdout.write("AUTO_TRADING_LEARNING_SNAPSHOT_CHECK=OK\n");
 }

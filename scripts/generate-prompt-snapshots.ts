@@ -16,6 +16,7 @@ const oxfmtPath = path.resolve(
   ".bin",
   process.platform === "win32" ? "oxfmt.cmd" : "oxfmt",
 );
+const oxfmtCliPath = path.resolve(repoRoot, "node_modules", "oxfmt", "bin", "oxfmt");
 const execFileAsync = promisify(execFile);
 
 type PromptSnapshotFile = ReturnType<typeof createHappyPathPromptSnapshotFiles>[number];
@@ -45,7 +46,12 @@ async function formatSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
   if (filePaths.length === 0) {
     return;
   }
-  await execFileAsync(oxfmtPath, ["--write", "--threads=1", ...filePaths], {
+  const command = process.platform === "win32" ? process.execPath : oxfmtPath;
+  const args =
+    process.platform === "win32"
+      ? [oxfmtCliPath, "--write", "--threads=1", ...filePaths]
+      : ["--write", "--threads=1", ...filePaths];
+  await execFileAsync(command, args, {
     cwd: repoRoot,
   });
 }

@@ -18,7 +18,7 @@ import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
+import { delimiter, dirname, join, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertNoLegacyPluginDependencyStagingDebris } from "../src/infra/package-dist-inventory.ts";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
@@ -3339,14 +3339,79 @@ function gitCommand() {
   return process.platform === "win32" ? "git.exe" : "git";
 }
 
+function isWindowsBatchCommand(command) {
+  return process.platform === "win32" && /\.(cmd|bat)$/iu.test(command);
+}
+
+function quoteWindowsCmdArg(value) {
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+function resolveWindowsCommandPath(command, env) {
+  if (
+    process.platform !== "win32" ||
+    command.includes("/") ||
+    command.includes("\\") ||
+    pathWin32.isAbsolute(command)
+  ) {
+    return command;
+  }
+
+  const pathValue = env.PATH ?? env.Path ?? process.env.PATH ?? process.env.Path ?? "";
+  const extensions = pathWin32.extname(command)
+    ? [""]
+    : (
+        env.PATHEXT ??
+        env.Pathext ??
+        process.env.PATHEXT ??
+        process.env.Pathext ??
+        ".EXE;.CMD;.BAT;.COM"
+      )
+        .split(";")
+        .map((ext) => ext.trim())
+        .filter(Boolean)
+        .map((ext) => (ext.startsWith(".") ? ext : `.${ext}`));
+
+  for (const dir of pathValue.split(delimiter).filter(Boolean)) {
+    for (const ext of extensions) {
+      for (const candidateExt of [ext, ext.toLowerCase(), ext.toUpperCase()]) {
+        const candidate = join(dir, `${command}${candidateExt}`);
+        if (existsSync(candidate)) {
+          return candidate;
+        }
+      }
+    }
+  }
+
+  return command;
+}
+
+function resolveCommandSpawn(command, args, env) {
+  const resolvedCommand = resolveWindowsCommandPath(command, env);
+  if (!isWindowsBatchCommand(resolvedCommand)) {
+    return { command: resolvedCommand, args, windowsVerbatimArguments: false };
+  }
+  return {
+    command: process.env.ComSpec ?? "cmd.exe",
+    args: [
+      "/d",
+      "/s",
+      "/c",
+      `call ${[resolvedCommand, ...args].map(quoteWindowsCmdArg).join(" ")}`,
+    ],
+    windowsVerbatimArguments: true,
+  };
+}
+
 async function runCommand(command, args, options) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const useWindowsShell = process.platform === "win32" && /\.(cmd|bat)$/iu.test(command);
-    const child = spawn(command, args, {
+    const env = options.env ?? process.env;
+    const spawnCommand = resolveCommandSpawn(command, args, env);
+    const child = spawn(spawnCommand.command, spawnCommand.args, {
       cwd: options.cwd,
       env: options.env,
-      shell: useWindowsShell,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsVerbatimArguments: spawnCommand.windowsVerbatimArguments,
       windowsHide: true,
     });
     const logStream = createWriteStream(options.logPath, { flags: "a" });
