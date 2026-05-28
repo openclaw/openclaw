@@ -162,6 +162,8 @@ describe("minimax music generation provider", () => {
 
   it("downloads tracks when url output is returned in data.audio", async () => {
     mockMusicGenerationResponse({
+      task_id: "task-url",
+      lyrics: "our city wakes",
       data: {
         audio: "https://example.com/url-audio.mp3",
       },
@@ -184,6 +186,9 @@ describe("minimax music generation provider", () => {
       fetch,
     );
     expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(0);
+    expect(result.lyrics).toEqual(["our city wakes"]);
+    expect(result.metadata?.taskId).toBe("task-url");
+    expect(result.metadata?.audioUrl).toBe("https://example.com/url-audio.mp3");
   });
 
   it("honors explicit long caller timeouts for request and download fallbacks", async () => {
