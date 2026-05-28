@@ -43,6 +43,7 @@ import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-con
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { collectConfiguredModelRefs } from "./model-refs.js";
+import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
@@ -778,6 +779,118 @@ function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, value);
   return isPathWithinRoot(workspaceRoot, resolved);
+}
+
+type AgentRuntimePolicyEntry = {
+  path: string;
+  policy?: AgentRuntimePolicyConfig;
+};
+
+function collectAgentRuntimePolicyEntries(config: OpenClawConfig): AgentRuntimePolicyEntry[] {
+  const entries: AgentRuntimePolicyEntry[] = [];
+  for (const [providerId, providerConfig] of Object.entries(config.models?.providers ?? {})) {
+    entries.push({
+      path: `models.providers.${providerId}.agentRuntime.id`,
+      policy: providerConfig?.agentRuntime,
+    });
+    for (const [index, modelConfig] of (providerConfig?.models ?? []).entries()) {
+      entries.push({
+        path: `models.providers.${providerId}.models.${index}.agentRuntime.id`,
+        policy: modelConfig?.agentRuntime,
+      });
+    }
+  }
+  const pushModelMapEntries = (models: unknown, pathPrefix: string): void => {
+    if (!isRecord(models)) {
+      return;
+    }
+    for (const [modelRef, entry] of Object.entries(models)) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      entries.push({
+        path: `${pathPrefix}.${modelRef}.agentRuntime.id`,
+        policy: isRecord(entry.agentRuntime)
+          ? (entry.agentRuntime as AgentRuntimePolicyConfig)
+          : undefined,
+      });
+    }
+  };
+  pushModelMapEntries(config.agents?.defaults?.models, "agents.defaults.models");
+  if (Array.isArray(config.agents?.list)) {
+    for (const [index, agent] of config.agents.list.entries()) {
+      pushModelMapEntries(agent?.models, `agents.list.${index}.models`);
+    }
+  }
+  return entries;
+}
+
+function collectAgentRuntimeValidationIssues(params: {
+  config: OpenClawConfig;
+  registry: PluginManifestRegistry;
+}): ConfigValidationIssue[] {
+  const runtimeOwners = new Map<string, Set<string>>();
+  const providerOwners = new Map<string, Set<string>>();
+  const appendOwner = (map: Map<string, Set<string>>, key: string, pluginId: string): void => {
+    const normalized = normalizeLowercaseStringOrEmpty(key);
+    if (!normalized) {
+      return;
+    }
+    const owners = map.get(normalized) ?? new Set<string>();
+    owners.add(pluginId);
+    map.set(normalized, owners);
+  };
+
+  for (const plugin of params.registry.plugins) {
+    for (const runtime of [...(plugin.activation?.onAgentHarnesses ?? []), ...plugin.cliBackends]) {
+      appendOwner(runtimeOwners, runtime, plugin.id);
+    }
+    for (const providerId of plugin.providers) {
+      appendOwner(providerOwners, providerId, plugin.id);
+    }
+  }
+
+  const knownRuntimes = new Set(["auto", "default", "pi"]);
+  for (const runtime of runtimeOwners.keys()) {
+    knownRuntimes.add(runtime);
+  }
+
+  const issues: ConfigValidationIssue[] = [];
+  for (const entry of collectAgentRuntimePolicyEntries(params.config)) {
+    const rawRuntime = entry.policy?.id;
+    if (typeof rawRuntime !== "string") {
+      continue;
+    }
+    const runtime = normalizeLowercaseStringOrEmpty(rawRuntime);
+    if (!runtime || knownRuntimes.has(runtime)) {
+      continue;
+    }
+    const providerPluginIds = providerOwners.get(runtime);
+    const suggestedRuntimes =
+      providerPluginIds && providerPluginIds.size > 0
+        ? [...runtimeOwners.entries()]
+            .filter(([, pluginIds]) =>
+              [...providerPluginIds].some((pluginId) => pluginIds.has(pluginId)),
+            )
+            .map(([candidate]) => candidate)
+            .toSorted((left, right) => left.localeCompare(right))
+        : [];
+    const suggestion =
+      suggestedRuntimes.length === 1
+        ? ` Use "${suggestedRuntimes[0]}" for this plugin CLI runtime, or remove agentRuntime to use the provider through the default PI runtime.`
+        : suggestedRuntimes.length > 1
+          ? ` Use one of ${suggestedRuntimes.map((value) => `"${value}"`).join(", ")}, or remove agentRuntime to use the provider through the default PI runtime.`
+          : " Use a registered agent runtime id such as pi, or remove agentRuntime for automatic selection.";
+    const providerHint = providerPluginIds
+      ? `; "${runtime}" is a provider id, not an agent runtime`
+      : "";
+    issues.push({
+      path: entry.path,
+      message: `unknown agent runtime "${rawRuntime}"${providerHint}.${suggestion}`,
+    });
+  }
+
+  return issues;
 }
 
 function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[] {
@@ -1597,6 +1710,15 @@ function validateConfigObjectWithPluginsBase(
 
   validateWebSearchProvider();
   validateConfiguredModelRefs();
+
+  if (registryInfo) {
+    issues.push(
+      ...collectAgentRuntimeValidationIssues({
+        config,
+        registry: registryInfo.registry,
+      }),
+    );
+  }
 
   if (!hasExplicitPluginsConfig) {
     if (issues.length > 0) {
