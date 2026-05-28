@@ -165,3 +165,9 @@ Actions:
 - Twilio stream disconnect auto-end uses a short grace window so quick reconnects do not end the call.
 - Realtime provider selection is generic. Configure `streaming.provider` / `realtime.provider` and put provider-owned options under `providers.<id>`.
 - Runtime fallback still accepts the old voice-call keys for now, but migration is a doctor step and the compat shim is scheduled to go away in a future release.
+
+## Recent changes
+
+- **Replay protection for Twilio webhooks (fixes #87497):** The webhook handler now performs early replay detection after signature verification and returns cached TwiML or a safe empty TwiML response for replayed requests. This prevents replayed Twilio callbacks from issuing fresh realtime stream tokens or triggering side effects.
+
+- Local test verification: `extensions/voice-call/src/webhook.test.ts` — 36 passed (36), Duration: 7.73s. See `REPLAY_FIX_87497.md` for implementation details and how to reproduce the local test run.

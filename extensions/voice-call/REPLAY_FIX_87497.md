@@ -25,11 +25,17 @@ This change prevents replayed Twilio webhooks from triggering side effects (nota
 
 ## How to run tests locally
 
-Run the voice-call tests (you can target the file changed):
+Run the voice-call tests for the changed file. From the repository root:
 
 ```powershell
-npx vitest run extensions/voice-call/src/webhook.test.ts
+cd "c:\Users\Hp\open claw project\openclaw"
+.\node_modules\.bin\vitest run --config test/vitest/vitest.extension-voice-call.config.ts extensions/voice-call/src/webhook.test.ts
 ```
+
+Verified locally with:
+
+- `36 passed (36)` tests in `extensions/voice-call/src/webhook.test.ts`
+- Total duration: `7.73s`
 
 ## Branch & PR
 
