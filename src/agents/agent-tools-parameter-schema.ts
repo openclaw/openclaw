@@ -24,9 +24,9 @@ function resolveToolParameterSchemaCacheKey(
 ): string {
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(options?.modelId);
-  const unsupportedKeywords = [
-    ...resolveUnsupportedToolSchemaKeywords(options?.modelCompat),
-  ].sort();
+  const unsupportedKeywords = Array.from(
+    resolveUnsupportedToolSchemaKeywords(options?.modelCompat),
+  ).toSorted();
   const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
   return JSON.stringify([
     normalizedProvider,
