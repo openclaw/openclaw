@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { resolveStorePath, updateSessionStoreEntry } from "../../config/sessions.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
@@ -220,6 +221,40 @@ function isNoRealConversationCompactionNoop(params: {
     params.compacted === false &&
     params.reason === NO_REAL_CONVERSATION_MESSAGES_REASON
   );
+}
+
+async function resetNoRealConversationTokenSnapshot(params: {
+  config?: RunEmbeddedAgentParams["config"];
+  sessionKey?: string;
+  agentId?: string;
+}): Promise<void> {
+  if (!params.sessionKey) {
+    return;
+  }
+  const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  try {
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: params.sessionKey,
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      update: async () => ({
+        totalTokens: 0,
+        totalTokensFresh: true,
+        inputTokens: undefined,
+        outputTokens: undefined,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        contextBudgetStatus: undefined,
+        updatedAt: Date.now(),
+      }),
+    });
+  } catch (err) {
+    log.warn(
+      `[context-overflow-precheck] failed to reset stale context snapshot for ` +
+        `${params.sessionKey}: ${String(err)}`,
+    );
+  }
 }
 
 function resolveAttemptDispatchApiKey(params: {
@@ -2129,6 +2164,11 @@ export async function runEmbeddedAgent(
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
               if (preflightRecovery && isNoRealConversationCompactionNoop(compactResult)) {
                 lastCompactionTokensAfter = 0;
+                await resetNoRealConversationTokenSnapshot({
+                  config: params.config,
+                  sessionKey: params.sessionKey,
+                  agentId: sessionAgentId,
+                });
                 log.info(
                   `[context-overflow-precheck] stale token state had no real conversation messages for ` +
                     `${provider}/${modelId}; resetting the context snapshot and retrying prompt`,

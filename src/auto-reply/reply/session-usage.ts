@@ -51,6 +51,11 @@ function resolveNonNegativeNumber(value: number | undefined): number | undefined
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function resolveNonNegativeTokenCount(value: number | undefined): number | undefined {
+  const resolved = resolveNonNegativeNumber(value);
+  return resolved === undefined ? undefined : Math.floor(resolved);
+}
+
 function estimateSessionRunCostUsd(params: {
   cfg: OpenClawConfig;
   usage?: NormalizedUsage;
@@ -89,6 +94,7 @@ export async function persistSessionUsageUpdate(params: {
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
   cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
+  compactionTokensAfter?: number;
   preserveFreshTotalTokensOnStaleUsage?: boolean;
   preserveUserFacingSessionModelState?: boolean;
   logLabel?: string;
@@ -107,8 +113,13 @@ export async function persistSessionUsageUpdate(params: {
     params.promptTokens > 0;
   const hasFreshContextSnapshot =
     Boolean(params.lastCallUsage) || hasPromptTokens || params.usageIsContextSnapshot === true;
+  const compactionTokensAfter = resolveNonNegativeTokenCount(params.compactionTokensAfter);
+  const hasCompactionSnapshot = compactionTokensAfter !== undefined;
+  const useCompactionSnapshot =
+    compactionTokensAfter !== undefined &&
+    (compactionTokensAfter === 0 || !hasFreshContextSnapshot);
 
-  if (hasUsage || hasFreshContextSnapshot) {
+  if (hasUsage || hasFreshContextSnapshot || hasCompactionSnapshot) {
     try {
       await updateSessionStoreEntry({
         storePath,
@@ -130,13 +141,15 @@ export async function persistSessionUsageUpdate(params: {
             params.lastCallUsage ??
             (params.usageIsContextSnapshot === true ? params.usage : undefined);
           const totalTokens =
-            hasFreshContextSnapshot && !preserveUserFacingRunState
-              ? deriveSessionTotalTokens({
-                  usage: usageForContext,
-                  contextTokens: resolvedContextTokens,
-                  promptTokens: params.promptTokens,
-                })
-              : undefined;
+            !preserveUserFacingRunState && useCompactionSnapshot
+              ? compactionTokensAfter
+              : hasFreshContextSnapshot && !preserveUserFacingRunState
+                ? deriveSessionTotalTokens({
+                    usage: usageForContext,
+                    contextTokens: resolvedContextTokens,
+                    promptTokens: params.promptTokens,
+                  })
+                : undefined;
           const runEstimatedCostUsd = preserveUserFacingRunState
             ? undefined
             : estimateSessionRunCostUsd({
@@ -167,13 +180,20 @@ export async function persistSessionUsageUpdate(params: {
             patch.cacheRead = cacheUsage?.cacheRead ?? 0;
             patch.cacheWrite = cacheUsage?.cacheWrite ?? 0;
           }
+          if (useCompactionSnapshot && !preserveUserFacingRunState) {
+            patch.inputTokens = undefined;
+            patch.outputTokens = undefined;
+            patch.cacheRead = undefined;
+            patch.cacheWrite = undefined;
+            patch.contextBudgetStatus = undefined;
+          }
           // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
           // cumulative run usage, so assign directly instead of accumulating).
           // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
           if (runEstimatedCostUsd !== undefined) {
             patch.estimatedCostUsd = runEstimatedCostUsd;
           }
-          if (hasFreshContextSnapshot && !preserveUserFacingRunState) {
+          if ((hasFreshContextSnapshot || hasCompactionSnapshot) && !preserveUserFacingRunState) {
             patch.totalTokens = totalTokens;
             patch.totalTokensFresh = true;
           } else if (

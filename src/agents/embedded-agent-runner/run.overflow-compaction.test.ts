@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentHarness } from "../harness/types.js";
 import type { AgentInternalEvent } from "../internal-events.js";
@@ -475,6 +478,9 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         },
         agents: {
           defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
             models: {
               "anthropic/test-model": { agentRuntime: { id: "claude-cli" } },
             },
@@ -1800,6 +1806,44 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   });
 
   it("recovers preflight compaction when stale tokens point at an empty transcript", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-empty-preflight-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "test-key": {
+          sessionId: "test-session",
+          updatedAt: 1,
+          totalTokens: 1_500_000,
+          totalTokensFresh: true,
+          inputTokens: 20,
+          outputTokens: 10_855,
+          cacheRead: 1_761_324,
+          cacheWrite: 33_047,
+          contextBudgetStatus: {
+            schemaVersion: 1,
+            source: "pre-prompt-estimate",
+            updatedAt: 1,
+            provider: "claude-cli",
+            model: "claude-opus-4-7",
+            route: "compact_only",
+            shouldCompact: true,
+            estimatedPromptTokens: 1_794_391,
+            contextTokenBudget: 1_048_576,
+            promptBudgetBeforeReserve: 1_044_480,
+            reserveTokens: 4_096,
+            effectiveReserveTokens: 4_096,
+            remainingPromptBudgetTokens: 0,
+            overflowTokens: 749_911,
+            toolResultReducibleChars: 0,
+            messageCount: 0,
+            unwindowedMessageCount: 0,
+          },
+        },
+      }),
+      "utf8",
+    );
+
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
         makeAttemptResult({
@@ -1816,12 +1860,31 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       reason: "no real conversation messages",
     });
 
-    const result = await runEmbeddedAgent(overflowBaseRunParams);
+    try {
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        config: {
+          session: {
+            store: storePath,
+          },
+        } as RunEmbeddedAgentParams["config"],
+      });
 
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.meta.error).toBeUndefined();
-    expect(result.meta.agentMeta?.compactionTokensAfter).toBe(0);
+      expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      expect(result.meta.error).toBeUndefined();
+      expect(result.meta.agentMeta?.compactionTokensAfter).toBe(0);
+      const stored = JSON.parse(await fs.readFile(storePath, "utf8"))["test-key"];
+      expect(stored.totalTokens).toBe(0);
+      expect(stored.totalTokensFresh).toBe(true);
+      expect(stored.inputTokens).toBeUndefined();
+      expect(stored.outputTokens).toBeUndefined();
+      expect(stored.cacheRead).toBeUndefined();
+      expect(stored.cacheWrite).toBeUndefined();
+      expect(stored.contextBudgetStatus).toBeUndefined();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("passes observed overflow token counts into compaction when providers report them", async () => {

@@ -3236,6 +3236,96 @@ describe("persistSessionUsageUpdate", () => {
     });
   });
 
+  it("prefers zero compactionTokensAfter over CLI cache usage", async () => {
+    const storePath = await createStorePath("openclaw-usage-compaction-reset-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        totalTokens: 1_794_391,
+        totalTokensFresh: true,
+        inputTokens: 20,
+        outputTokens: 10_855,
+        cacheRead: 1_761_324,
+        cacheWrite: 33_047,
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: 1,
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          route: "compact_only",
+          shouldCompact: true,
+          estimatedPromptTokens: 1_794_391,
+          contextTokenBudget: 1_048_576,
+          promptBudgetBeforeReserve: 1_044_480,
+          reserveTokens: 4_096,
+          effectiveReserveTokens: 4_096,
+          remainingPromptBudgetTokens: 0,
+          overflowTokens: 749_911,
+          toolResultReducibleChars: 0,
+          messageCount: 0,
+          unwindowedMessageCount: 0,
+        },
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
+      lastCallUsage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
+      usageIsContextSnapshot: true,
+      providerUsed: "claude-cli",
+      contextTokensUsed: 1_048_576,
+      compactionTokensAfter: 0,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(0);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(stored[sessionKey].inputTokens).toBeUndefined();
+    expect(stored[sessionKey].outputTokens).toBeUndefined();
+    expect(stored[sessionKey].cacheRead).toBeUndefined();
+    expect(stored[sessionKey].cacheWrite).toBeUndefined();
+    expect(stored[sessionKey].contextBudgetStatus).toBeUndefined();
+  });
+
+  it("prefers fresh lastCallUsage over positive compactionTokensAfter", async () => {
+    const storePath = await createStorePath("openclaw-usage-compaction-positive-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        totalTokens: 180_000,
+        totalTokensFresh: true,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 100_000, output: 3_000, cacheRead: 20_000 },
+      lastCallUsage: { input: 91_000, output: 1_000, cacheRead: 4_000 },
+      providerUsed: "openai",
+      contextTokensUsed: 200_000,
+      compactionTokensAfter: 80_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(95_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(stored[sessionKey].inputTokens).toBe(100_000);
+    expect(stored[sessionKey].outputTokens).toBe(3_000);
+    expect(stored[sessionKey].cacheRead).toBe(4_000);
+  });
+
   it("persists totalTokens from promptTokens when usage is unavailable", async () => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";
