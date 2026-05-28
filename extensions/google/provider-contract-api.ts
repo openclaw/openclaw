@@ -123,7 +123,7 @@ export function createGoogleVertexProvider(): ProviderPlugin {
                   },
                 },
               },
-            } as Partial<OpenClawConfig>,
+            } as unknown as Partial<OpenClawConfig>,
             notes: [
               `Project: ${project}, Location: ${location}`,
               "Credentials will be resolved via Application Default Credentials (ADC).",
