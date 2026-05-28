@@ -1494,11 +1494,44 @@ jobs:
       - name: Checkout ClawHub docs source
         run: |
           set -euo pipefail
-          git init clawhub-source
-          git -C clawhub-source config gc.auto 0
-          git -C clawhub-source remote add origin "https://github.com/openclaw/clawhub.git"
-          git -C clawhub-source fetch --no-tags --depth=1 origin "+HEAD:refs/remotes/origin/checkout"
-          git -C clawhub-source checkout --detach refs/remotes/origin/checkout
+
+          workdir="$GITHUB_WORKSPACE/clawhub-source"
+          started_at="$(date +%s)"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git -C "$workdir" config gc.auto 0
+            git -C "$workdir" remote add origin "https://github.com/openclaw/clawhub.git"
+
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+refs/heads/main:refs/remotes/origin/checkout" || return 1
+
+            git -C "$workdir" checkout --force --detach refs/remotes/origin/checkout || return 1
+            echo "ClawHub checkout attempt ${attempt}/5 succeeded"
+          }
+
+          for attempt in 1 2 3 4 5; do
+            if checkout_attempt "$attempt"; then
+              elapsed="$(( $(date +%s) - started_at ))"
+              echo "ClawHub checkout completed in ${elapsed}s"
+              exit 0
+            fi
+            echo "ClawHub checkout attempt ${attempt}/5 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "ClawHub checkout failed after 5 attempts" >&2
+          exit 1
 
       - name: Check docs
         env:
