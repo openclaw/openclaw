@@ -66,18 +66,19 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
       : [];
     const alreadyRegistered = existingProviderModels.some((m) => m.id === modelId);
     if (!alreadyRegistered) {
+      const updatedProviders = {
+        ...(existingProviders as Record<string, unknown>),
+        [providerName]: {
+          ...existingProvider,
+          models: [...existingProviderModels, { id: modelId, name: modelName }],
+        },
+      };
       result = {
         ...result,
         models: {
-          ...(result.models as Record<string, unknown> | undefined),
-          providers: {
-            ...(existingProviders as Record<string, unknown>),
-            [providerName]: {
-              ...existingProvider,
-              models: [...existingProviderModels, { id: modelId, name: modelName }],
-            },
-          },
-        },
+          ...result.models,
+          providers: updatedProviders,
+        } as OpenClawConfig["models"],
       };
     }
   }

@@ -71,7 +71,10 @@ function hasRequiredAuthEvidenceEnv(
   return true;
 }
 
-function hasLocalFileAuthEvidence(evidence: ProviderAuthEvidence, env: NodeJS.ProcessEnv): boolean {
+function hasLocalFileAuthEvidence(
+  evidence: Extract<ProviderAuthEvidence, { type: "local-file-with-env" }>,
+  env: NodeJS.ProcessEnv,
+): boolean {
   if (evidence.fileEnvVar) {
     const explicitPath = normalizeOptionalPathInput(env[evidence.fileEnvVar]);
     if (explicitPath) {
