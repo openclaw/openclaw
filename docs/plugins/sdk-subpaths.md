@@ -179,7 +179,7 @@ and pairing-path families.
     | `plugin-sdk/approval-gateway-runtime` | Shared approval gateway-resolution helper |
     | `plugin-sdk/approval-handler-adapter-runtime` | Lightweight native approval adapter loading helpers for hot channel entrypoints |
     | `plugin-sdk/approval-handler-runtime` | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
-    | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers and local native exec prompt suppression |
+    | `plugin-sdk/approval-native-runtime` | Native approval target, account-binding, route-gate, forwarding fallback, and local native exec prompt suppression helpers |
     | `plugin-sdk/approval-reaction-runtime` | Hardcoded approval reaction bindings, reaction prompt payloads, reaction target stores, and compatibility export for local native exec prompt suppression |
     | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval payload helpers, native approval routing/runtime helpers, and structured approval display helpers such as `formatApprovalDisplayPath` |
