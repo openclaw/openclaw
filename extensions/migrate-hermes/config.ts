@@ -189,12 +189,12 @@ export function buildConfigItems(params: {
         id: "config:memory-plugin-slot",
         target: "plugins.slots",
         path: ["plugins", "slots"],
-        value: { memory: "memory-core" },
+        value: { "memory.recall": "memory-core" },
         message: "Select the default OpenClaw memory plugin for imported file memory.",
         conflict:
           !params.ctx.overwrite &&
           hasMigrationConfigPatchConflict(params.ctx.config, ["plugins", "slots"], {
-            memory: true,
+            "memory.recall": true,
           }),
       }),
     );

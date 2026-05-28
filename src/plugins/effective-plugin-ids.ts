@@ -143,7 +143,7 @@ function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[]
 
 function collectSelectedMemoryRolePluginIds(config: OpenClawConfig): string[] {
   return listSelectedMemoryRolePluginIds({ cfg: config }).filter(
-    (pluginId) => pluginId !== defaultSlotIdForKey("memory"),
+    (pluginId) => pluginId !== defaultSlotIdForKey("memory.recall"),
   );
 }
 

@@ -21,7 +21,7 @@ import {
 } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { listConfiguredMemoryRolePluginIds } from "../plugins/slot-resolution.js";
-import { hasKind } from "../plugins/slots.js";
+import { MEMORY_PLUGIN_SLOT_KEYS, hasKind } from "../plugins/slots.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
 import {
@@ -45,22 +45,13 @@ import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { collectConfiguredModelRefs } from "./model-refs.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
-import type { PluginSlotsConfig } from "./types.plugins.js";
 import { coerceSecretRef } from "./types.secrets.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
-const MEMORY_SLOT_KEYS = [
-  "memory",
-  "memory.recall",
-  "memory.compaction",
-  "memory.capture",
-  "memory.dreaming",
-  "memory.userModel",
-] as const satisfies readonly (keyof PluginSlotsConfig)[];
-const GRANULAR_MEMORY_SLOT_KEYS = MEMORY_SLOT_KEYS.filter((key) => key !== "memory");
+const GRANULAR_MEMORY_SLOT_KEYS = MEMORY_PLUGIN_SLOT_KEYS.filter((key) => key !== "memory");
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -1815,7 +1806,7 @@ function validateConfigObjectWithPluginsBase(
 
   // Default slot values are inferred; only user-configured slot refs should block startup.
   const pluginSlots = pluginsConfig?.slots;
-  for (const slotKey of MEMORY_SLOT_KEYS) {
+  for (const slotKey of MEMORY_PLUGIN_SLOT_KEYS) {
     const hasExplicitSlot =
       pluginSlots !== undefined && Object.prototype.hasOwnProperty.call(pluginSlots, slotKey);
     const slotValue = normalizedPlugins.slots[slotKey];
@@ -1848,7 +1839,7 @@ function validateConfigObjectWithPluginsBase(
     if (!agentSlots) {
       continue;
     }
-    for (const slotKey of MEMORY_SLOT_KEYS) {
+    for (const slotKey of MEMORY_PLUGIN_SLOT_KEYS) {
       if (!Object.prototype.hasOwnProperty.call(agentSlots, slotKey)) {
         continue;
       }

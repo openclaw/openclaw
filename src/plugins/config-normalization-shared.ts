@@ -241,7 +241,7 @@ export function normalizePluginsConfigWithResolver(
       "memory.recall":
         memoryRecallSlot === undefined
           ? memorySlot === undefined
-            ? defaultSlotIdForKey("memory")
+            ? defaultSlotIdForKey("memory.recall")
             : memorySlot
           : memoryRecallSlot,
       "memory.compaction": normalizeSlotValue(config?.slots?.["memory.compaction"]),

@@ -202,7 +202,7 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
           : 'plugins.slots.memory="none"',
     };
   }
-  return { enabled: true, slot: raw || defaultSlotIdForKey("memory") };
+  return { enabled: true, slot: raw || defaultSlotIdForKey("memory.recall") };
 }
 
 export async function resolveGatewayProbeSnapshot(params: {
@@ -320,7 +320,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   }
   const agentId = agentStatus.defaultId ?? "main";
 
-  if (memoryPlugin.slot !== defaultSlotIdForKey("memory")) {
+  if (memoryPlugin.slot !== defaultSlotIdForKey("memory.recall")) {
     return await resolveMemoryManagerStatusSnapshot(params, agentId);
   }
 

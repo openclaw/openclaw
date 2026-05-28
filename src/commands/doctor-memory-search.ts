@@ -371,7 +371,7 @@ function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
   if (typeof memorySlot !== "string" || memorySlot.length === 0) {
     return false;
   }
-  if (memorySlot === defaultSlotIdForKey("memory")) {
+  if (memorySlot === defaultSlotIdForKey("memory.recall")) {
     return false;
   }
   if (plugins.deny.includes(memorySlot)) {

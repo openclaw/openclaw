@@ -180,7 +180,7 @@ export async function invokeGatewayTool(params: {
           type: "invalid_request",
           message:
             `memory tools are disabled in tests${suffix}. ` +
-            `Enable by setting plugins.slots.memory.recall="${defaultSlotIdForKey("memory")}" (and ensure plugins.enabled is not false).`,
+            `Enable by setting plugins.slots.memory.recall="${defaultSlotIdForKey("memory.recall")}" (and ensure plugins.enabled is not false).`,
         },
       };
     }

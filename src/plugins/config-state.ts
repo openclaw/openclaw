@@ -104,7 +104,7 @@ const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(
     plugins?.entries &&
-    Object.prototype.hasOwnProperty.call(plugins.entries, defaultSlotIdForKey("memory")),
+    Object.prototype.hasOwnProperty.call(plugins.entries, defaultSlotIdForKey("memory.recall")),
   );
 
 export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) =>
