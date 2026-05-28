@@ -1216,8 +1216,12 @@ plugins are assumed to be co-versioned with the host checkout.
 plugin sources. Use it for the OpenClaw plugin SDK/runtime API floor that the
 package was built against. It can be stricter than `minHostVersion` when a
 plugin package needs a newer API but still keeps a lower install hint for other
-flows. `peerDependencies.openclaw` remains npm package metadata; OpenClaw uses
-the `openclaw.compat.pluginApi` contract for install compatibility decisions.
+flows. Official OpenClaw release sync bumps existing official plugin API floors
+to the OpenClaw release version by default, but plugin-only releases can keep a
+lower floor when the package intentionally supports older hosts. Do not use the
+package version alone as the compatibility contract. `peerDependencies.openclaw`
+remains npm package metadata; OpenClaw uses the `openclaw.compat.pluginApi`
+contract for install compatibility decisions.
 
 Official install-on-demand metadata should use `clawhubSpec` when the plugin is
 published on ClawHub; onboarding treats that as the preferred remote source and
