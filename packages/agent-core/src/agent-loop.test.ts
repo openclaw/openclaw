@@ -75,6 +75,13 @@ function assistantText(message: AgentMessage | undefined): string {
   return message.content.map((part) => (part.type === "text" ? part.text : "")).join("");
 }
 
+function assistantToolName(message: AgentMessage | undefined): string {
+  if (!message || message.role !== "assistant") {
+    return "";
+  }
+  return message.content.find((part) => part.type === "toolCall")?.name ?? "";
+}
+
 async function collectEvents(stream: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   const events: AgentEvent[] = [];
   for await (const event of stream) {
@@ -151,6 +158,38 @@ describe("agentLoop EventStream failures", () => {
       "Hel",
       "Hello",
       "Hello",
+    ]);
+  });
+
+  it("preserves tool-call state across lightweight tool-call deltas", async () => {
+    const toolCall = { type: "toolCall" as const, id: "call-1", name: "search", arguments: {} };
+    const finalMessage = assistantMessage([]);
+    const stream = agentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      { systemPrompt: "", messages: [] },
+      config,
+      undefined,
+      streamEvents([
+        { type: "start", partial: assistantMessage([]) },
+        { type: "toolcall_start", contentIndex: 0, partial: assistantMessage([toolCall]) },
+        { type: "toolcall_delta", contentIndex: 0, delta: '{"q"', partial: assistantMessage([]) },
+        {
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: ':"openclaw"}',
+          partial: assistantMessage([]),
+        },
+        { type: "done", reason: "stop", message: finalMessage },
+      ]),
+    );
+
+    const events = await collectEvents(stream);
+    const updates = events.filter((event) => event.type === "message_update");
+
+    expect(updates.map((event) => assistantToolName(event.message))).toEqual([
+      "search",
+      "search",
+      "search",
     ]);
   });
 });
