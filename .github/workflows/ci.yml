@@ -1083,6 +1083,8 @@ jobs:
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && matrix.runner || 'ubuntu-24.04') }}
     timeout-minutes: 20
+    env:
+      NODE_OPTIONS: --max-old-space-size=8192
     strategy:
       fail-fast: false
       matrix:
