@@ -1,0 +1,17 @@
+{
+  "name": "SuperClaw",
+  "short_name": "SuperClaw",
+  "start_url": "/superclaw/",
+  "scope": "/superclaw/",
+  "display": "standalone",
+  "background_color": "#121212",
+  "theme_color": "#121212",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

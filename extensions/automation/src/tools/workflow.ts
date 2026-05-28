@@ -1,5 +1,38 @@
-import { Type } from "typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { Type } from "typebox";
+
+type ToolResult = {
+  content: Array<{ type: "text"; text: string }>;
+  details: unknown;
+};
+
+function jsonResult(payload: unknown): ToolResult {
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+    details: payload,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function buildWorkflowError(params: {
+  errorCode:
+    | "WORKFLOW_INPUT_INVALID"
+    | "WORKFLOW_NOT_FOUND"
+    | "WORKFLOW_DEFINE_INVALID"
+    | "WORKFLOW_ACTION_UNKNOWN";
+  nextAction: string;
+  detail: string;
+}): string {
+  return (
+    `回覆狀態：FAILED\n` +
+    `error_code=${params.errorCode}\n` +
+    `next_action=${params.nextAction}\n` +
+    `detail=${params.detail}`
+  );
+}
 
 export type WorkflowStep = {
   id: string;
@@ -47,7 +80,7 @@ const BUILTIN_WORKFLOWS: Record<string, WorkflowDefinition> = {
       { id: "notify", agent: "claude-cli", action: "format-notification" },
     ],
   },
-  "refactor": {
+  refactor: {
     name: "refactor",
     description: "分析目標 → 重構 → 測試 → 提交",
     steps: [
@@ -59,7 +92,7 @@ const BUILTIN_WORKFLOWS: Record<string, WorkflowDefinition> = {
   },
 };
 
-export function createWorkflowTool(api: OpenClawPluginApi) {
+export function createWorkflowTool(_api: OpenClawPluginApi) {
   return {
     name: "automation_workflow",
     label: "Workflow Engine",
@@ -70,13 +103,18 @@ export function createWorkflowTool(api: OpenClawPluginApi) {
     parameters: Type.Object({
       action: Type.Union(
         [Type.Literal("list"), Type.Literal("run"), Type.Literal("define"), Type.Literal("status")],
-        { description: "Action: list available workflows, run one, define a new one, or check status" },
+        {
+          description:
+            "Action: list available workflows, run one, define a new one, or check status",
+        },
       ),
       workflowName: Type.Optional(
         Type.String({ description: "Name of the workflow to run or define" }),
       ),
       input: Type.Optional(
-        Type.String({ description: "Input/context for the workflow execution (e.g., PR number, file path)" }),
+        Type.String({
+          description: "Input/context for the workflow execution (e.g., PR number, file path)",
+        }),
       ),
       steps: Type.Optional(
         Type.Array(
@@ -100,7 +138,8 @@ export function createWorkflowTool(api: OpenClawPluginApi) {
       },
     ) {
       const action = typeof params.action === "string" ? params.action : "list";
-      const workflowName = typeof params.workflowName === "string" ? params.workflowName : undefined;
+      const workflowName =
+        typeof params.workflowName === "string" ? params.workflowName : undefined;
       const input = typeof params.input === "string" ? params.input : undefined;
 
       switch (action) {
@@ -111,15 +150,27 @@ export function createWorkflowTool(api: OpenClawPluginApi) {
             stepCount: w.steps.length,
             agents: [...new Set(w.steps.map((s) => s.agent))],
           }));
-          return [{ type: "text" as const, text: JSON.stringify(list, null, 2) }];
+          return jsonResult(list);
         }
 
         case "run": {
-          if (!workflowName) throw new Error("workflowName is required for action=run");
+          if (!workflowName) {
+            throw new Error(
+              buildWorkflowError({
+                errorCode: "WORKFLOW_INPUT_INVALID",
+                nextAction: "PROVIDE_WORKFLOW_NAME",
+                detail: "缺少 workflowName（action=run）。",
+              }),
+            );
+          }
           const workflow = BUILTIN_WORKFLOWS[workflowName];
           if (!workflow) {
             throw new Error(
-              `Unknown workflow: ${workflowName}. Available: ${Object.keys(BUILTIN_WORKFLOWS).join(", ")}`,
+              buildWorkflowError({
+                errorCode: "WORKFLOW_NOT_FOUND",
+                nextAction: "USE_ACTION_LIST",
+                detail: `找不到 workflow=${workflowName}。可用：${Object.keys(BUILTIN_WORKFLOWS).join(", ")}`,
+              }),
             );
           }
 
@@ -132,67 +183,64 @@ export function createWorkflowTool(api: OpenClawPluginApi) {
             prompt: buildStepPrompt(step, input, i, workflow.steps),
           }));
 
-          return [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  status: "execution_plan_ready",
-                  workflow: workflowName,
-                  description: workflow.description,
-                  input,
-                  totalSteps: executionPlan.length,
-                  plan: executionPlan,
-                  instruction:
-                    "Execute each step sequentially. For steps with requiresConfirm=true, " +
-                    "use automation_confirm_gate before proceeding. " +
-                    "Use automation_codex_execute for codex steps. " +
-                    "Report progress after each step.",
-                },
-                null,
-                2,
-              ),
-            },
-          ];
+          return jsonResult({
+            status: "execution_plan_ready",
+            workflow: workflowName,
+            description: workflow.description,
+            input,
+            totalSteps: executionPlan.length,
+            plan: executionPlan,
+            instruction:
+              "Execute each step sequentially. For steps with requiresConfirm=true, " +
+              "use automation_confirm_gate before proceeding. " +
+              "Use automation_codex_execute for codex steps. " +
+              "Report progress after each step.",
+          });
         }
 
         case "define": {
           const steps = Array.isArray(params.steps) ? params.steps : [];
           if (!workflowName || steps.length === 0) {
-            throw new Error("workflowName and steps[] are required for action=define");
+            throw new Error(
+              buildWorkflowError({
+                errorCode: "WORKFLOW_DEFINE_INVALID",
+                nextAction: "PROVIDE_WORKFLOW_NAME_AND_STEPS",
+                detail: "action=define 需要 workflowName 與 steps[]。",
+              }),
+            );
           }
-          return [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                status: "workflow_defined",
-                name: workflowName,
-                steps: steps.map((s: any, i: number) => ({
-                  stepNumber: i + 1,
-                  agent: s.agent ?? "claude-cli",
-                  action: s.action ?? "execute",
-                  requiresConfirm: s.requiresConfirm ?? false,
-                })),
-              }, null, 2),
-            },
-          ];
+          return jsonResult({
+            status: "workflow_defined",
+            name: workflowName,
+            steps: steps.map((step, i) => {
+              const item = isRecord(step) ? step : {};
+              return {
+                stepNumber: i + 1,
+                agent: item.agent === "codex" ? "codex" : "claude-cli",
+                action: typeof item.action === "string" ? item.action : "execute",
+                requiresConfirm:
+                  typeof item.requiresConfirm === "boolean" ? item.requiresConfirm : false,
+              };
+            }),
+          });
         }
 
         case "status": {
-          return [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                activeWorkflows: 0,
-                completedToday: 0,
-                note: "Workflow state tracking is session-scoped. Check agent session for active runs.",
-              }, null, 2),
-            },
-          ];
+          return jsonResult({
+            activeWorkflows: 0,
+            completedToday: 0,
+            note: "Workflow state tracking is session-scoped. Check agent session for active runs.",
+          });
         }
 
         default:
-          throw new Error(`Unknown action: ${action}`);
+          throw new Error(
+            buildWorkflowError({
+              errorCode: "WORKFLOW_ACTION_UNKNOWN",
+              nextAction: "USE_ACTION_LIST_OR_RUN_OR_DEFINE_OR_STATUS",
+              detail: `未知 action=${action}`,
+            }),
+          );
       }
     },
   };

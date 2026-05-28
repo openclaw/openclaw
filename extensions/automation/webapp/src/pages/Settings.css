@@ -59,6 +59,22 @@
   font-size: 13px;
 }
 
+.settings-secondary-btn {
+  border: 1px solid var(--tgui--hint_color, #94a3b8);
+  background: var(--tgui--bg_color, #fff);
+  color: var(--tgui--text_color, #111827);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.settings-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .settings-message {
   margin-top: 8px;
   color: var(--tgui--hint_color, #64748b);

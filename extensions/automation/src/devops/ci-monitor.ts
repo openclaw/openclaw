@@ -8,7 +8,9 @@ export interface CIStatus {
 }
 
 export function formatCIStatusBoard(statuses: CIStatus[]): string {
-  if (statuses.length === 0) return "<b>🏗️ CI/CD Status Board</b>\n\nNo active checks.";
+  if (statuses.length === 0) {
+    return "<b>🏗️ CI/CD Status Board</b>\n\nNo active checks.";
+  }
 
   const lines = ["<b>🏗️ CI/CD Status Board</b>\n"];
   for (const s of statuses) {

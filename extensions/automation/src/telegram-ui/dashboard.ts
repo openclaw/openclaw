@@ -1,5 +1,6 @@
-import type { InteractiveReply } from "./types.js";
 import type { SystemState, AgentPhase } from "./agent-state.js";
+import { generateSuggestions } from "./suggestions.js";
+import type { InteractiveReply } from "./types.js";
 
 const PHASE_DISPLAY: Record<AgentPhase, { emoji: string; label: string }> = {
   idle: { emoji: "🟢", label: "待命中" },
@@ -80,10 +81,13 @@ function buildDashboardText(state: SystemState): string {
   if (!state.activeTask && state.attentionItems.length === 0) {
     const hour = new Date().getHours();
     const greeting =
-      hour < 6 ? "🌙 深夜了，有什麼需要處理的嗎？" :
-      hour < 12 ? "☀️ 早安，今天要做什麼？" :
-      hour < 18 ? "🌤 隨時可以開始工作。" :
-      "🌆 晚上好，需要我做什麼？";
+      hour < 6
+        ? "🌙 深夜了，有什麼需要處理的嗎？"
+        : hour < 12
+          ? "☀️ 早安，今天要做什麼？"
+          : hour < 18
+            ? "🌤 隨時可以開始工作。"
+            : "🌆 晚上好，需要我做什麼？";
     lines.push(greeting);
     lines.push("");
   }
@@ -96,16 +100,24 @@ function buildDashboardText(state: SystemState): string {
   lines.push(`${cStatus} Claude <code>${c.model}</code>  ${xStatus} Codex <code>${x.model}</code>`);
 
   if (state.stats.tasksToday > 0) {
-    lines.push(`📊 今日: ${state.stats.tasksToday} 任務 · ${formatTokens(state.stats.tokensToday)} tokens`);
+    lines.push(
+      `📊 今日: ${state.stats.tasksToday} 任務 · ${formatTokens(state.stats.tokensToday)} 權杖`,
+    );
   }
 
   return lines.join("\n");
 }
 
-function buildContextualActions(state: SystemState): Array<{ label: string; value: string; style?: "primary" | "success" | "danger" }> {
+function buildContextualActions(
+  state: SystemState,
+): Array<{ label: string; value: string; style?: "primary" | "success" | "danger" }> {
   switch (state.phase) {
     case "idle": {
-      const actions: Array<{ label: string; value: string; style?: "primary" | "success" | "danger" }> = [];
+      const actions: Array<{
+        label: string;
+        value: string;
+        style?: "primary" | "success" | "danger";
+      }> = [];
 
       if (state.attentionItems.some((i) => i.urgency === "loud")) {
         const first = state.attentionItems.find((i) => i.urgency === "loud")!;
@@ -116,6 +128,12 @@ function buildContextualActions(state: SystemState): Array<{ label: string; valu
 
       if (state.lastCompletedTask?.success) {
         actions.push(...getSuggestedNextActions(state));
+      }
+      const suggested = generateSuggestions(state)
+        .map((item) => ({ label: item.label, value: item.callbackData, style: "primary" as const }))
+        .filter((item) => !actions.some((existing) => existing.value === item.value));
+      if (suggested.length > 0) {
+        actions.push(...suggested.slice(0, 2));
       }
 
       actions.push(
@@ -143,7 +161,9 @@ function buildContextualActions(state: SystemState): Array<{ label: string; valu
 
     case "awaiting_input": {
       const task = state.activeTask;
-      if (!task) return [];
+      if (!task) {
+        return [];
+      }
       return [
         { label: "✅ 批准", value: `sc:approve:${task.id}`, style: "success" },
         { label: "❌ 拒絕", value: `sc:deny:${task.id}`, style: "danger" },
@@ -158,11 +178,17 @@ function buildContextualActions(state: SystemState): Array<{ label: string; valu
         { label: "⏭ 跳過", value: "sc:skip", style: "primary" },
       ];
   }
+
+  return [];
 }
 
-function getSuggestedNextActions(state: SystemState): Array<{ label: string; value: string; style?: "primary" | "success" | "danger" }> {
+function getSuggestedNextActions(
+  state: SystemState,
+): Array<{ label: string; value: string; style?: "primary" | "success" | "danger" }> {
   const last = state.lastCompletedTask;
-  if (!last) return [];
+  if (!last) {
+    return [];
+  }
 
   const title = last.title.toLowerCase();
 
@@ -192,27 +218,42 @@ function getSuggestedNextActions(state: SystemState): Array<{ label: string; val
 
 function getKindEmoji(kind: string): string {
   switch (kind) {
-    case "approval": return "🔐";
-    case "error": return "❌";
-    case "ci_fail": return "🔴";
-    case "pr_ready": return "📋";
-    case "stale_pr": return "⏰";
-    case "task_done": return "✅";
-    default: return "📌";
+    case "approval":
+      return "🔐";
+    case "error":
+      return "❌";
+    case "ci_fail":
+      return "🔴";
+    case "pr_ready":
+      return "📋";
+    case "stale_pr":
+      return "⏰";
+    case "task_done":
+      return "✅";
+    default:
+      return "📌";
   }
 }
 
 function formatTimeAgo(ms: number): string {
   const sec = Math.round(ms / 1000);
-  if (sec < 60) return `${sec}s 前`;
+  if (sec < 60) {
+    return `${sec}s 前`;
+  }
   const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m 前`;
+  if (min < 60) {
+    return `${min}m 前`;
+  }
   const hr = Math.round(min / 60);
   return `${hr}h 前`;
 }
 
 function formatTokens(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  if (n < 1000) {
+    return String(n);
+  }
+  if (n < 1_000_000) {
+    return `${(n / 1000).toFixed(1)}k`;
+  }
   return `${(n / 1_000_000).toFixed(1)}M`;
 }

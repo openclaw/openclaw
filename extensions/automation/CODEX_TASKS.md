@@ -201,6 +201,7 @@ extensions/automation/
 ## 🔨 Phase 4: Hooks
 
 - [x] 建立 `webapp/src/hooks/useGateway.ts` — Gateway 連線 Hook
+
   ```typescript
   function useGateway() {
     // 連線管理 + RPC 呼叫 + 重連
@@ -209,6 +210,7 @@ extensions/automation/
   ```
 
 - [x] 建立 `webapp/src/hooks/useTelegram.ts` — Telegram API Hook
+
   ```typescript
   function useTelegram() {
     return { user, theme, showConfirm, haptic, cloudStorage };
@@ -216,6 +218,7 @@ extensions/automation/
   ```
 
 - [x] 建立 `webapp/src/hooks/useAgent.ts` — Agent 狀態 Hook
+
   ```typescript
   function useAgent() {
     // 訂閱 agent 狀態變化
@@ -253,7 +256,7 @@ extensions/automation/
   - Menu Button → Web App URL: `https://{host}/superclaw/`
   - 設定 Domain whitelist
 
-- [ ] 建置腳本
+- [x] 建置腳本
   - `webapp/package.json` scripts: `build`, `dev`, `preview`
   - 確保 `pnpm build` 時自動建置 webapp
 
@@ -261,16 +264,16 @@ extensions/automation/
 
 ## 🔨 Phase 6: 進階功能（可選）
 
-- [ ] 建立 `webapp/src/pages/TaskBoard.tsx` — Kanban 看板
+- [x] 建立 `webapp/src/pages/TaskBoard.tsx` — Kanban 看板
   - 三欄: 待處理 / 進行中 / 已完成
   - 拖拽排序
   - 任務卡片（標題 + 狀態 + agent）
 
-- [ ] 實作 PWA 離線支援
+- [x] 實作 PWA 離線支援
   - Service Worker 快取靜態資源
   - 離線時顯示最後快取的狀態
 
-- [ ] 實作 Push Notification
+- [x] 實作 Push Notification
   - Telegram Mini App push API
   - 綁定 OpenClaw 通知系統
 
@@ -279,11 +282,13 @@ extensions/automation/
 ## ⚠️ 重要規範
 
 ### 型別系統
+
 - 所有檔案使用 TypeScript strict mode
 - 從 `extensions/automation/src/telegram-ui/agent-state.ts` 複用型別
 - API 回傳一律使用 `any` 再 type guard，不信任外部資料
 
 ### UI 規範
+
 - 使用 `@telegram-apps/telegram-ui` 元件庫
 - 顏色跟隨 Telegram 主題（dark/light）
 - 中文介面（繁體中文）
@@ -291,6 +296,7 @@ extensions/automation/
 - 載入狀態使用 skeleton / spinner
 
 ### Gateway RPC 呼叫
+
 - WebSocket 連線: `wss://{host}/ws`
 - 格式: JSON-RPC 2.0 `{ method, params, id }`
 - 已知方法（用到的）:
@@ -304,11 +310,13 @@ extensions/automation/
   - `ci.statuses`, `github.prs.list`
 
 ### 安全
+
 - 所有 Gateway 呼叫需驗證 Telegram `initData`
 - 危險操作（deploy, reset, delete）需二次確認
 - Rate limiting: 30 actions/min
 
 ### 程式碼風格
+
 - 註解使用繁體中文
 - 函數/變數名用英文
 - 每個檔案頂部說明用途

@@ -1,10 +1,10 @@
-import type { InteractiveReply } from "./types.js";
-import { buildBreadcrumb } from "./main-menu.js";
 import {
   WORKFLOW_TEMPLATES,
   type WorkflowDefinition,
   type WorkflowExecution,
 } from "../tools/workflow-types.js";
+import { buildBreadcrumb } from "./main-menu.js";
+import type { InteractiveReply } from "./types.js";
 
 export function buildWorkflowList(
   workflows?: WorkflowDefinition[],
@@ -14,7 +14,7 @@ export function buildWorkflowList(
   const wfs = workflows ?? WORKFLOW_TEMPLATES;
   const pinned = new Set(pinnedIds ?? []);
 
-  const sorted = [...wfs].sort((a, b) => {
+  const sorted = wfs.toSorted((a, b) => {
     const ap = pinned.has(a.id) ? 0 : 1;
     const bp = pinned.has(b.id) ? 0 : 1;
     return ap - bp;
@@ -87,16 +87,18 @@ export function buildWorkflowProgress(
     return `${emoji} ${i + 1}/${workflow.nodes.length} ${node.label}${detail}`;
   });
 
-  const elapsedLine =
-    elapsed != null ? `\n\n⏱ ${(elapsed / 1000).toFixed(1)}s` : "";
+  const elapsedLine = elapsed != null ? `\n\n⏱ ${(elapsed / 1000).toFixed(1)}s` : "";
 
-  const isActive =
-    execution.status === "running" || execution.status === "awaiting_confirm";
+  const isActive = execution.status === "running" || execution.status === "awaiting_confirm";
 
   const actionButtons = isActive
     ? [{ label: "⏹️ 取消", value: `sc:wf:stop:${execution.id}`, style: "danger" as const }]
     : [
-        { label: "🔄 再執行", value: `sc:wf:run:${execution.workflowId}`, style: "primary" as const },
+        {
+          label: "🔄 再執行",
+          value: `sc:wf:run:${execution.workflowId}`,
+          style: "primary" as const,
+        },
         { label: "← 工作流", value: "sc:wf", style: "primary" as const },
       ];
 

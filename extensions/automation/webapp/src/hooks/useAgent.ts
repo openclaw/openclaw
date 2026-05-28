@@ -1,94 +1,92 @@
-import { useEffect, useState } from 'react'
-import type {
-  ActiveTask,
-  AgentInfo,
-  AgentPhase,
-  AttentionItem,
-} from '../stores/app-store'
-import { useAppStore } from '../stores/app-store'
-import { useGateway } from './useGateway'
+import { useEffect, useState } from "react";
+import type { GatewayEventHandler } from "../api/types";
+import type { ActiveTask, AgentInfo, AgentPhase, AttentionItem } from "../stores/app-store";
+import { useAppStore } from "../stores/app-store";
+import { useGateway } from "./useGateway";
+
+type GatewayPayload = Parameters<GatewayEventHandler>[0];
 
 type UseAgentResult = {
-  phase: AgentPhase
-  activeTask: ActiveTask | null
-  agents: AgentInfo[]
-  attentionItems: AttentionItem[]
-}
+  phase: AgentPhase;
+  activeTask: ActiveTask | null;
+  agents: AgentInfo[];
+  attentionItems: AttentionItem[];
+};
 
 function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
+  return typeof value === "object" && value !== null;
 }
 
 function asString(value: unknown, fallback: string): string {
-  return typeof value === 'string' ? value : fallback
+  return typeof value === "string" ? value : fallback;
 }
 
 function asNumber(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function toPhase(value: unknown, fallback: AgentPhase): AgentPhase {
-  if (value === 'idle' || value === 'running' || value === 'waiting' || value === 'error') {
-    return value
+  if (value === "idle" || value === "running" || value === "waiting" || value === "error") {
+    return value;
   }
-  return fallback
+  return fallback;
 }
 
 function toActiveTask(value: unknown): ActiveTask | null {
   if (!isObject(value)) {
-    return null
+    return null;
   }
   return {
-    id: asString(value.id, 'task-unknown'),
-    title: asString(value.title, 'Untitled task'),
+    id: asString(value.id, "task-unknown"),
+    title: asString(value.title, "Untitled task"),
     progress: asNumber(value.progress, 0),
-  }
+  };
 }
 
 function toAgents(value: unknown): AgentInfo[] {
   if (!Array.isArray(value)) {
-    return []
+    return [];
   }
   return value.map((item, index) => {
     if (!isObject(item)) {
       return {
         id: `agent-${index}`,
         name: `Agent ${index + 1}`,
-        status: 'unknown',
-      }
+        status: "unknown",
+      };
     }
     return {
       id: asString(item.id, `agent-${index}`),
       name: asString(item.name, `Agent ${index + 1}`),
-      status: asString(item.status, 'unknown'),
-      model: typeof item.model === 'string' ? item.model : undefined,
-      turns: typeof item.turns === 'number' ? item.turns : undefined,
-    }
-  })
+      status: asString(item.status, "unknown"),
+      model: typeof item.model === "string" ? item.model : undefined,
+      turns: typeof item.turns === "number" ? item.turns : undefined,
+    };
+  });
 }
 
 function toAttentionItems(value: unknown): AttentionItem[] {
   if (!Array.isArray(value)) {
-    return []
+    return [];
   }
   return value.map((item, index) => {
     if (!isObject(item)) {
       return {
         id: `attention-${index}`,
         title: `Attention ${index + 1}`,
-        urgency: 'low',
-      }
+        urgency: "low",
+      };
     }
     const urgency =
-      item.urgency === 'high' || item.urgency === 'medium' || item.urgency === 'low'
+      item.urgency === "high" || item.urgency === "medium" || item.urgency === "low"
         ? item.urgency
-        : 'low'
+        : "low";
     return {
       id: asString(item.id, `attention-${index}`),
       title: asString(item.title, `Attention ${index + 1}`),
       urgency,
-    }
-  })
+    };
+  });
 }
 
 export function useAgent(): UseAgentResult {
@@ -104,63 +102,63 @@ export function useAgent(): UseAgentResult {
     agents: state.agents,
     attentionItems: state.attentionItems,
     refreshAll: state.refreshAll,
-  }))
+  }));
 
-  const { subscribe } = useGateway()
+  const { subscribe } = useGateway();
 
-  const [phase, setPhase] = useState<AgentPhase>(storePhase)
-  const [activeTask, setActiveTask] = useState<ActiveTask | null>(storeActiveTask)
-  const [agents, setAgents] = useState<AgentInfo[]>(storeAgents)
-  const [attentionItems, setAttentionItems] = useState<AttentionItem[]>(storeAttentionItems)
-
-  useEffect(() => {
-    void refreshAll()
-  }, [refreshAll])
+  const [phase, setPhase] = useState<AgentPhase>(storePhase);
+  const [activeTask, setActiveTask] = useState<ActiveTask | null>(storeActiveTask);
+  const [agents, setAgents] = useState<AgentInfo[]>(storeAgents);
+  const [attentionItems, setAttentionItems] = useState<AttentionItem[]>(storeAttentionItems);
 
   useEffect(() => {
-    setPhase(storePhase)
-    setActiveTask(storeActiveTask)
-    setAgents(storeAgents)
-    setAttentionItems(storeAttentionItems)
-  }, [storePhase, storeActiveTask, storeAgents, storeAttentionItems])
+    void refreshAll();
+  }, [refreshAll]);
+
+  useEffect(() => {
+    setPhase(storePhase);
+    setActiveTask(storeActiveTask);
+    setAgents(storeAgents);
+    setAttentionItems(storeAttentionItems);
+  }, [storePhase, storeActiveTask, storeAgents, storeAttentionItems]);
 
   useEffect(() => {
     const unsubscribers = [
-      subscribe('agent.state', (payload) => {
+      subscribe("agent.state", (payload: GatewayPayload) => {
         if (!isObject(payload)) {
-          return
+          return;
         }
-        setPhase((prev) => toPhase(payload.phase, prev))
-        if ('activeTask' in payload) {
-          setActiveTask(toActiveTask(payload.activeTask))
+        setPhase((prev) => toPhase(payload.phase, prev));
+        if ("activeTask" in payload) {
+          setActiveTask(toActiveTask(payload.activeTask));
         }
-        if ('agents' in payload) {
-          setAgents(toAgents(payload.agents))
+        if ("agents" in payload) {
+          setAgents(toAgents(payload.agents));
         }
-        if ('attentionItems' in payload) {
-          setAttentionItems(toAttentionItems(payload.attentionItems))
+        if ("attentionItems" in payload) {
+          setAttentionItems(toAttentionItems(payload.attentionItems));
         }
       }),
-      subscribe('agent.phase', (payload) => {
-        setPhase((prev) => toPhase(payload, prev))
+      subscribe("agent.phase", (payload: GatewayPayload) => {
+        setPhase((prev) => toPhase(payload, prev));
       }),
-      subscribe('agent.active-task', (payload) => {
-        setActiveTask(toActiveTask(payload))
+      subscribe("agent.active-task", (payload: GatewayPayload) => {
+        setActiveTask(toActiveTask(payload));
       }),
-      subscribe('agent.attention-items', (payload) => {
-        setAttentionItems(toAttentionItems(payload))
+      subscribe("agent.attention-items", (payload: GatewayPayload) => {
+        setAttentionItems(toAttentionItems(payload));
       }),
-    ]
+    ];
 
     return () => {
-      unsubscribers.forEach((unsubscribe) => unsubscribe())
-    }
-  }, [subscribe])
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [subscribe]);
 
   return {
     phase,
     activeTask,
     agents,
     attentionItems,
-  }
+  };
 }

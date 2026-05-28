@@ -46,21 +46,32 @@ export type SystemState = {
   };
 };
 
-let currentState: SystemState = {
-  phase: "idle",
-  activeTask: null,
-  queuedTasks: 0,
-  attentionItems: [],
-  lastCompletedTask: null,
-  agents: {
-    claude: { status: "online", model: "claude-sonnet-4-6" },
-    codex: { status: "online", model: "codex-mini" },
-  },
-  stats: { tokensToday: 0, tasksToday: 0, uptime: 0 },
-};
+function createInitialState(): SystemState {
+  return {
+    phase: "idle",
+    activeTask: null,
+    queuedTasks: 0,
+    attentionItems: [],
+    lastCompletedTask: null,
+    agents: {
+      claude: { status: "online", model: "claude-sonnet-4-6" },
+      codex: { status: "online", model: "codex-mini" },
+    },
+    stats: { tokensToday: 0, tasksToday: 0, uptime: 0 },
+  };
+}
+
+let currentState: SystemState = createInitialState();
+let runtimeStartedAt = Date.now();
 
 export function getSystemState(): SystemState {
-  return currentState;
+  return {
+    ...currentState,
+    stats: {
+      ...currentState.stats,
+      uptime: Math.max(0, Date.now() - runtimeStartedAt),
+    },
+  };
 }
 
 export function updateSystemState(patch: Partial<SystemState>) {
@@ -72,7 +83,11 @@ export function setActiveTask(task: ActiveTask | null) {
   currentState.phase = task?.phase ?? "idle";
 }
 
-export function updateTaskProgress(stepCurrent: number, currentAction: string, thinkingLine?: string) {
+export function updateTaskProgress(
+  stepCurrent: number,
+  currentAction: string,
+  thinkingLine?: string,
+) {
   if (currentState.activeTask) {
     currentState.activeTask.stepCurrent = stepCurrent;
     currentState.activeTask.currentAction = currentAction;
@@ -103,4 +118,13 @@ export function dismissAttentionItem(id: string) {
 
 export function getUrgentItems(): AttentionItem[] {
   return currentState.attentionItems.filter((i) => i.urgency === "loud");
+}
+
+export function __resetSystemStateForTest(): void {
+  currentState = createInitialState();
+  runtimeStartedAt = Date.now();
+}
+
+export function __setRuntimeStartedAtForTest(ts: number): void {
+  runtimeStartedAt = ts;
 }

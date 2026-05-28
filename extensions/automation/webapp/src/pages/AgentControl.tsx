@@ -1,72 +1,70 @@
-import { useEffect, useMemo, useState } from 'react'
-import { createGatewayWsRpcClient } from '../api/gateway-ws'
-import { useAppStore } from '../stores/app-store'
-import './AgentControl.css'
+import { useEffect, useMemo, useState } from "react";
+import { createGatewayWsRpcClient } from "../api/gateway-ws";
+import { useAppStore } from "../stores/app-store";
+import "./AgentControl.css";
 
 function statusDotClass(status: string): string {
-  const normalized = status.toLowerCase()
-  if (normalized.includes('run') || normalized.includes('busy')) {
-    return 'agent-dot agent-dot-busy'
+  const normalized = status.toLowerCase();
+  if (normalized.includes("run") || normalized.includes("busy")) {
+    return "agent-dot agent-dot-busy";
   }
-  if (normalized.includes('off') || normalized.includes('error')) {
-    return 'agent-dot agent-dot-offline'
+  if (normalized.includes("off") || normalized.includes("error")) {
+    return "agent-dot agent-dot-offline";
   }
-  return 'agent-dot agent-dot-online'
+  return "agent-dot agent-dot-online";
 }
 
 export function AgentControl() {
   const { agents, refreshAll } = useAppStore((state) => ({
     agents: state.agents,
     refreshAll: state.refreshAll,
-  }))
+  }));
 
-  const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
     if (agents.length === 0) {
-      void refreshAll()
+      void refreshAll();
     }
-  }, [agents.length, refreshAll])
+  }, [agents.length, refreshAll]);
 
   const sortedAgents = useMemo(
     () =>
-      [...agents].sort((a, b) =>
-        a.name.localeCompare(b.name, 'zh-Hant', { sensitivity: 'base' }),
-      ),
+      agents.toSorted((a, b) => a.name.localeCompare(b.name, "zh-Hant", { sensitivity: "base" })),
     [agents],
-  )
+  );
 
   async function switchAgent(agentId: string): Promise<void> {
-    setBusy(true)
-    setMessage('')
-    const client = createGatewayWsRpcClient()
+    setBusy(true);
+    setMessage("");
+    const client = createGatewayWsRpcClient();
     try {
-      await client.connect()
-      await client.call('config.patch', { activeAgentId: agentId })
-      await refreshAll()
-      setMessage(`已切換 Agent：${agentId}`)
+      await client.connect();
+      await client.call("config.patch", { activeAgentId: agentId });
+      await refreshAll();
+      setMessage(`已切換 Agent：${agentId}`);
     } catch {
-      setMessage('切換 Agent 失敗，請稍後重試。')
+      setMessage("切換 Agent 失敗，請稍後重試。");
     } finally {
-      client.disconnect()
-      setBusy(false)
+      client.disconnect();
+      setBusy(false);
     }
   }
 
   async function resetAgentSession(agentId: string): Promise<void> {
-    setBusy(true)
-    setMessage('')
-    const client = createGatewayWsRpcClient()
+    setBusy(true);
+    setMessage("");
+    const client = createGatewayWsRpcClient();
     try {
-      await client.connect()
-      await client.call('sessions.reset', { agentId })
-      setMessage(`已重置 Agent 對話：${agentId}`)
+      await client.connect();
+      await client.call("sessions.reset", { agentId });
+      setMessage(`已重置 Agent 對話：${agentId}`);
     } catch {
-      setMessage('重置對話失敗，請稍後重試。')
+      setMessage("重置對話失敗，請稍後重試。");
     } finally {
-      client.disconnect()
-      setBusy(false)
+      client.disconnect();
+      setBusy(false);
     }
   }
 
@@ -100,7 +98,7 @@ export function AgentControl() {
               </div>
               <p className="agent-meta">ID：{agent.id}</p>
               <p className="agent-meta">狀態：{agent.status}</p>
-              <p className="agent-meta">模型：{agent.model ?? '未設定'}</p>
+              <p className="agent-meta">模型：{agent.model ?? "未設定"}</p>
               <p className="agent-meta">Session Turns：{agent.turns ?? 0}</p>
               <div className="agent-actions">
                 <button
@@ -125,5 +123,5 @@ export function AgentControl() {
         </div>
       )}
     </section>
-  )
+  );
 }

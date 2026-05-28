@@ -1,5 +1,5 @@
-import type { InteractiveReply } from "./types.js";
 import type { AgentPhase } from "./agent-state.js";
+import type { InteractiveReply } from "./types.js";
 
 const PHASE_EMOJI: Record<AgentPhase, string> = {
   idle: "🟢",
@@ -73,6 +73,7 @@ export function buildTaskComplete(
   summary: string,
   elapsed: number,
   suggestedActions: Array<{ label: string; value: string }>,
+  taskId?: string,
 ): InteractiveReply {
   const emoji = success ? "🎉" : "❌";
   const status = success ? "完成" : "失敗";
@@ -92,15 +93,17 @@ export function buildTaskComplete(
   }));
 
   if (!success) {
-    buttons.unshift({ label: "🔄 重試", value: "sc:retry", style: "primary" });
+    buttons.unshift({
+      label: "🔄 重試",
+      value: taskId ? `sc:retry:${taskId}` : "sc:retry",
+      style: "primary",
+    });
   }
 
   return {
     blocks: [
       { type: "text", text: lines.join("\n") },
-      ...(buttons.length > 0
-        ? [{ type: "buttons" as const, buttons: buttons.slice(0, 3) }]
-        : []),
+      ...(buttons.length > 0 ? [{ type: "buttons" as const, buttons: buttons.slice(0, 3) }] : []),
     ],
   };
 }
@@ -140,9 +143,7 @@ export function buildTaskError(
   taskId: string,
 ): InteractiveReply {
   const truncatedError =
-    errorMessage.length > 300
-      ? errorMessage.slice(0, 300) + "..."
-      : errorMessage;
+    errorMessage.length > 300 ? errorMessage.slice(0, 300) + "..." : errorMessage;
 
   return {
     blocks: [
@@ -163,9 +164,13 @@ export function buildTaskError(
 }
 
 function buildProgressBar(current: number, total: number, width = 12): string {
-  const filled = Math.round((current / total) * width);
+  if (total <= 0) {
+    return `[${"░".repeat(width)}] 0%`;
+  }
+  const safeCurrent = Math.min(Math.max(current, 0), total);
+  const filled = Math.round((safeCurrent / total) * width);
   const empty = width - filled;
-  const pct = Math.round((current / total) * 100);
+  const pct = Math.round((safeCurrent / total) * 100);
   return `[${"█".repeat(filled)}${"░".repeat(empty)}] ${pct}%`;
 }
 

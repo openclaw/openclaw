@@ -10,6 +10,35 @@ export interface SpawnedAgent {
 
 const activeAgents = new Map<string, SpawnedAgent>();
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function stringifyUnknown(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+    return String(value);
+  }
+  return JSON.stringify(value) ?? "";
+}
+
+function messageToText(message: unknown): string {
+  if (typeof message === "string") {
+    return message;
+  }
+  if (isRecord(message)) {
+    if (typeof message.text === "string") {
+      return message.text;
+    }
+    if (message.content !== undefined) {
+      return stringifyUnknown(message.content);
+    }
+  }
+  return stringifyUnknown(message);
+}
+
 export async function spawnAgent(
   api: OpenClawPluginApi,
   opts: {
@@ -38,12 +67,21 @@ export async function spawnAgent(
 
   activeAgents.set(opts.id, agent);
 
-  api.runtime.subagent
-    .waitForRun({ runId, timeoutMs: 300_000 })
-    .then((result: any) => {
+  void api.runtime.subagent.waitForRun({ runId, timeoutMs: 300_000 }).then(
+    (result: unknown) => {
       const a = activeAgents.get(opts.id);
-      if (a) a.status = result.status === "ok" ? "idle" : "error";
-    });
+      if (a) {
+        const status = isRecord(result) ? result.status : undefined;
+        a.status = status === "ok" ? "idle" : "error";
+      }
+    },
+    () => {
+      const a = activeAgents.get(opts.id);
+      if (a) {
+        a.status = "error";
+      }
+    },
+  );
 
   return agent;
 }
@@ -52,25 +90,19 @@ export function listActiveAgents(): SpawnedAgent[] {
   return Array.from(activeAgents.values());
 }
 
-export async function getAgentOutput(
-  api: OpenClawPluginApi,
-  agentId: string,
-): Promise<string> {
+export async function getAgentOutput(api: OpenClawPluginApi, agentId: string): Promise<string> {
   const agent = activeAgents.get(agentId);
-  if (!agent) return "(agent not found)";
+  if (!agent) {
+    return "(agent not found)";
+  }
   const { messages } = await api.runtime.subagent.getSessionMessages({
     sessionKey: agent.sessionKey,
     limit: 20,
   });
-  return messages
-    .map((m: any) => m?.text ?? m?.content ?? JSON.stringify(m))
-    .join("\n\n");
+  return messages.map((message: unknown) => messageToText(message)).join("\n\n");
 }
 
-export async function terminateAgent(
-  api: OpenClawPluginApi,
-  agentId: string,
-): Promise<void> {
+export async function terminateAgent(api: OpenClawPluginApi, agentId: string): Promise<void> {
   const agent = activeAgents.get(agentId);
   if (agent) {
     await api.runtime.subagent.deleteSession({ sessionKey: agent.sessionKey });

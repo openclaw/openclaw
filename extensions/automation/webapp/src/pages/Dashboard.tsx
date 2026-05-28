@@ -1,63 +1,54 @@
-import { useEffect, useMemo } from 'react'
-import { useAppStore } from '../stores/app-store'
-import './Dashboard.css'
+import { useEffect, useMemo } from "react";
+import { useAppStore } from "../stores/app-store";
+import "./Dashboard.css";
 
 const phaseLabelMap = {
-  idle: { emoji: '🟢', label: '待命中' },
-  running: { emoji: '🔄', label: '執行中' },
-  waiting: { emoji: '🟡', label: '等待中' },
-  error: { emoji: '🔴', label: '異常' },
-} as const
+  idle: { emoji: "🟢", label: "待命中" },
+  running: { emoji: "🔄", label: "執行中" },
+  waiting: { emoji: "🟡", label: "等待中" },
+  error: { emoji: "🔴", label: "異常" },
+} as const;
 
 const urgencyWeight = {
   high: 3,
   medium: 2,
   low: 1,
-} as const
+} as const;
 
 function getQuickActions(phase: keyof typeof phaseLabelMap): string[] {
-  if (phase === 'running') {
-    return ['查看輸出', '暫停任務', '快速回報']
+  if (phase === "running") {
+    return ["查看輸出", "暫停任務", "快速回報"];
   }
-  if (phase === 'error') {
-    return ['查看錯誤', '重試刷新', '建立修復任務']
+  if (phase === "error") {
+    return ["查看錯誤", "重試刷新", "建立修復任務"];
   }
-  if (phase === 'waiting') {
-    return ['繼續執行', '切換 Agent', '檢查排程']
+  if (phase === "waiting") {
+    return ["繼續執行", "切換 Agent", "檢查排程"];
   }
-  return ['刷新狀態', '啟動工作流', '查看任務佇列']
+  return ["刷新狀態", "啟動工作流", "查看任務佇列"];
 }
 
 export function Dashboard() {
-  const {
-    phase,
-    activeTask,
-    attentionItems,
-    stats,
-    refreshAll,
-  } = useAppStore((state) => ({
+  const { phase, activeTask, attentionItems, stats, refreshAll } = useAppStore((state) => ({
     phase: state.phase,
     activeTask: state.activeTask,
     attentionItems: state.attentionItems,
     stats: state.stats,
     refreshAll: state.refreshAll,
-  }))
+  }));
 
   useEffect(() => {
-    void refreshAll()
-  }, [refreshAll])
+    void refreshAll();
+  }, [refreshAll]);
 
   const sortedAttentionItems = useMemo(
-    () =>
-      [...attentionItems].sort(
-        (a, b) => urgencyWeight[b.urgency] - urgencyWeight[a.urgency],
-      ),
+    () => attentionItems.toSorted((a, b) => urgencyWeight[b.urgency] - urgencyWeight[a.urgency]),
     [attentionItems],
-  )
+  );
 
-  const quickActions = getQuickActions(phase)
-  const phaseInfo = phaseLabelMap[phase]
-  const progress = activeTask ? Math.max(0, Math.min(100, activeTask.progress)) : 0
+  const quickActions = getQuickActions(phase);
+  const phaseInfo = phaseLabelMap[phase];
+  const progress = activeTask ? Math.max(0, Math.min(100, activeTask.progress)) : 0;
 
   return (
     <section className="dashboard">
@@ -119,5 +110,5 @@ export function Dashboard() {
         <p>今日任務：{stats.tasksToday}</p>
       </footer>
     </section>
-  )
+  );
 }

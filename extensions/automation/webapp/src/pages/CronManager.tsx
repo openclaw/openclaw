@@ -1,59 +1,60 @@
-import { useEffect, useMemo, useState } from 'react'
-import { createGatewayWsRpcClient } from '../api/gateway-ws'
-import { useAppStore } from '../stores/app-store'
-import './CronManager.css'
+import { useEffect, useMemo, useState } from "react";
+import { createGatewayWsRpcClient } from "../api/gateway-ws";
+import { useAppStore } from "../stores/app-store";
+import "./CronManager.css";
 
 export function CronManager() {
   const { cronJobs, refreshAll } = useAppStore((state) => ({
     cronJobs: state.cronJobs,
     refreshAll: state.refreshAll,
-  }))
-  const [busy, setBusy] = useState<string | null>(null)
-  const [message, setMessage] = useState('')
+  }));
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
     if (cronJobs.length === 0) {
-      void refreshAll()
+      void refreshAll();
     }
-  }, [cronJobs.length, refreshAll])
+  }, [cronJobs.length, refreshAll]);
 
   const orderedJobs = useMemo(
-    () => [...cronJobs].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant', { sensitivity: 'base' })),
+    () =>
+      cronJobs.toSorted((a, b) => a.name.localeCompare(b.name, "zh-Hant", { sensitivity: "base" })),
     [cronJobs],
-  )
+  );
 
   async function toggleCron(id: string, enabled: boolean) {
-    setBusy(id)
-    setMessage('')
-    const client = createGatewayWsRpcClient()
+    setBusy(id);
+    setMessage("");
+    const client = createGatewayWsRpcClient();
 
     try {
-      await client.connect()
-      await client.call('cron.update', { id, enabled })
-      await refreshAll()
-      setMessage(`排程已${enabled ? '啟用' : '停用'}：${id}`)
+      await client.connect();
+      await client.call("cron.update", { id, enabled });
+      await refreshAll();
+      setMessage(`排程已${enabled ? "啟用" : "停用"}：${id}`);
     } catch {
-      setMessage(`排程切換失敗：${id}`)
+      setMessage(`排程切換失敗：${id}`);
     } finally {
-      client.disconnect()
-      setBusy(null)
+      client.disconnect();
+      setBusy(null);
     }
   }
 
   async function runCronNow(id: string) {
-    setBusy(id)
-    setMessage('')
-    const client = createGatewayWsRpcClient()
+    setBusy(id);
+    setMessage("");
+    const client = createGatewayWsRpcClient();
 
     try {
-      await client.connect()
-      await client.call('cron.run', { id })
-      setMessage(`已觸發立即執行：${id}`)
+      await client.connect();
+      await client.call("cron.run", { id });
+      setMessage(`已觸發立即執行：${id}`);
     } catch {
-      setMessage(`立即執行失敗：${id}`)
+      setMessage(`立即執行失敗：${id}`);
     } finally {
-      client.disconnect()
-      setBusy(null)
+      client.disconnect();
+      setBusy(null);
     }
   }
 
@@ -61,7 +62,12 @@ export function CronManager() {
     <section className="cron-manager">
       <header className="cron-card">
         <h1>排程管理</h1>
-        <button type="button" className="cron-btn-primary" disabled={Boolean(busy)} onClick={() => void refreshAll()}>
+        <button
+          type="button"
+          className="cron-btn-primary"
+          disabled={Boolean(busy)}
+          onClick={() => void refreshAll()}
+        >
           刷新列表
         </button>
       </header>
@@ -85,7 +91,7 @@ export function CronManager() {
                     disabled={busy === job.id}
                     onChange={(event) => void toggleCron(job.id, event.target.checked)}
                   />
-                  <span>{job.enabled ? '啟用' : '停用'}</span>
+                  <span>{job.enabled ? "啟用" : "停用"}</span>
                 </label>
               </div>
               <p className="cron-meta">ID：{job.id}</p>
@@ -103,5 +109,5 @@ export function CronManager() {
         </div>
       )}
     </section>
-  )
+  );
 }

@@ -8,6 +8,7 @@
  * 4. 完成後將任務標記為 `[x]`
  */
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -93,7 +94,7 @@ async function executeTask(
   task: ParsedTask,
   filePath: string,
 ): Promise<boolean> {
-  const sessionKey = `codex-auto-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const sessionKey = `codex-auto-${randomUUID()}`;
 
   // 建立完整的 Codex 指令
   const instruction = [
@@ -101,7 +102,7 @@ async function executeTask(
     ``,
     `請完成以下任務：`,
     ``,
-    `${task.description}`,
+    task.description,
     ``,
     `### 規範`,
     `- 專案根目錄: extensions/automation/`,
@@ -153,17 +154,23 @@ async function executeTask(
 }
 
 async function pollAndExecute(api: OpenClawPluginApi): Promise<void> {
-  if (isProcessing) return;
+  if (isProcessing) {
+    return;
+  }
 
   const filePath = resolveTaskFilePath();
   const modifiedMs = getFileModifiedTime(filePath);
 
   // 檔案沒有變更，跳過
-  if (modifiedMs <= lastModifiedMs) return;
+  if (modifiedMs <= lastModifiedMs) {
+    return;
+  }
   lastModifiedMs = modifiedMs;
 
   const task = getNextTask(filePath);
-  if (!task) return;
+  if (!task) {
+    return;
+  }
 
   isProcessing = true;
 
@@ -201,49 +208,44 @@ export function registerFileWatcher(api: OpenClawPluginApi): void {
   });
 
   // 也可以透過 Gateway RPC 手動觸發
-  api.registerGatewayMethod(
-    "automation.codex.runNextTask",
-    async () => {
-      const task = getNextTask(filePath);
-      if (!task) {
-        return { status: "no_tasks", message: "沒有待執行的任務" };
-      }
+  api.registerGatewayMethod("automation.codex.runNextTask", async ({ respond }) => {
+    const task = getNextTask(filePath);
+    if (!task) {
+      respond(true, { status: "no_tasks", message: "沒有待執行的任務" });
+      return;
+    }
 
-      // 不等待完成，立即返回
-      executeTask(api, task, filePath).catch(() => {});
+    // 不等待完成，立即返回
+    executeTask(api, task, filePath).catch(() => {});
 
-      return {
-        status: "started",
-        task: task.description,
-        message: `開始執行: ${task.description}`,
-      };
-    },
-  );
+    respond(true, {
+      status: "started",
+      task: task.description,
+      message: `開始執行: ${task.description}`,
+    });
+  });
 
   // 查詢任務狀態
-  api.registerGatewayMethod(
-    "automation.codex.taskStatus",
-    async () => {
-      const tasks = (() => {
-        try {
-          const content = fs.readFileSync(filePath, "utf-8");
-          return parseTasksFromContent(content);
-        } catch {
-          return [];
-        }
-      })();
+  api.registerGatewayMethod("automation.codex.taskStatus", async ({ respond }) => {
+    const tasks = (() => {
+      try {
+        const content = fs.readFileSync(filePath, "utf-8");
+        return parseTasksFromContent(content);
+      } catch {
+        return [];
+      }
+    })();
 
-      const done = tasks.filter((t) => t.done).length;
-      const pending = tasks.filter((t) => !t.done).length;
-      const next = tasks.find((t) => !t.done);
+    const done = tasks.filter((t) => t.done).length;
+    const pending = tasks.filter((t) => !t.done).length;
+    const next = tasks.find((t) => !t.done);
 
-      return {
-        total: tasks.length,
-        done,
-        pending,
-        isProcessing,
-        nextTask: next?.description ?? null,
-      };
-    },
-  );
+    respond(true, {
+      total: tasks.length,
+      done,
+      pending,
+      isProcessing,
+      nextTask: next?.description ?? null,
+    });
+  });
 }

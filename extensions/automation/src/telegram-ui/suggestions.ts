@@ -84,9 +84,7 @@ function getPostTaskSuggestions(taskTitle: string): SuggestedAction[] {
   }
 
   if (taskTitle.includes("review") || taskTitle.includes("審查")) {
-    return [
-      { label: "✅ 合併", callbackData: "sc:do:merge", reason: "審查完成可以合併" },
-    ];
+    return [{ label: "✅ 合併", callbackData: "sc:do:merge", reason: "審查完成可以合併" }];
   }
 
   if (taskTitle.includes("deploy") || taskTitle.includes("部署")) {
@@ -100,7 +98,9 @@ function getPostTaskSuggestions(taskTitle: string): SuggestedAction[] {
 }
 
 export function formatSuggestionMessage(suggestions: SuggestedAction[]): string {
-  if (suggestions.length === 0) return "";
+  if (suggestions.length === 0) {
+    return "";
+  }
   return (
     "💡 <b>建議下一步</b>\n" +
     suggestions.map((s) => `  → ${s.label}: <i>${s.reason}</i>`).join("\n")

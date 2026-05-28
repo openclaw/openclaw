@@ -42,7 +42,9 @@ export function formatProgressMessage(
 }
 
 export function formatStreamChunk(buffer: string, maxLen = 4000): string {
-  if (buffer.length <= maxLen) return `<pre><code>${escapeHtml(buffer)}</code></pre>`;
+  if (buffer.length <= maxLen) {
+    return `<pre><code>${escapeHtml(buffer)}</code></pre>`;
+  }
   const truncated = buffer.slice(-maxLen);
   return `<pre><code>...\n${escapeHtml(truncated)}</code></pre>`;
 }

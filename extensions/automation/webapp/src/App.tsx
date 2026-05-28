@@ -1,36 +1,37 @@
-import { Tabbar } from '@telegram-apps/telegram-ui'
-import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { AgentControl } from './pages/AgentControl'
-import { CodeWorkspace } from './pages/CodeWorkspace'
-import { CronManager } from './pages/CronManager'
-import { Dashboard } from './pages/Dashboard'
-import { DevOpsPanel } from './pages/DevOpsPanel'
-import { ModelSelector } from './pages/ModelSelector'
-import { Settings } from './pages/Settings'
-import { WorkflowEditor } from './pages/WorkflowEditor'
-import './App.css'
+import { Tabbar } from "@telegram-apps/telegram-ui";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { usePushNotifications } from "./hooks/usePushNotifications";
+import { AgentControl } from "./pages/AgentControl";
+import { CodeWorkspace } from "./pages/CodeWorkspace";
+import { CronManager } from "./pages/CronManager";
+import { Dashboard } from "./pages/Dashboard";
+import { DevOpsPanel } from "./pages/DevOpsPanel";
+import { ModelSelector } from "./pages/ModelSelector";
+import { Settings } from "./pages/Settings";
+import { TaskBoard } from "./pages/TaskBoard";
+import { WorkflowEditor } from "./pages/WorkflowEditor";
+import "./App.css";
 
 type RouteItem = {
-  path: string
-  title: string
-  description: string
-}
+  path: string;
+  title: string;
+  description: string;
+};
 
-const routeItems: RouteItem[] = [
-]
+const routeItems: RouteItem[] = [];
 
 type TabItem = {
-  path: string
-  text: string
-  icon: string
-}
+  path: string;
+  text: string;
+  icon: string;
+};
 
 const tabItems: TabItem[] = [
-  { path: '/', text: '首頁', icon: '🏠' },
-  { path: '/agents', text: 'Agent', icon: '🤖' },
-  { path: '/code', text: '程式碼', icon: '💻' },
-  { path: '/settings', text: '更多', icon: '⚙️' },
-]
+  { path: "/", text: "首頁", icon: "🏠" },
+  { path: "/agents", text: "Agent", icon: "🤖" },
+  { path: "/code", text: "程式碼", icon: "💻" },
+  { path: "/settings", text: "更多", icon: "⚙️" },
+];
 
 function PlaceholderPage({ title, description }: { title: string; description: string }) {
   return (
@@ -38,12 +39,13 @@ function PlaceholderPage({ title, description }: { title: string; description: s
       <h1>{title}</h1>
       <p>{description}</p>
     </section>
-  )
+  );
 }
 
 function App() {
-  const location = useLocation()
-  const navigate = useNavigate()
+  usePushNotifications();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   return (
     <div className="app-shell">
@@ -57,6 +59,7 @@ function App() {
           <Route path="/models" element={<ModelSelector />} />
           <Route path="/devops" element={<DevOpsPanel />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/taskboard" element={<TaskBoard />} />
           {routeItems.map((item) => (
             <Route
               key={item.path}
@@ -81,7 +84,7 @@ function App() {
         ))}
       </Tabbar>
     </div>
-  )
+  );
 }
 
-export default App
+export default App;

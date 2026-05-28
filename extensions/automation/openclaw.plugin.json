@@ -6,6 +6,10 @@
     "onStartup": true
   },
   "enabledByDefault": true,
+  "subagent": {
+    "allowModelOverride": true,
+    "allowedModels": ["qwen3:14b", "gpt-5.4-mini", "deepseek-chat", "claude-4.6-sonnet"]
+  },
   "contracts": {
     "tools": [
       "automation_classify_intent",

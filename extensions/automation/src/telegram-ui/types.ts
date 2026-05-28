@@ -4,8 +4,8 @@ export type CallbackContext = {
   userId: number;
   data: string;
   answerCallback: (text?: string) => Promise<void>;
-  editMessage: (text: string, buttons?: any) => Promise<void>;
-  sendMessage: (text: string, buttons?: any) => Promise<void>;
+  editMessage: (text: string, buttons?: unknown) => Promise<void>;
+  sendMessage: (text: string, buttons?: unknown) => Promise<void>;
 };
 
 export type PanelButton = {

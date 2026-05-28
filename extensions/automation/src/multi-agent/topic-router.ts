@@ -8,7 +8,9 @@ const TOPIC_AGENT_MAP: Record<string, string> = {
 export function resolveAgentFromTopic(topicName: string): string {
   const normalized = topicName.toLowerCase().replace(/[^a-z]/g, "");
   for (const [key, agentId] of Object.entries(TOPIC_AGENT_MAP)) {
-    if (normalized.includes(key)) return agentId;
+    if (normalized.includes(key)) {
+      return agentId;
+    }
   }
   return "main";
 }

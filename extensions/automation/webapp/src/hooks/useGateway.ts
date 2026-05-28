@@ -1,74 +1,71 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import {
-  createGatewayWsRpcClient,
-  type GatewayEventHandler,
-} from '../api/gateway-ws'
-import type { GatewayCallParams } from '../api/types'
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { createGatewayWsRpcClient } from "../api/gateway-ws";
+import type { GatewayCallParams, GatewayEventHandler } from "../api/types";
 
 type UseGatewayResult = {
-  connected: boolean
-  call: (method: string, params?: GatewayCallParams) => Promise<unknown>
-  subscribe: (event: string, handler: GatewayEventHandler) => () => void
-  reconnect: () => Promise<void>
-}
+  connected: boolean;
+  call: (method: string, params?: GatewayCallParams) => Promise<unknown>;
+  subscribe: (event: string, handler: GatewayEventHandler) => () => void;
+  reconnect: () => Promise<void>;
+};
 
 export function useGateway(): UseGatewayResult {
-  const client = useMemo(() => createGatewayWsRpcClient(), [])
-  const [connected, setConnected] = useState(false)
+  const client = useMemo(() => createGatewayWsRpcClient(), []);
+  const [connected, setConnected] = useState(false);
 
   const reconnect = useCallback(async () => {
-    client.disconnect()
+    client.disconnect();
     try {
-      await client.connect()
-      setConnected(true)
+      await client.connect();
+      setConnected(true);
     } catch {
-      setConnected(false)
-      throw new Error('Gateway 重新連線失敗')
+      setConnected(false);
+      throw new Error("Gateway 重新連線失敗");
     }
-  }, [client])
+  }, [client]);
 
   const call = useCallback(
     async (method: string, params?: GatewayCallParams): Promise<unknown> => {
       if (!connected) {
-        await reconnect()
+        await reconnect();
       }
-      return client.call(method, params)
+      return client.call(method, params);
     },
     [client, connected, reconnect],
-  )
+  );
 
   const subscribe = useCallback(
     (event: string, handler: GatewayEventHandler): (() => void) => {
-      return client.subscribe(event, handler)
+      return client.subscribe(event, handler);
     },
     [client],
-  )
+  );
 
   useEffect(() => {
-    let unmounted = false
+    let unmounted = false;
     void (async () => {
       try {
-        await client.connect()
+        await client.connect();
         if (!unmounted) {
-          setConnected(true)
+          setConnected(true);
         }
       } catch {
         if (!unmounted) {
-          setConnected(false)
+          setConnected(false);
         }
       }
-    })()
+    })();
 
     return () => {
-      unmounted = true
-      client.disconnect()
-    }
-  }, [client])
+      unmounted = true;
+      client.disconnect();
+    };
+  }, [client]);
 
   return {
     connected,
     call,
     subscribe,
     reconnect,
-  }
+  };
 }

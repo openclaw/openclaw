@@ -1,5 +1,5 @@
-import type { InteractiveReply } from "./types.js";
 import { buildBreadcrumb } from "./main-menu.js";
+import type { InteractiveReply } from "./types.js";
 
 export type AgentInfo = {
   id: string;
@@ -16,18 +16,16 @@ const STATUS_EMOJI: Record<string, string> = {
   error: "🔴",
 };
 
-export function buildAgentPanel(
-  agents: AgentInfo[],
-  activeAgentId?: string,
-): InteractiveReply {
-  const nav = buildBreadcrumb("首頁", "Agent 管理");
+export function buildAgentPanel(agents: AgentInfo[], activeAgentId?: string): InteractiveReply {
+  const nav = buildBreadcrumb("首頁", "智能體管理");
 
   const lines = agents.map((a) => {
     const emoji = STATUS_EMOJI[a.status] ?? "❓";
     const active = a.id === activeAgentId ? " ← 當前" : "";
-    const model = a.model ? `  模型: <code>${a.model}</code>` : "";
+    const model = a.model ? `  模型: <code>${escapeHtml(a.model)}</code>` : "";
     const turns = a.sessionTurns != null ? `  對話: ${a.sessionTurns} 輪` : "";
-    return `${emoji} <b>${a.name}</b>${active}\n${model}${turns}`.trim();
+    const uptime = a.uptime != null ? `  上線: ${formatDuration(a.uptime)}` : "";
+    return `${emoji} <b>${escapeHtml(a.name)}</b>${active}\n${model}${turns}${uptime}`.trim();
   });
 
   const switchButtons = agents
@@ -43,11 +41,9 @@ export function buildAgentPanel(
     blocks: [
       {
         type: "text",
-        text: `${nav}\n\n🧠 <b>Agent 狀態</b>\n\n${lines.join("\n\n")}`,
+        text: `${nav}\n\n🧠 <b>智能體狀態</b>\n\n${lines.join("\n\n")}`,
       },
-      ...(switchButtons.length > 0
-        ? [{ type: "buttons" as const, buttons: switchButtons }]
-        : []),
+      ...(switchButtons.length > 0 ? [{ type: "buttons" as const, buttons: switchButtons }] : []),
       {
         type: "buttons",
         buttons: [
@@ -68,7 +64,7 @@ export function buildResetConfirm(agentName: string): InteractiveReply {
     blocks: [
       {
         type: "text",
-        text: `⚠️ 確認要重置 <b>${agentName}</b> 的對話？\n所有對話歷史將清除。`,
+        text: `⚠️ 確認要重置 <b>${escapeHtml(agentName)}</b> 的對話？\n所有對話歷史將清除。`,
       },
       {
         type: "buttons",
@@ -79,4 +75,18 @@ export function buildResetConfirm(agentName: string): InteractiveReply {
       },
     ],
   };
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 60_000) {
+    return `${Math.floor(ms / 1000)} 秒`;
+  }
+  if (ms < 3_600_000) {
+    return `${Math.floor(ms / 60_000)} 分`;
+  }
+  return `${Math.floor(ms / 3_600_000)} 小時`;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

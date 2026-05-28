@@ -1,5 +1,6 @@
+import { resolveTelegramAuthBadge } from "./pro-status.js";
 import type { InteractiveReply } from "./types.js";
-import { getQuickActions, getContextualGreeting, type RecentAction } from "./user-state.js";
+import { getQuickActions, getContextualGreeting } from "./user-state.js";
 
 export type SystemSnapshot = {
   agentStatus: string;
@@ -8,12 +9,21 @@ export type SystemSnapshot = {
   cronJobsEnabled: number;
 };
 
-export function buildMainMenu(
-  userId: number,
-  snapshot?: SystemSnapshot,
-): InteractiveReply {
+const LEGACY_MAIN_MENU_LABEL_MAP: Array<[RegExp, string]> = [
+  [/\bWorkfl(?:ow)?\b(?:\.\.\.)?/gi, "工作流程"],
+  [/\bDevOp(?:s)?\b(?:\.\.\.)?/gi, "維運"],
+  [/\bAgen(?:t)?\b(?:\.\.\.)?/gi, "智能體"],
+  [/\bSess(?:ion)?\b(?:\.\.\.)?/gi, "工作階段"],
+  [/\bMod(?:el)?\b(?:\.\.\.)?/gi, "模型"],
+  [/\bDash(?:board)?\b(?:\.\.\.)?/gi, "儀表板"],
+  [/\bMor(?:e)?\b(?:\.\.\.)?/gi, "更多功能"],
+  [/\bCodex\b(?:\.\.\.)?/gi, "寫碼"],
+];
+
+export function buildMainMenu(userId: number, snapshot?: SystemSnapshot): InteractiveReply {
   const greeting = getContextualGreeting(userId);
   const recent = getQuickActions(userId);
+  const authBadge = resolveTelegramAuthBadge(userId);
 
   const statusLine = snapshot
     ? `\n🤖 ${snapshot.agentStatus}` +
@@ -25,7 +35,7 @@ export function buildMainMenu(
   const blocks: InteractiveReply["blocks"] = [
     {
       type: "text",
-      text: `${greeting}\n<b>SuperClaw 控制台</b>${statusLine}`,
+      text: `${greeting}\n<b>SuperClaw 控制台</b> · ${authBadge}${statusLine}`,
     },
   ];
 
@@ -33,8 +43,8 @@ export function buildMainMenu(
     blocks.push({
       type: "buttons",
       buttons: recent.map((r) => ({
-        label: `🕐 ${r.label}`,
-        value: r.callbackData,
+        label: `🕐 ${sanitizeButtonLabel(r.label)}`,
+        value: safeCallbackData(r.callbackData),
         style: "primary" as const,
       })),
     });
@@ -46,21 +56,22 @@ export function buildMainMenu(
       buttons: [
         { label: "💬 對話", value: "sc:chat", style: "primary" },
         { label: "💻 寫碼", value: "sc:code", style: "primary" },
-        { label: "🔄 Workflow", value: "sc:wf", style: "primary" },
+        { label: "🔄 工作流程", value: "sc:wf", style: "primary" },
       ],
     },
     {
       type: "buttons",
       buttons: [
         { label: "⏰ 排程", value: "sc:cron", style: "primary" },
-        { label: "🧠 Model", value: "sc:model", style: "primary" },
+        { label: "🧠 切換模型", value: "sc:model", style: "primary" },
         { label: "📊 狀態", value: "sc:stat", style: "primary" },
       ],
     },
     {
       type: "buttons",
       buttons: [
-        { label: "🚀 DevOps", value: "sc:devops", style: "primary" },
+        { label: "🚀 維運", value: "sc:devops", style: "primary" },
+        { label: "💹 交易", value: "sc:trade", style: "primary" },
         { label: "🖥️ 儀表板", value: "sc:dash", style: "success" },
       ],
     },
@@ -92,6 +103,19 @@ export function buildStartMessage(): InteractiveReply {
 
 function buildBreadcrumb(...path: string[]): string {
   return path.join(" › ");
+}
+
+function safeCallbackData(value: string): string {
+  return Buffer.byteLength(value, "utf8") <= 64 && value.length > 0 ? value : "sc:home";
+}
+
+function sanitizeButtonLabel(value: string): string {
+  const cleaned = value.replace(/[\r\n\t]/g, " ").trim();
+  let normalized = cleaned;
+  for (const [pattern, localized] of LEGACY_MAIN_MENU_LABEL_MAP) {
+    normalized = normalized.replace(pattern, localized);
+  }
+  return normalized;
 }
 
 export { buildBreadcrumb };

@@ -1,29 +1,56 @@
-import { Type } from "typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { Type } from "typebox";
 
-export function createConfirmGateTool(api: OpenClawPluginApi) {
+type ToolResult = {
+  content: Array<{ type: "text"; text: string }>;
+  details: unknown;
+};
+
+function jsonResult(payload: unknown): ToolResult {
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+    details: payload,
+  };
+}
+
+function buildConfirmGateError(params: {
+  errorCode: "CONFIRM_INPUT_INVALID";
+  nextAction: string;
+  detail: string;
+}): string {
+  return (
+    `回覆狀態：FAILED\n` +
+    `error_code=${params.errorCode}\n` +
+    `next_action=${params.nextAction}\n` +
+    `detail=${params.detail}`
+  );
+}
+
+export function createConfirmGateTool(_api: OpenClawPluginApi) {
   return {
     name: "automation_confirm_gate",
-    label: "Confirm Gate",
+    label: "操作確認閘門",
     description:
-      "Request user confirmation before executing a high-risk operation. " +
-      "Sends an interactive message with approve/deny buttons to the user's channel. " +
-      "Use this for: git push, deploy, delete, production operations, or any destructive action.",
+      "在高風險操作前要求使用者確認。會送出可互動訊息（批准/拒絕按鈕）。" +
+      "適用於 git push、部署、刪除、正式環境操作等破壞性動作。",
     parameters: Type.Object({
       operation: Type.String({
-        description: "Short description of the operation (e.g., 'git push origin main')",
+        description: "操作簡述（例如：git push origin main）",
       }),
       details: Type.Optional(
         Type.String({
-          description: "Additional details about what will happen (e.g., '3 commits, modifies auth module')",
+          description: "補充細節（例如：3 commits、修改 auth module）",
         }),
       ),
-      riskLevel: Type.Union([Type.Literal("medium"), Type.Literal("high"), Type.Literal("critical")], {
-        description: "Risk level of the operation",
-        default: "high",
-      }),
+      riskLevel: Type.Union(
+        [Type.Literal("medium"), Type.Literal("high"), Type.Literal("critical")],
+        {
+          description: "操作風險等級",
+          default: "high",
+        },
+      ),
       timeoutMinutes: Type.Optional(
-        Type.Number({ description: "Auto-cancel after N minutes if no response. Default: 30", default: 30 }),
+        Type.Number({ description: "逾時自動取消（分鐘），預設 30", default: 30 }),
       ),
     }),
 
@@ -38,7 +65,13 @@ export function createConfirmGateTool(api: OpenClawPluginApi) {
     ) {
       const operation = typeof params.operation === "string" ? params.operation.trim() : "";
       if (!operation) {
-        throw new Error("operation is required");
+        throw new Error(
+          buildConfirmGateError({
+            errorCode: "CONFIRM_INPUT_INVALID",
+            nextAction: "PROVIDE_OPERATION",
+            detail: "缺少 operation 參數。",
+          }),
+        );
       }
 
       const details = typeof params.details === "string" ? params.details : undefined;
@@ -62,26 +95,24 @@ export function createConfirmGateTool(api: OpenClawPluginApi) {
           {
             type: "buttons" as const,
             buttons: [
-              { label: "✅ 批准", value: `approve:${taskId}`, style: "success" as const },
-              { label: "❌ 拒絕", value: `deny:${taskId}`, style: "danger" as const },
+              { label: "✅ 批准", value: `sc:approve:${taskId}`, style: "success" as const },
+              { label: "❌ 拒絕", value: `sc:deny:${taskId}`, style: "danger" as const },
             ],
           },
         ],
       };
 
-      return [
-        {
-          type: "text" as const,
-          text: JSON.stringify({
-            status: "awaiting_confirmation",
-            taskId,
-            operation,
-            riskLevel,
-            timeoutMinutes,
-            interactive,
-          }, null, 2),
-        },
-      ];
+      return jsonResult({
+        回覆狀態: "SUCCESS",
+        error_code: "NONE",
+        next_action: "WAIT_USER_CONFIRMATION",
+        status: "awaiting_confirmation",
+        taskId,
+        operation,
+        riskLevel,
+        timeoutMinutes,
+        interactive,
+      });
     },
   };
 }

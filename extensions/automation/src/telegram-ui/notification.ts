@@ -14,8 +14,12 @@ export function classifyNotificationTier(
   eventType: string,
   context?: { isError?: boolean; needsHumanInput?: boolean; isUrgent?: boolean },
 ): NotificationTier {
-  if (context?.needsHumanInput || context?.isUrgent) return "loud";
-  if (context?.isError) return "loud";
+  if (context?.needsHumanInput || context?.isUrgent) {
+    return "loud";
+  }
+  if (context?.isError) {
+    return "loud";
+  }
 
   switch (eventType) {
     case "task_progress":
@@ -47,8 +51,7 @@ export function formatNotificationMessage(event: NotificationEvent): {
   silent: boolean;
   buttons?: Array<{ label: string; value: string }>;
 } {
-  const tierEmoji =
-    event.tier === "loud" ? "🔔" : event.tier === "quiet" ? "📌" : "";
+  const tierEmoji = event.tier === "loud" ? "🔔" : event.tier === "quiet" ? "📌" : "";
 
   const lines = [`${tierEmoji} <b>${event.title}</b>`];
   if (event.body) {
@@ -65,7 +68,7 @@ export function formatNotificationMessage(event: NotificationEvent): {
   };
 }
 
-export function shouldUpdateDashboard(tier: NotificationTier): boolean {
+export function shouldUpdateDashboard(_tier: NotificationTier): boolean {
   return true;
 }
 

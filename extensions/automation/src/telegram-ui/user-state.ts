@@ -36,6 +36,10 @@ export function setUserMode(userId: number, mode: UserMode) {
   getUserState(userId).mode = mode;
 }
 
+export function peekUserMode(userId: number): UserMode | undefined {
+  return userStates.get(userId)?.mode;
+}
+
 export function trackAction(userId: number, label: string, callbackData: string) {
   const state = getUserState(userId);
   state.recentActions = [
@@ -62,6 +66,6 @@ export function getContextualGreeting(userId: number): string {
     case "workflow":
       return `${timeGreeting}，工作流執行中 🔄`;
     default:
-      return `${timeGreeting}`;
+      return timeGreeting;
   }
 }

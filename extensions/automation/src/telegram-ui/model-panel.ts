@@ -1,5 +1,5 @@
-import type { InteractiveReply } from "./types.js";
 import { buildBreadcrumb } from "./main-menu.js";
+import type { InteractiveReply, PanelButton } from "./types.js";
 
 export type ModelInfo = {
   id: string;
@@ -8,15 +8,10 @@ export type ModelInfo = {
   isCurrent?: boolean;
 };
 
-export function buildModelPanel(
-  models: ModelInfo[],
-  currentModel?: string,
-): InteractiveReply {
+export function buildModelPanel(models: ModelInfo[], currentModel?: string): InteractiveReply {
   const nav = buildBreadcrumb("首頁", "模型切換");
 
-  const currentLine = currentModel
-    ? `當前: <code>${currentModel}</code>\n`
-    : "";
+  const currentLine = currentModel ? `當前: <code>${currentModel}</code>\n` : "";
 
   const grouped = new Map<string, ModelInfo[]>();
   for (const m of models) {
@@ -33,10 +28,10 @@ export function buildModelPanel(
   ];
 
   for (const [_provider, providerModels] of grouped) {
-    const buttons = providerModels.slice(0, 3).map((m) => ({
+    const buttons: PanelButton[] = providerModels.slice(0, 3).map((m) => ({
       label: `${m.isCurrent ? "✅ " : ""}${m.name}`,
       value: `sc:md:sw:${m.id}`,
-      style: (m.isCurrent ? "success" : "primary") as "success" | "primary",
+      style: m.isCurrent ? "success" : "primary",
     }));
     blocks.push({ type: "buttons", buttons });
   }
@@ -49,17 +44,12 @@ export function buildModelPanel(
   return { blocks };
 }
 
-export function buildModelSwitchResult(
-  modelName: string,
-  success: boolean,
-): InteractiveReply {
+export function buildModelSwitchResult(modelName: string, success: boolean): InteractiveReply {
   return {
     blocks: [
       {
         type: "text",
-        text: success
-          ? `✅ 已切換至 <b>${modelName}</b>`
-          : `❌ 切換至 ${modelName} 失敗`,
+        text: success ? `✅ 已切換至 <b>${modelName}</b>` : `❌ 切換至 ${modelName} 失敗`,
       },
       {
         type: "buttons",

@@ -4,6 +4,11 @@
   "private": true,
   "description": "SuperClaw — Telegram intelligent agent control panel for OpenClaw",
   "type": "module",
+  "scripts": {
+    "build": "pnpm --dir webapp build",
+    "dev": "pnpm --dir webapp dev",
+    "preview": "pnpm --dir webapp preview"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

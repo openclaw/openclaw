@@ -1,9 +1,9 @@
-import type { InteractiveReply } from "./types.js";
-import { buildBreadcrumb } from "./main-menu.js";
 import { formatCIStatusBoard, type CIStatus } from "../devops/ci-monitor.js";
+import { buildBreadcrumb } from "./main-menu.js";
+import type { InteractiveReply } from "./types.js";
 
 export function buildDevOpsPanel(statuses: CIStatus[]): InteractiveReply {
-  const nav = buildBreadcrumb("首頁", "DevOps");
+  const nav = buildBreadcrumb("首頁", "維運");
   const board = formatCIStatusBoard(statuses);
 
   const failedCount = statuses.filter((s) => s.status === "failure").length;
@@ -30,9 +30,7 @@ export function buildDevOpsPanel(statuses: CIStatus[]): InteractiveReply {
         ? [
             {
               type: "buttons" as const,
-              buttons: [
-                { label: "🔍 分析失敗", value: "sc:dv:fix", style: "danger" as const },
-              ],
+              buttons: [{ label: "🔍 分析失敗", value: "sc:dv:fix", style: "danger" as const }],
             },
           ]
         : []),
@@ -52,22 +50,22 @@ export function buildPRListPanel(
     draft: boolean;
   }>,
 ): InteractiveReply {
-  const nav = buildBreadcrumb("首頁", "DevOps", "PR 列表");
+  const nav = buildBreadcrumb("首頁", "維運", "PR 列表");
 
   if (prs.length === 0) {
     return {
       blocks: [
-        { type: "text", text: `${nav}\n\n📋 <b>Pull Requests</b>\n\n沒有 open PR。` },
+        { type: "text", text: `${nav}\n\n📋 <b>合併請求</b>\n\n目前沒有開啟中的 PR。` },
         {
           type: "buttons",
-          buttons: [{ label: "← DevOps", value: "sc:devops", style: "primary" }],
+          buttons: [{ label: "← 維運", value: "sc:devops", style: "primary" }],
         },
       ],
     };
   }
 
   const lines = prs.slice(0, 8).map((pr) => {
-    const draft = pr.draft ? " [Draft]" : "";
+    const draft = pr.draft ? " [草稿]" : "";
     return `  #${pr.number} ${pr.title.slice(0, 40)}${draft}`;
   });
 
@@ -81,12 +79,12 @@ export function buildPRListPanel(
     blocks: [
       {
         type: "text",
-        text: `${nav}\n\n📋 <b>Open PRs</b> (${prs.length})\n\n${lines.join("\n")}`,
+        text: `${nav}\n\n📋 <b>開啟中的 PR</b> (${prs.length})\n\n${lines.join("\n")}`,
       },
       { type: "buttons", buttons: reviewButtons },
       {
         type: "buttons",
-        buttons: [{ label: "← DevOps", value: "sc:devops", style: "primary" }],
+        buttons: [{ label: "← 維運", value: "sc:devops", style: "primary" }],
       },
     ],
   };
@@ -96,7 +94,7 @@ export function buildDeployConfirm(env: string): InteractiveReply {
   const isCritical = env === "production" || env === "prod";
   const warning = isCritical
     ? "🔴 <b>正式環境部署</b>\n需要生物辨識驗證。"
-    : `🟡 部署到 <b>${env}</b>`;
+    : `🟡 部署到 <b>${escapeHtml(env)}</b>`;
 
   return {
     blocks: [
@@ -106,7 +104,7 @@ export function buildDeployConfirm(env: string): InteractiveReply {
         buttons: [
           {
             label: "✅ 確認部署",
-            value: `sc:dv:dep:${env}`,
+            value: safeDevopsCallback(`sc:dv:depgo:${env}`),
             style: isCritical ? "danger" : "success",
           },
           { label: "❌ 取消", value: "sc:devops", style: "primary" },
@@ -114,4 +112,12 @@ export function buildDeployConfirm(env: string): InteractiveReply {
       },
     ],
   };
+}
+
+function safeDevopsCallback(value: string): string {
+  return Buffer.byteLength(value, "utf8") <= 64 ? value : "sc:devops";
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

@@ -1,103 +1,114 @@
-import { useMemo, useState } from 'react'
-import './WorkflowEditor.css'
+import { useMemo, useState } from "react";
+import "./WorkflowEditor.css";
 
-type StepState = 'pending' | 'running' | 'success' | 'failed'
+type StepState = "pending" | "running" | "success" | "failed";
 
 type WorkflowStep = {
-  id: string
-  label: string
-  state: StepState
-}
+  id: string;
+  label: string;
+  state: StepState;
+};
 
 type Workflow = {
-  id: string
-  name: string
-  steps: WorkflowStep[]
-}
+  id: string;
+  name: string;
+  steps: WorkflowStep[];
+};
 
 const workflowTemplates: Workflow[] = [
   {
-    id: 'auto-pr',
-    name: 'auto-pr',
+    id: "auto-pr",
+    name: "auto-pr",
     steps: [
-      { id: 'scan', label: '掃描變更', state: 'pending' },
-      { id: 'test', label: '執行測試', state: 'pending' },
-      { id: 'compose', label: '產生 PR 內容', state: 'pending' },
+      { id: "scan", label: "掃描變更", state: "pending" },
+      { id: "test", label: "執行測試", state: "pending" },
+      { id: "compose", label: "產生 PR 內容", state: "pending" },
     ],
   },
   {
-    id: 'code-review',
-    name: 'code-review',
+    id: "code-review",
+    name: "code-review",
     steps: [
-      { id: 'collect', label: '收集差異', state: 'pending' },
-      { id: 'lint', label: '檢查規範', state: 'pending' },
-      { id: 'report', label: '輸出審查報告', state: 'pending' },
+      { id: "collect", label: "收集差異", state: "pending" },
+      { id: "lint", label: "檢查規範", state: "pending" },
+      { id: "report", label: "輸出審查報告", state: "pending" },
     ],
   },
   {
-    id: 'daily-scan',
-    name: 'daily-scan',
+    id: "daily-scan",
+    name: "daily-scan",
     steps: [
-      { id: 'inventory', label: '更新 inventory', state: 'pending' },
-      { id: 'status', label: '檢查服務狀態', state: 'pending' },
-      { id: 'notify', label: '整理通知摘要', state: 'pending' },
+      { id: "inventory", label: "更新 inventory", state: "pending" },
+      { id: "status", label: "檢查服務狀態", state: "pending" },
+      { id: "notify", label: "整理通知摘要", state: "pending" },
     ],
   },
   {
-    id: 'refactor',
-    name: 'refactor',
+    id: "refactor",
+    name: "refactor",
     steps: [
-      { id: 'target', label: '選定模組', state: 'pending' },
-      { id: 'patch', label: '套用重構補丁', state: 'pending' },
-      { id: 'verify', label: '驗證與收斂', state: 'pending' },
+      { id: "target", label: "選定模組", state: "pending" },
+      { id: "patch", label: "套用重構補丁", state: "pending" },
+      { id: "verify", label: "驗證與收斂", state: "pending" },
     ],
   },
-]
+];
 
 function stateIcon(state: StepState): string {
-  if (state === 'running') return '🔄'
-  if (state === 'success') return '✅'
-  if (state === 'failed') return '❌'
-  return '⏳'
+  if (state === "running") {
+    return "🔄";
+  }
+  if (state === "success") {
+    return "✅";
+  }
+  if (state === "failed") {
+    return "❌";
+  }
+  return "⏳";
 }
 
 function cloneWorkflows(): Workflow[] {
   return workflowTemplates.map((workflow) => ({
-    ...workflow,
-    steps: workflow.steps.map((step) => ({ ...step })),
-  }))
+    id: workflow.id,
+    name: workflow.name,
+    steps: workflow.steps.map((step) => ({
+      id: step.id,
+      label: step.label,
+      state: step.state,
+    })),
+  }));
 }
 
 export function WorkflowEditor() {
-  const [workflows, setWorkflows] = useState<Workflow[]>(() => cloneWorkflows())
-  const [runningId, setRunningId] = useState<string | null>(null)
-  const [message, setMessage] = useState('')
+  const [workflows, setWorkflows] = useState<Workflow[]>(() => cloneWorkflows());
+  const [runningId, setRunningId] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
 
-  const workflowCount = useMemo(() => workflows.length, [workflows])
+  const workflowCount = useMemo(() => workflows.length, [workflows]);
 
   async function runWorkflow(workflowId: string): Promise<void> {
     if (runningId) {
-      return
+      return;
     }
 
-    setRunningId(workflowId)
-    setMessage('')
+    setRunningId(workflowId);
+    setMessage("");
 
     setWorkflows((prev) =>
       prev.map((workflow) =>
         workflow.id === workflowId
           ? {
               ...workflow,
-              steps: workflow.steps.map((step) => ({ ...step, state: 'pending' })),
+              steps: workflow.steps.map((step) => ({ ...step, state: "pending" })),
             }
           : workflow,
       ),
-    )
+    );
 
-    const current = workflows.find((item) => item.id === workflowId)
+    const current = workflows.find((item) => item.id === workflowId);
     if (!current) {
-      setRunningId(null)
-      return
+      setRunningId(null);
+      return;
     }
 
     for (let index = 0; index < current.steps.length; index += 1) {
@@ -108,18 +119,18 @@ export function WorkflowEditor() {
                 ...workflow,
                 steps: workflow.steps.map((step, stepIndex) => {
                   if (stepIndex < index) {
-                    return { ...step, state: 'success' }
+                    return { ...step, state: "success" };
                   }
                   if (stepIndex === index) {
-                    return { ...step, state: 'running' }
+                    return { ...step, state: "running" };
                   }
-                  return { ...step, state: 'pending' }
+                  return { ...step, state: "pending" };
                 }),
               }
             : workflow,
         ),
-      )
-      await new Promise((resolve) => setTimeout(resolve, 450))
+      );
+      await new Promise((resolve) => setTimeout(resolve, 450));
     }
 
     setWorkflows((prev) =>
@@ -127,14 +138,14 @@ export function WorkflowEditor() {
         workflow.id === workflowId
           ? {
               ...workflow,
-              steps: workflow.steps.map((step) => ({ ...step, state: 'success' })),
+              steps: workflow.steps.map((step) => ({ ...step, state: "success" })),
             }
           : workflow,
       ),
-    )
+    );
 
-    setMessage(`工作流已完成：${workflowId}`)
-    setRunningId(null)
+    setMessage(`工作流已完成：${workflowId}`);
+    setRunningId(null);
   }
 
   return (
@@ -171,5 +182,5 @@ export function WorkflowEditor() {
         ))}
       </div>
     </section>
-  )
+  );
 }
