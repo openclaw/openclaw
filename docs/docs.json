@@ -1403,6 +1403,7 @@
                   "providers/fal",
                   "providers/fireworks",
                   "providers/github-copilot",
+                  "providers/gigachat",
                   "providers/google",
                   "providers/gradium",
                   "providers/groq",

@@ -48,10 +48,7 @@ const surfaceEntry = (id: string, surfaceTag: string, extra: Record<string, unkn
   },
 });
 
-async function withLiveFetch(
-  mockFetch: ReturnType<typeof vi.fn>,
-  run: () => Promise<void>,
-) {
+async function withLiveFetch(mockFetch: ReturnType<typeof vi.fn>, run: () => Promise<void>) {
   const env = { ...process.env };
   delete process.env.NODE_ENV;
   delete process.env.VITEST;
@@ -208,10 +205,7 @@ describe("listDeepInfraVideoGenCatalog", () => {
     await withLiveFetch(mockFetch, async () => {
       const result = await listDeepInfraVideoGenCatalog(withKeyCtx());
       expect(result).not.toBeNull();
-      expect(result?.map((e) => e.model)).toEqual([
-        "Wan-AI/Wan2.6-T2V",
-        "ByteDance/Seedance-2.0",
-      ]);
+      expect(result?.map((e) => e.model)).toEqual(["Wan-AI/Wan2.6-T2V", "ByteDance/Seedance-2.0"]);
       const first = result?.[0];
       expect(first?.kind).toBe("video_generation");
       expect(first?.capabilities?.generate?.supportsAspectRatio).toBe(true);

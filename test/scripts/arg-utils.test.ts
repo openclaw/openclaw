@@ -3,11 +3,9 @@ import { intFlag, parseFlagArgs } from "../../scripts/lib/arg-utils.mjs";
 
 describe("scripts/lib/arg-utils parseFlagArgs", () => {
   it("ignores the conventional option separator by default", () => {
-    const parsed = parseFlagArgs(
-      ["--", "--limit", "30"],
-      { limit: 10 },
-      [intFlag("--limit", "limit", { min: 1 })],
-    );
+    const parsed = parseFlagArgs(["--", "--limit", "30"], { limit: 10 }, [
+      intFlag("--limit", "limit", { min: 1 }),
+    ]);
 
     expect(parsed.limit).toBe(30);
   });

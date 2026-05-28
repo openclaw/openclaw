@@ -1,15 +1,15 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import {
-  onInternalDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-  type DiagnosticEventPayload,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -346,9 +346,7 @@ describe("createCodexDynamicToolBridge", () => {
       }),
     );
     const blockedEvents = diagnosticEvents.filter(
-      (
-        event,
-      ): event is Extract<DiagnosticEventPayload, { type: "tool.execution.blocked" }> =>
+      (event): event is Extract<DiagnosticEventPayload, { type: "tool.execution.blocked" }> =>
         event.type === "tool.execution.blocked",
     );
     expect(blockedEvents).toContainEqual(

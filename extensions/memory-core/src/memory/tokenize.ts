@@ -92,8 +92,7 @@ export function textSimilarity(contentA: string, contentB: string): number {
   const tokensA = tokenize(contentA);
   const tokensB = tokenize(contentB);
   if (tokensA.size === 0 && tokensB.size === 0) {
-    return normalizeLowercaseStringOrEmpty(contentA) ===
-      normalizeLowercaseStringOrEmpty(contentB)
+    return normalizeLowercaseStringOrEmpty(contentA) === normalizeLowercaseStringOrEmpty(contentB)
       ? 1
       : 0;
   }

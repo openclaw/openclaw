@@ -21,9 +21,10 @@ const MAX_DEEPINFRA_INPUT_IMAGES = 1;
 export function buildDeepInfraImageGenerationProvider(options?: {
   imageGenModels?: readonly DeepInfraSurfaceModel[];
 }): ImageGenerationProvider {
-  const ids = options?.imageGenModels && options.imageGenModels.length > 0
-    ? options.imageGenModels.map((model) => model.id)
-    : [...DEEPINFRA_IMAGE_FALLBACK_MODELS];
+  const ids =
+    options?.imageGenModels && options.imageGenModels.length > 0
+      ? options.imageGenModels.map((model) => model.id)
+      : [...DEEPINFRA_IMAGE_FALLBACK_MODELS];
   const defaultModel = ids[0] ?? DEEPINFRA_IMAGE_FALLBACK_MODELS[0];
   return createOpenAiCompatibleImageGenerationProvider({
     id: "deepinfra",

@@ -64,10 +64,7 @@ export function findConflictMarkersInFiles(filePaths, readFile = fs.readFileSync
   return violations;
 }
 
-export function listTrackedFilesWithConflictMarkerCandidates(
-  cwd = process.cwd(),
-  run = spawnSync,
-) {
+export function listTrackedFilesWithConflictMarkerCandidates(cwd = process.cwd(), run = spawnSync) {
   const result = run(
     "git",
     ["grep", "-l", "-z", "-I", "-E", CONFLICT_MARKER_GREP_PATTERN, "--", "."],

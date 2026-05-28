@@ -154,15 +154,8 @@ function ensureControllerOwnsRun(params: {
   return "Subagents can only control runs spawned from their own session.";
 }
 
-function isFinishedForSteerControl(
-  entry: SubagentRunRecord,
-  hasPendingDescendants: boolean,
-) {
-  return (
-    Boolean(entry.endedAt) &&
-    entry.pauseReason !== "sessions_yield" &&
-    !hasPendingDescendants
-  );
+function isFinishedForSteerControl(entry: SubagentRunRecord, hasPendingDescendants: boolean) {
+  return Boolean(entry.endedAt) && entry.pauseReason !== "sessions_yield" && !hasPendingDescendants;
 }
 
 async function killSubagentRun(params: {

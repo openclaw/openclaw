@@ -1712,6 +1712,108 @@ describe("openai transport stream", () => {
     ]);
   });
 
+  it("maps legacy OpenAI-compatible function_call chunks to tool calls", async () => {
+    const model = {
+      id: "GigaChat-2",
+      name: "GigaChat 2",
+      api: "openai-completions",
+      provider: "gigachat",
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+      compat: { legacyFunctionCallStreaming: true },
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-gigachat-function",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "",
+                function_call: {
+                  name: "weather_forecast",
+                  arguments: { location: "Moscow", num_days: 1 },
+                },
+              },
+              logprobs: null,
+              finish_reason: "function_call",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    const toolCall = output.content.find((block) => block.type === "toolCall");
+    expect(toolCall).toMatchObject({
+      type: "toolCall",
+      name: "weather_forecast",
+      arguments: { location: "Moscow", num_days: 1 },
+      partialArgs: JSON.stringify({ location: "Moscow", num_days: 1 }),
+    });
+    expect(toolCall?.id).toMatch(/^call_/);
+    expect(output.stopReason).toBe("toolUse");
+  });
+
+  it("ignores legacy function_call chunks without explicit model compat opt-in", async () => {
+    const model = {
+      id: "legacy-function-call-disabled",
+      name: "Legacy Function Call Disabled",
+      api: "openai-completions",
+      provider: "custom-proxy",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-legacy-disabled",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "",
+                function_call: {
+                  name: "weather_forecast",
+                  arguments: { location: "Moscow", num_days: 1 },
+                },
+              },
+              logprobs: null,
+              finish_reason: "function_call",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toEqual([]);
+    expect(output.stopReason).toBe("stop");
+  });
+
   it("filters DeepSeek DSML text queued after native tool calls", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
