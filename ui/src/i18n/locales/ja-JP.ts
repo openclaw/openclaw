@@ -1120,6 +1120,7 @@ export const ja_JP: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      resetSession: "Reset session",
       export: "エクスポート",
       exportChat: "Export chat",
       queue: "Queue",

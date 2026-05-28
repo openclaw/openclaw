@@ -1086,6 +1086,7 @@ export const th: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      resetSession: "Reset session",
       export: "ส่งออก",
       exportChat: "Export chat",
       queue: "Queue",

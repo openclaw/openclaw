@@ -125,6 +125,7 @@ export function createChatSessionsLoadOverrides(
   return overrides;
 }
 export {
+  clearChatHistory,
   handleChatDraftChange,
   handleChatInputHistoryKey,
   navigateChatInputHistory,

@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
-import { createChatSessionsLoadOverrides, refreshChat, refreshChatAvatar } from "./app-chat.ts";
+import { clearChatHistory, createChatSessionsLoadOverrides, refreshChat, refreshChatAvatar } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
@@ -187,6 +187,32 @@ const NEW_CHAT_SESSIONS_LOADING_MESSAGE =
   "Session list is still refreshing. Try New Chat again in a moment.";
 const NEW_CHAT_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new session. Try again in a moment.";
+const RESET_SESSION_CONFIRM_MESSAGE =
+  "Reset this session? This will clear all messages and start fresh.";
+
+/** Reset the current session via sessions.reset, reusing the same session key. */
+export async function resetChatSession(state: AppViewState): Promise<boolean> {
+  if (!state.client || !state.connected) {
+    return false;
+  }
+  if (!canSwitchToNewChatSession(state)) {
+    state.lastError = NEW_CHAT_ACTIVE_RUN_MESSAGE;
+    return false;
+  }
+  if (state.sessionsLoading) {
+    state.lastError = NEW_CHAT_SESSIONS_LOADING_MESSAGE;
+    return false;
+  }
+  if (
+    typeof globalThis.confirm === "function" &&
+    !globalThis.confirm(RESET_SESSION_CONFIRM_MESSAGE)
+  ) {
+    return false;
+  }
+  state.lastError = null;
+  await clearChatHistory(state as unknown as Parameters<typeof clearChatHistory>[0]);
+  return true;
+}
 
 export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
   const href = pathForTab(tab, state.basePath);

@@ -1118,6 +1118,7 @@ export const fa: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      resetSession: "Reset session",
       export: "خروجی گرفتن",
       exportChat: "Export chat",
       queue: "Queue",
