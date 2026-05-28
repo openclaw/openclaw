@@ -1291,7 +1291,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "signature_delta" &&
               typeof delta.signature === "string"
             ) {
-              block.thinkingSignature = delta.signature;
+              block.thinkingSignature = (block.thinkingSignature || "") + delta.signature;
             }
             continue;
           }
