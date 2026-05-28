@@ -105,6 +105,15 @@ export function createGoogleVertexProvider(): ProviderPlugin {
                 GOOGLE_CLOUD_PROJECT: project,
                 GOOGLE_CLOUD_LOCATION: location,
               },
+              models: {
+                providers: {
+                  "google-vertex": {
+                    models: [
+                      { id: "gemini-flash-latest", name: "Gemini Flash (latest)" },
+                    ],
+                  },
+                },
+              },
             },
             notes: [
               `Project: ${project}, Location: ${location}`,
