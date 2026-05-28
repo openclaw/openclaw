@@ -641,9 +641,15 @@ function normalizeMcpServerStatus(
   if (!tools) {
     return undefined;
   }
+  const toolNames = readRecordKeys(tools);
+  if (!toolNames) {
+    return undefined;
+  }
   return {
     name: serverName,
-    tools: tools as CodexMcpServerStatus["tools"],
+    tools: Object.fromEntries(
+      toolNames.map((toolName) => [toolName, {}]),
+    ) as CodexMcpServerStatus["tools"],
   };
 }
 
@@ -823,6 +829,14 @@ function readBooleanField(record: Record<string, unknown>, key: string): boolean
   try {
     const value = record[key];
     return typeof value === "boolean" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readRecordKeys(record: Record<string, unknown>): string[] | undefined {
+  try {
+    return Object.keys(record);
   } catch {
     return undefined;
   }

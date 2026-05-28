@@ -406,6 +406,32 @@ describe("Codex Computer Use setup", () => {
     });
   });
 
+  it("fails closed when Computer Use MCP server tool keys are unreadable after install", async () => {
+    const request = createComputerUseRequest({
+      installed: false,
+      unreadableMcpToolKeys: true,
+    });
+
+    await expectSetupErrorStatus(
+      installCodexComputerUse({
+        pluginConfig: { computerUse: { marketplaceName: "desktop-tools" } },
+        request,
+      }),
+      {
+        ready: false,
+        reason: "mcp_missing",
+        installed: true,
+        pluginEnabled: true,
+        mcpServerAvailable: false,
+        message: "Computer Use is installed, but the computer-use MCP server is not available.",
+      },
+    );
+    expect(request).toHaveBeenCalledWith("plugin/install", {
+      marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+      pluginName: "computer-use",
+    });
+  });
+
   it("auto-registers the bundled Codex app marketplace during auto-install", async () => {
     const bundledMarketplacePath = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-codex-bundled-marketplace-"),
@@ -583,6 +609,7 @@ function createComputerUseRequest(params: {
   enabled?: boolean;
   marketplaceAvailableAfterListCalls?: number;
   unreadableMarketplaceAddName?: boolean;
+  unreadableMcpToolKeys?: boolean;
   unreadableMcpTools?: boolean;
   unreadablePluginDetail?: boolean;
   unreadablePluginSummary?: boolean;
@@ -678,6 +705,20 @@ function createComputerUseRequest(params: {
             throw new Error("fuzzplugin computer-use tools read failed");
           },
         });
+      } else if (params.unreadableMcpToolKeys) {
+        server.tools = new Proxy(
+          {
+            list_apps: {
+              name: "list_apps",
+              inputSchema: { type: "object" },
+            },
+          },
+          {
+            ownKeys() {
+              throw new Error("fuzzplugin computer-use tool keys read failed");
+            },
+          },
+        );
       } else {
         server.tools = {
           list_apps: {
