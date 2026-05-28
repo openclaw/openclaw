@@ -52,6 +52,7 @@ import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-e
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { preloadKatex, loadKatexCss } from "../katex-renderer.ts";
+import { clearMarkdownCache } from "../markdown.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -1068,7 +1069,11 @@ function renderSlashMenu(
 export function renderChat(props: ChatProps) {
   // Preload KaTeX when math rendering is enabled
   if (props.mathRendering === "katex") {
-    preloadKatex();
+    preloadKatex().then(() => {
+      clearMarkdownCache();
+      const requestUpdate = props.onRequestUpdate ?? (() => {});
+      requestUpdate();
+    });
     loadKatexCss();
   }
 
