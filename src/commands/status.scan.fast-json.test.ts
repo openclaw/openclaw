@@ -153,6 +153,25 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 5000 }));
   });
 
+  it("keeps configured gateway handshake timeouts on the lean JSON path", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    applyStatusScanDefaults(mocks, {
+      resolvedConfig: {
+        ...createStatusMemorySearchConfig(),
+        gateway: { handshakeTimeoutMs: 30_000 },
+      } as never,
+    });
+
+    await scanStatusJsonFast({}, {} as never);
+
+    expect(mocks.probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preauthHandshakeTimeoutMs: 30_000,
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
   it("restores the local status RPC fallback when --all is requested", async () => {
     mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.callGateway.mockResolvedValue({ sessions: 1 });

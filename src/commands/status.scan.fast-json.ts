@@ -28,7 +28,7 @@ type StatusJsonScanPolicy = {
   fetchGitUpdate?: boolean;
   includeRegistryUpdate?: boolean;
   includeLocalStatusRpcFallback?: boolean;
-  gatewayProbeTimeoutMs?: number;
+  gatewayProbeTimeoutMs?: number | ((cfg: OpenClawConfig) => number | undefined);
   resolveHasConfiguredChannels: (
     cfg: OpenClawConfig,
     sourceConfig: OpenClawConfig,
@@ -129,7 +129,10 @@ export async function scanStatusJsonFast(
     fetchGitUpdate: opts.all === true,
     includeRegistryUpdate: opts.all === true,
     includeLocalStatusRpcFallback: opts.all === true,
-    gatewayProbeTimeoutMs: opts.all === true ? undefined : (opts.timeoutMs ?? 1000),
+    gatewayProbeTimeoutMs:
+      opts.all === true
+        ? undefined
+        : (cfg) => opts.timeoutMs ?? Math.max(1000, cfg.gateway?.handshakeTimeoutMs ?? 0),
     resolveHasConfiguredChannels: (cfg) => hasPotentialConfiguredChannelsForStatusJson(cfg),
     resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
       opts.all
