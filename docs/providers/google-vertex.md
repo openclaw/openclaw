@@ -55,6 +55,7 @@ Choose the setup that matches your environment.
       ```
       Look for `https://www.googleapis.com/auth/cloud-platform` in the output.
     </Tip>
+
   </Tab>
 
   <Tab title="gcloud CLI">
@@ -84,6 +85,7 @@ Choose the setup that matches your environment.
         ```
       </Step>
     </Steps>
+
   </Tab>
 
   <Tab title="Service account key">
@@ -117,6 +119,7 @@ Choose the setup that matches your environment.
         ```
       </Step>
     </Steps>
+
   </Tab>
 </Tabs>
 
@@ -147,12 +150,12 @@ After onboarding, your `openclaw.json` will include:
 
 ## Environment variables
 
-| Variable | Required | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `GOOGLE_CLOUD_PROJECT` | Yes (auto-detected during onboarding on GCE/GKE) | None | GCP project ID |
-| `GOOGLE_CLOUD_LOCATION` | No | `global` | Vertex AI endpoint region |
-| `GOOGLE_APPLICATION_CREDENTIALS` | No | None | Path to service account key file |
-| `GOOGLE_CLOUD_API_KEY` | No | None | Vertex AI Express API key (alternative to ADC) |
+| Variable                         | Required                                         | Default  | Description                                    |
+| :------------------------------- | :----------------------------------------------- | :------- | :--------------------------------------------- |
+| `GOOGLE_CLOUD_PROJECT`           | Yes (auto-detected during onboarding on GCE/GKE) | None     | GCP project ID                                 |
+| `GOOGLE_CLOUD_LOCATION`          | No                                               | `global` | Vertex AI endpoint region                      |
+| `GOOGLE_APPLICATION_CREDENTIALS` | No                                               | None     | Path to service account key file               |
+| `GOOGLE_CLOUD_API_KEY`           | No                                               | None     | Vertex AI Express API key (alternative to ADC) |
 
 <Note>
   Environment variables can be set in your shell, in `openclaw.json` under the
@@ -171,23 +174,23 @@ These auto-updating aliases always point to the latest stable version of each
 model family. Recommended for most users. The onboarding wizard sets
 `gemini-flash-latest` as the default model.
 
-| Model | ID |
-| :--- | :--- |
-| Gemini Flash (latest) | `google-vertex/gemini-flash-latest` |
-| Gemini Pro (latest) | `google-vertex/gemini-pro-latest` |
+| Model                      | ID                                       |
+| :------------------------- | :--------------------------------------- |
+| Gemini Flash (latest)      | `google-vertex/gemini-flash-latest`      |
+| Gemini Pro (latest)        | `google-vertex/gemini-pro-latest`        |
 | Gemini Flash-Lite (latest) | `google-vertex/gemini-flash-lite-latest` |
 
 ### Specific versions
 
 Pin to a specific version when you need deterministic behavior:
 
-| Model | ID |
-| :--- | :--- |
-| Gemini 2.5 Flash | `google-vertex/gemini-2.5-flash` |
-| Gemini 2.5 Pro | `google-vertex/gemini-2.5-pro` |
-| Gemini 2.5 Flash-Lite | `google-vertex/gemini-2.5-flash-lite` |
-| Gemini 3 Flash | `google-vertex/gemini-3-flash-preview` |
-| Gemini 3.1 Pro | `google-vertex/gemini-3.1-pro-preview` |
+| Model                 | ID                                     |
+| :-------------------- | :------------------------------------- |
+| Gemini 2.5 Flash      | `google-vertex/gemini-2.5-flash`       |
+| Gemini 2.5 Pro        | `google-vertex/gemini-2.5-pro`         |
+| Gemini 2.5 Flash-Lite | `google-vertex/gemini-2.5-flash-lite`  |
+| Gemini 3 Flash        | `google-vertex/gemini-3-flash-preview` |
+| Gemini 3.1 Pro        | `google-vertex/gemini-3.1-pro-preview` |
 
 OpenClaw normalizes aliases automatically (e.g. `gemini-3.1-pro` resolves to
 `gemini-3.1-pro-preview`).
@@ -204,6 +207,7 @@ OpenClaw normalizes aliases automatically (e.g. `gemini-3.1-pro` resolves to
     2. On GCE/GKE: the metadata server is reachable.
     3. With gcloud CLI: you have run `gcloud auth application-default login`.
     4. With a service account: `GOOGLE_APPLICATION_CREDENTIALS` points to a valid JSON key file.
+
   </Accordion>
 
   <Accordion title="Vertex AI requires a project ID">
@@ -215,6 +219,7 @@ OpenClaw normalizes aliases automatically (e.g. `gemini-3.1-pro` resolves to
 
     Then restart the gateway: `openclaw gateway restart` or
     `systemctl --user restart openclaw-gateway`.
+
   </Accordion>
 
   <Accordion title="403 / PERMISSION_DENIED">
@@ -223,6 +228,7 @@ OpenClaw normalizes aliases automatically (e.g. `gemini-3.1-pro` resolves to
     requests.
 
     On GCE, also verify that the VM has the **Cloud Platform** access scope.
+
   </Accordion>
 
   <Accordion title="404 / Model not found">
@@ -232,6 +238,7 @@ OpenClaw normalizes aliases automatically (e.g. `gemini-3.1-pro` resolves to
     ```json5
     { env: { GOOGLE_CLOUD_LOCATION: "global" } }
     ```
+
   </Accordion>
 </AccordionGroup>
 
