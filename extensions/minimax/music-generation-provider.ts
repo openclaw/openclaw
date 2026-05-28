@@ -304,12 +304,16 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
       jsonHeaders.set("Content-Type", "application/json");
 
       const model = resolveMinimaxMusicModel(req.model);
-      const lyrics = normalizeOptionalString(req.lyrics);
+      const requestedLyrics = normalizeOptionalString(req.lyrics);
       const body = {
         model,
         prompt: req.prompt.trim(),
         ...(req.instrumental === true ? { is_instrumental: true } : {}),
-        ...(lyrics ? { lyrics } : req.instrumental === true ? {} : { lyrics_optimizer: true }),
+        ...(requestedLyrics
+          ? { lyrics: requestedLyrics }
+          : req.instrumental === true
+            ? {}
+            : { lyrics_optimizer: true }),
         stream: true,
         output_format: "hex",
         audio_setting: {
@@ -352,7 +356,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
           normalizeOptionalString(payload?.data?.audio_url) ||
           (isLikelyRemoteUrl(audioCandidate) ? audioCandidate : undefined);
         const inlineAudio = isLikelyRemoteUrl(audioCandidate) ? undefined : audioCandidate;
-        const lyrics = decodePossibleText(payload?.lyrics ?? payload?.data?.lyrics ?? "");
+        const responseLyrics = decodePossibleText(payload?.lyrics ?? payload?.data?.lyrics ?? "");
 
         const track = audioUrl
           ? await downloadTrackFromUrl({
@@ -376,7 +380,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
 
         return {
           tracks: [track],
-          ...(lyrics ? { lyrics: [lyrics] } : {}),
+          ...(responseLyrics ? { lyrics: [responseLyrics] } : {}),
           model,
           metadata: {
             ...(normalizeOptionalString(payload?.task_id)
@@ -384,7 +388,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
               : {}),
             ...(audioUrl ? { audioUrl } : {}),
             instrumental: req.instrumental === true,
-            ...(lyrics ? { requestedLyrics: true } : {}),
+            ...(requestedLyrics ? { requestedLyrics: true } : {}),
           },
         };
       } finally {

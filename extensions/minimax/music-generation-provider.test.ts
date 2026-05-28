@@ -104,6 +104,7 @@ describe("minimax music generation provider", () => {
     expect(result.tracks).toHaveLength(1);
     expect(result.tracks[0]?.buffer).toEqual(Buffer.concat([chunkA, chunkB]));
     expect(result.tracks[0]?.mimeType).toBe("audio/mpeg");
+    expect(result.metadata?.requestedLyrics).toBe(true);
     expect(result.metadata).not.toHaveProperty("requestedDurationSeconds");
   });
 
