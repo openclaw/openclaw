@@ -89,22 +89,30 @@ if (IS_MAIN) {
 }
 
 function parsePositiveInt(raw, fallback, label) {
-  if (!raw) {
+  if (raw === undefined || raw === "") {
     return fallback;
   }
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 1) {
+  const text = String(raw).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
     throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
   }
   return parsed;
 }
 
 function parseNonNegativeInt(raw, fallback, label) {
-  if (!raw) {
+  if (raw === undefined || raw === "") {
     return fallback;
   }
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  const text = String(raw).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a non-negative integer. Got: ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new Error(`${label} must be a non-negative integer. Got: ${JSON.stringify(raw)}`);
   }
   return parsed;

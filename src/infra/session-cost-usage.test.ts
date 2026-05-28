@@ -1,6 +1,5 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -680,6 +679,56 @@ describe("session cost usage", () => {
       expect(refreshed.totals.totalCost).toBeCloseTo(0.004, 5);
       expect(refreshed.cacheStatus?.status).toBe("fresh");
     });
+  });
+
+  it("keeps queued durable aggregate refresh state scoped to the cache path", async () => {
+    const firstRoot = await makeSessionCostRoot("cost-cache-queued-first");
+    const secondRoot = await makeSessionCostRoot("cost-cache-queued-second");
+    const writeSession = async (root: string, sessionId: string) => {
+      const sessionsDir = path.join(root, "agents", "main", "sessions");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, `${sessionId}.jsonl`),
+        transcriptText(sessionId, {
+          type: "message",
+          timestamp: "2026-02-05T12:00:00.000Z",
+          message: {
+            role: "assistant",
+            usage: {
+              input: 10,
+              output: 20,
+              totalTokens: 30,
+              cost: { total: 0.03 },
+            },
+          },
+        }),
+        "utf-8",
+      );
+    };
+
+    await writeSession(firstRoot, "sess-cache-queued-first");
+    await writeSession(secondRoot, "sess-cache-queued-second");
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await withStateDir(firstRoot, async () => {
+        requestCostUsageCacheRefresh();
+      });
+
+      await withStateDir(secondRoot, async () => {
+        const summary = await loadCostUsageSummaryFromCache({
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          requestRefresh: false,
+        });
+
+        expect(summary.cacheStatus?.status).toBe("stale");
+      });
+
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rebuilds cold durable aggregate cache synchronously when requested", async () => {
@@ -2155,7 +2204,7 @@ example
   });
 
   it("buckets hourly message counts into UTC quarter-hour slots", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-quarter-"));
+    const root = await makeSessionCostRoot("cost-quarter");
     const sessionFile = path.join(root, "session.jsonl");
 
     // Messages at different UTC quarter-hour boundaries:
@@ -2224,7 +2273,7 @@ example
   });
 
   it("captures UTC quarter-hour token usage buckets without proportional allocation", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-token-hourly-"));
+    const root = await makeSessionCostRoot("cost-token-hourly");
     const sessionFile = path.join(root, "session.jsonl");
     const entries = [
       {
@@ -2305,7 +2354,7 @@ example
   });
 
   it("splits UTC quarter-hour token usage buckets across UTC day boundaries", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-token-midnight-"));
+    const root = await makeSessionCostRoot("cost-token-midnight");
     const sessionFile = path.join(root, "session.jsonl");
     const entries = [
       {
@@ -2362,7 +2411,7 @@ example
   });
 
   it("returns undefined utcQuarterHourMessageCounts when session has no messages", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-empty-hourly-"));
+    const root = await makeSessionCostRoot("cost-empty-hourly");
     const sessionFile = path.join(root, "session.jsonl");
     // Empty file — no entries at all
     await fs.writeFile(sessionFile, "", "utf-8");

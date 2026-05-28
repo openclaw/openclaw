@@ -65,6 +65,30 @@ sparkle_framework_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
 }
 
+PNPM_CMD=()
+
+resolve_pnpm_cmd() {
+  if command -v pnpm >/dev/null 2>&1; then
+    PNPM_CMD=(pnpm)
+    return 0
+  fi
+
+  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
+    PNPM_CMD=(corepack pnpm)
+    return 0
+  fi
+
+  echo "ERROR: pnpm is not on PATH and corepack pnpm is unavailable. Install pnpm or run with Node/Corepack on PATH." >&2
+  exit 1
+}
+
+run_pnpm() {
+  if [[ "${#PNPM_CMD[@]}" -eq 0 ]]; then
+    resolve_pnpm_cmd
+  fi
+  (cd "$ROOT_DIR" && "${PNPM_CMD[@]}" "$@")
+}
+
 merge_framework_machos() {
   local primary="$1"
   local dest="$2"
@@ -128,7 +152,7 @@ merge_framework_machos() {
 
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install --frozen-lockfile)"
-  (cd "$ROOT_DIR" && pnpm install --frozen-lockfile --config.node-linker=hoisted)
+  run_pnpm install --frozen-lockfile --config.node-linker=hoisted
 else
   echo "📦 Skipping pnpm install (SKIP_PNPM_INSTALL=1)"
 fi
@@ -153,7 +177,7 @@ fi
 
 if [[ "${SKIP_TSC:-0}" != "1" ]]; then
   echo "📦 Building JS (pnpm build)"
-  (cd "$ROOT_DIR" && pnpm build)
+  run_pnpm build
 else
   echo "📦 Skipping JS build (SKIP_TSC=1)"
 fi
@@ -255,16 +279,6 @@ cp "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns" "$APP_ROOT/Co
 echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
-
-echo "📦 Copying model catalog"
-MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@earendil-works/pi-ai/dist/models.generated.js"
-MODEL_CATALOG_DEST="$APP_ROOT/Contents/Resources/models.generated.js"
-if [ -f "$MODEL_CATALOG_SRC" ]; then
-  cp "$MODEL_CATALOG_SRC" "$MODEL_CATALOG_DEST"
-else
-  echo "ERROR: model catalog missing at $MODEL_CATALOG_SRC" >&2
-  exit 1
-fi
 
 echo "📦 Copying Control UI assets"
 CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"

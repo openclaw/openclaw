@@ -25,10 +25,12 @@ type BuildTelegramMessageContextForTestParams = {
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
   accountId?: string;
+  dmPolicy?: BuildTelegramMessageContextParams["dmPolicy"];
   historyLimit?: number;
   groupHistories?: Map<string, import("openclaw/plugin-sdk/reply-history").HistoryEntry[]>;
   ackReactionScope?: BuildTelegramMessageContextParams["ackReactionScope"];
   botApi?: Record<string, unknown>;
+  sendChatActionHandler?: BuildTelegramMessageContextParams["sendChatActionHandler"];
   runtime?: BuildTelegramMessageContextParams["runtime"];
   sessionRuntime?: BuildTelegramMessageContextParams["sessionRuntime"] | null;
   resolveGroupActivation?: BuildTelegramMessageContextParams["resolveGroupActivation"];
@@ -128,7 +130,7 @@ export async function buildTelegramMessageContextForTest(
     account: { accountId: params.accountId ?? "default" } as never,
     historyLimit: params.historyLimit ?? 0,
     groupHistories: params.groupHistories ?? new Map(),
-    dmPolicy: "open",
+    dmPolicy: params.dmPolicy ?? "open",
     allowFrom: ["*"],
     groupAllowFrom: [],
     ackReactionScope: params.ackReactionScope ?? "off",
@@ -141,7 +143,7 @@ export async function buildTelegramMessageContextForTest(
         groupConfig: { requireMention: false },
         topicConfig: undefined,
       })),
-    sendChatActionHandler: { sendChatAction: vi.fn() } as never,
+    sendChatActionHandler: params.sendChatActionHandler ?? ({ sendChatAction: vi.fn() } as never),
   });
 }
 
@@ -150,14 +152,6 @@ let buildTelegramMessageContextLoader:
   | undefined;
 let vitestModuleLoader: Promise<typeof import("vitest")> | undefined;
 let messageContextMocksInstalled = false;
-type TopicNameCacheEntry = {
-  name: string;
-  iconColor?: number;
-  iconCustomEmojiId?: string;
-  closed?: boolean;
-  updatedAt: number;
-};
-const topicNameStoresForTest = new Map<string, Map<string, TopicNameCacheEntry>>();
 
 async function loadBuildTelegramMessageContext() {
   await installMessageContextTestMocks();
@@ -179,22 +173,4 @@ async function installMessageContextTestMocks() {
     return;
   }
   messageContextMocksInstalled = true;
-  const { setTelegramTopicNameStoreFactoryForTest } = await import("./topic-name-cache.js");
-  setTelegramTopicNameStoreFactoryForTest((namespace) => {
-    let store = topicNameStoresForTest.get(namespace);
-    if (!store) {
-      store = new Map();
-      topicNameStoresForTest.set(namespace, store);
-    }
-    return {
-      register: async (key, value) => {
-        store.set(key, value);
-      },
-      entries: async () => [...store.entries()].map(([key, value]) => ({ key, value })),
-      delete: async (key) => store.delete(key),
-      clear: async () => {
-        store.clear();
-      },
-    };
-  });
 }

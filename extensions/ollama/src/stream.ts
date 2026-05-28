@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   AssistantMessage,
   StopReason,
@@ -8,9 +9,8 @@ import type {
   ToolCall,
   Tool,
   Usage,
-} from "@earendil-works/pi-ai";
-import { createAssistantMessageEventStream, streamSimple } from "@earendil-works/pi-ai";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+} from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, streamSimple } from "openclaw/plugin-sdk/llm";
 import type {
   OpenClawConfig,
   ProviderRuntimeModel,
@@ -341,6 +341,18 @@ function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, 
     options.num_ctx = numCtx;
   }
   return options;
+}
+
+function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>): void {
+  if (options.temperature !== 0) {
+    return;
+  }
+  if (
+    options.top_p === undefined ||
+    (typeof options.top_p === "number" && Number.isFinite(options.top_p) && options.top_p !== 1)
+  ) {
+    options.top_p = 1;
+  }
 }
 
 function resolveOllamaTopLevelParams(
@@ -1098,6 +1110,7 @@ export function createOllamaStreamFn(
         if (typeof options?.maxTokens === "number") {
           ollamaOptions.num_predict = options.maxTokens;
         }
+        normalizeOllamaGreedySamplingOptions(ollamaOptions);
 
         const body = buildOllamaChatRequest({
           modelId: model.id,

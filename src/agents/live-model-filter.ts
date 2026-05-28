@@ -59,6 +59,12 @@ for (const key of HIGH_SIGNAL_LIVE_MODEL_PRIORITY) {
   }
 }
 
+export function getHighSignalLiveModelProviders(): string[] {
+  return [...HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.keys()].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+}
+
 function isHighSignalClaudeModelId(id: string): boolean {
   const normalized = id.replace(/[_.]/g, "-");
   if (!/\bclaude\b/i.test(normalized)) {
@@ -347,8 +353,8 @@ export function resolveHighSignalLiveModelLimit(params: {
 }): number {
   const trimmed = params.rawMaxModels?.trim();
   if (trimmed) {
-    const parsed = Number.parseInt(trimmed, 10);
-    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    return Number.isSafeInteger(parsed) ? Math.max(0, parsed) : 0;
   }
   if (params.useExplicitModels) {
     return 0;

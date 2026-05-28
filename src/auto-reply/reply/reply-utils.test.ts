@@ -152,6 +152,11 @@ describe("normalizeReplyPayload", () => {
   it("records skip reasons for silent/empty payloads", () => {
     const cases = [
       { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },
+      {
+        name: "repeated silent",
+        payload: { text: `${SILENT_REPLY_TOKEN}\n\n${SILENT_REPLY_TOKEN}` },
+        reason: "silent",
+      },
       { name: "empty", payload: { text: "   " }, reason: "empty" },
     ] as const;
     for (const testCase of cases) {
@@ -221,6 +226,37 @@ describe("normalizeReplyPayload", () => {
     const reasons: string[] = [];
     const result = normalizeReplyPayload(
       { text: '{"action":"NO_REPLY"}' },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("suppresses leaked reasoning when the final answer is NO_REPLY (#66701)", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: [
+          "think",
+          "Cav is talking about a follow-up conversation.",
+          "I will stay quiet here.NO_REPLY",
+        ].join("\n"),
+      },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("suppresses tagged leaked reasoning when silence narration ends in NO_REPLY (#66701)", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: [
+          "<think>Cav is talking about a follow-up conversation.</think>",
+          "I will stay quiet here.NO_REPLY",
+        ].join("\n"),
+      },
       { onSkip: (reason) => reasons.push(reason) },
     );
     expect(result).toBeNull();

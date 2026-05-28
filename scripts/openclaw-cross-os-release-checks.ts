@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
+  createReadStream,
   createWriteStream,
   existsSync,
   mkdirSync,
@@ -101,7 +102,7 @@ function buildReleaseProviderConfigOverride(providerMeta) {
   }
   return {
     ...(typeof providerMeta.baseUrl === "string" ? { baseUrl: providerMeta.baseUrl } : {}),
-    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "pi" } } : {}),
+    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "openclaw" } } : {}),
     models: [],
     ...(typeof providerMeta.timeoutSeconds === "number"
       ? { timeoutSeconds: providerMeta.timeoutSeconds }
@@ -2022,15 +2023,7 @@ async function startManualGatewayFromInstalledCli(params) {
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
   const invocation = resolveInstalledCliInvocation(
     params.cliPath,
-    [
-      "gateway",
-      "run",
-      "--bind",
-      "loopback",
-      "--port",
-      String(params.lane.gatewayPort),
-      "--force",
-    ],
+    ["gateway", "run", "--bind", "loopback", "--port", String(params.lane.gatewayPort), "--force"],
     {
       comSpec: params.env?.ComSpec ?? params.env?.COMSPEC,
       platform: process.platform,
@@ -2072,19 +2065,26 @@ async function startManualGatewayFromInstalledCli(params) {
 
 async function resolveInstalledGatewayStatusArgs(params) {
   const requireRpc = params.requireRpc !== false;
-  const help = await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["gateway", "status", "--help"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 15_000,
-    check: false,
-  });
-  if (
-    requireRpc &&
-    (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc"))
-  ) {
+  try {
+    const help = await runInstalledCli({
+      cliPath: params.cliPath,
+      args: ["gateway", "status", "--help"],
+      cwd: params.cwd,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs: 15_000,
+      check: false,
+    });
+    return buildGatewayStatusArgsFromHelpText(`${help.stdout}\n${help.stderr}`, { requireRpc });
+  } catch (error) {
+    appendGatewayStatusHelpProbeFallback(params.logPath, error);
+    return buildGatewayStatusArgsFromHelpText("--require-rpc", { requireRpc });
+  }
+}
+
+export function buildGatewayStatusArgsFromHelpText(helpText, options = {}) {
+  const requireRpc = options.requireRpc !== false;
+  if (requireRpc && helpText.includes("--require-rpc")) {
     return [
       "gateway",
       "status",
@@ -2094,6 +2094,13 @@ async function resolveInstalledGatewayStatusArgs(params) {
     ];
   }
   return ["gateway", "status"];
+}
+
+function appendGatewayStatusHelpProbeFallback(logPath, error) {
+  appendFileSync(
+    logPath,
+    `${new Date().toISOString()} gateway status help probe failed; assuming current --require-rpc support: ${formatError(error)}\n`,
+  );
 }
 
 export async function canConnectToLoopbackPort(port, timeoutMs = 1_000) {
@@ -3000,24 +3007,20 @@ function gatewayReadyDeadlineMs() {
 }
 
 async function resolveGatewayStatusArgs(lane, env, logPath) {
-  const help = await runOpenClaw({
-    lane,
-    env,
-    args: ["gateway", "status", "--help"],
-    logPath,
-    timeoutMs: 15_000,
-    check: false,
-  });
-  if (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc")) {
-    return [
-      "gateway",
-      "status",
-      "--require-rpc",
-      "--timeout",
-      String(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS),
-    ];
+  try {
+    const help = await runOpenClaw({
+      lane,
+      env,
+      args: ["gateway", "status", "--help"],
+      logPath,
+      timeoutMs: 15_000,
+      check: false,
+    });
+    return buildGatewayStatusArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
+  } catch (error) {
+    appendGatewayStatusHelpProbeFallback(logPath, error);
+    return buildGatewayStatusArgsFromHelpText("--require-rpc");
   }
-  return ["gateway", "status"];
 }
 
 async function runModelsSet(params) {
@@ -3678,11 +3681,11 @@ async function runCommandInvocation(invocation, options) {
   });
 }
 
-async function startStaticFileServer(params) {
+export async function startStaticFileServer(params) {
   mkdirSync(dirname(params.logPath), { recursive: true });
   const logStream = createWriteStream(params.logPath, { flags: "a" });
   const fileName = String(params.filePath.split(/[/\\]/u).at(-1) ?? "artifact");
-  const fileBytes = readFileSync(params.filePath);
+  const fileStat = statSync(params.filePath);
   const server = createServer((request, response) => {
     logStream.write(`${new Date().toISOString()} ${request.method} ${request.url}\n`);
     if (request.url !== `/${fileName}`) {
@@ -3692,8 +3695,20 @@ async function startStaticFileServer(params) {
     }
     response.statusCode = 200;
     response.setHeader("content-type", resolveStaticFileContentType(params.filePath));
-    response.setHeader("content-length", String(fileBytes.length));
-    response.end(fileBytes);
+    response.setHeader("content-length", String(fileStat.size));
+    response.setHeader("connection", "close");
+    const fileStream = createReadStream(params.filePath);
+    fileStream.once("error", (error) => {
+      logStream.write(`${new Date().toISOString()} static-file-read-error ${formatError(error)}\n`);
+      if (response.headersSent) {
+        response.destroy(error);
+        return;
+      }
+      response.removeHeader("content-length");
+      response.statusCode = 500;
+      response.end("failed to read file");
+    });
+    fileStream.pipe(response);
   });
   await new Promise((resolvePromise, rejectPromise) => {
     server.once("error", rejectPromise);

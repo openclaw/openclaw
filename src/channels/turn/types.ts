@@ -63,7 +63,7 @@ export type ConversationFacts = {
   parentId?: string;
   threadId?: string;
   nativeChannelId?: string;
-  routePeer: {
+  routePeer?: {
     kind: "direct" | "group" | "channel";
     id: string;
   };
@@ -83,7 +83,7 @@ export type RouteFacts = {
 
 export type ReplyPlanFacts = {
   to: string;
-  originatingTo: string;
+  originatingTo?: string;
   nativeChannelId?: string;
   replyTarget?: string;
   deliveryTarget?: string;
@@ -183,7 +183,7 @@ export type MessageFacts = {
   rawBody: string;
   bodyForAgent?: string;
   commandBody?: string;
-  envelopeFrom: string;
+  envelopeFrom?: string;
   senderLabel?: string;
   preview?: string;
   inboundHistory?: HistoryEntry[];
@@ -224,6 +224,8 @@ export type SupplementalContextFacts = {
   };
   untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
   groupSystemPrompt?: string;
+  /** Prompt-like group metadata from user-controlled sources; never enters the system prompt. */
+  untrustedGroupSystemPrompt?: string;
 };
 
 export type InboundMediaFacts = {
@@ -453,20 +455,5 @@ export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResul
   accountId?: string;
   raw: TRaw;
   adapter: ChannelTurnAdapter<TRaw, TDispatchResult>;
-  log?: (event: ChannelTurnLogEvent) => void;
-};
-
-export type RunResolvedChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResult> = {
-  channel: string;
-  accountId?: string;
-  raw: TRaw;
-  input:
-    | NormalizedTurnInput
-    | ((raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null);
-  resolveTurn: (
-    input: NormalizedTurnInput,
-    eventClass: ChannelEventClass,
-    preflight: PreflightFacts,
-  ) => Promise<ChannelTurnResolved<TDispatchResult>> | ChannelTurnResolved<TDispatchResult>;
   log?: (event: ChannelTurnLogEvent) => void;
 };
