@@ -78,6 +78,21 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   }
 
+  function emitAssistantTextEnd(
+    emit: (evt: unknown) => void,
+    content: string,
+    message: Record<string, unknown> = { role: "assistant" },
+  ) {
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: {
+        type: "text_end",
+        content,
+      },
+    });
+  }
+
   function createWriteFailureHarness(params: {
     runId: string;
     path: string;
@@ -939,6 +954,137 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("Visible answer");
     expect(payloads[0]?.delta).toBe("Visible answer");
+  });
+
+  it("replaces malformed streamed reasoning when orphan close tags split across deltas", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "private chain of thought </thi");
+    emitAssistantTextDelta(emit, "nk> Visible answer");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Visible answer");
+    expect(payloads[0]?.replace).toBeUndefined();
+  });
+
+  it("preserves visible text before a split orphan close when no final text follows", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "Done ");
+    emitAssistantTextDelta(emit, "</thi");
+    emitAssistantTextDelta(emit, "nk>");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Done");
+  });
+
+  it("preserves media directives when orphan close replacement has no text", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "private chain of thought </thi");
+    emitAssistantTextDelta(emit, "nk>\nMEDIA:/tmp/a.png\n");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.at(-1)).toMatchObject({
+      text: "",
+      mediaUrls: ["/tmp/a.png"],
+    });
+    expect(payloads.at(-1)?.replace).toBeUndefined();
+  });
+
+  it("preserves block tag literals inside fenced code split across deltas", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+    const finalText = "```xml\n<thinking>literal</thinking>\n```";
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "```xml\n");
+    emitAssistantTextDelta(emit, "<thinking>literal</thinking>\n");
+    emitAssistantTextDelta(emit, "```");
+    emitAssistantTextEnd(emit, finalText);
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.at(-1)?.text).toBe(finalText);
+  });
+
+  it("does not infer a fence from a chunk-local line start before reasoning tags", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "abc");
+    emitAssistantTextDelta(emit, "~~~xml\n<think>secret");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads[0]?.text).toBe("abc");
+    expect(payloads.at(-1)?.text).toBe("abc~~~xml");
+    expect(payloads.some((payload) => String(payload.text).includes("secret"))).toBe(false);
+  });
+
+  it("preserves split fenced code openers while stripping later reasoning", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "``");
+    emitAssistantTextDelta(
+      emit,
+      "`xml\n<thinking>literal</thinking>\n```\n<think>secret</think>answer",
+    );
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.at(-1)?.text).toBe("```xml\n<thinking>literal</thinking>\n```\nanswer");
+  });
+
+  it("preserves long fenced code openers split after three markers", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+    const finalText = "````\n<thinking>literal</thinking>\n```\n````";
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "```");
+    emitAssistantTextDelta(emit, "`\n<thinking>literal</thinking>\n```\n````");
+    emitAssistantTextEnd(emit, finalText);
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.at(-1)?.text).toBe(finalText);
+  });
+
+  it("keeps close tag literals inside hidden fenced code stripped across deltas", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "<think>\n```ts\nliteral ");
+    emitAssistantTextDelta(emit, "</think> still private");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("does not carry hidden fenced code state into visible text", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "<think>\n```ts\nscratch");
+    emitAssistantTextDelta(emit, "\n```\n</think>Visible answer");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.at(-1)?.text).toBe("Visible answer");
+  });
+
+  it("preserves block tag literals inside tilde fenced code split across deltas", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+    const finalText = "~~~xml\n<thinking>literal</thinking>\n~~~";
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "~~~xml\n");
+    emitAssistantTextDelta(emit, "<thinking>literal</thinking>\n");
+    emitAssistantTextDelta(emit, "~~~");
+    emitAssistantTextEnd(emit, finalText);
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.at(-1)?.text).toBe(finalText);
   });
 
   it("emits agent events on message_end for non-streaming assistant text", () => {
