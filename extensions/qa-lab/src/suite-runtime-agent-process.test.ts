@@ -20,7 +20,6 @@ vi.mock("./suite-runtime-gateway.js", () => ({
   waitForTransportReady: waitForTransportReadyMock,
 }));
 
-import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 import {
   findManagedDreamingCronJob,
   isManagedDreamingCronJob,
@@ -32,6 +31,7 @@ import {
   waitForAgentRun,
   waitForMemorySearchMatch,
 } from "./suite-runtime-agent-process.js";
+import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 
 type MockEmitter = {
   emit: (eventName: string | symbol, ...args: unknown[]) => boolean;

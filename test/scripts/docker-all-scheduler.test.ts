@@ -89,7 +89,9 @@ describe("scripts/test-docker-all scheduler", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("OPENCLAW_DOCKER_ALL_PARALLELISM must be a positive integer");
+    expect(result.stderr).toContain(
+      "OPENCLAW_DOCKER_ALL_PARALLELISM must be a positive integer",
+    );
     expect(result.stderr).not.toContain("at ");
   });
 

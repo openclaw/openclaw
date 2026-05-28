@@ -99,7 +99,9 @@ export function resolveBoundaryRootShimsTimeoutMs(env = process.env) {
     return 300_000;
   }
   const parsed = Number.parseInt(raw, 10);
-  return Number.isInteger(parsed) && parsed > 0 && String(parsed) === raw.trim() ? parsed : 300_000;
+  return Number.isInteger(parsed) && parsed > 0 && String(parsed) === raw.trim()
+    ? parsed
+    : 300_000;
 }
 
 function collectNewestMtime(paths, params = {}) {

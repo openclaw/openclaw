@@ -78,5 +78,7 @@ export function formatQaChildOutputTail(tail: QaChildOutputTail, label: string) 
   if (!text) {
     return "";
   }
-  return tail.truncated ? `[${label} truncated to last ${tail.maxBytes} bytes]\n${text}` : text;
+  return tail.truncated
+    ? `[${label} truncated to last ${tail.maxBytes} bytes]\n${text}`
+    : text;
 }

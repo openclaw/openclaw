@@ -146,9 +146,7 @@ describe("resolve-openclaw-package-candidate", () => {
         ],
         { capture: true },
       ),
-    ).rejects.toThrow(
-      /failed with 7\n\[output truncated \d+ chars; showing tail\][\s\S]*recent failure/u,
-    );
+    ).rejects.toThrow(/failed with 7\n\[output truncated \d+ chars; showing tail\][\s\S]*recent failure/u);
   });
 
   it("rejects truncated captured stdout instead of parsing partial command output", async () => {

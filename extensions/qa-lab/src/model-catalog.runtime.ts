@@ -2,15 +2,6 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import {
-  appendQaChildOutput,
-  appendQaChildOutputTail,
-  createQaChildOutputCapture,
-  createQaChildOutputTail,
-  formatQaChildOutputTail,
-  QA_CHILD_STDOUT_MAX_BYTES,
-  readQaChildOutput,
-} from "./child-output.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import {
   isPreferredQaLiveFrontierCatalogModel,
@@ -22,6 +13,15 @@ import {
   createQaChannelGatewayConfig,
   QA_CHANNEL_REQUIRED_PLUGIN_IDS,
 } from "./qa-channel-transport.js";
+import {
+  appendQaChildOutput,
+  appendQaChildOutputTail,
+  createQaChildOutputCapture,
+  createQaChildOutputTail,
+  formatQaChildOutputTail,
+  QA_CHILD_STDOUT_MAX_BYTES,
+  readQaChildOutput,
+} from "./child-output.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 
 type ModelRow = {
@@ -237,7 +237,11 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
           return;
         }
         const stderrText = formatQaChildOutputTail(stderr, "qa model catalog stderr");
-        reject(new Error(`qa model catalog failed (${code ?? "unknown"}): ${stderrText}`));
+        reject(
+          new Error(
+            `qa model catalog failed (${code ?? "unknown"}): ${stderrText}`,
+          ),
+        );
       });
     });
 

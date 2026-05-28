@@ -622,7 +622,9 @@ describe("kitchen-sink RPC process sampling", () => {
   });
 
   it("bounds HTTP probe response bodies", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(new Response("x".repeat(1025), { status: 200 }));
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response("x".repeat(1025), { status: 200 }));
 
     await expect(
       fetchJson("http://127.0.0.1:19680/healthz", {
@@ -687,9 +689,9 @@ describe("kitchen-sink RPC process sampling", () => {
   });
 
   it("reads bounded response streams", async () => {
-    await expect(readBoundedResponseText(new Response('{"status":"live"}'), 1024)).resolves.toBe(
-      '{"status":"live"}',
-    );
+    await expect(
+      readBoundedResponseText(new Response('{"status":"live"}'), 1024),
+    ).resolves.toBe('{"status":"live"}');
   });
 
   it("times out stalled HTTP probe response bodies", async () => {

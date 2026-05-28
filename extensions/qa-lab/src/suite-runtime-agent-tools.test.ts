@@ -198,7 +198,9 @@ describe("qa suite runtime agent tools helpers", () => {
       const stderrListener = stderrOnMock.mock.calls[0]?.[1] as
         | ((chunk: unknown) => void)
         | undefined;
-      stderrListener?.(Buffer.from(`old stderr${"x".repeat(12_000)}\nrecent MCP stderr tail`));
+      stderrListener?.(
+        Buffer.from(`old stderr${"x".repeat(12_000)}\nrecent MCP stderr tail`),
+      );
       throw new Error("tool call failed");
     });
 

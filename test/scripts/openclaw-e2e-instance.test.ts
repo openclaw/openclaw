@@ -426,13 +426,17 @@ echo "child still alive after watchdog termination" >&2
 exit 1
 `;
 
-      const result = spawnSync("/bin/bash", ["-c", script], {
-        encoding: "utf8",
-        env: shellTestEnv({
-          PATH: tempDir,
-        }),
-        timeout: 5_000,
-      });
+      const result = spawnSync(
+        "/bin/bash",
+        ["-c", script],
+        {
+          encoding: "utf8",
+          env: shellTestEnv({
+            PATH: tempDir,
+          }),
+          timeout: 5_000,
+        },
+      );
 
       expectShellSuccess(result);
     } finally {

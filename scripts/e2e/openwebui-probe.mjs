@@ -161,7 +161,10 @@ async function fetchModels(authHeaders, attempt) {
         return {
           ok: false,
           status: response.status,
-          text: await readBoundedResponseText(response, `Open WebUI models attempt ${attempt}`),
+          text: await readBoundedResponseText(
+            response,
+            `Open WebUI models attempt ${attempt}`,
+          ),
         };
       }
       return {
@@ -188,7 +191,9 @@ async function fetchChatCompletion(authHeaders, targetModel) {
     });
     if (!response.ok) {
       const body = await readBoundedResponseText(response, "Open WebUI chat completion");
-      throw new Error(`/api/chat/completions failed: HTTP ${response.status} ${body}`);
+      throw new Error(
+        `/api/chat/completions failed: HTTP ${response.status} ${body}`,
+      );
     }
     return await readBoundedResponseJson(response, "Open WebUI chat completion");
   });

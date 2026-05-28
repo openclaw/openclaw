@@ -306,7 +306,8 @@ export function createTalkRealtimeRelaySession(
   params: CreateTalkRealtimeRelaySessionParams,
 ): TalkRealtimeRelaySessionResult {
   enforceRelaySessionLimits(params.connId);
-  const forceAgentConsultOnFinalTranscript = params.forceAgentConsultOnFinalTranscript === true;
+  const forceAgentConsultOnFinalTranscript =
+    params.forceAgentConsultOnFinalTranscript === true;
   const relaySessionId = randomUUID();
   const expiresAtMs = Date.now() + RELAY_SESSION_TTL_MS;
   const talk = createTalkSessionController(

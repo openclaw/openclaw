@@ -120,7 +120,14 @@ export function resolveNpmPackageCandidatePackRunner(packageSpec, outputDir, par
     env: params.env,
     execPath: params.execPath,
     existsSync: params.existsSync,
-    npmArgs: ["pack", packageSpec, "--ignore-scripts", "--json", "--pack-destination", outputDir],
+    npmArgs: [
+      "pack",
+      packageSpec,
+      "--ignore-scripts",
+      "--json",
+      "--pack-destination",
+      outputDir,
+    ],
     platform: params.platform,
   });
 }
@@ -471,7 +478,10 @@ function ipv4FromHextets(high, low) {
 }
 
 function ipv4OctetsToHextets(octets) {
-  return [((octets[0] << 8) | octets[1]).toString(16), ((octets[2] << 8) | octets[3]).toString(16)];
+  return [
+    ((octets[0] << 8) | octets[1]).toString(16),
+    ((octets[2] << 8) | octets[3]).toString(16),
+  ];
 }
 
 function parseIpv6Parts(address) {
@@ -843,24 +853,19 @@ async function openFetchPackageDownloadResponse(parsed, options) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
   timeout.unref?.();
-  const response = await options
-    .fetchImpl(parsed, {
-      headers: options.headers,
-      redirect: "manual",
-      signal: controller.signal,
-    })
-    .catch((error) => {
-      clearTimeout(timeout);
-      if (error?.name === "AbortError") {
-        throw new Error(
-          `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
-          {
-            cause: error,
-          },
-        );
-      }
-      throw error;
-    });
+  const response = await options.fetchImpl(parsed, {
+    headers: options.headers,
+    redirect: "manual",
+    signal: controller.signal,
+  }).catch((error) => {
+    clearTimeout(timeout);
+    if (error?.name === "AbortError") {
+      throw new Error(`package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  });
   return {
     close: async () => closeResponseBody(response.body),
     response,
@@ -903,12 +908,9 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
   }).catch((error) => {
     clearTimeout(timeout);
     if (error?.name === "AbortError" || error?.code === "ABORT_ERR") {
-      throw new Error(
-        `package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`,
-        {
-          cause: error,
-        },
-      );
+      throw new Error(`package_url download timed out after ${options.timeoutMs}ms: ${parsed.toString()}`, {
+        cause: error,
+      });
     }
     throw error;
   });

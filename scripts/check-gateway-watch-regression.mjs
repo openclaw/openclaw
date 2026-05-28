@@ -54,9 +54,7 @@ export function appendBoundedWatchLog(current, chunk, maxChars = WATCH_LOG_CAPTU
 }
 
 function formatCapturedWatchLog(text, truncated) {
-  return truncated
-    ? `[openclaw] log truncated to last ${WATCH_LOG_CAPTURE_MAX_CHARS} chars\n${text}`
-    : text;
+  return truncated ? `[openclaw] log truncated to last ${WATCH_LOG_CAPTURE_MAX_CHARS} chars\n${text}` : text;
 }
 
 export function updateWatchBuildDetection(state, chunk) {

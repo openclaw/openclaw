@@ -1,7 +1,6 @@
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { createMSTeamsHttpError } from "./http-error.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
   MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS,
@@ -9,6 +8,7 @@ import {
   buildMSTeamsTokenEndpoint,
   type MSTeamsDelegatedTokens,
 } from "./oauth.shared.js";
+import { createMSTeamsHttpError } from "./http-error.js";
 
 /** Five-minute buffer subtracted from token expiry to avoid edge-case clock drift. */
 const EXPIRY_BUFFER_MS = 5 * 60 * 1000;
