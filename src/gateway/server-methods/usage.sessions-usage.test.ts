@@ -213,28 +213,36 @@ describe("sessions.usage", () => {
   });
 
   it("loads selected session summaries concurrently and reports cache refresh status", async () => {
-    vi.mocked(discoverAllSessions).mockResolvedValueOnce([
-      {
-        sessionId: "s-a",
-        sessionFile: "/tmp/agents/main/sessions/s-a.jsonl",
-        mtime: 300,
-      },
-      {
-        sessionId: "s-b",
-        sessionFile: "/tmp/agents/main/sessions/s-b.jsonl",
-        mtime: 200,
-      },
-      {
-        sessionId: "s-c",
-        sessionFile: "/tmp/agents/main/sessions/s-c.jsonl",
-        mtime: 100,
-      },
-    ]);
+    vi.mocked(discoverAllSessions)
+      .mockResolvedValueOnce([
+        {
+          sessionId: "s-a",
+          sessionFile: "/tmp/agents/main/sessions/s-a.jsonl",
+          mtime: 300,
+        },
+        {
+          sessionId: "s-b",
+          sessionFile: "/tmp/agents/main/sessions/s-b.jsonl",
+          mtime: 200,
+        },
+        {
+          sessionId: "s-c",
+          sessionFile: "/tmp/agents/main/sessions/s-c.jsonl",
+          mtime: 100,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          sessionId: "s-opus",
+          sessionFile: "/tmp/agents/opus/sessions/s-opus.jsonl",
+          mtime: 50,
+        },
+      ]);
     const pending: Array<{
       sessionId?: string;
       resolve: (value: Awaited<ReturnType<typeof loadSessionCostSummaryFromCache>>) => void;
     }> = [];
-    for (let i = 0; i < 3; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       vi.mocked(loadSessionCostSummaryFromCache).mockImplementationOnce(
         async ({ sessionId }) =>
           await new Promise<Awaited<ReturnType<typeof loadSessionCostSummaryFromCache>>>(
@@ -247,10 +255,10 @@ describe("sessions.usage", () => {
 
     const respondPromise = runSessionsUsage({ ...BASE_USAGE_RANGE, limit: 3 });
     await vi.waitFor(() =>
-      expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalledTimes(3),
+      expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalledTimes(4),
     );
     for (const item of pending) {
-      const tokens = item.sessionId === "s-a" ? 10 : item.sessionId === "s-b" ? 20 : 30;
+      const tokens = item.sessionId === "s-a" ? 10 : item.sessionId === "s-b" ? 20 : item.sessionId === "s-c" ? 30 : 40;
       item.resolve({
         summary: {
           input: tokens,
@@ -282,8 +290,8 @@ describe("sessions.usage", () => {
       totals: { totalTokens: number };
     };
     expect(result.cacheStatus?.status).toBe("refreshing");
-    expect(result.sessions.map((session) => session.sessionId)).toEqual(["s-a", "s-b", "s-c"]);
-    expect(result.totals.totalTokens).toBe(60);
+    expect(result.sessions.map((session) => session.sessionId)).toEqual(["s-a", "s-b", "s-c", "s-opus"]);
+    expect(result.totals.totalTokens).toBe(100);
   });
 
   it("discovers usage for requested disk-only agents not listed in config", async () => {
