@@ -34,6 +34,8 @@ function toAgentToolResult(params: {
           text: `structuredContent:\n${JSON.stringify(params.result.structuredContent, null, 2)}`,
         } as const)
       : null;
+  // Structured MCP results are the canonical model payload here; replacing
+  // mirrored content avoids duplicating large tool output in the prompt.
   const normalizedContent: AgentToolResult<unknown>["content"] = structuredContentBlock
     ? [structuredContentBlock]
     : content.length > 0
