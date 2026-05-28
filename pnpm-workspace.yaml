@@ -16,6 +16,7 @@ minimumReleaseAgeExclude:
   - "basic-ftp"
   - "baileys@7.0.0-rc13"
   - "hono"
+  - "libopus-wasm@0.1.0"
   - "libsignal@6.0.0"
   - "openclaw"
   - "protobufjs"
@@ -33,9 +34,6 @@ minimumReleaseAgeExclude:
   - "@aws-sdk/token-providers@3.1052.0"
   - "@aws-sdk/token-providers@3.1053.0"
   - "@copilotkit/aimock@1.27.1"
-  - "@earendil-works/pi-agent-core"
-  - "@earendil-works/pi-ai"
-  - "@earendil-works/pi-coding-agent"
   - "@earendil-works/pi-tui"
   - "@google/genai@2.6.0"
   - "@larksuiteoapi/node-sdk@1.65.0"
@@ -55,6 +53,7 @@ minimumReleaseAgeExclude:
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
+  - "rastermill"
 
 nodeLinker: hoisted
 blockExoticSubdeps: true
@@ -63,7 +62,6 @@ overrides:
   "@anthropic-ai/sdk": 0.98.0
   hono: 4.12.18
   "@hono/node-server": 1.19.14
-  "@aws-sdk/client-bedrock-runtime": 3.1053.0
   axios: 1.16.0
   fast-uri: 3.1.2
   follow-redirects: 1.16.0
@@ -101,22 +99,17 @@ allowBuilds:
   koffi: false
   node-llama-cpp: true
   protobufjs: true
+  sharp: true
   tree-sitter-bash: false
   openclaw: true
   "@openclaw/proxyline": true
+  rastermill: true
 
 packageExtensions:
   baileys:
     peerDependenciesMeta:
       sharp:
         optional: true
-  "@earendil-works/pi-coding-agent":
-    dependencies:
-      strip-ansi: 7.2.0
-
-peerDependencyRules:
-  allowedVersions:
-    "prism-media>opusscript": "^0.0.8 || ^0.1.1"
 
 patchedDependencies:
   '@agentclientprotocol/claude-agent-acp@0.37.0': patches/@agentclientprotocol__claude-agent-acp@0.37.0.patch

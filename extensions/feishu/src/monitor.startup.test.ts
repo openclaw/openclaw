@@ -1,5 +1,5 @@
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
@@ -16,6 +16,10 @@ vi.mock("./client.js", async () => {
 vi.mock("./runtime.js", async () => {
   const { createFeishuRuntimeMockModule } = await import("./monitor.test-mocks.js");
   return createFeishuRuntimeMockModule();
+});
+
+beforeAll(async () => {
+  await import("./monitor.account.js");
 });
 
 function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {

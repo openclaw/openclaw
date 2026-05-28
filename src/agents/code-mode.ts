@@ -2,21 +2,21 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import type { AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../shared/record-coerce.js";
 import { uniqueValues } from "../shared/string-normalization.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
+import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
   isCodeModeControlTool,
   markCodeModeControlTool,
 } from "./code-mode-control-tools.js";
-import type { HookContext } from "./pi-tools.before-tool-call.js";
+import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { optionalStringEnum } from "./schema/typebox.js";
+import type { ToolDefinition } from "./sessions/index.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
@@ -133,6 +133,7 @@ type CodeModeWorkerResult =
 const activeRuns = new Map<string, CodeModeRunState>();
 const resumingRunIds = new Set<string>();
 let typescriptRuntimePromise: Promise<typeof import("typescript")> | null = null;
+let typescriptRuntimeForTest: typeof import("typescript") | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
   const codeMode = value;
@@ -412,6 +413,9 @@ function rejectsModuleAccess(code: string): boolean {
 }
 
 async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
+  if (typescriptRuntimeForTest) {
+    return typescriptRuntimeForTest;
+  }
   typescriptRuntimePromise ??= import("typescript");
   return await typescriptRuntimePromise;
 }
@@ -466,7 +470,7 @@ async function runBridgeRequest(params: {
   parentToolCallId: string;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }): Promise<SettledBridgeRequest> {
   try {
     const values = Array.isArray(params.request.args) ? params.request.args : [];
@@ -618,7 +622,7 @@ function snapshotState(params: {
   runtime: ToolSearchRuntime;
   output: unknown[];
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }) {
   enforceActiveRunLimit();
   if (params.snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
@@ -686,7 +690,7 @@ async function runExec(params: {
   code: string;
   language?: CodeModeLanguage;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }) {
   removeExpiredRuns();
   const config = resolveCodeModeConfig(
@@ -777,7 +781,7 @@ async function runWait(params: {
   ctx: CodeModeToolContext;
   runId: string;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }) {
   removeExpiredRuns();
   const state = activeRuns.get(params.runId);
@@ -893,7 +897,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       toolCallId: string,
       args: unknown,
       signal?: AbortSignal,
-      onUpdate?: AgentToolUpdateCallback<unknown>,
+      onUpdate?: AgentToolUpdateCallback,
     ) => {
       const input = readCode(args);
       return jsonResult(
@@ -919,7 +923,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       toolCallId: string,
       args: unknown,
       signal?: AbortSignal,
-      onUpdate?: AgentToolUpdateCallback<unknown>,
+      onUpdate?: AgentToolUpdateCallback,
     ) =>
       jsonResult(
         await runWait({
@@ -992,5 +996,8 @@ export const testing = {
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,
   getTypescriptRuntimePromise: () => typescriptRuntimePromise,
+  setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
+    typescriptRuntimeForTest = runtime;
+  },
 };
 export { testing as __testing };

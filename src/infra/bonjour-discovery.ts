@@ -1,6 +1,7 @@
 import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
+import { parseStrictInteger } from "./parse-finite-number.js";
 import { isTailnetIPv4 } from "./tailnet.js";
 import { resolveWideAreaDiscoveryDomain } from "./widearea-dns.js";
 
@@ -196,8 +197,7 @@ function parseIntOrNull(value: string | undefined): number | undefined {
   if (!value) {
     return undefined;
   }
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return parseStrictInteger(value);
 }
 
 function parseTxtTokens(tokens: string[]): Record<string, string> {

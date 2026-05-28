@@ -34,6 +34,7 @@ function usage() {
     "  --output <path>       JSON report path (default: .artifacts/test-perf/group-report.json)",
     "  --limit <count>       Number of groups/configs to print (default: 25)",
     "  --top-files <count>   Number of files to print (default: 25)",
+    "  --max-test-ms <ms>    Fail when any individual test exceeds this duration",
     "  --allow-failures      Write a report even when a Vitest run exits non-zero",
     "  --no-rss              Skip max RSS measurement",
     "  --help                Show this help",
@@ -58,6 +59,7 @@ export function parseTestGroupReportArgs(argv) {
     fullSuite: false,
     groupBy: "area",
     limit: 25,
+    maxTestMs: null,
     output: null,
     reports: [],
     rss: process.platform !== "win32",
@@ -117,6 +119,11 @@ export function parseTestGroupReportArgs(argv) {
     }
     if (arg === "--limit") {
       args.limit = parsePositiveInt(argv[index + 1], args.limit);
+      index += 1;
+      continue;
+    }
+    if (arg === "--max-test-ms") {
+      args.maxTestMs = parsePositiveInt(argv[index + 1], args.maxTestMs);
       index += 1;
       continue;
     }
@@ -202,9 +209,12 @@ function runVitestJsonReport(params) {
     encoding: "utf8",
     env: {
       ...process.env,
+      ...params.env,
       NODE_OPTIONS: [
-        process.env.NODE_OPTIONS?.trim(),
-        ...resolveVitestNodeArgs(process.env).filter((arg) => arg !== "--no-maglev"),
+        (params.env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS)?.trim(),
+        ...resolveVitestNodeArgs({ ...process.env, ...params.env }).filter(
+          (arg) => arg !== "--no-maglev",
+        ),
       ]
         .filter(Boolean)
         .join(" "),
@@ -304,6 +314,20 @@ export function resolveRunPlans(args) {
   }));
 }
 
+export function resolveFullSuiteVitestEnv(args, env = process.env, label = "") {
+  if (
+    !args.fullSuite ||
+    env.OPENCLAW_VITEST_MAX_WORKERS?.trim() ||
+    env.OPENCLAW_TEST_WORKERS?.trim()
+  ) {
+    return {};
+  }
+
+  return {
+    OPENCLAW_VITEST_MAX_WORKERS: label === "commands" ? "1" : "2",
+  };
+}
+
 function printRunLine(run) {
   console.log(
     `[test-group-report] ${run.label} status=${run.status} wall=${formatMs(run.elapsedMs)} rss=${formatBytesAsMb(run.maxRssBytes)} report=${run.reportPath}`,
@@ -358,6 +382,7 @@ async function main() {
     const run = runVitestJsonReport({
       config: plan.config,
       forwardedArgs: plan.forwardedArgs,
+      env: resolveFullSuiteVitestEnv(args, process.env, plan.label),
       label: plan.label,
       logPath: path.join(logDir, `${slug}.log`),
       reportPath: path.join(reportDir, `${slug}.json`),
@@ -397,6 +422,7 @@ async function main() {
     .map(readReportInput);
   const report = buildGroupedTestReport({
     groupBy: args.groupBy,
+    maxTestMs: args.maxTestMs,
     reports: reportInputs,
   });
   const envelope = {
@@ -417,6 +443,13 @@ async function main() {
   fs.writeFileSync(output, `${JSON.stringify(envelope, null, 2)}\n`, "utf8");
   console.log(renderGroupedTestReport(report, { limit: args.limit, topFiles: args.topFiles }));
   console.log(`[test-group-report] wrote ${path.relative(process.cwd(), output)}`);
+
+  if (args.maxTestMs !== null && report.slowTests.length > 0) {
+    console.error(
+      `[test-group-report] ${report.slowTests.length} tests exceeded ${formatMs(args.maxTestMs)}`,
+    );
+    process.exit(1);
+  }
 
   if (failed && !args.allowFailures) {
     process.exit(1);

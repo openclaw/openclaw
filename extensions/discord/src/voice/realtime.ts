@@ -42,6 +42,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asBoolean, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 import {
+  createDiscordOpusEncodeStream,
   convertDiscordPcm48kStereoToRealtimePcm24kMono,
   convertRealtimePcm24kMonoToDiscordPcm48kStereo,
 } from "./audio.js";
@@ -74,6 +75,7 @@ const DISCORD_REALTIME_PENDING_SPEAKER_CONTEXT_LIMIT = 32;
 const DISCORD_REALTIME_RECENT_AGENT_PROXY_CONSULT_LIMIT = 16;
 const DISCORD_REALTIME_RECENT_AGENT_PROXY_CONSULT_TTL_MS = 15_000;
 const DISCORD_REALTIME_IGNORED_WAKE_NAME_CONTEXT_TTL_MS = 10_000;
+const DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS = 10_000;
 const DISCORD_REALTIME_LOG_PREVIEW_CHARS = 500;
 const DISCORD_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 const DISCORD_REALTIME_FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
@@ -113,6 +115,11 @@ type PendingSpeakerTurn = RealtimeVoiceTurnContextHandle<
   DiscordRealtimeSpeakerContext,
   PendingSpeakerTurnStats
 >;
+
+type TranscriptUtteranceAttribution = {
+  context: DiscordRealtimeSpeakerContext;
+  startedAt: number;
+};
 
 type RecentAgentProxyConsultResult =
   | { status: "fulfilled"; text: string }
@@ -390,6 +397,13 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private partialUserTranscript = "";
   private wakeNameAckedForTurn = false;
   private wakeNameAckIndex = 0;
+  private pendingWakeNameFollowup:
+    | {
+        context: DiscordRealtimeSpeakerContext;
+        startedAt: number;
+        expiresAt: number;
+      }
+    | undefined;
   private lastControlSpeech:
     | { normalizedText: string; sentAt: number; assistantTranscriptCount: number }
     | undefined;
@@ -582,6 +596,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.exactSpeechResponseActive = false;
     this.exactSpeechAudioStarted = false;
     this.resetPartialWakeNameTracking();
+    this.pendingWakeNameFollowup = undefined;
     this.clearOutputAudio("session-close");
     this.bridge?.close();
     this.bridge = null;
@@ -752,14 +767,24 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.outputPacedBuffer = Buffer.alloc(0);
     this.outputActivity.markStreamOpened();
     stream.once("close", () => {
-      if (this.outputStream === stream) {
-        this.logOutputAudioStopped("stream-close");
-        this.outputStream = null;
-        this.resetOutputAudioStats();
-        this.completeExactSpeechResponse("stream-close", { drain: false });
+      // After playback starts this PCM stream can close before Discord consumes
+      // the Opus resource; idle/watchdog owns active playback cleanup.
+      if (this.outputActivity.snapshot().playbackStarted) {
+        return;
       }
+      this.handleOutputStreamClosed(stream, "stream-close");
     });
     return stream;
+  }
+
+  private handleOutputStreamClosed(stream: PassThrough, reason: string): void {
+    if (this.outputStream !== stream) {
+      return;
+    }
+    this.logOutputAudioStopped(reason);
+    this.outputStream = null;
+    this.resetOutputAudioStats();
+    this.completeExactSpeechResponse(reason, { drain: false });
   }
 
   private queueOutputAudio(stream: PassThrough, discordPcm: Buffer): void {
@@ -784,12 +809,21 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     const voiceSdk = loadDiscordVoiceSdk();
+    const opusStream = createDiscordOpusEncodeStream();
+    opusStream.on("error", (err) => {
+      logger.warn(
+        `discord voice: realtime opus encode failed guild=${this.params.entry.guildId} channel=${this.params.entry.channelId}: ${formatErrorMessage(err)}`,
+      );
+      this.resetOutputStream("opus-encode-error");
+    });
+    opusStream.once("close", () => this.handleOutputStreamClosed(stream, "stream-close"));
+    stream.pipe(opusStream);
     if (this.outputPacedBuffer.length > 0) {
       stream.write(this.outputPacedBuffer);
       this.outputPacedBuffer = Buffer.alloc(0);
     }
-    const resource = voiceSdk.createAudioResource(stream, {
-      inputType: voiceSdk.StreamType.Raw,
+    const resource = voiceSdk.createAudioResource(opusStream, {
+      inputType: voiceSdk.StreamType.Opus,
     });
     this.params.entry.player.play(resource);
     this.outputActivity.markPlaybackStarted();
@@ -1199,21 +1233,39 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     this.partialUserTranscript = "";
-    const meetingNotesTurn = this.peekPendingSpeakerTurn();
-    this.recordMeetingNotesUtterance(trimmed, meetingNotesTurn);
+    const transcriptsTurn = this.peekPendingSpeakerTurn();
+    let transcriptAttribution = this.transcriptAttributionFromTurn(transcriptsTurn);
     const wakeNameResult = this.resolveWakeNameTranscript(trimmed);
+    let forcedSpeakerContext: DiscordRealtimeSpeakerContext | undefined;
     if (!wakeNameResult.allowed) {
-      this.rememberIgnoredWakeNameSpeakerContext(this.consumePendingSpeakerContext());
+      const pendingWakeNameFollowup = this.consumePendingWakeNameFollowup();
+      transcriptAttribution ??= pendingWakeNameFollowup;
+      if (!pendingWakeNameFollowup) {
+        this.recordTranscriptUtterance(trimmed, transcriptAttribution);
+        this.rememberIgnoredWakeNameSpeakerContext(this.consumePendingSpeakerContext());
+        logger.info(
+          `discord voice: realtime wake-name gate ignored transcript chars=${trimmed.length} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId} wakeNames=${this.wakeNames.join(",") || "none"}`,
+        );
+        return;
+      }
+      forcedSpeakerContext = pendingWakeNameFollowup.context;
       logger.info(
-        `discord voice: realtime wake-name gate ignored transcript chars=${trimmed.length} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId} wakeNames=${this.wakeNames.join(",") || "none"}`,
+        `discord voice: realtime wake-name follow-up accepted chars=${trimmed.length} speaker=${forcedSpeakerContext.speakerLabel} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
       );
+    }
+    this.recordTranscriptUtterance(trimmed, transcriptAttribution);
+    const acceptedText = wakeNameResult.allowed ? wakeNameResult.text || trimmed : trimmed;
+    if (wakeNameResult.allowed && !wakeNameResult.text.trim()) {
+      this.armWakeNameFollowup();
       return;
     }
-    const acceptedText = wakeNameResult.text || trimmed;
+    if (wakeNameResult.allowed) {
+      this.pendingWakeNameFollowup = undefined;
+    }
     const usesAgentProxy = isDiscordAgentProxyVoiceMode(this.params.mode);
     const pendingForcedConsult =
       usesAgentProxy && params.usesRealtimeAgentHandoff
-        ? this.prepareForcedAgentProxyConsult(acceptedText)
+        ? this.prepareForcedAgentProxyConsult(acceptedText, forcedSpeakerContext)
         : undefined;
     const control = await maybeControlDiscordVoiceAgentRun({
       entry: this.params.entry,
@@ -1244,7 +1296,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       }
       return;
     }
-    this.talkback.enqueue(acceptedText, this.consumePendingSpeakerContext());
+    this.talkback.enqueue(
+      acceptedText,
+      forcedSpeakerContext ?? this.consumePendingSpeakerContext(),
+    );
   }
 
   private handlePartialUserTranscript(text: string): void {
@@ -1289,15 +1344,24 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     return { allowed: false, text };
   }
 
-  private recordMeetingNotesUtterance(text: string, turn: PendingSpeakerTurn | undefined): void {
-    const meetingNotes = this.params.entry.meetingNotes;
-    if (!meetingNotes || !turn) {
+  private transcriptAttributionFromTurn(
+    turn: PendingSpeakerTurn | undefined,
+  ): TranscriptUtteranceAttribution | undefined {
+    return turn ? { context: turn.context, startedAt: turn.startedAt } : undefined;
+  }
+
+  private recordTranscriptUtterance(
+    text: string,
+    attribution: TranscriptUtteranceAttribution | undefined,
+  ): void {
+    const transcripts = this.params.entry.transcripts;
+    if (!transcripts || !attribution) {
       return;
     }
-    const context = turn.context;
+    const context = attribution.context;
     const utterance = {
-      sessionId: meetingNotes.sessionId,
-      startedAt: new Date(turn.startedAt).toISOString(),
+      sessionId: transcripts.sessionId,
+      startedAt: new Date(attribution.startedAt).toISOString(),
       final: true,
       speaker: {
         id: context.userId,
@@ -1312,10 +1376,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       },
     };
     void Promise.resolve()
-      .then(() => meetingNotes.onUtterance(utterance))
+      .then(() => transcripts.onUtterance(utterance))
       .catch((error: unknown) => {
         logger.warn(
-          `discord voice: realtime meeting notes utterance failed: ${formatErrorMessage(error)}`,
+          `discord voice: realtime transcripts utterance failed: ${formatErrorMessage(error)}`,
         );
       });
   }
@@ -1326,7 +1390,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     );
   }
 
-  private prepareForcedAgentProxyConsult(transcript: string): AgentProxyConsultHandle | undefined {
+  private prepareForcedAgentProxyConsult(
+    transcript: string,
+    speakerContext?: DiscordRealtimeSpeakerContext,
+  ): AgentProxyConsultHandle | undefined {
     if (this.consultPolicy !== "always" && !this.requireWakeName) {
       return undefined;
     }
@@ -1342,7 +1409,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       );
       return undefined;
     }
-    let context = this.consumePendingSpeakerContext();
+    let context = speakerContext ?? this.consumePendingSpeakerContext();
     if (!context) {
       context = this.consumeRecentIgnoredWakeNameSpeakerContext();
     }
@@ -1419,6 +1486,44 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
 
   private consumePendingSpeakerContext(): DiscordRealtimeSpeakerContext | undefined {
     return this.speakerTurns.consumeAudioContext();
+  }
+
+  private armWakeNameFollowup(): void {
+    const turn = this.peekPendingSpeakerTurn();
+    const context = this.consumePendingSpeakerContext();
+    if (!context) {
+      logger.warn(
+        `discord voice: realtime wake-name follow-up has no speaker context voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
+      );
+      return;
+    }
+    this.pendingWakeNameFollowup = {
+      context,
+      startedAt: turn?.startedAt ?? Date.now(),
+      expiresAt: Date.now() + DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS,
+    };
+    logger.info(
+      `discord voice: realtime wake-name follow-up armed speaker=${context.speakerLabel} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
+    );
+  }
+
+  private consumePendingWakeNameFollowup(): TranscriptUtteranceAttribution | undefined {
+    const pending = this.pendingWakeNameFollowup;
+    this.pendingWakeNameFollowup = undefined;
+    if (!pending || Date.now() > pending.expiresAt) {
+      return undefined;
+    }
+    const currentTurn = this.peekPendingSpeakerTurn();
+    if (currentTurn && currentTurn.context.userId !== pending.context.userId) {
+      return undefined;
+    }
+    if (currentTurn) {
+      this.consumePendingSpeakerContext();
+    }
+    return {
+      context: pending.context,
+      startedAt: pending.startedAt,
+    };
   }
 
   private rememberIgnoredWakeNameSpeakerContext(

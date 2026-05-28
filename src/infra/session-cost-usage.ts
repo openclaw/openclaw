@@ -21,6 +21,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { asFiniteNumber } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
 import {
   estimateUsageCost,
@@ -88,14 +89,17 @@ const emptyTotals = (): CostUsageTotals => ({
 const USAGE_COST_CACHE_VERSION = 4;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
+const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
   agentId?: string;
+  cachePath: string;
   config?: OpenClawConfig;
   fullRefreshRequested: boolean;
   pendingSessionFiles: Set<string>;
   running: boolean;
+  sessionsDir: string;
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -366,24 +370,37 @@ async function writeUsageCostCache(cachePath: string, cache: UsageCostCacheFile)
   });
 }
 
+async function listUsageCountedTranscriptFileStats(
+  agentId?: string,
+  params?: { minMtimeMs?: number; sessionsDir?: string },
+): Promise<UsageCostTranscriptFile[]> {
+  const sessionsDir = params?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
+  const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+  const tasks = entries
+    .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
+    .map((entry) => async (): Promise<UsageCostTranscriptFile | undefined> => {
+      const filePath = path.join(sessionsDir, entry.name);
+      const stats = await fs.promises.stat(filePath).catch(() => null);
+      if (!stats) {
+        return undefined;
+      }
+      if (params?.minMtimeMs !== undefined && stats.mtimeMs < params.minMtimeMs) {
+        return undefined;
+      }
+      return { filePath, size: stats.size, mtimeMs: stats.mtimeMs };
+    });
+  const { results } = await runTasksWithConcurrency({
+    tasks,
+    limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
+  });
+  return results.filter((file): file is UsageCostTranscriptFile => Boolean(file));
+}
+
 async function listUsageCountedTranscriptFiles(
   agentId?: string,
+  params?: { sessionsDir?: string },
 ): Promise<UsageCostTranscriptFile[]> {
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
-  const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
-  const files = await Promise.all(
-    entries
-      .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
-      .map(async (entry) => {
-        const filePath = path.join(sessionsDir, entry.name);
-        const stats = await fs.promises.stat(filePath).catch(() => null);
-        if (!stats) {
-          return undefined;
-        }
-        return { filePath, size: stats.size, mtimeMs: stats.mtimeMs };
-      }),
-  );
-  return files.filter((file): file is UsageCostTranscriptFile => Boolean(file));
+  return await listUsageCountedTranscriptFileStats(agentId, params);
 }
 
 function isUsageCostCacheEntryFresh(params: {
@@ -1283,30 +1300,13 @@ export async function loadCostUsageSummary(params?: {
   const totals = emptyTotals();
   const resolveCost = createUsageCostResolver(params?.config);
 
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
-  const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
-  const files = (
-    await Promise.all(
-      entries
-        .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
-        .map(async (entry) => {
-          const filePath = path.join(sessionsDir, entry.name);
-          const stats = await fs.promises.stat(filePath).catch(() => null);
-          if (!stats) {
-            return null;
-          }
-          // Include file if it was modified after our start time
-          if (stats.mtimeMs < sinceTime) {
-            return null;
-          }
-          return filePath;
-        }),
-    )
-  ).filter((filePath): filePath is string => Boolean(filePath));
+  const files = await listUsageCountedTranscriptFileStats(params?.agentId, {
+    minMtimeMs: sinceTime,
+  });
 
-  for (const filePath of files) {
+  for (const file of files) {
     await scanUsageFile({
-      filePath,
+      filePath: file.filePath,
       config: params?.config,
       resolveCost,
       onEntry: (entry) => {
@@ -1497,14 +1497,16 @@ async function scanUsageFileForCache(params: {
   };
 }
 
-export async function refreshCostUsageCache(params?: {
+async function refreshCostUsageCacheForPath(params?: {
   config?: OpenClawConfig;
   agentId?: string;
+  cachePath?: string;
   maxFiles?: number;
+  sessionsDir?: string;
   sessionFiles?: string[];
   startMs?: number;
 }): Promise<UsageCostRefreshResult> {
-  const cachePath = resolveUsageCostCachePath(params?.agentId);
+  const cachePath = params?.cachePath ?? resolveUsageCostCachePath(params?.agentId);
   const lock = await acquireUsageCostCacheRefreshLock(cachePath);
   if (!lock.acquired) {
     return "busy";
@@ -1512,7 +1514,9 @@ export async function refreshCostUsageCache(params?: {
   try {
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
     const cache = await readUsageCostCache(cachePath);
-    const files = await listUsageCountedTranscriptFiles(params?.agentId);
+    const files = await listUsageCountedTranscriptFiles(params?.agentId, {
+      sessionsDir: params?.sessionsDir,
+    });
     const sessionSummaryFiles = new Set(params?.sessionFiles ?? []);
     const refreshStartMs = params?.startMs;
     const refreshFiles =
@@ -1564,6 +1568,16 @@ export async function refreshCostUsageCache(params?: {
   } finally {
     await lock.release();
   }
+}
+
+export async function refreshCostUsageCache(params?: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  maxFiles?: number;
+  sessionFiles?: string[];
+  startMs?: number;
+}): Promise<UsageCostRefreshResult> {
+  return await refreshCostUsageCacheForPath(params);
 }
 
 export async function loadCostUsageSummaryFromCache(params: {
@@ -1622,7 +1636,7 @@ export async function loadCostUsageSummaryFromCache(params: {
     startMs: params.startMs,
     endMs: params.endMs,
     pricingFingerprint,
-    refreshing: usageCostRefreshes.has(params.agentId ?? "main") || refreshRunning,
+    refreshing: usageCostRefreshes.has(cachePath) || refreshRunning,
   });
 }
 
@@ -1697,7 +1711,8 @@ export async function loadSessionCostSummaryFromCache(params: {
       refreshRequested = true;
     }
   }
-  const refreshRunning = await isUsageCostCacheRefreshRunning(cachePath);
+  const refreshRunning =
+    usageCostRefreshes.has(cachePath) || (await isUsageCostCacheRefreshRunning(cachePath));
   let summary = stale ? null : (entry?.sessionSummary ?? null);
   if (!summary && params.refreshMode === "sync-when-empty") {
     summary = await loadSessionCostSummary({
@@ -1759,8 +1774,8 @@ export function requestCostUsageCacheRefresh(params?: {
   agentId?: string;
   sessionFiles?: string[];
 }): void {
-  const agentId = params?.agentId ?? "main";
-  const existing = usageCostRefreshes.get(agentId);
+  const cachePath = resolveUsageCostCachePath(params?.agentId);
+  const existing = usageCostRefreshes.get(cachePath);
   if (existing) {
     mergeUsageCostRefreshRequest(existing, params);
     return;
@@ -1768,14 +1783,16 @@ export function requestCostUsageCacheRefresh(params?: {
 
   const state: UsageCostRefreshState = {
     agentId: params?.agentId,
+    cachePath,
     config: params?.config,
     fullRefreshRequested: false,
     pendingSessionFiles: new Set(),
     running: false,
+    sessionsDir: path.dirname(cachePath),
   };
   mergeUsageCostRefreshRequest(state, params);
-  usageCostRefreshes.set(agentId, state);
-  scheduleUsageCostRefresh(agentId, state);
+  usageCostRefreshes.set(cachePath, state);
+  scheduleUsageCostRefresh(cachePath, state);
 }
 
 function mergeUsageCostRefreshRequest(
@@ -1802,7 +1819,7 @@ function mergeUsageCostRefreshRequest(
 }
 
 function scheduleUsageCostRefresh(
-  agentId: string,
+  refreshKey: string,
   state: UsageCostRefreshState,
   delayMs = 0,
 ): void {
@@ -1811,14 +1828,14 @@ function scheduleUsageCostRefresh(
   }
   const timer = setTimeout(() => {
     state.timer = undefined;
-    void runQueuedUsageCostRefresh(agentId, state);
+    void runQueuedUsageCostRefresh(refreshKey, state);
   }, delayMs);
   timer.unref?.();
   state.timer = timer;
 }
 
 async function runQueuedUsageCostRefresh(
-  agentId: string,
+  refreshKey: string,
   state: UsageCostRefreshState,
 ): Promise<void> {
   state.running = true;
@@ -1831,9 +1848,11 @@ async function runQueuedUsageCostRefresh(
         state.pendingSessionFiles.clear();
       }
       state.fullRefreshRequested = false;
-      const result = await refreshCostUsageCache({
+      const result = await refreshCostUsageCacheForPath({
+        cachePath: state.cachePath,
         config: state.config,
         agentId: state.agentId,
+        sessionsDir: state.sessionsDir,
         sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
       });
       if (result === "busy") {
@@ -1853,9 +1872,9 @@ async function runQueuedUsageCostRefresh(
   } finally {
     state.running = false;
     if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
-      scheduleUsageCostRefresh(agentId, state, retryDelayMs);
+      scheduleUsageCostRefresh(refreshKey, state, retryDelayMs);
     } else {
-      usageCostRefreshes.delete(agentId);
+      usageCostRefreshes.delete(refreshKey);
     }
   }
 }
@@ -1870,33 +1889,22 @@ export async function discoverAllSessions(params?: {
   endMs?: number;
   includeFirstUserMessage?: boolean;
 }): Promise<DiscoveredSession[]> {
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
-  const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+  const files = await listUsageCountedTranscriptFileStats(params?.agentId, {
+    minMtimeMs: params?.startMs,
+  });
 
   const discovered = new Map<string, DiscoveredSession>();
 
-  for (const entry of entries) {
-    if (!entry.isFile() || !isUsageCountedSessionTranscriptFileName(entry.name)) {
-      continue;
-    }
-
-    const filePath = path.join(sessionsDir, entry.name);
-    const stats = await fs.promises.stat(filePath).catch(() => null);
-    if (!stats) {
-      continue;
-    }
-
-    // Filter by date range if provided
-    if (params?.startMs && stats.mtimeMs < params.startMs) {
-      continue;
-    }
+  for (const file of files) {
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
+    const filePath = file.filePath;
+    const fileName = path.basename(filePath);
 
-    const sessionId = parseUsageCountedSessionIdFromFileName(entry.name);
+    const sessionId = parseUsageCountedSessionIdFromFileName(fileName);
     if (!sessionId) {
       continue;
     }
-    const isPrimaryTranscript = isPrimarySessionTranscriptFileName(entry.name);
+    const isPrimaryTranscript = isPrimarySessionTranscriptFileName(fileName);
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
@@ -1942,13 +1950,13 @@ export async function discoverAllSessions(params?: {
     const shouldReplace =
       !existing ||
       (isPrimaryTranscript && !existingIsPrimary) ||
-      (isPrimaryTranscript === existingIsPrimary && stats.mtimeMs >= existing.mtime);
+      (isPrimaryTranscript === existingIsPrimary && file.mtimeMs >= existing.mtime);
 
     if (shouldReplace) {
       discovered.set(sessionId, {
         sessionId,
         sessionFile: filePath,
-        mtime: stats.mtimeMs,
+        mtime: file.mtimeMs,
         firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
       });
       continue;

@@ -86,27 +86,42 @@ function parseArgs(argv) {
   if (options.qaScenarios.length === 0) {
     options.qaScenarios = [...DEFAULT_QA_SCENARIOS];
   }
+  if (options.skipStartup && options.skipQa) {
+    throw new Error("--skip-startup and --skip-qa cannot be used together");
+  }
   return options;
 }
 
 function parsePositiveInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1) {
+  const text = String(raw).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${label} must be a positive integer`);
   }
   return value;
 }
 
 function parseNonNegativeInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) {
+  const text = String(raw).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${label} must be a non-negative integer`);
   }
   return value;
 }
 
 function parsePositiveNumber(raw, label) {
-  const value = Number(raw);
+  const text = String(raw).trim();
+  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
+    throw new Error(`${label} must be a positive number`);
+  }
+  const value = Number(text);
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`${label} must be a positive number`);
   }
@@ -223,9 +238,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
       qaOutputArg,
       ...options.qaScenarios.flatMap((id) => ["--scenario", id]),
     ]);
-    steps.push(
-      runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params),
-    );
+    steps.push(runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params));
   }
 
   const startup = readJsonIfExists(startupOutput);
@@ -259,8 +272,15 @@ async function runGatewayCpuScenarios(options, params = {}) {
   if (!params.silent) {
     console.log(JSON.stringify(summary, null, 2));
   }
+  if (observations.length > 0) {
+    console.error(
+      `[gateway-cpu] fail hot CPU observations: ${observations
+        .map((observation) => `${observation.kind}:${observation.id}`)
+        .join(", ")}`,
+    );
+  }
 
-  const exitCode = steps.some((step) => step.status !== 0) ? 1 : 0;
+  const exitCode = steps.some((step) => step.status !== 0) || observations.length > 0 ? 1 : 0;
   return { exitCode, summary };
 }
 

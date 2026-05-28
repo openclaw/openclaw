@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -44,7 +44,7 @@ async function expectVertexAdcEnvApiKey(params: {
   }
 }
 
-function testModelDefinition(id: string): Model<Api> {
+function testModelDefinition(id: string): Model {
   return {
     id,
     name: id,
@@ -136,42 +136,56 @@ vi.mock("./model-auth-env-vars.js", () => {
     voyage: ["VOYAGE_API_KEY"],
     zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
   } as const;
+  const aliasMap = {
+    modelstudio: "qwen",
+    qwencloud: "qwen",
+    "z.ai": "zai",
+    "z-ai": "zai",
+    "opencode-go-auth": "opencode-go",
+    bedrock: "amazon-bedrock",
+    "aws-bedrock": "amazon-bedrock",
+  };
+  const resolveProviderEnvAuthEvidence = (params?: { config?: OpenClawConfig }) => {
+    const evidence = {
+      "google-vertex": [
+        {
+          type: "local-file-with-env",
+          fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
+          fallbackPaths: [
+            "${HOME}/.config/gcloud/application_default_credentials.json",
+            "${APPDATA}/gcloud/application_default_credentials.json",
+          ],
+          requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+          requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
+          credentialMarker: "gcp-vertex-credentials",
+          source: "gcloud adc",
+        },
+      ],
+    } satisfies Record<string, readonly unknown[]>;
+    if (!hasAllowedPlugin(params?.config, "workspace-cloud")) {
+      return evidence;
+    }
+    return {
+      ...evidence,
+      "workspace-cloud": [
+        {
+          type: "local-file-with-env",
+          fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+          credentialMarker: "workspace-cloud-local-credentials",
+          source: "workspace cloud credentials",
+        },
+      ],
+    };
+  };
   return {
-    PROVIDER_ENV_API_KEY_CANDIDATES: candidates,
     listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
     resolveProviderEnvApiKeyCandidates: () => candidates,
-    resolveProviderEnvAuthEvidence: (params?: { config?: OpenClawConfig }) => {
-      const evidence = {
-        "google-vertex": [
-          {
-            type: "local-file-with-env",
-            fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
-            fallbackPaths: [
-              "${HOME}/.config/gcloud/application_default_credentials.json",
-              "${APPDATA}/gcloud/application_default_credentials.json",
-            ],
-            requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
-            requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
-            credentialMarker: "gcp-vertex-credentials",
-            source: "gcloud adc",
-          },
-        ],
-      } satisfies Record<string, readonly unknown[]>;
-      if (!hasAllowedPlugin(params?.config, "workspace-cloud")) {
-        return evidence;
-      }
-      return {
-        ...evidence,
-        "workspace-cloud": [
-          {
-            type: "local-file-with-env",
-            fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
-            credentialMarker: "workspace-cloud-local-credentials",
-            source: "workspace cloud credentials",
-          },
-        ],
-      };
-    },
+    resolveProviderEnvAuthEvidence,
+    resolveProviderEnvAuthLookupMaps: (params?: { config?: OpenClawConfig }) => ({
+      aliasMap,
+      envCandidateMap: candidates,
+      authEvidenceMap: resolveProviderEnvAuthEvidence(params),
+    }),
   };
 });
 
@@ -220,6 +234,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 
 vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForProvider: ({ provider }: { provider: string }) =>
+    provider === "openai" ? ["openai"] : [],
+  resolveOwningPluginIdsForProviderRef: ({ provider }: { provider: string }) =>
     provider === "openai" ? ["openai"] : [],
 }));
 
@@ -401,7 +417,7 @@ describe("getApiKeyForModel", () => {
           id: "codex-mini-latest",
           provider: "openai-codex",
           api: "openai-codex-responses",
-        } as Model<Api>;
+        } as Model;
 
         const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
           allowKeychainPrompt: false,
@@ -795,7 +811,7 @@ describe("getApiKeyForModel", () => {
         env: {},
         store,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     await expect(
       hasAuthForModelProvider({
         provider: "vllm",

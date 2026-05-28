@@ -11,7 +11,8 @@ describe("number-coercion", () => {
 
   test("parseFiniteNumber accepts finite numbers and numeric strings", () => {
     expect(parseFiniteNumber(4)).toBe(4);
-    expect(parseFiniteNumber("4.5ms")).toBe(4.5);
+    expect(parseFiniteNumber("4.5")).toBe(4.5);
+    expect(parseFiniteNumber("4.5ms")).toBeUndefined();
     expect(parseFiniteNumber("")).toBeUndefined();
     expect(parseFiniteNumber("nope")).toBeUndefined();
   });

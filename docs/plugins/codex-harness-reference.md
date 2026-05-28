@@ -310,7 +310,7 @@ available timeout in this order:
   image-generation default.
 - For the media-understanding `image` tool, `tools.media.image.timeoutSeconds`
   converted to milliseconds, or the 60 second media default.
-- The 30 second dynamic-tool default.
+- The 90 second dynamic-tool default.
 
 Dynamic tool budgets are capped at 600000 ms. On timeout, OpenClaw aborts the
 tool signal where supported and returns a failed dynamic-tool response to Codex
@@ -353,7 +353,7 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 - GPT-5.4 mini
 - GPT-5.2
 
-The current bundled harness is `@openai/codex` `0.133.0`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.134.0`. A `model/list` probe
 against that bundled app-server returned:
 
 | Model id              | Default | Hidden | Input modalities | Reasoning efforts        |
@@ -420,8 +420,15 @@ files. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
 OpenClaw Codex developer instructions because they define the active agent,
 available workspace guidance, and user profile. `HEARTBEAT.md` content is not
 injected; heartbeat turns get a collaboration-mode pointer to read the file when
-it exists and is non-empty. `BOOTSTRAP.md` and `MEMORY.md` when present are
-forwarded as OpenClaw turn input reference context.
+it exists and is non-empty. `MEMORY.md` content from the configured agent
+workspace is not pasted into native Codex turn input when memory tools are
+available for that workspace; when it exists, the harness adds a small
+workspace-memory pointer and Codex should use `memory_search` or `memory_get`
+when durable memory is relevant. If tools are disabled, memory search is
+unavailable, or the active workspace differs from the agent memory workspace,
+`MEMORY.md` uses the normal bounded turn-context path.
+`BOOTSTRAP.md` when present is forwarded as OpenClaw turn input reference
+context.
 
 ## Environment overrides
 

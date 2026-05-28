@@ -1,6 +1,6 @@
 ---
 name: security-triage
-description: Triage OpenClaw security advisories, drafts, and GHSA reports with shipped-tag and trust-model proof.
+description: "Triage OpenClaw security advisories, drafts, and GHSA reports with shipped-tag and trust-model proof."
 ---
 
 # Security Triage
@@ -87,10 +87,17 @@ When preparing a maintainer-ready close reply:
    - exact reason for close
    - exact code refs
    - exact shipped tag / release facts
-   - exact fix commit or canonical duplicate GHSA when applicable
+   - fix provenance or canonical duplicate GHSA when applicable
    - optional hardening note only if worthwhile and functionality-preserving
 
 Keep tone firm, specific, non-defensive.
+
+## Public Wording Hygiene
+
+- Keep raw commit hashes out of hardening/no-publish close comments and public advisory text. Use the shipped version, planned patched version, PR, or "the fix on main" instead.
+- Keep exact commit SHAs in internal notes and verification files. Include raw SHAs in a public advisory only when publishing a real vulnerability and the SHA materially helps downstream tracking.
+- For hardening/no-publish outcomes, do not add exploit-heavy details or a "Fix Commit(s)" section. Thank reporters, preserve credit, state the `SECURITY.md` boundary, and say clearly that the GHSA will close without publication.
+- Keep GHSA ids out of changelog and release-note wording unless Peter explicitly asks.
 
 ## Discussion Mode
 

@@ -3,6 +3,7 @@ import {
   cleanSchemaForGemini,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
 } from "../agents/schema/clean-for-gemini.js";
+import { stripUnsupportedSchemaKeywords } from "../shared/schema-keyword-strip.js";
 import type {
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
@@ -10,49 +11,7 @@ import type {
 } from "./plugin-entry.js";
 
 // Shared provider-tool helpers for plugin-owned schema compatibility rewrites.
-export { cleanSchemaForGemini, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS };
-
-export function stripUnsupportedSchemaKeywords(
-  schema: unknown,
-  unsupportedKeywords: ReadonlySet<string>,
-): unknown {
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
-  if (Array.isArray(schema)) {
-    return schema.map((entry) => stripUnsupportedSchemaKeywords(entry, unsupportedKeywords));
-  }
-  const obj = schema as Record<string, unknown>;
-  const cleaned: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (unsupportedKeywords.has(key)) {
-      continue;
-    }
-    if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
-      cleaned[key] = Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [
-          childKey,
-          stripUnsupportedSchemaKeywords(childValue, unsupportedKeywords),
-        ]),
-      );
-      continue;
-    }
-    if (key === "items" && value && typeof value === "object") {
-      cleaned[key] = Array.isArray(value)
-        ? value.map((entry) => stripUnsupportedSchemaKeywords(entry, unsupportedKeywords))
-        : stripUnsupportedSchemaKeywords(value, unsupportedKeywords);
-      continue;
-    }
-    if ((key === "anyOf" || key === "oneOf" || key === "allOf") && Array.isArray(value)) {
-      cleaned[key] = value.map((entry) =>
-        stripUnsupportedSchemaKeywords(entry, unsupportedKeywords),
-      );
-      continue;
-    }
-    cleaned[key] = value;
-  }
-  return cleaned;
-}
+export { cleanSchemaForGemini, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS, stripUnsupportedSchemaKeywords };
 
 export function findUnsupportedSchemaKeywords(
   schema: unknown,
@@ -455,6 +414,25 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
   const variants = record[unionKey] as unknown[];
   const normalizedVariants = variants.map((entry) => normalizeDeepSeekSchema(entry));
   const nonNullVariants = normalizedVariants.filter((entry) => !isNullSchemaVariant(entry));
+  const hasNullVariant = nonNullVariants.length < normalizedVariants.length;
+
+  // Preserve string-const unions as a flat string enum so DeepSeek tool
+  // callers still see every allowed literal. Without this, a Typebox
+  // `Type.Union([Type.Literal("a"), Type.Literal("b"), ...])` collapses to
+  // only the first const and the model can never pick any other value.
+  if (nonNullVariants.length > 1 && nonNullVariants.every((entry) => isStringConstVariant(entry))) {
+    const enumValues = nonNullVariants.map((entry) => (entry as { const: string }).const);
+    const merged: Record<string, unknown> = {
+      ...normalized,
+      type: "string",
+      enum: enumValues,
+    };
+    if (hasNullVariant) {
+      merged.nullable = true;
+    }
+    return merged;
+  }
+
   const selected = nonNullVariants[0] ?? normalizedVariants[0];
   if (!selected || typeof selected !== "object" || Array.isArray(selected)) {
     return normalized;
@@ -464,10 +442,18 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     ...(selected as Record<string, unknown>),
     ...normalized,
   };
-  if (nonNullVariants.length < normalizedVariants.length) {
+  if (hasNullVariant) {
     merged.nullable = true;
   }
   return merged;
+}
+
+function isStringConstVariant(entry: unknown): entry is { const: string } {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return false;
+  }
+  const record = entry as Record<string, unknown>;
+  return typeof record.const === "string";
 }
 
 export function normalizeDeepSeekToolSchemas(

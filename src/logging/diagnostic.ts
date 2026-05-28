@@ -513,6 +513,9 @@ function isStalledModelCallRecoveryEligible(params: {
   stuckSessionAbortMs: number;
 }): boolean {
   const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
+  // Local providers are not blanket-exempt from recovery. Streaming model
+  // chunks refresh run activity while emitted progress events are throttled, so
+  // active streams stay fresh and silent/non-streaming calls can be recovered.
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
@@ -536,7 +539,7 @@ function isActiveAbortRecoveryEligible(params: {
   );
 }
 
-function isIdleQueuedEmbeddedRunStall(params: {
+function isIdleQueuedRecoverableSessionStall(params: {
   state: {
     state: SessionStateValue;
     queueDepth: number;
@@ -547,10 +550,14 @@ function isIdleQueuedEmbeddedRunStall(params: {
   const hasEmbeddedOwner =
     params.activity.activeWorkKind === "embedded_run" ||
     params.activity.hasActiveEmbeddedRun === true;
+  // Also detect orphaned activity (model_call or tool_call left behind
+  // without an active embedded owner) so recovery can pump the stale queue.
+  const hasOrphanedActivity =
+    params.activity.activeWorkKind !== undefined && params.activity.hasActiveEmbeddedRun !== true;
   return (
     params.state.state === "idle" &&
     params.state.queueDepth > 0 &&
-    hasEmbeddedOwner &&
+    (hasEmbeddedOwner || hasOrphanedActivity) &&
     (params.activity.lastProgressAgeMs ?? 0) > params.staleMs
   );
 }
@@ -890,6 +897,15 @@ export function logSessionStateChange(
   markActivity();
 }
 
+export function updateDiagnosticSessionFile(params: SessionRef) {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  const state = getDiagnosticSessionState(params);
+  state.sessionFile = params.sessionFile?.trim() || undefined;
+  markActivity();
+}
+
 export function markDiagnosticSessionProgress(params: SessionRef) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
@@ -970,6 +986,7 @@ export function logSessionAttention(
     Date.now(),
   );
   const classification = classifySessionAttention({
+    state: state.state as "idle" | "processing" | "waiting" | undefined,
     queueDepth: state.queueDepth,
     activity,
     staleMs: params.thresholdMs,
@@ -1227,16 +1244,16 @@ export function startDiagnosticHeartbeat(
         { sessionId: state.sessionId, sessionKey: state.sessionKey },
         now,
       );
-      const idleQueuedEmbeddedRunStall = isIdleQueuedEmbeddedRunStall({
+      const idleQueuedRecoverableStall = isIdleQueuedRecoverableSessionStall({
         state,
         activity,
         staleMs: stuckSessionWarnMs,
       });
       if (
         (state.state === "processing" && ageMs > stuckSessionWarnMs) ||
-        idleQueuedEmbeddedRunStall
+        idleQueuedRecoverableStall
       ) {
-        const attentionAgeMs = idleQueuedEmbeddedRunStall
+        const attentionAgeMs = idleQueuedRecoverableStall
           ? (activity.lastProgressAgeMs ?? ageMs)
           : ageMs;
         const classification = logSessionAttention({
@@ -1254,6 +1271,7 @@ export function startDiagnosticHeartbeat(
             request: {
               sessionId: state.sessionId,
               sessionKey: state.sessionKey,
+              sessionFile: state.sessionFile,
               ageMs: attentionAgeMs,
               queueDepth: state.queueDepth,
               expectedState: state.state,
@@ -1276,6 +1294,7 @@ export function startDiagnosticHeartbeat(
             request: {
               sessionId: state.sessionId,
               sessionKey: state.sessionKey,
+              sessionFile: state.sessionFile,
               ageMs: attentionAgeMs,
               queueDepth: state.queueDepth,
               allowActiveAbort: true,

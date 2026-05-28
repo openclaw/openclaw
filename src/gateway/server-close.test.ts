@@ -44,16 +44,16 @@ vi.mock("../agents/harness/registry.js", () => ({
   disposeRegisteredAgentHarnesses: mocks.disposeAgentHarnesses,
 }));
 
-vi.mock("../agents/pi-bundle-mcp-tools.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/pi-bundle-mcp-tools.js")>(
-    "../agents/pi-bundle-mcp-tools.js",
+vi.mock("../agents/agent-bundle-mcp-tools.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/agent-bundle-mcp-tools.js")>(
+    "../agents/agent-bundle-mcp-tools.js",
   )),
   disposeAllSessionMcpRuntimes: mocks.disposeAllSessionMcpRuntimes,
 }));
 
-vi.mock("../agents/pi-bundle-lsp-runtime.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/pi-bundle-lsp-runtime.js")>(
-    "../agents/pi-bundle-lsp-runtime.js",
+vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/agent-bundle-lsp-runtime.js")>(
+    "../agents/agent-bundle-lsp-runtime.js",
   )),
   disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
 }));
@@ -196,6 +196,47 @@ describe("createGatewayCloseHandler", () => {
     expect(events).toEqual(["plugin-services", "channel:discord"]);
     expect(pluginServices.stop).toHaveBeenCalledTimes(1);
     expect(stopChannel).toHaveBeenCalledWith("discord");
+  });
+
+  it("awaits post-ready sidecars before plugin services and channels", async () => {
+    const events: string[] = [];
+    let releaseSidecar!: () => void;
+    const sidecarReleased = new Promise<void>((resolve) => {
+      releaseSidecar = resolve;
+    });
+    const postReadySidecar = {
+      stop: vi.fn(async () => {
+        events.push("sidecar:start");
+        await sidecarReleased;
+        events.push("sidecar:end");
+      }),
+    };
+    const pluginServices = {
+      stop: vi.fn(async () => {
+        events.push("plugin-services");
+      }),
+    };
+    const stopChannel = vi.fn(async (channelId: string) => {
+      events.push(`channel:${channelId}`);
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["discord"],
+        postReadySidecars: [postReadySidecar],
+        pluginServices: pluginServices as never,
+        stopChannel,
+      }),
+    );
+
+    const closePromise = close({ reason: "test" });
+    await vi.waitFor(() => {
+      expect(events).toEqual(["sidecar:start"]);
+    });
+    releaseSidecar();
+    await closePromise;
+
+    expect(events).toEqual(["sidecar:start", "sidecar:end", "plugin-services", "channel:discord"]);
+    expect(postReadySidecar.stop).toHaveBeenCalledTimes(1);
   });
 
   it("emits gateway shutdown and pre-restart hooks", async () => {
