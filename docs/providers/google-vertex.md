@@ -1,5 +1,5 @@
 ---
-summary: "Google Vertex AI / Agent Platform setup (ADC auth for GCE, GKE, local dev, service accounts)"
+summary: "Google Vertex AI / Agent Platform setup (ADC auth for GCE, GKE, gcloud CLI, service accounts)"
 title: "Google Vertex AI"
 read_when:
   - You want to use Gemini models through Google Cloud Vertex AI (Agent Platform)
@@ -58,7 +58,7 @@ Choose the auth method that matches your environment.
   </Tab>
 
   <Tab title="gcloud CLI">
-    **Best for:** developing on your laptop or workstation with `gcloud` installed.
+    **Best for:** laptops or workstations with the `gcloud` CLI installed.
 
     <Steps>
       <Step title="Log in with ADC">
@@ -189,8 +189,8 @@ Pin to a specific version when you need deterministic behavior:
 | Gemini 3 Flash | `google-vertex/gemini-3-flash-preview` |
 | Gemini 3.1 Pro | `google-vertex/gemini-3.1-pro-preview` |
 
-Model names are the same as on Google AI Studio. OpenClaw normalizes aliases
-automatically (e.g. `gemini-3.1-pro` resolves to `gemini-3.1-pro-preview`).
+OpenClaw normalizes aliases automatically (e.g. `gemini-3.1-pro` resolves to
+`gemini-3.1-pro-preview`).
 
 ## Troubleshooting
 
@@ -202,7 +202,7 @@ automatically (e.g. `gemini-3.1-pro` resolves to `gemini-3.1-pro-preview`).
 
     1. `GOOGLE_CLOUD_PROJECT` is set (in env or `openclaw.json` `env` section).
     2. On GCE/GKE: the metadata server is reachable.
-    3. On local dev: you have run `gcloud auth application-default login`.
+    3. With gcloud CLI: you have run `gcloud auth application-default login`.
     4. With a service account: `GOOGLE_APPLICATION_CREDENTIALS` points to a valid JSON key file.
   </Accordion>
 
