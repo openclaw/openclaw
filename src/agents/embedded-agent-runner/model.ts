@@ -1118,11 +1118,28 @@ function normalizeProviderModelRef(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
 }): { provider: string; model: string } {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const model = normalizeStaticProviderModelId(normalizedProvider, params.modelId);
   const provider = canonicalizeManifestModelCatalogProviderAlias({
     provider: params.provider,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
   });
+  // Provider-specific suppressions must win before an alias borrows its target's
+  // fallback models; otherwise blocked Azure routes can resolve direct OpenAI rows.
+  if (normalizeProviderId(provider) !== normalizedProvider) {
+    const providerConfig = resolveConfiguredProviderConfig(params.cfg, params.provider);
+    if (
+      shouldSuppressBuiltInModel({
+        provider: normalizedProvider,
+        id: model,
+        baseUrl: providerConfig?.baseUrl,
+        config: params.cfg,
+      })
+    ) {
+      return { provider: params.provider, model };
+    }
+  }
   return {
     provider,
     model: normalizeStaticProviderModelId(normalizeProviderId(provider), params.modelId),

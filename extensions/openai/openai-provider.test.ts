@@ -223,7 +223,6 @@ describe("buildOpenAIProvider", () => {
         } as never)
         ?.levels.map((level) => level.id),
     ).toContain("xhigh");
-
     const entries = provider.augmentModelCatalog?.({
       env: process.env,
       entries: [
@@ -354,6 +353,24 @@ describe("buildOpenAIProvider", () => {
       maxTokens: 128_000,
       cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
     });
+  });
+
+  it("does not resolve OAuth-only gpt-5.3-codex-spark through direct OpenAI routes", () => {
+    const provider = buildOpenAIProvider();
+
+    const directModel = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+      modelRegistry: { find: () => null },
+    });
+    const azureModel = provider.resolveDynamicModel?.({
+      provider: "azure-openai-responses",
+      modelId: "gpt-5.3-codex-spark",
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expect(directModel).toBeUndefined();
+    expect(azureModel).toBeUndefined();
   });
 
   it("resolves gpt-5.5 locally without cached catalog metadata", () => {

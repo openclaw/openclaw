@@ -30,9 +30,7 @@ function isSuppressedModel(provider?: string, id?: string): boolean {
     return false;
   }
   return (
-    (provider === "openai" ||
-      provider === "azure-openai-responses" ||
-      provider === "openai-codex") &&
+    (provider === "openai" || provider === "azure-openai-responses") &&
     modelId === "gpt-5.3-codex-spark"
   );
 }
@@ -478,6 +476,15 @@ describe("loadModelCatalog", () => {
     expect(result).toEqual([
       {
         provider: "openai-codex",
+        id: "gpt-5.3-codex-spark",
+        name: "GPT-5.3 Codex Spark",
+        reasoning: true,
+        contextWindow: 128000,
+        input: ["text"],
+        compat: undefined,
+      },
+      {
+        provider: "openai-codex",
         id: "gpt-5.4",
         name: "GPT-5.4",
         reasoning: true,
@@ -786,7 +793,7 @@ describe("loadModelCatalog", () => {
     expect(augmentCatalogMock).not.toHaveBeenCalled();
   });
 
-  it("does not synthesize stale openai-codex/gpt-5.3-codex-spark entries from gpt-5.4", async () => {
+  it("does not synthesize plugin-owned Codex OAuth Spark rows in the generic catalog layer", async () => {
     mockAgentDiscoveryModels([
       {
         id: "gpt-5.4",
@@ -809,7 +816,7 @@ describe("loadModelCatalog", () => {
     expect(entry.name).toBe("GPT-5.3 Codex");
   });
 
-  it("filters stale gpt-5.3-codex-spark built-ins from the catalog", async () => {
+  it("keeps Codex OAuth Spark while filtering direct OpenAI and stale Azure rows", async () => {
     mockAgentDiscoveryModels([
       {
         id: "gpt-5.3-codex-spark",
@@ -840,7 +847,10 @@ describe("loadModelCatalog", () => {
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
     expectNoCatalogEntry(result, "openai", "gpt-5.3-codex-spark");
     expectNoCatalogEntry(result, "azure-openai-responses", "gpt-5.3-codex-spark");
-    expectNoCatalogEntry(result, "openai-codex", "gpt-5.3-codex-spark");
+    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.3-codex-spark")).toMatchObject({
+      input: ["text"],
+      contextWindow: 128000,
+    });
   });
 
   it("keeps available openai-codex 5.1/5.2/5.3 built-ins in the catalog", async () => {

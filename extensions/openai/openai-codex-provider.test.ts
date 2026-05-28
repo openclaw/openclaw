@@ -627,6 +627,24 @@ describe("openai codex provider", () => {
     });
   });
 
+  it("resolves gpt-5.3-codex-spark through the Codex OAuth route", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.3-codex-spark",
+      modelRegistry: createSingleModelRegistry(createCodexTemplate({})) as never,
+    });
+
+    expect(model).toMatchObject({
+      id: "gpt-5.3-codex-spark",
+      contextWindow: 128_000,
+      contextTokens: 128_000,
+      maxTokens: 128_000,
+      input: ["text"],
+    });
+  });
+
   it("augments catalog with gpt-5.5-pro and gpt-5.4 native metadata", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
@@ -669,6 +687,15 @@ describe("openai codex provider", () => {
       contextTokens: 272_000,
       cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
     });
+    expectRecordFields(
+      requireEntryById(entries, "gpt-5.3-codex-spark"),
+      "gpt-5.3-codex-spark entry",
+      {
+        contextWindow: 128_000,
+        contextTokens: 128_000,
+        input: ["text"],
+      },
+    );
   });
 
   it("augments gpt-5.4-pro from catalog gpt-5.4 when legacy codex rows are absent", () => {

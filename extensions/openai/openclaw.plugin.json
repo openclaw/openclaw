@@ -220,6 +220,21 @@
         "api": "openai-codex-responses",
         "models": [
           {
+            "id": "gpt-5.3-codex-spark",
+            "name": "gpt-5.3-codex-spark",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 128000,
+            "contextTokens": 128000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
             "id": "gpt-5.5",
             "name": "gpt-5.5",
             "reasoning": true,
@@ -301,12 +316,62 @@
       {
         "provider": "openai",
         "model": "gpt-5.3-codex-spark",
-        "reason": "gpt-5.3-codex-spark is not exposed by the OpenAI API catalog. Use openai-codex/gpt-5.3-codex-spark or openai/gpt-5.5."
+        "reason": "gpt-5.3-codex-spark is a Codex OAuth research preview and is not exposed on direct OpenAI API-key routes. Use openai/gpt-5.3-codex-spark with the native Codex runtime or openai-codex/gpt-5.3-codex-spark."
       },
       {
         "provider": "azure-openai-responses",
         "model": "gpt-5.3-codex-spark",
-        "reason": "gpt-5.3-codex-spark is not exposed by the OpenAI API catalog. Use openai-codex/gpt-5.3-codex-spark or openai/gpt-5.5."
+        "reason": "gpt-5.3-codex-spark is a Codex OAuth research preview and is not exposed on Azure OpenAI responses routes. Use openai/gpt-5.3-codex-spark with the native Codex runtime or openai-codex/gpt-5.3-codex-spark."
+      },
+      {
+        "provider": "openai-codex",
+        "model": "gpt-5.1",
+        "reason": "gpt-5.1 is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id=\"codex\" for the native Codex runtime."
+      },
+      {
+        "provider": "openai-codex",
+        "model": "gpt-5.1-codex",
+        "reason": "gpt-5.1-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id=\"codex\" for the native Codex runtime."
+      },
+      {
+        "provider": "openai-codex",
+        "model": "gpt-5.1-codex-mini",
+        "reason": "gpt-5.1-codex-mini is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id=\"codex\" for the native Codex runtime."
+      },
+      {
+        "provider": "openai-codex",
+        "model": "gpt-5.1-codex-max",
+        "reason": "gpt-5.1-codex-max is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id=\"codex\" for the native Codex runtime."
+      },
+      {
+        "provider": "openai-codex",
+        "model": "gpt-5.2",
+        "reason": "gpt-5.2 is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id=\"codex\" for the native Codex runtime."
+      },
+      {
+        "provider": "openai-codex",
+        "model": "gpt-5.2-codex",
+        "reason": "gpt-5.2-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id=\"codex\" for the native Codex runtime."
+      },
+      {
+        "provider": "openai-codex",
+        "model": "gpt-5.2-pro",
+        "reason": "gpt-5.2-pro is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id=\"codex\" for the native Codex runtime."
+      },
+      {
+        "provider": "openai-codex",
+        "model": "gpt-5.3",
+        "reason": "gpt-5.3 is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id=\"codex\" for the native Codex runtime."
+      },
+      {
+        "provider": "openai-codex",
+        "model": "gpt-5.3-codex",
+        "reason": "gpt-5.3-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id=\"codex\" for the native Codex runtime."
+      },
+      {
+        "provider": "openai-codex",
+        "model": "gpt-5.3-chat-latest",
+        "reason": "gpt-5.3-chat-latest is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id=\"codex\" for the native Codex runtime."
       }
     ]
   },

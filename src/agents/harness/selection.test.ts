@@ -620,6 +620,22 @@ describe("selectAgentHarness", () => {
     expect(selectAgentHarness({ provider: "openai", modelId: "gpt-5.4" }).id).toBe("openclaw");
   });
 
+  it("routes OAuth-only OpenAI Spark refs through the implicit Codex harness", async () => {
+    registerSuccessfulCodexHarness();
+
+    expect(selectAgentHarness({ provider: "openai", modelId: "gpt-5.3-codex-spark" }).id).toBe(
+      "codex",
+    );
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+    });
+    expect(result.sessionIdUsed).toBe("codex");
+    expect(agentRunAttempt).not.toHaveBeenCalled();
+  });
+
   it("ignores legacy agentRuntime as a runtime policy source", () => {
     const config = {
       agents: {

@@ -917,9 +917,14 @@ is required.
     },
     "suppressions": [
       {
+        "provider": "openai",
+        "model": "gpt-5.3-codex-spark",
+        "reason": "Codex OAuth research preview; not exposed on direct OpenAI API-key routes"
+      },
+      {
         "provider": "azure-openai-responses",
         "model": "gpt-5.3-codex-spark",
-        "reason": "not available on Azure OpenAI Responses"
+        "reason": "Codex OAuth research preview; not exposed on Azure OpenAI Responses"
       }
     ],
     "discovery": {

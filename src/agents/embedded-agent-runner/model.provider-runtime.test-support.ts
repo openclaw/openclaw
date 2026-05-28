@@ -391,6 +391,7 @@ function buildDynamicModel(
             input: ["text"],
             cost: OPENROUTER_FALLBACK_COST,
             contextWindow: 128_000,
+            contextTokens: 128_000,
             maxTokens: 128_000,
           },
           fallback,
@@ -409,8 +410,10 @@ function buildDynamicModel(
               : lower === "gpt-5.4-mini"
                 ? ["gpt-5.4-mini"]
                 : lower === "gpt-5.4-nano"
-              ? ["gpt-5.4-nano", "gpt-5.4-mini"]
-              : undefined;
+                  ? ["gpt-5.4-nano", "gpt-5.4-mini"]
+                  : lower === "gpt-5.3-codex-spark"
+                    ? ["gpt-5.4", "gpt-5.2"]
+                    : undefined;
       if (!templateIds) {
         return undefined;
       }
@@ -464,16 +467,27 @@ function buildDynamicModel(
                     contextWindow: 400_000,
                     maxTokens: 128_000,
                   }
-                : {
-                    provider: "openai",
-                    api: "openai-responses",
-                    baseUrl: OPENAI_BASE_URL,
-                    reasoning: true,
-                    input: ["text", "image"],
-                    cost: { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
-                    contextWindow: 400_000,
-                    maxTokens: 128_000,
-                  };
+                : lower === "gpt-5.4-nano"
+                  ? {
+                      provider: "openai",
+                      api: "openai-responses",
+                      baseUrl: OPENAI_BASE_URL,
+                      reasoning: true,
+                      input: ["text", "image"],
+                      cost: { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
+                      contextWindow: 400_000,
+                      maxTokens: 128_000,
+                    }
+                  : {
+                      provider: "openai",
+                      api: "openai-responses",
+                      baseUrl: OPENAI_BASE_URL,
+                      reasoning: true,
+                      input: ["text"],
+                      cost: OPENROUTER_FALLBACK_COST,
+                      contextWindow: 128_000,
+                      maxTokens: 128_000,
+                    };
       return cloneTemplate(template, modelId, patch, {
         provider: "openai",
         api: "openai-responses",
@@ -488,7 +502,10 @@ function buildDynamicModel(
     case "anthropic":
     case "claude-cli": {
       if (lower !== "claude-opus-4-6" && lower !== "claude-sonnet-4-6") {
-        return undefined;
+        return (
+          (params.modelRegistry.find(params.provider, modelId) as ResolvedModelLike | null) ??
+          undefined
+        );
       }
       const template = findTemplate(
         params,
@@ -569,7 +586,10 @@ function buildDynamicModel(
       );
     }
     default:
-      return undefined;
+      return (
+        (params.modelRegistry.find(params.provider, modelId) as ResolvedModelLike | null) ??
+        undefined
+      );
   }
 }
 
@@ -651,7 +671,7 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       context: { modelId: string };
     }) =>
       params.provider === "openai-codex" &&
-      ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro"].includes(
+      ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini"].includes(
         params.context.modelId.trim().toLowerCase(),
       ),
     prepareProviderDynamicModel: async (params: {
