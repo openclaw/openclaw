@@ -4,7 +4,12 @@ import {
   readJson as readJsonImpl,
   readJsonIfExists as readJsonIfExistsImpl,
 } from "@openclaw/fs-safe/json";
-import { replaceFileAtomic, type ReplaceFileAtomicOptions } from "./replace-file.js";
+import { replaceFileAtomic } from "./replace-file.js";
+
+type WriteTextAtomicBeforeRename = (params: {
+  filePath: string;
+  tempPath: string;
+}) => Promise<void>;
 
 export {
   JsonFileReadError,
@@ -71,7 +76,7 @@ export type WriteTextAtomicOptions = {
   dirMode?: number;
   trailingNewline?: boolean;
   durable?: boolean;
-  beforeRename?: ReplaceFileAtomicOptions["beforeRename"];
+  beforeRename?: WriteTextAtomicBeforeRename;
   /**
    * Prefix for the staged `<prefix>.<pid>.<uuid>.tmp` file. Defaults to the
    * generic `.fs-safe-replace`; pass a target-specific prefix so an orphaned
