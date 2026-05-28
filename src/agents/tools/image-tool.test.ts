@@ -97,6 +97,30 @@ vi.mock("../agent-tools.abort.js", () => ({
   wrapToolWithAbortSignal: vi.fn((tool) => tool),
 }));
 
+// Keep image-tool tests focused on root propagation; media-tool-shared
+// and channel-inbound tests cover the real bundled contract loader.
+vi.mock("../../media/channel-inbound-roots.js", () => ({
+  resolveChannelInboundAttachmentRootsForChannel: (params: {
+    cfg?: OpenClawConfig;
+    channelId?: string | null;
+    accountId?: string | null;
+  }) => {
+    const channelId = params.channelId?.trim();
+    if (!channelId) {
+      return undefined;
+    }
+    const channelConfig = params.cfg?.channels?.[channelId];
+    const accountConfig = params.accountId
+      ? channelConfig?.accounts?.[params.accountId]
+      : undefined;
+    const roots = [
+      ...(accountConfig?.attachmentRoots ?? []),
+      ...(channelConfig?.attachmentRoots ?? []),
+    ];
+    return channelId === "imessage" ? [...roots, "/Users/*/Library/Messages/Attachments"] : roots;
+  },
+}));
+
 vi.mock("../auth-profiles.js", () => ({
   externalCliDiscoveryForProviderAuth: () => undefined,
   ensureAuthProfileStore: (agentDir?: string) => {
