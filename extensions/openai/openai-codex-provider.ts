@@ -23,6 +23,7 @@ import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
 import {
   normalizeLowercaseStringOrEmpty,
   readStringValue,
+  uniqueValues,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   OPENAI_CODEX_DEVICE_PAIRING_HINT,
@@ -95,7 +96,7 @@ const OPENAI_CODEX_GPT_54_MINI_COST = {
   cacheRead: 0.075,
   cacheWrite: 0,
 } as const;
-const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
+const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex"] as const;
 /** Legacy codex rows first; fall back to catalog `gpt-5.4` when the API omits 5.3/5.2. */
 const OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS = [
   ...OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
@@ -330,7 +331,7 @@ function withDefaultCodexContextMetadata(params: {
         : params.contextTokens;
   const input = params.model.input?.includes("image")
     ? params.model.input
-    : ([...new Set([...(params.model.input ?? ["text"]), "image"])] as ("text" | "image")[]);
+    : uniqueValues<"text" | "image">([...(params.model.input ?? ["text"]), "image"]);
   return {
     ...params.model,
     input,
@@ -410,13 +411,20 @@ async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   }
 }
 
-async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
+type OpenAICodexOAuthContext = ProviderAuthContext & {
+  signal?: AbortSignal;
+  onManualCodeInput?: () => Promise<string>;
+};
+
+async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
   const creds = await loginOpenAICodexOAuth({
     prompter: ctx.prompter,
     runtime: ctx.runtime,
     oauth: ctx.oauth,
     isRemote: ctx.isRemote,
     openUrl: ctx.openUrl,
+    signal: ctx.signal,
+    onManualCodeInput: ctx.onManualCodeInput,
     localBrowserMessage: "Complete sign-in in browser…",
   });
   if (!creds) {

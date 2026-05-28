@@ -125,6 +125,7 @@ async function runEnvProviderCase(params: {
 
 describe("models-config", () => {
   beforeAll(async () => {
+    vi.resetModules();
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
     ({ clearRuntimeAuthProfileStoreSnapshots } = await import("./auth-profiles/store.js"));
     ({ ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =
@@ -153,7 +154,6 @@ describe("models-config", () => {
         const agentDir = path.join(home, "agent-empty");
         // ensureAuthProfileStore merges the main auth store into non-main dirs; point main at our temp dir.
         process.env.OPENCLAW_AGENT_DIR = agentDir;
-        process.env.PI_CODING_AGENT_DIR = agentDir;
 
         const result = await ensureOpenClawModelsJson(
           {

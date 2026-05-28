@@ -2,7 +2,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
@@ -15,6 +15,7 @@ import {
   parseReleaseVersion as parseReleaseVersionBase,
 } from "./lib/npm-publish-plan.mjs";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mjs";
+import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 type PackageJson = {
   name?: string;
@@ -146,7 +147,14 @@ const PACKED_TEST_CARGO_DIRECTORY_SEGMENTS = new Set([
 ]);
 const PACKED_TEST_CARGO_FILE_RE = /(?:^|\/)[^/]+\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/u;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+const DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const skipPackValidationEnv = "OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK";
+
+type ReleaseCheckCommandInvocation = {
+  command: string;
+  args: string[];
+  windowsVerbatimArguments?: boolean;
+};
 
 function normalizePackedPath(packedPath: string): string {
   return packedPath.replace(/\\/g, "/");
@@ -293,6 +301,53 @@ export function utcCalendarDayDistance(left: Date, right: Date): number {
   return Math.round(Math.abs(startOfUtcDay(left) - startOfUtcDay(right)) / 86_400_000);
 }
 
+function positiveEnvInt(name: string, env: NodeJS.ProcessEnv, fallback: number): number {
+  const raw = env[name]?.trim();
+  if (raw === undefined || raw === "" || !/^[0-9]+$/u.test(raw)) {
+    return fallback;
+  }
+  const value = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+export function resolveNpmReleaseCheckCommandTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  return positiveEnvInt(
+    "OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS",
+    env,
+    DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS,
+  );
+}
+
+export function runNpmReleaseCheckCommand(
+  invocation: ReleaseCheckCommandInvocation,
+  options: {
+    cwd?: string;
+    encoding?: BufferEncoding;
+    env?: NodeJS.ProcessEnv;
+    maxBuffer?: number;
+    stdio: "ignore" | ["ignore", "pipe", "pipe"];
+    timeoutMs?: number;
+  },
+): string {
+  const env = options.env ?? process.env;
+  const output = execFileSync(invocation.command, invocation.args, {
+    cwd: options.cwd,
+    encoding: options.encoding,
+    env,
+    killSignal: "SIGKILL",
+    maxBuffer: options.maxBuffer ?? NPM_PACK_MAX_BUFFER_BYTES,
+    stdio: options.stdio,
+    timeout: options.timeoutMs ?? resolveNpmReleaseCheckCommandTimeoutMs(env),
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  }) as Buffer | string | null;
+  if (output == null) {
+    return "";
+  }
+  return typeof output === "string" ? output : output.toString("utf8");
+}
+
 export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] {
   const actualRepositoryUrl = normalizeRepoUrl(
     typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url,
@@ -415,9 +470,11 @@ export function collectReleaseTagErrors(params: {
 
   if (params.releaseSha?.trim() && params.releaseMainRef?.trim()) {
     try {
-      execFileSync(
-        "git",
-        ["merge-base", "--is-ancestor", params.releaseSha, params.releaseMainRef],
+      runNpmReleaseCheckCommand(
+        {
+          command: "git",
+          args: ["merge-base", "--is-ancestor", params.releaseSha, params.releaseMainRef],
+        },
         { stdio: "ignore" },
       );
     } catch {
@@ -435,30 +492,65 @@ function loadPackageJson(): PackageJson {
 }
 
 function isNpmExecPath(value: string): boolean {
-  return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(basename(value).toLowerCase());
+  return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(portableBasename(value).toLowerCase());
 }
+
+function portableBasename(value: string): string {
+  return value.split(/[/\\]/u).at(-1) ?? value;
+}
+
+type NpmCommandInvocation = {
+  command: string;
+  args: string[];
+  windowsVerbatimArguments?: boolean;
+};
 
 export function resolveNpmCommandInvocation(
   params: {
+    comSpec?: string;
+    npmArgs?: string[];
     npmExecPath?: string;
     nodeExecPath?: string;
     platform?: NodeJS.Platform;
   } = {},
-): { command: string; args: string[] } {
+): NpmCommandInvocation {
+  const npmArgs = params.npmArgs ?? [];
   const npmExecPath = params.npmExecPath ?? process.env.npm_execpath;
   const nodeExecPath = params.nodeExecPath ?? process.execPath;
-  const npmCommand = (params.platform ?? process.platform) === "win32" ? "npm.cmd" : "npm";
+  const platform = params.platform ?? process.platform;
 
   if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isNpmExecPath(npmExecPath)) {
-    return { command: nodeExecPath, args: [npmExecPath] };
+    const name = portableBasename(npmExecPath).toLowerCase();
+    if (platform === "win32" && (name.endsWith(".cmd") || name.endsWith(".bat"))) {
+      return {
+        command: params.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+        args: ["/d", "/s", "/c", buildCmdExeCommandLine(npmExecPath, npmArgs)],
+        windowsVerbatimArguments: true,
+      };
+    }
+    if (platform === "win32" && name.endsWith(".exe")) {
+      return { command: npmExecPath, args: npmArgs };
+    }
+    if (name.endsWith(".js") || name.endsWith(".cjs") || name.endsWith(".mjs")) {
+      return { command: nodeExecPath, args: [npmExecPath, ...npmArgs] };
+    }
+    return { command: npmExecPath, args: npmArgs };
   }
 
-  return { command: npmCommand, args: [] };
+  if (platform === "win32") {
+    return {
+      command: params.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine("npm.cmd", npmArgs)],
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return { command: "npm", args: npmArgs };
 }
 
 function runNpmCommand(args: string[]): string {
-  const invocation = resolveNpmCommandInvocation();
-  return execFileSync(invocation.command, [...invocation.args, ...args], {
+  const invocation = resolveNpmCommandInvocation({ npmArgs: args });
+  return runNpmReleaseCheckCommand(invocation, {
     encoding: "utf8",
     maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
@@ -596,11 +688,14 @@ function collectPackedTarballErrors(): string[] {
 
 function collectNpmShrinkwrapErrors(): string[] {
   try {
-    execFileSync(process.execPath, ["scripts/generate-npm-shrinkwrap.mjs", "--check"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    runNpmReleaseCheckCommand(
+      { command: process.execPath, args: ["scripts/generate-npm-shrinkwrap.mjs", "--check"] },
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     return [];
   } catch (error) {
     return [`npm-shrinkwrap.json must match package dependencies: ${describeExecFailure(error)}`];

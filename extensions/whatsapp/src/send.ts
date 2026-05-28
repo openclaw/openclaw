@@ -14,6 +14,7 @@ import {
   resolveWhatsAppAccount,
   resolveWhatsAppMediaMaxBytes,
 } from "./accounts.js";
+import { registerWhatsAppApprovalReactionTargetForOutboundMessage } from "./approval-reactions.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
@@ -57,6 +58,20 @@ function requireOutboundActiveWebListener(params: { cfg: OpenClawConfig; account
     );
   }
   return { accountId: resolvedAccountId, listener };
+}
+
+function resolveActualSentRemoteJid(result: unknown, fallbackJid: string): string {
+  if (!result || typeof result !== "object") {
+    return fallbackJid;
+  }
+  const rawKeys = (result as { keys?: unknown }).keys;
+  const keys: Array<{ remoteJid?: unknown }> = Array.isArray(rawKeys) ? rawKeys : [];
+  for (const key of keys) {
+    if (typeof key?.remoteJid === "string" && key.remoteJid.trim()) {
+      return key.remoteJid.trim();
+    }
+  }
+  return fallbackJid;
 }
 
 export async function sendMessageWhatsApp(
@@ -221,12 +236,21 @@ export async function sendMessageWhatsApp(
       }
     }
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
+    const sentRemoteJid = resolveActualSentRemoteJid(result, jid);
+    if (messageId && messageId !== "unknown" && text) {
+      registerWhatsAppApprovalReactionTargetForOutboundMessage({
+        accountId: resolvedAccountId,
+        remoteJid: sentRemoteJid,
+        messageId,
+        text,
+      });
+    }
     const durationMs = Date.now() - startedAt;
     outboundLog.info(
       `Sent message ${messageId} -> ${redactedJid}${hasMedia ? " (media)" : ""} (${durationMs}ms)`,
     );
     logger.info({ jid: redactedJid, messageId }, "sent message");
-    return { messageId, toJid: jid };
+    return { messageId, toJid: sentRemoteJid };
   } catch (err) {
     logger.error({ err: String(err), to: redactedTo, hasMedia }, "failed to send via web session");
     throw err;

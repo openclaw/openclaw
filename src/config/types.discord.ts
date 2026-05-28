@@ -157,6 +157,10 @@ export type DiscordVoiceRealtimeConfig = {
   toolPolicy?: DiscordVoiceRealtimeToolPolicy;
   /** Whether bidi should force the OpenClaw agent brain for every substantive turn. */
   consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
+  /** Require a wake name before OpenAI agent-proxy realtime Discord voice responds. */
+  requireWakeName?: boolean;
+  /** Wake names that allow OpenAI agent-proxy realtime Discord voice to respond. Defaults to the routed agent name, then agent id. */
+  wakeNames?: string[];
   /** Agent profile bootstrap files to include in realtime provider instructions. Defaults to IDENTITY.md, USER.md, and SOUL.md; set [] to disable. */
   bootstrapContextFiles?: DiscordVoiceRealtimeBootstrapContextFile[];
   /** Allow Discord speaker-start events to interrupt active realtime playback. */
@@ -203,7 +207,7 @@ export type DiscordVoiceConfig = {
   connectTimeoutMs?: number;
   /** Grace period for Discord voice reconnect signalling after a disconnect (default: 15000). */
   reconnectGraceMs?: number;
-  /** Silence grace after Discord reports a speaker ended before finalizing STT capture (default: 2500). */
+  /** Silence grace after Discord reports a speaker ended before finalizing STT capture (default: 2000). */
   captureSilenceGraceMs?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;

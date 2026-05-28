@@ -40,9 +40,9 @@ import {
 import {
   callGateway,
   dispatchGatewayMethodInProcess,
-  isEmbeddedPiRunActive,
+  isEmbeddedAgentRunActive,
   getRuntimeConfig,
-  waitForEmbeddedPiRunEnd,
+  waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
@@ -88,7 +88,7 @@ function buildAnnounceReplyInstruction(params: {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
   if (params.expectsCompletionMessage) {
-    return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. If the runtime marks this route as message-tool-only, send visible output with the message tool first, then reply ONLY: ${SILENT_REPLY_TOKEN}. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
+    return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type). Reply ONLY: ${SILENT_REPLY_TOKEN} when no user-facing update is needed.`;
   }
   return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
 }
@@ -269,9 +269,9 @@ export async function runSubagentAnnounceFlow(params: {
     const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
     let reply = params.roundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
-    if (childSessionId && isEmbeddedPiRunActive(childSessionId)) {
-      const settled = await waitForEmbeddedPiRunEnd(childSessionId, settleTimeoutMs);
-      if (!settled && isEmbeddedPiRunActive(childSessionId)) {
+    if (childSessionId && isEmbeddedAgentRunActive(childSessionId)) {
+      const settled = await waitForEmbeddedAgentRunEnd(childSessionId, settleTimeoutMs);
+      if (!settled && isEmbeddedAgentRunActive(childSessionId)) {
         shouldDeleteChildSession = false;
         return false;
       }

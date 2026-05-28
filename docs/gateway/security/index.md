@@ -1070,12 +1070,13 @@ Hardening tips:
 
 OpenClaw loads workspace-local `.env` files for agents and tools, but never lets those files silently override gateway runtime controls.
 
+- Provider credential environment variables are blocked from untrusted workspace `.env` files. Examples include `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `PERPLEXITY_API_KEY`, `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `FIRECRAWL_API_KEY`, and provider auth keys declared by installed trusted plugins. Put provider credentials in the Gateway process environment, `~/.openclaw/.env` (`$OPENCLAW_STATE_DIR/.env`), the config `env` block, or optional login-shell import.
 - Any key that starts with `OPENCLAW_*` is blocked from untrusted workspace `.env` files.
 - Channel endpoint settings for Matrix, Mattermost, IRC, and Synology Chat are also blocked from workspace `.env` overrides, so cloned workspaces cannot redirect bundled connector traffic through local endpoint config. Endpoint env keys (such as `MATRIX_HOMESERVER`, `MATTERMOST_URL`, `IRC_HOST`, `SYNOLOGY_CHAT_INCOMING_URL`) must come from the gateway process environment or `env.shellEnv`, not from a workspace-loaded `.env`.
 - The block is fail-closed: a new runtime-control variable added in a future release cannot be inherited from a checked-in or attacker-supplied `.env`; the key is ignored and the gateway keeps its own value.
-- Trusted process/OS environment variables (the gateway's own shell, launchd/systemd unit, app bundle) still apply - this only constrains `.env` file loading.
+- Trusted process/OS environment variables, global runtime dotenv, config `env`, and enabled login-shell import still apply - this only constrains workspace `.env` file loading.
 
-Why: workspace `.env` files frequently live next to agent code, get committed by accident, or get written by tools. Blocking the whole `OPENCLAW_*` prefix means adding a new `OPENCLAW_*` flag later can never regress into silent inheritance from workspace state.
+Why: workspace `.env` files frequently live next to agent code, get committed by accident, or get written by tools. Blocking provider credentials prevents a cloned workspace from substituting attacker-controlled provider accounts. Blocking the whole `OPENCLAW_*` prefix means adding a new `OPENCLAW_*` flag later can never regress into silent inheritance from workspace state.
 
 ### Logs and transcripts (redaction and retention)
 

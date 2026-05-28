@@ -362,6 +362,8 @@ export const id: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "Kebijakan persetujuan yang berlaku mengharuskan persetujuan setiap kali, sehingga Izinkan Selalu tidak tersedia.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -393,6 +395,7 @@ export const id: TranslationMap = {
   },
   tabs: {
     agents: "Agen",
+    activity: "Aktivitas",
     overview: "Ikhtisar",
     channels: "Saluran",
     instances: "Instans",
@@ -414,6 +417,7 @@ export const id: TranslationMap = {
   },
   subtitles: {
     agents: "Ruang kerja, alat, identitas.",
+    activity: "Ringkasan aktivitas alat lokal browser.",
     overview: "Status, titik masuk, kesehatan.",
     channels: "Saluran dan pengaturan.",
     instances: "Klien dan node yang terhubung.",
@@ -432,6 +436,42 @@ export const id: TranslationMap = {
     debug: "Snapshot, peristiwa, RPC.",
     logs: "Log Gateway langsung.",
     dreams: "Konsolidasi memori saat tidur.",
+  },
+  activity: {
+    title: "Aktivitas",
+    subtitle: "Aktivitas alat sementara yang berasal dari peristiwa sesi langsung.",
+    visibleCount: "{visible} dari {total}",
+    filtersLabel: "Filter aktivitas",
+    search: "Cari",
+    searchPlaceholder: "Filter berdasarkan alat, ringkasan, run, sesi",
+    toolFilter: "Alat",
+    allTools: "Semua alat",
+    statusFilters: "Filter status",
+    autoFollow: "Ikuti otomatis",
+    expandAll: "Perluas semua",
+    collapseAll: "Ciutkan semua",
+    clear: "Bersihkan",
+    empty: "Belum ada aktivitas alat.",
+    emptyFiltered: "Tidak ada aktivitas yang cocok dengan filter ini.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argumen disembunyikan",
+    argumentsHidden: "{count} argumen disembunyikan",
+    streamLabel: "Entri aktivitas alat",
+    toolCallId: "Panggilan alat",
+    runId: "Jalankan",
+    session: "Sesi",
+    outputTruncated: "Pratinjau disunting dan dipotong.",
+    noOutputPreview: "Tidak ada pratinjau output.",
+    status: {
+      running: "Berjalan",
+      done: "Selesai",
+      error: "Kesalahan",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} dtk",
+      minutes: "{minutes}m {seconds}dtk",
+    },
   },
   overview: {
     access: {
@@ -1084,6 +1124,11 @@ export const id: TranslationMap = {
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
+    },
+    queue: {
+      retry: "Retry",
+      retrySend: "Retry send",
+      retryQueuedMessage: "Retry queued message",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

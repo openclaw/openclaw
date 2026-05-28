@@ -161,7 +161,7 @@ operator token:
       {
         "deviceToken": "…",
         "role": "operator",
-        "scopes": ["operator.approvals", "operator.read", "operator.write"]
+        "scopes": ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"]
       }
     ]
   }
@@ -169,9 +169,11 @@ operator token:
 ```
 
 The operator handoff is intentionally bounded so QR onboarding can start the
-mobile operator loop without granting `operator.admin`, `operator.pairing`, or
-`operator.talk.secrets`. Those scopes require a separate approved operator
-pairing or token flow. Clients should persist `hello-ok.auth.deviceTokens` only
+mobile operator loop without granting `operator.admin` or `operator.pairing`.
+It does include `operator.talk.secrets` so the native client can read the Talk
+configuration it needs after bootstrap. Broader admin and pairing scopes require
+a separate approved operator pairing or token flow. Clients should persist
+`hello-ok.auth.deviceTokens` only
 when the connect used bootstrap auth on trusted transport such as `wss://` or
 loopback/local pairing.
 
@@ -379,10 +381,12 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `talk.session.startTurn`, `talk.session.endTurn`, and `talk.session.cancelTurn` drive managed-room turn lifecycle with stale-turn rejection before state is cleared.
     - `talk.session.cancelOutput` stops assistant audio output, primarily for VAD-gated barge-in in Gateway relay sessions.
     - `talk.session.submitToolResult` completes a provider tool call emitted by a Gateway-owned realtime relay session. Pass `options: { willContinue: true }` for interim tool output when a final result will follow, or `options: { suppressResponse: true }` when the tool result should satisfy the provider call without starting another realtime assistant response.
+    - `talk.session.steer` sends active-run voice control into a Gateway-owned agent-backed Talk session. It accepts `{ sessionId, text, mode? }`, where `mode` is `status`, `steer`, `cancel`, or `followup`; omitted mode is classified from the spoken text.
     - `talk.session.close` closes a Gateway-owned relay, transcription, or managed-room session and emits terminal Talk events.
     - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
     - `talk.client.create` creates a client-owned realtime provider session using `webrtc` or `provider-websocket` while the Gateway owns config, credentials, instructions, and tool policy.
     - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to Gateway policy. The first supported tool is `openclaw_agent_consult`; clients receive a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result.
+    - `talk.client.steer` sends active-run voice control for client-owned realtime transports. The Gateway resolves the active embedded run from `sessionKey` and returns a structured accepted/rejected result instead of silently dropping steering.
     - `talk.event` is the single Talk event channel for realtime, transcription, STT/TTS, managed-room, telephony, and meeting adapters.
     - `talk.speak` synthesizes speech through the active Talk speech provider.
     - `tts.status` returns TTS enabled state, active provider, fallback providers, and provider config state.
@@ -558,8 +562,14 @@ terminal summary, and sanitized error text.
   - `sessionKey` is required.
   - The gateway derives trusted runtime context from the session server-side instead of accepting
     caller-supplied auth or delivery context.
-  - The response is session-scoped and reflects what the active conversation can use right now,
-    including core, plugin, and channel tools.
+  - The response is a session-scoped server-derived projection of the active inventory,
+    including core, plugin, channel, and already-discovered MCP server tools.
+  - `tools.effective` is read-only for MCP: it may project a warm session MCP catalog through the
+    final tool policy, but it does not create MCP runtimes, connect transports, or issue
+    `tools/list`. If no matching warm catalog exists, the response may include a notice such as
+    `mcp-not-yet-connected`, `mcp-not-yet-listed`, or `mcp-stale-catalog`.
+  - Effective tool entries use `source="core"`, `source="plugin"`, `source="channel"`, or
+    `source="mcp"`.
 - Operators may call `tools.invoke` (`operator.write`) to invoke one available tool through the
   same gateway policy path as `/tools/invoke`.
   - `name` is required. `args`, `sessionKey`, `agentId`, `confirm`, and
@@ -703,7 +713,8 @@ rather than the pre-handshake defaults.
 - Built-in setup-code bootstrap returns the primary node
   `hello-ok.auth.deviceToken` plus a bounded operator token in
   `hello-ok.auth.deviceTokens` for trusted mobile handoff. The operator token
-  excludes `operator.admin`, `operator.pairing`, and `operator.talk.secrets`.
+  includes `operator.talk.secrets` for native Talk configuration reads and
+  excludes `operator.admin` and `operator.pairing`.
 - While a non-baseline setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
   details include `recommendedNextStep: "wait_then_retry"`, `retryable: true`,
   and `pauseReconnect: false`. Clients should keep reconnecting with the same
@@ -714,7 +725,8 @@ rather than the pre-handshake defaults.
   caller-requested scope set remains authoritative; cached scopes are only
   reused when the client is reusing the stored per-device token.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
-  `device.token.revoke` (requires `operator.pairing` scope).
+  `device.token.revoke` (requires `operator.pairing` scope). Rotating or
+  revoking a node or other non-operator role also requires `operator.admin`.
 - `device.token.rotate` returns rotation metadata. It echoes the replacement
   bearer token only for same-device calls that are already authenticated with
   that device token, so token-only clients can persist their replacement before
@@ -723,8 +735,9 @@ rather than the pre-handshake defaults.
   recorded in that device's pairing entry; token mutation cannot expand or
   target a device role that pairing approval never granted.
 - For paired-device token sessions, device management is self-scoped unless the
-  caller also has `operator.admin`: non-admin callers can remove/revoke/rotate
-  only their **own** device entry.
+  caller also has `operator.admin`: non-admin callers can manage only the
+  operator token for their **own** device entry. Node and other non-operator
+  token management is admin-only, even for the caller's own device.
 - `device.token.rotate` and `device.token.revoke` also check the target operator
   token scope set against the caller's current session scopes. Non-admin callers
   cannot rotate or revoke a broader operator token than they already hold.

@@ -34,6 +34,17 @@ describe("qa suite planning helpers", () => {
       expect(normalizeQaSuiteConcurrency(2.8, 10)).toBe(2);
       expect(normalizeQaSuiteConcurrency(20, 3)).toBe(3);
       expect(normalizeQaSuiteConcurrency(0, 3)).toBe(1);
+
+      process.env.OPENCLAW_QA_SUITE_CONCURRENCY = "3";
+      expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(3);
+
+      process.env.OPENCLAW_QA_SUITE_CONCURRENCY = "0";
+      expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(1);
+
+      for (const value of ["0x10", "1e2", "2.5"]) {
+        process.env.OPENCLAW_QA_SUITE_CONCURRENCY = value;
+        expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(10);
+      }
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
@@ -167,6 +178,18 @@ describe("qa suite planning helpers", () => {
         OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "0",
       }),
     ).toBe(0);
+    expect(
+      resolveQaSuiteWorkerStartStaggerMs(4, {
+        OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "25",
+      }),
+    ).toBe(25);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        resolveQaSuiteWorkerStartStaggerMs(4, {
+          OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: value,
+        }),
+      ).toBe(1500);
+    }
   });
 
   it("keeps explicitly requested provider-specific scenarios", () => {
@@ -412,5 +435,31 @@ describe("qa suite planning helpers", () => {
         primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "live-only"]);
+  });
+
+  it("keeps live-only runtime parity scenarios out of implicit mock selections", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("live-runtime", {
+        runtimeParityTier: "live-only",
+      }),
+    ];
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["generic"]);
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        scenarioIds: ["live-runtime"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["live-runtime"]);
   });
 });

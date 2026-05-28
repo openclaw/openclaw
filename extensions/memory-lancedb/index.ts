@@ -13,7 +13,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord as asRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
@@ -89,12 +92,6 @@ function loadMemoryHostCoreModule(): Promise<
 > {
   memoryHostCoreModulePromise ??= import("openclaw/plugin-sdk/memory-host-core");
   return memoryHostCoreModulePromise;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function extractUserTextContent(message: unknown): string[] {
@@ -694,6 +691,14 @@ export default definePluginEntry({
     };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
+    api.registerMemoryCapability?.({
+      publicArtifacts: {
+        async listArtifacts(params) {
+          const { listMemoryHostPublicArtifacts } = await loadMemoryHostCoreModule();
+          return await listMemoryHostPublicArtifacts(params);
+        },
+      },
+    });
 
     // ========================================================================
     // Tools
@@ -776,6 +781,21 @@ export default definePluginEntry({
             importance?: number;
             category?: MemoryEntry["category"];
           };
+
+          if (looksLikePromptInjection(text)) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Memory was not stored because it looks like prompt instructions rather than a durable user fact, preference, or decision.",
+                },
+              ],
+              details: {
+                action: "rejected",
+                reason: "prompt_injection_detected",
+              },
+            };
+          }
 
           const vector = await embeddings.embed(text);
 
@@ -915,7 +935,8 @@ export default definePluginEntry({
           .option("--limit <n>", "Max results", "5")
           .action(async (query, opts) => {
             const vector = await embeddings.embed(normalizeRecallQuery(query, cfg.recallMaxChars));
-            const results = await db.search(vector, Number.parseInt(opts.limit, 10), 0.3);
+            const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+            const results = await db.search(vector, limit, 0.3);
             // Strip vectors for output
             const output = results.map((r) => ({
               id: r.entry.id,
@@ -963,10 +984,7 @@ export default definePluginEntry({
               }
               query = query.where(filterCondition);
             }
-            const limit = Number.parseInt(opts.limit, 10);
-            if (Number.isNaN(limit) || limit <= 0) {
-              throw new Error("Invalid limit: must be a positive integer");
-            }
+            const limit = parsePositiveIntegerOption(opts.limit, "--limit") ?? 10;
 
             // Fetch all filtered rows first if we need to order them in memory
             if (!opts.orderBy) {

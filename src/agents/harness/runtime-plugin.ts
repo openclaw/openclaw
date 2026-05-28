@@ -3,8 +3,10 @@ import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,
-  resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
+import { isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
+import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 
 function dedupePluginIds(values: readonly string[]): string[] {
@@ -22,9 +24,6 @@ function dedupePluginIds(values: readonly string[]): string[] {
 }
 
 function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, pluginId: string) {
-  if (config?.plugins?.bundledDiscovery === "compat") {
-    return false;
-  }
   const allow = config?.plugins?.allow ?? [];
   return allow.length > 0 && !allow.includes(pluginId);
 }
@@ -38,7 +37,7 @@ function resolveCodexHarnessPluginIds(params: {
     return ["codex"];
   }
   const providerOwnerPluginIds = dedupePluginIds(
-    resolveOwningPluginIdsForProvider({
+    resolveOwningPluginIdsForProviderRef({
       provider: params.provider,
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -97,7 +96,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   agentHarnessRuntimeOverride?: string;
   workspaceDir: string;
 }): Promise<void> {
-  const runtimeOverride = params.agentHarnessRuntimeOverride?.trim();
+  const runtimeOverride = normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);
   const policy = resolveAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.modelId,
@@ -106,9 +105,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     sessionKey: params.sessionKey,
   });
   const runtime =
-    runtimeOverride && runtimeOverride !== "auto" && runtimeOverride !== "default"
-      ? runtimeOverride
-      : policy.runtime;
+    runtimeOverride && !isDefaultAgentRuntimeId(runtimeOverride) ? runtimeOverride : policy.runtime;
   if (runtime !== "codex") {
     return;
   }

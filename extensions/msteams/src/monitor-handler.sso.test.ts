@@ -127,13 +127,12 @@ function createFakeFetch(handlers: Array<(url: string, init?: unknown) => unknow
       status: number;
       body: unknown;
     };
-    return {
-      ok: response.ok,
+    const responseBody = response.body;
+    const isTextBody = typeof responseBody === "string";
+    return new Response(isTextBody ? responseBody : JSON.stringify(responseBody ?? ""), {
       status: response.status,
-      json: async () => response.body,
-      text: async () =>
-        typeof response.body === "string" ? response.body : JSON.stringify(response.body ?? ""),
-    };
+      headers: { "content-type": isTextBody ? "text/plain" : "application/json" },
+    });
   };
   return { fetchImpl, calls };
 }

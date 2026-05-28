@@ -9,6 +9,7 @@ import {
   type NativeHookRelayRegistrationHandle,
   runBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
   approvalRequestExplicitlyUnavailable,
@@ -58,7 +59,11 @@ export async function handleCodexAppServerApprovalRequest(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   threadId: string;
   turnId: string;
-  nativeHookRelay?: Pick<NativeHookRelayRegistrationHandle, "allowedEvents" | "relayId">;
+  nativeHookRelay?: Pick<
+    NativeHookRelayRegistrationHandle,
+    "allowedEvents" | "generation" | "relayId"
+  >;
+  autoApprove?: boolean;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
   const requestParams = isJsonObject(params.requestParams) ? params.requestParams : undefined;
@@ -95,6 +100,18 @@ export async function handleCodexAppServerApprovalRequest(params: {
         message: policyOutcome.reason,
       });
       return buildApprovalResponse(params.method, context.requestParams, "denied");
+    }
+    if (params.autoApprove === true) {
+      emitApprovalEvent(params.paramsForRun, {
+        phase: "resolved",
+        kind: context.kind,
+        status: "approved",
+        title: context.title,
+        ...context.eventDetails,
+        ...approvalEventScope(params.method, "approved-session"),
+        message: "Codex app-server approval auto-approved by runtime policy.",
+      });
+      return buildApprovalResponse(params.method, context.requestParams, "approved-session");
     }
     const requestResult = await requestPluginApproval({
       paramsForRun: params.paramsForRun,
@@ -302,7 +319,10 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
   requestParams: JsonObject | undefined;
   paramsForRun: EmbeddedRunAttemptParams;
   context: ApprovalContext;
-  nativeHookRelay?: Pick<NativeHookRelayRegistrationHandle, "allowedEvents" | "relayId">;
+  nativeHookRelay?: Pick<
+    NativeHookRelayRegistrationHandle,
+    "allowedEvents" | "generation" | "relayId"
+  >;
   signal?: AbortSignal;
 }): Promise<ApprovalPolicyOutcome | undefined> {
   const policyRequest = buildOpenClawToolPolicyRequest(params.method, params.requestParams);
@@ -365,7 +385,10 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
   requestParams: JsonObject | undefined;
   context: ApprovalContext;
   policyRequest: { toolName: string; params: JsonObject };
-  nativeHookRelay?: Pick<NativeHookRelayRegistrationHandle, "allowedEvents" | "relayId">;
+  nativeHookRelay?: Pick<
+    NativeHookRelayRegistrationHandle,
+    "allowedEvents" | "generation" | "relayId"
+  >;
   cwd?: string;
 }): Promise<
   | {
@@ -409,8 +432,10 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     const response = await invokeNativeHookRelay({
       provider: "codex",
       relayId: params.nativeHookRelay.relayId,
+      generation: params.nativeHookRelay.generation,
       event: "pre_tool_use",
       rawPayload: payload,
+      requireGeneration: true,
     });
     const decision = readNativeRelayPreToolUseDecision(response);
     if (decision.blocked) {
@@ -877,10 +902,7 @@ function summarizeNetworkPolicyAmendments(value: JsonValue | undefined): string 
 }
 
 function readStringArray(record: JsonObject, key: string): string[] {
-  const value = record[key];
-  return Array.isArray(value)
-    ? value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean)
-    : [];
+  return normalizeTrimmedStringList(record[key]);
 }
 
 function sanitizePermissionHostValue(value: string): string {

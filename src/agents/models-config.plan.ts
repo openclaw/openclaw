@@ -105,6 +105,22 @@ function resolveProvidersForMode(params: {
   });
 }
 
+function isWritableProviderConfig(provider: ProviderConfig): boolean {
+  if (!Array.isArray(provider.models) || provider.models.length === 0) {
+    return true;
+  }
+  return Boolean(provider.baseUrl?.trim() && provider.apiKey);
+}
+
+function filterWritableProviders(
+  providers: Record<string, ProviderConfig>,
+): Record<string, ProviderConfig> {
+  const next = Object.fromEntries(
+    Object.entries(providers).filter(([, provider]) => isWritableProviderConfig(provider)),
+  );
+  return Object.keys(next).length === Object.keys(providers).length ? providers : next;
+}
+
 export async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -152,6 +168,7 @@ export async function planOpenClawModelsJsonWithDeps(
 
   const mode = cfg.models?.mode ?? "merge";
   const secretRefManagedProviders = new Set<string>();
+  const manifestPlugins = params.pluginMetadataSnapshot?.manifestRegistry.plugins;
   const normalizedProviders =
     normalizeProviders({
       providers,
@@ -161,6 +178,7 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceProviders: params.sourceConfigForSecrets?.models?.providers,
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
+      manifestPlugins,
     }) ?? providers;
   const mergedProviders = resolveProvidersForMode({
     mode,
@@ -169,7 +187,9 @@ export async function planOpenClawModelsJsonWithDeps(
     secretRefManagedProviders,
   });
   const normalizedMergedProviders =
-    normalizeProviderCatalogModelsForConfig(mergedProviders) ?? mergedProviders;
+    normalizeProviderCatalogModelsForConfig(mergedProviders, {
+      manifestPlugins,
+    }) ?? mergedProviders;
   const secretEnforcedProviders =
     enforceSourceManagedProviderSecrets({
       providers: normalizedMergedProviders,
@@ -177,7 +197,9 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
-  const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+  const finalProviders = applyNativeStreamingUsageCompat(
+    filterWritableProviders(secretEnforcedProviders),
+  );
   const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {

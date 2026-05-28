@@ -4,8 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 const TOKEN = "bundled-plugin-runtime-smoke-token";
+const OUTPUT_CAPTURE_CHARS = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS,
+  1024 * 1024,
+);
+const LOG_SCAN_BYTES = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES,
+  256 * 1024,
+);
 const WATCHDOG_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS, 1000);
 const READY_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS,
@@ -16,6 +25,21 @@ const RPC_READY_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS,
   210000,
 );
+const COMMAND_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_COMMAND_MS,
+  120000,
+);
+const HTTP_PROBE_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS,
+  5000,
+);
+const GATEWAY_READY_LOG_NEEDLE = Buffer.from("[gateway] ready");
+const READY_OFFSET_LOG_NEEDLES = [
+  GATEWAY_READY_LOG_NEEDLE,
+  Buffer.from("listening on ws://"),
+  Buffer.from("[gateway] http server listening"),
+];
+const FORBIDDEN_POST_READY_DEPS_WORK = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
 
 function readPositiveInt(raw, fallback) {
   const parsed = Number.parseInt(String(raw || ""), 10);
@@ -31,12 +55,143 @@ function writeJson(file, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function manifestPath(pluginDir) {
-  return path.join(process.cwd(), "dist", "extensions", pluginDir, "openclaw.plugin.json");
+function readFileChunk(file, startOffset, maxBytes) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return { buffer: Buffer.alloc(0), startOffset: 0, size: 0 };
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return { buffer: Buffer.alloc(0), startOffset: 0, size: stat.size };
+  }
+
+  const safeMaxBytes = Math.max(1, Math.floor(Number(maxBytes) || LOG_SCAN_BYTES));
+  const safeStartOffset = Math.min(Math.max(0, Math.floor(Number(startOffset) || 0)), stat.size);
+  const bytesToRead = Math.min(safeMaxBytes, stat.size - safeStartOffset);
+  if (bytesToRead <= 0) {
+    return { buffer: Buffer.alloc(0), startOffset: safeStartOffset, size: stat.size };
+  }
+
+  const buffer = Buffer.alloc(bytesToRead);
+  const fd = fs.openSync(file, "r");
+  try {
+    const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, safeStartOffset);
+    return { buffer: buffer.subarray(0, bytesRead), startOffset: safeStartOffset, size: stat.size };
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
-function loadManifest(pluginDir) {
-  const file = manifestPath(pluginDir);
+function readFileTailBuffer(file, maxBytes = LOG_SCAN_BYTES) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return { buffer: Buffer.alloc(0), startOffset: 0, size: 0 };
+  }
+  const safeMaxBytes = Math.max(1, Math.floor(Number(maxBytes) || LOG_SCAN_BYTES));
+  const startOffset = Math.max(0, stat.size - safeMaxBytes);
+  return readFileChunk(file, startOffset, safeMaxBytes);
+}
+
+export function readFileTail(file, maxBytes = LOG_SCAN_BYTES) {
+  return readFileTailBuffer(file, maxBytes).buffer.toString("utf8");
+}
+
+function findFirstNeedleOffset(file, needles) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return 0;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return 0;
+  }
+
+  const carryBytes = Math.max(0, ...needles.map((needle) => needle.length - 1));
+  const chunk = Buffer.alloc(Math.min(LOG_SCAN_BYTES, stat.size));
+  const fd = fs.openSync(file, "r");
+  let carry = Buffer.alloc(0);
+  let offset = 0;
+  try {
+    while (offset < stat.size) {
+      const bytesToRead = Math.min(chunk.length, stat.size - offset);
+      const bytesRead = fs.readSync(fd, chunk, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      const view = chunk.subarray(0, bytesRead);
+      const combined = carry.length > 0 ? Buffer.concat([carry, view]) : view;
+      const combinedOffset = offset - carry.length;
+      const indexes = needles
+        .map((needle) => combined.indexOf(needle))
+        .filter((index) => index >= 0);
+      if (indexes.length > 0) {
+        return combinedOffset + Math.min(...indexes);
+      }
+      carry = combined.subarray(Math.max(0, combined.length - carryBytes));
+      offset += bytesRead;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return 0;
+}
+
+export function createReadyLogScanner(file) {
+  const carryBytes = GATEWAY_READY_LOG_NEEDLE.length - 1;
+  let carry = Buffer.alloc(0);
+  let offset = 0;
+  let seen = false;
+
+  return () => {
+    if (seen) {
+      return true;
+    }
+    let stat;
+    try {
+      stat = fs.statSync(file);
+    } catch {
+      return false;
+    }
+    if (!stat.isFile() || stat.size <= 0) {
+      return false;
+    }
+    if (stat.size < offset) {
+      carry = Buffer.alloc(0);
+      offset = 0;
+    }
+    while (offset < stat.size) {
+      const { buffer } = readFileChunk(file, offset, LOG_SCAN_BYTES);
+      if (buffer.length === 0) {
+        break;
+      }
+      const combined = carry.length > 0 ? Buffer.concat([carry, buffer]) : buffer;
+      const matched = combined.includes(GATEWAY_READY_LOG_NEEDLE);
+      if (matched) {
+        seen = true;
+        return true;
+      }
+      carry = combined.subarray(Math.max(0, combined.length - carryBytes));
+      offset += buffer.length;
+    }
+    return false;
+  };
+}
+
+function manifestPath(pluginDir, pluginRoot) {
+  const candidates = [
+    ...(isNonEmptyString(pluginRoot) ? [path.join(pluginRoot, "openclaw.plugin.json")] : []),
+    path.join(process.cwd(), "dist", "extensions", pluginDir, "openclaw.plugin.json"),
+    path.join(process.cwd(), "dist-runtime", "extensions", pluginDir, "openclaw.plugin.json"),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+}
+
+function loadManifest(pluginDir, pluginRoot) {
+  const file = manifestPath(pluginDir, pluginRoot);
   if (!fs.existsSync(file)) {
     throw new Error(`missing bundled plugin manifest: ${file}`);
   }
@@ -129,32 +284,87 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function runCommand(command, args, options = {}) {
+export function appendBoundedOutput(buffer, chunk, maxChars = OUTPUT_CAPTURE_CHARS) {
+  const nextText = buffer.text + String(chunk);
+  if (nextText.length <= maxChars) {
+    return { text: nextText, truncatedChars: buffer.truncatedChars };
+  }
+  const truncatedChars = buffer.truncatedChars + nextText.length - maxChars;
+  return { text: nextText.slice(-maxChars), truncatedChars };
+}
+
+function formatCapturedOutput(label, buffer) {
+  if (!buffer.text) {
+    return "";
+  }
+  const prefix =
+    buffer.truncatedChars > 0
+      ? `[${label} truncated ${buffer.truncatedChars} chars; showing tail]\n`
+      : "";
+  return `${prefix}${buffer.text}`;
+}
+
+export function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const { timeoutMs = COMMAND_TIMEOUT_MS, ...spawnOptions } = options;
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      ...options,
+      ...spawnOptions,
     });
-    let stdout = "";
-    let stderr = "";
+    let stdout = { text: "", truncatedChars: 0 };
+    let stderr = { text: "", truncatedChars: 0 };
+    let timedOut = false;
+    let settled = false;
     child.stdout?.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendBoundedOutput(stdout, chunk);
     });
     child.stderr?.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr = appendBoundedOutput(stderr, chunk);
     });
-    child.on("error", reject);
-    child.on("close", (status, signal) => {
-      if (status === 0) {
-        resolve({ stdout, stderr });
+    const clearCommandTimer = timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGKILL");
+        }, timeoutMs)
+      : undefined;
+    child.on("error", (error) => {
+      if (settled) {
         return;
       }
-      const detail = [stdout, stderr].filter(Boolean).join("\n").trim();
-      reject(
-        new Error(
-          `${command} ${args.join(" ")} failed with ${signal || status}${detail ? `\n${detail}` : ""}`,
-        ),
-      );
+      settled = true;
+      if (clearCommandTimer) {
+        clearTimeout(clearCommandTimer);
+      }
+      reject(error);
+    });
+    child.on("close", (status, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (clearCommandTimer) {
+        clearTimeout(clearCommandTimer);
+      }
+      if (status === 0) {
+        resolve({
+          stdout: stdout.text,
+          stderr: stderr.text,
+          stdoutTruncatedChars: stdout.truncatedChars,
+          stderrTruncatedChars: stderr.truncatedChars,
+        });
+        return;
+      }
+      const detail = [
+        formatCapturedOutput("stdout", stdout),
+        formatCapturedOutput("stderr", stderr),
+      ]
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+      const outcome = timedOut
+        ? `timed out after ${timeoutMs}ms`
+        : `failed with ${signal || status}`;
+      reject(new Error(`${command} ${args.join(" ")} ${outcome}${detail ? `\n${detail}` : ""}`));
     });
   });
 }
@@ -188,16 +398,20 @@ function startGateway(params) {
   return child;
 }
 
-async function stopGateway(child) {
-  if (!child || child.exitCode !== null) {
+export function hasChildExited(child) {
+  return child.exitCode !== null || (child.signalCode ?? null) !== null;
+}
+
+export async function stopGateway(child) {
+  if (!child || hasChildExited(child)) {
     return;
   }
   child.kill("SIGTERM");
   const started = Date.now();
-  while (child.exitCode === null && Date.now() - started < 10000) {
+  while (!hasChildExited(child) && Date.now() - started < 10000) {
     await delay(100);
   }
-  if (child.exitCode === null) {
+  if (!hasChildExited(child)) {
     child.kill("SIGKILL");
   }
 }
@@ -205,12 +419,13 @@ async function stopGateway(child) {
 async function waitForReady(params) {
   const started = Date.now();
   let lastError = "";
+  const readyLogSeen = createReadyLogScanner(params.logPath);
   while (Date.now() - started < READY_TIMEOUT_MS) {
-    if (params.child.exitCode !== null) {
+    if (hasChildExited(params.child)) {
       throw new Error(`gateway exited before ready\n${tailFile(params.logPath)}`);
     }
     try {
-      const res = await fetch(`http://127.0.0.1:${params.port}/readyz`);
+      const res = await fetchHttpProbeStatus(params.port, "/readyz");
       if (res.ok) {
         return;
       }
@@ -218,7 +433,7 @@ async function waitForReady(params) {
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
-    if (logShowsGatewayReady(params.logPath) && (await httpOk(params.port, "/healthz"))) {
+    if (readyLogSeen() && (await httpOk(params.port, "/healthz"))) {
       return;
     }
     await delay(250);
@@ -226,14 +441,31 @@ async function waitForReady(params) {
   throw new Error(`gateway did not become ready: ${lastError}\n${tailFile(params.logPath)}`);
 }
 
-function logShowsGatewayReady(logPath) {
-  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  return log.includes("[gateway] ready");
+async function fetchHttpProbeStatus(port, pathName, options = {}) {
+  const { timeoutMs = HTTP_PROBE_TIMEOUT_MS } = options;
+  const controller = new AbortController();
+  const clearProbeTimer = timeoutMs
+    ? setTimeout(() => {
+        controller.abort();
+      }, timeoutMs)
+    : undefined;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}${pathName}`, {
+      signal: controller.signal,
+    });
+    const status = { ok: res.ok, status: res.status };
+    await res.body?.cancel().catch(() => {});
+    return status;
+  } finally {
+    if (clearProbeTimer) {
+      clearTimeout(clearProbeTimer);
+    }
+  }
 }
 
-async function httpOk(port, pathName) {
+export async function httpOk(port, pathName, options = {}) {
   try {
-    const res = await fetch(`http://127.0.0.1:${port}${pathName}`);
+    const res = await fetchHttpProbeStatus(port, pathName, options);
     return res.ok;
   } catch {
     return false;
@@ -245,7 +477,7 @@ async function assertHttpOk(port, pathName) {
   let lastError;
   while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}${pathName}`);
+      const res = await fetchHttpProbeStatus(port, pathName);
       if (res.ok) {
         return;
       }
@@ -263,7 +495,7 @@ async function assertReadyzProbe(options) {
   let lastError;
   while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
     try {
-      const res = await fetch(`http://127.0.0.1:${options.port}/readyz`);
+      const res = await fetchHttpProbeStatus(options.port, "/readyz");
       if (res.ok) {
         return;
       }
@@ -373,7 +605,7 @@ function unwrapRpcPayload(raw) {
   return raw?.result ?? raw?.payload ?? raw?.data ?? raw;
 }
 
-async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
+async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, pluginRoot) {
   if (requiresConfig) {
     console.log(`Runtime smoke skipped for ${pluginId}: plugin requires config`);
     return;
@@ -382,7 +614,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
   if (!entrypoint) {
     throw new Error("missing OPENCLAW_ENTRY");
   }
-  const manifest = loadManifest(pluginDir);
+  const manifest = loadManifest(pluginDir, pluginRoot);
   const plan = buildPluginPlan(manifest);
   const port =
     readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE, 19000) + pluginIndex * 3;
@@ -543,32 +775,47 @@ function assertSpeechProviderVisible(payload, provider, label) {
 }
 
 async function runWatchdog(options) {
-  const readyIndex = findReadyLogIndex(options.logPath);
+  const readyOffset = findReadyLogOffset(options.logPath);
   await delay(WATCHDOG_MS);
-  if (options.child.exitCode !== null) {
+  if (hasChildExited(options.child)) {
     throw new Error(
       `gateway exited after ready for ${options.pluginId}\n${tailFile(options.logPath)}`,
     );
   }
   await retryRpcCall("health", {}, options);
-  assertNoPostReadyRuntimeDepsWork(options.logPath, readyIndex);
+  assertNoPostReadyRuntimeDepsWork(options.logPath, readyOffset);
   await assertNoPackageManagerChildren(options.child.pid);
 }
 
-function findReadyLogIndex(logPath) {
-  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  const candidates = ["[gateway] ready", "listening on ws://", "[gateway] http server listening"];
-  const indexes = candidates.map((needle) => log.indexOf(needle)).filter((index) => index >= 0);
-  return indexes.length > 0 ? Math.min(...indexes) : 0;
+export function findReadyLogOffset(logPath) {
+  return findFirstNeedleOffset(logPath, READY_OFFSET_LOG_NEEDLES);
 }
 
-function assertNoPostReadyRuntimeDepsWork(logPath, readyIndex) {
-  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  const postReady = log.slice(Math.max(0, readyIndex));
-  const forbidden = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
-  const match = forbidden.find((pattern) => pattern.test(postReady));
-  if (match) {
-    throw new Error(`post-ready runtime dependency work matched ${match}: ${tailText(postReady)}`);
+export function assertNoPostReadyRuntimeDepsWork(logPath, readyOffset) {
+  let stat;
+  try {
+    stat = fs.statSync(logPath);
+  } catch {
+    return;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return;
+  }
+
+  let offset = Math.min(Math.max(0, Math.floor(Number(readyOffset) || 0)), stat.size);
+  let carry = "";
+  while (offset < stat.size) {
+    const { buffer } = readFileChunk(logPath, offset, LOG_SCAN_BYTES);
+    if (buffer.length === 0) {
+      break;
+    }
+    const text = carry + buffer.toString("utf8");
+    const match = FORBIDDEN_POST_READY_DEPS_WORK.find((pattern) => pattern.test(text));
+    if (match) {
+      throw new Error(`post-ready runtime dependency work matched ${match}: ${tailText(text)}`);
+    }
+    carry = text.slice(-256);
+    offset += buffer.length;
   }
 }
 
@@ -600,12 +847,12 @@ async function assertNoPackageManagerChildren(pid) {
   }
 }
 
-async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex) {
+async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex, pluginRoot) {
   const entrypoint = process.env.OPENCLAW_ENTRY;
   if (!entrypoint) {
     throw new Error("missing OPENCLAW_ENTRY");
   }
-  const manifest = loadManifest(pluginDir);
+  const manifest = loadManifest(pluginDir, pluginRoot);
   const plan = buildPluginPlan(manifest);
   const selectedProvider = provider || plan.speechProviders[0];
   if (!selectedProvider) {
@@ -719,7 +966,7 @@ async function smokeOpenAiTts(pluginIndex) {
   }
 }
 
-function createIsolatedStateEnv(label) {
+export function createIsolatedStateEnv(label) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${label}-`));
   const home = path.join(root, "home");
   const stateDir = path.join(home, ".openclaw");
@@ -728,33 +975,37 @@ function createIsolatedStateEnv(label) {
   return {
     ...process.env,
     HOME: home,
-    OPENCLAW_HOME: stateDir,
+    USERPROFILE: home,
+    OPENCLAW_HOME: home,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
   };
 }
 
 function tailFile(file) {
-  if (!fs.existsSync(file)) {
-    return "";
-  }
-  return tailText(fs.readFileSync(file, "utf8"));
+  return tailText(readFileTail(file));
 }
 
 function tailText(text) {
   return text.split(/\r?\n/u).slice(-120).join("\n");
 }
 
-const [command, pluginId, pluginDir, requiresConfigRaw, pluginIndexRaw, provider] =
-  process.argv.slice(2);
-const pluginIndex = Number.parseInt(pluginIndexRaw || "0", 10);
+export async function main(argv = process.argv.slice(2)) {
+  const [command, pluginId, pluginDir, requiresConfigRaw, pluginIndexRaw, pluginRoot, provider] =
+    argv;
+  const pluginIndex = Number.parseInt(pluginIndexRaw || "0", 10);
 
-if (command === "plugin") {
-  await smokePlugin(pluginId, pluginDir, requiresConfigRaw === "1", pluginIndex);
-} else if (command === "tts-global-disable") {
-  await smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex);
-} else if (command === "tts-openai-live") {
-  await smokeOpenAiTts(pluginIndex);
-} else {
-  throw new Error(`Unknown runtime smoke command: ${command || "(missing)"}`);
+  if (command === "plugin") {
+    await smokePlugin(pluginId, pluginDir, requiresConfigRaw === "1", pluginIndex, pluginRoot);
+  } else if (command === "tts-global-disable") {
+    await smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex, pluginRoot);
+  } else if (command === "tts-openai-live") {
+    await smokeOpenAiTts(pluginIndex);
+  } else {
+    throw new Error(`Unknown runtime smoke command: ${command || "(missing)"}`);
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
 }

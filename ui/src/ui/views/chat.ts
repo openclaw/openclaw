@@ -154,6 +154,7 @@ export type ChatProps = {
   onDismissError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
+  onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
@@ -425,6 +426,17 @@ function focusComposerFromChrome(event: MouseEvent, connected: boolean) {
   currentTarget
     .querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
     ?.focus({ preventScroll: true });
+}
+
+function clickComposerFileInput(event: MouseEvent) {
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  target
+    .closest(".agent-chat__input")
+    ?.querySelector<HTMLInputElement>(".agent-chat__file-input")
+    ?.click();
 }
 
 function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
@@ -1482,6 +1494,7 @@ export function renderChat(props: ChatProps) {
       ${renderChatQueue({
         queue: props.queue,
         canAbort: showAbortableUi,
+        onQueueRetry: props.onQueueRetry,
         onQueueSteer: props.onQueueSteer,
         onQueueRemove: props.onQueueRemove,
       })}
@@ -1562,10 +1575,9 @@ export function renderChat(props: ChatProps) {
         <div class="agent-chat__toolbar">
           <div class="agent-chat__toolbar-left">
             <button
+              type="button"
               class="agent-chat__input-btn"
-              @click=${() => {
-                document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
-              }}
+              @click=${clickComposerFileInput}
               title=${t("chat.composer.attachFile")}
               aria-label=${t("chat.composer.attachFile")}
               ?disabled=${!props.connected}

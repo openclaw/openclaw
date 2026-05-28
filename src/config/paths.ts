@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import type { OpenClawConfig } from "./types.js";
 
 /**
@@ -86,6 +87,14 @@ export function resolveStateDir(
     return existingLegacy;
   }
   return newDir;
+}
+
+export function normalizeStateDirEnv(env: NodeJS.ProcessEnv = process.env): void {
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, envHomedir(env));
+  const openclawOverride = env.OPENCLAW_STATE_DIR?.trim();
+  if (openclawOverride) {
+    env.OPENCLAW_STATE_DIR = resolveUserPath(openclawOverride, env, effectiveHomedir);
+  }
 }
 
 function resolveUserPath(
@@ -297,16 +306,14 @@ function parseGatewayPortEnvValue(raw: string | undefined): number | null {
     return null;
   }
   if (/^\d+$/.test(trimmed)) {
-    const parsed = Number.parseInt(trimmed, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    return parseStrictPositiveInteger(trimmed) ?? null;
   }
 
   // Docker Compose publish strings can leak into host CLI env loading via repo `.env`,
   // for example `127.0.0.1:18789` or `[::1]:18789`. Accept only explicit host:port forms.
   const bracketedIpv6Match = trimmed.match(/^\[[^\]]+\]:(\d+)$/);
   if (bracketedIpv6Match?.[1]) {
-    const parsed = Number.parseInt(bracketedIpv6Match[1], 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    return parseStrictPositiveInteger(bracketedIpv6Match[1]) ?? null;
   }
 
   const firstColon = trimmed.indexOf(":");
@@ -318,8 +325,7 @@ function parseGatewayPortEnvValue(raw: string | undefined): number | null {
   if (!/^\d+$/.test(suffix)) {
     return null;
   }
-  const parsed = Number.parseInt(suffix, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return parseStrictPositiveInteger(suffix) ?? null;
 }
 
 export function resolveGatewayPort(

@@ -1,6 +1,7 @@
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import {
+  applyAuthorizationHeaderForUrl,
   inferPlaceholder,
   isUrlAllowed,
   type MSTeamsAttachmentDownloadLogger,
@@ -53,6 +54,21 @@ function normalizeServiceUrl(serviceUrl: string): string {
   return serviceUrl.replace(/\/+$/, "");
 }
 
+function buildBotFrameworkAttachmentHeaders(params: {
+  url: string;
+  accessToken: string;
+  policy: MSTeamsAttachmentFetchPolicy;
+}): Headers {
+  const headers = ensureUserAgentHeader();
+  applyAuthorizationHeaderForUrl({
+    headers,
+    url: params.url,
+    authAllowHosts: params.policy.authAllowHosts,
+    bearerToken: params.accessToken,
+  });
+  return headers;
+}
+
 async function fetchBotFrameworkAttachmentInfo(params: {
   serviceUrl: string;
   attachmentId: string;
@@ -78,7 +94,11 @@ async function fetchBotFrameworkAttachmentInfo(params: {
       fetchFn: params.fetchFn,
       resolveFn: params.resolveFn,
       requestInit: {
-        headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
+        headers: buildBotFrameworkAttachmentHeaders({
+          url,
+          accessToken: params.accessToken,
+          policy: params.policy,
+        }),
       },
     });
   } catch (err) {
@@ -128,7 +148,11 @@ async function saveBotFrameworkAttachmentView(params: {
       fetchFn: params.fetchFn,
       resolveFn: params.resolveFn,
       requestInit: {
-        headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
+        headers: buildBotFrameworkAttachmentHeaders({
+          url,
+          accessToken: params.accessToken,
+          policy: params.policy,
+        }),
       },
     });
   } catch (err) {

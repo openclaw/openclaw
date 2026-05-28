@@ -2,7 +2,11 @@ import fs from "node:fs";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
-import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import {
+  type ConfigFileSnapshot,
+  readConfigFileSnapshot,
+  replaceConfigFile,
+} from "../config/config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import {
@@ -11,6 +15,7 @@ import {
 } from "../config/model-input.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
+import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -28,6 +33,7 @@ import {
 } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -43,11 +49,15 @@ import {
   discoverConfigSecretTargets,
   resolveConfigSecretTargetByPath,
 } from "../secrets/target-registry.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
+import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
 import type {
   ConfigSetDryRunError,
   ConfigSetDryRunInputMode,
@@ -311,7 +321,11 @@ class ConfigSetDryRunValidationError extends Error {
 }
 
 function isIndexSegment(raw: string): boolean {
-  return /^[0-9]+$/.test(raw);
+  return parseIndexSegment(raw) !== undefined;
+}
+
+function parseIndexSegment(raw: string): number | undefined {
+  return parseConfigPathArrayIndex(raw);
 }
 
 function parseBracketPathSegment(raw: string, fullPath: string): string {
@@ -382,7 +396,7 @@ function parsePath(raw: string): PathSegment[] {
   if (current) {
     parts.push(current);
   }
-  return parts.map((part) => part.trim()).filter(Boolean);
+  return normalizeStringEntries(parts);
 }
 
 function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
@@ -406,12 +420,17 @@ function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function formatDoctorHint(message: string): string {
   return `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${message}`;
+}
+
+function formatInvalidConfigRepairHint(
+  snapshot: Pick<ConfigFileSnapshot, "valid" | "issues" | "warnings" | "legacyIssues">,
+  doctorMessage: string,
+): string {
+  return isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+    ? formatPluginPackagingRuntimeOutputRecoveryHint()
+    : formatDoctorHint(doctorMessage);
 }
 
 function formatUnsupportedSecretRefPolicyFailureMessage(issues: string[]): string {
@@ -443,8 +462,8 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
       if (!isIndexSegment(segment)) {
         return { found: false };
       }
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+      const index = parseIndexSegment(segment);
+      if (index === undefined || index >= current.length) {
         return { found: false };
       }
       current = current[index];
@@ -513,9 +532,7 @@ function schemaAlternatives(
 
 function schemaLooksArray(schema: JsonSchemaRecord): boolean {
   return (
-    schemaTypes(schema).has("array") ||
-    isSchemaRecord(schema.items) ||
-    Array.isArray(schema.items)
+    schemaTypes(schema).has("array") || isSchemaRecord(schema.items) || Array.isArray(schema.items)
   );
 }
 
@@ -533,8 +550,8 @@ function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSch
   const schemas: JsonSchemaRecord[] = [];
   for (const alternative of schemaAlternatives(schema)) {
     if (schemaLooksArray(alternative)) {
-      if (isIndexSegment(segment)) {
-        const index = Number.parseInt(segment, 10);
+      const index = parseIndexSegment(segment);
+      if (index !== undefined) {
         const indexedItem = Array.isArray(alternative.items)
           ? alternative.items[index]
           : alternative.items;
@@ -631,7 +648,10 @@ function setAtPath(
       if (!isIndexSegment(segment)) {
         throw new Error(`Expected numeric index for array segment "${segment}"`);
       }
-      const index = Number.parseInt(segment, 10);
+      const index = parseIndexSegment(segment);
+      if (index === undefined) {
+        throw new Error(`Expected numeric index for array segment "${segment}"`);
+      }
       const existing = current[index];
       if (!existing || typeof existing !== "object") {
         current[index] = nextIsIndex ? [] : {};
@@ -655,7 +675,10 @@ function setAtPath(
     if (!isIndexSegment(last)) {
       throw new Error(`Expected numeric index for array segment "${last}"`);
     }
-    const index = Number.parseInt(last, 10);
+    const index = parseIndexSegment(last);
+    if (index === undefined) {
+      throw new Error(`Expected numeric index for array segment "${last}"`);
+    }
     current[index] = value;
     return;
   }
@@ -826,8 +849,8 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetA
       if (!isIndexSegment(segment)) {
         return { removed: false };
       }
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+      const index = parseIndexSegment(segment);
+      if (index === undefined || index >= current.length) {
         return { removed: false };
       }
       current = current[index];
@@ -845,8 +868,8 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetA
     if (!isIndexSegment(last)) {
       return { removed: false };
     }
-    const index = Number.parseInt(last, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+    const index = parseIndexSegment(last);
+    if (index === undefined || index >= current.length) {
       return { removed: false };
     }
     current.splice(index, 1);
@@ -872,7 +895,7 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
   for (const line of formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })) {
     runtime.error(line);
   }
-  runtime.error(formatDoctorHint("to repair, then retry."));
+  runtime.error(formatInvalidConfigRepairHint(snapshot, "to repair, then retry."));
   runtime.exit(1);
   return snapshot;
 }
@@ -992,8 +1015,8 @@ function parseOptionalPositiveInteger(raw: string | undefined, flag: string): nu
   if (!trimmed) {
     throw new Error(`${flag} must not be empty.`);
   }
-  const parsed = Number(trimmed);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  const parsed = parseStrictPositiveInteger(trimmed);
+  if (parsed === undefined) {
     throw new Error(`${flag} must be a positive integer.`);
   }
   return parsed;
@@ -1059,7 +1082,7 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
 
   let provider: SecretProviderConfig;
   if (source === "env") {
-    const allowlist = (opts.providerAllowlist ?? []).map((entry) => entry.trim()).filter(Boolean);
+    const allowlist = normalizeStringEntries(opts.providerAllowlist);
     for (const envName of allowlist) {
       if (!isValidEnvSecretRefId(envName)) {
         throw new Error(
@@ -1106,10 +1129,10 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
       ...(opts.providerJsonOnly ? { jsonOnly: true } : {}),
       ...(providerEnv ? { env: providerEnv } : {}),
       ...(opts.providerPassEnv && opts.providerPassEnv.length > 0
-        ? { passEnv: opts.providerPassEnv.map((entry) => entry.trim()).filter(Boolean) }
+        ? { passEnv: normalizeStringEntries(opts.providerPassEnv) }
         : {}),
       ...(opts.providerTrustedDir && opts.providerTrustedDir.length > 0
-        ? { trustedDirs: opts.providerTrustedDir.map((entry) => entry.trim()).filter(Boolean) }
+        ? { trustedDirs: normalizeStringEntries(opts.providerTrustedDir) }
         : {}),
       ...(opts.providerAllowInsecurePath ? { allowInsecurePath: true } : {}),
       ...(opts.providerAllowSymlinkCommand ? { allowSymlinkCommand: true } : {}),
@@ -1980,7 +2003,7 @@ async function runConfigOperations(params: {
       ok: dedupedErrors.length === 0,
       operations: operations.length,
       configPath: shortenHomePath(snapshot.path),
-      inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
+      inputModes: uniqueValues(operations.map((operation) => operation.inputMode)),
       checks: {
         schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
         resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode,
@@ -2347,7 +2370,9 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
           runtime.error(`  ${line}`);
         }
         runtime.error("");
-        runtime.error(formatDoctorHint("to repair, or fix the keys above manually."));
+        runtime.error(
+          formatInvalidConfigRepairHint(snapshot, "to repair, or fix the keys above manually."),
+        );
         runtime.error(`Inspect with ${formatCliCommand("openclaw config validate")}.`);
       }
       runtime.exit(1);

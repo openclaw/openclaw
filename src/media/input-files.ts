@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
+import { parseMediaContentLength } from "./content-length.js";
 import { convertHeicToJpeg } from "./media-services.js";
 import { detectMime } from "./mime.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
@@ -154,7 +155,7 @@ export function parseContentType(value: string | undefined): {
 
 export function normalizeMimeList(values: string[] | undefined, fallback: string[]): Set<string> {
   const input = values && values.length > 0 ? values : fallback;
-  return new Set(input.map((value) => normalizeMimeType(value)).filter(Boolean) as string[]);
+  return new Set(input.flatMap((value) => normalizeMimeType(value) ?? []));
 }
 
 export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFileLimits {
@@ -192,15 +193,22 @@ export async function fetchWithGuard(params: {
 
   try {
     if (!response.ok) {
+      await discardIgnoredResponseBody(response);
       throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
     }
 
-    const contentLength = response.headers.get("content-length");
-    if (contentLength) {
-      const size = Number(contentLength);
-      if (Number.isFinite(size) && size > params.maxBytes) {
-        throw new Error(`Content too large: ${size} bytes (limit: ${params.maxBytes} bytes)`);
-      }
+    let contentLength: number | null;
+    try {
+      contentLength = parseMediaContentLength(response.headers.get("content-length"));
+    } catch (err) {
+      await discardIgnoredResponseBody(response);
+      throw err;
+    }
+    if (contentLength !== null && contentLength > params.maxBytes) {
+      await discardIgnoredResponseBody(response);
+      throw new Error(
+        `Content too large: ${contentLength} bytes (limit: ${params.maxBytes} bytes)`,
+      );
     }
 
     const buffer = await readResponseWithLimit(response, params.maxBytes);
@@ -212,6 +220,10 @@ export async function fetchWithGuard(params: {
   } finally {
     await release();
   }
+}
+
+async function discardIgnoredResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
 }
 
 function decodeTextContent(buffer: Buffer, charset: string | undefined): string {

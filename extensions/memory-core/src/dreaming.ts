@@ -20,25 +20,17 @@ import {
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
-import { writeDeepDreamingReport } from "./dreaming-markdown.js";
 import {
-  generateAndAppendDreamNarrative,
-  type NarrativePhaseData,
-  runDetachedDreamNarrative,
-} from "./dreaming-narrative.js";
-import { runDreamingSweepPhases } from "./dreaming-phases.js";
+  normalizeLowercaseStringOrEmpty,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
+import type { NarrativePhaseData } from "./dreaming-narrative.js";
 import {
   formatErrorMessage,
   includesSystemEventToken,
   normalizeTrimmedString,
 } from "./dreaming-shared.js";
-import {
-  applyShortTermPromotions,
-  repairShortTermPromotionArtifacts,
-  rankShortTermPromotionCandidates,
-} from "./short-term-promotion.js";
 
 const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
 const STARTUP_CRON_RETRY_DELAY_MS = 5_000;
@@ -140,13 +132,19 @@ type LegacyPhaseMigrationMode = "enabled" | "disabled";
 function formatRepairSummary(repair: {
   rewroteStore: boolean;
   removedInvalidEntries: number;
+  removedOverflowEntries?: number;
   removedStaleLock: boolean;
 }): string {
   const actions: string[] = [];
   if (repair.rewroteStore) {
-    actions.push(
-      `rewrote recall store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid)` : ""}`,
-    );
+    const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
+    const details = [
+      repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
+      removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    actions.push(`rewrote recall store${details ? ` (${details})` : ""}`);
   }
   if (repair.removedStaleLock) {
     actions.push("removed stale promotion lock");
@@ -371,7 +369,7 @@ function resolveDreamingTriggerSessionKeys(sessionKey?: string): string[] {
     }
   }
 
-  return Array.from(new Set(keys));
+  return uniqueStrings(keys);
 }
 
 function hasPendingManagedDreamingCronEvent(sessionKey?: string): boolean {
@@ -497,7 +495,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   cfg?: OpenClawConfig;
   config: ShortTermPromotionDreamingConfig;
   logger: Logger;
-  subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
+  subagent?: OpenClawPluginApi["runtime"]["subagent"];
 }): Promise<{ handled: true; reason: string } | undefined> {
   if (params.trigger !== "heartbeat" && params.trigger !== "cron") {
     return undefined;
@@ -551,6 +549,21 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   let failedWorkspaces = 0;
   const pluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
   const detachNarratives = params.trigger === "cron";
+  const [
+    { writeDeepDreamingReport },
+    { generateAndAppendDreamNarrative, runDetachedDreamNarrative },
+    { runDreamingSweepPhases },
+    {
+      applyShortTermPromotions,
+      repairShortTermPromotionArtifacts,
+      rankShortTermPromotionCandidates,
+    },
+  ] = await Promise.all([
+    import("./dreaming-markdown.js"),
+    import("./dreaming-narrative.js"),
+    import("./dreaming-phases.js"),
+    import("./short-term-promotion.js"),
+  ]);
   for (const workspaceDir of workspaces) {
     try {
       const sweepNowMs = Date.now();
@@ -688,6 +701,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   let lastRuntimeConfigKey: string | null = null;
   let lastRuntimeCronRef: CronServiceLike | null = null;
   let startupCronRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let runtimeCronReconcileTimer: ReturnType<typeof setInterval> | null = null;
   let startupCronRetryAttempts = 0;
   let disposed = false;
 
@@ -716,6 +730,10 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   const disposeStartupCronRetry = (): void => {
     disposed = true;
     clearStartupCronRetry();
+    if (runtimeCronReconcileTimer) {
+      clearInterval(runtimeCronReconcileTimer);
+      runtimeCronReconcileTimer = null;
+    }
     gatewayContext = null;
     resolveStartupCron = null;
   };
@@ -849,6 +867,18 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     }, STARTUP_CRON_RETRY_DELAY_MS);
   };
 
+  const startRuntimeCronReconcileTimer = (): void => {
+    if (runtimeCronReconcileTimer) {
+      return;
+    }
+    runtimeCronReconcileTimer = setInterval(() => {
+      void reconcileManagedDreamingCron({ reason: "runtime" }).catch((err) => {
+        api.logger.error(`memory-core: dreaming cron reconcile failed: ${formatErrorMessage(err)}`);
+      });
+    }, RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+    runtimeCronReconcileTimer.unref?.();
+  };
+
   api.on("gateway_start", async (_event, ctx) => {
     disposed = false;
     // Store the gateway context for runtime cron resolution retries.
@@ -859,6 +889,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         startupConfig: ctx.config,
         startupCron: () => resolveCronServiceFromGatewayContext(ctx),
       });
+      startRuntimeCronReconcileTimer();
       scheduleStartupCronRetry();
     } catch (err) {
       api.logger.error(
@@ -926,6 +957,7 @@ export const testing = {
     DEFAULT_DREAMING_MIN_RECALL_COUNT: DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
     DEFAULT_DREAMING_MIN_UNIQUE_QUERIES: DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
     DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS: DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
+    RUNTIME_CRON_RECONCILE_INTERVAL_MS,
     STARTUP_CRON_RETRY_DELAY_MS,
     STARTUP_CRON_RETRY_MAX_ATTEMPTS,
   },

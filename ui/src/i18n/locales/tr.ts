@@ -364,6 +364,8 @@ export const tr: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "Geçerli onay ilkesi her seferinde onay gerektiriyor, bu nedenle Her Zaman İzin Ver kullanılamıyor.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -395,6 +397,7 @@ export const tr: TranslationMap = {
   },
   tabs: {
     agents: "Aracılar",
+    activity: "Etkinlik",
     overview: "Genel Bakış",
     channels: "Kanallar",
     instances: "Örnekler",
@@ -416,6 +419,7 @@ export const tr: TranslationMap = {
   },
   subtitles: {
     agents: "Çalışma alanları, araçlar, kimlikler.",
+    activity: "Tarayıcıya yerel araç etkinliği özetleri.",
     overview: "Durum, giriş noktaları, sağlık.",
     channels: "Kanallar ve ayarlar.",
     instances: "Bağlı istemciler ve düğümler.",
@@ -434,6 +438,42 @@ export const tr: TranslationMap = {
     debug: "Anlık görüntüler, olaylar, RPC.",
     logs: "Canlı Gateway günlükleri.",
     dreams: "Uyku sırasında bellek birleştirme.",
+  },
+  activity: {
+    title: "Etkinlik",
+    subtitle: "Canlı oturum olaylarından türetilen geçici araç etkinliği.",
+    visibleCount: "{visible} / {total}",
+    filtersLabel: "Etkinlik filtreleri",
+    search: "Ara",
+    searchPlaceholder: "Araca, özete, çalıştırmaya, oturuma göre filtrele",
+    toolFilter: "Araç",
+    allTools: "Tüm araçlar",
+    statusFilters: "Durum filtreleri",
+    autoFollow: "Otomatik takip",
+    expandAll: "Tümünü genişlet",
+    collapseAll: "Tümünü daralt",
+    clear: "Temizle",
+    empty: "Henüz araç etkinliği yok.",
+    emptyFiltered: "Bu filtrelerle eşleşen etkinlik yok.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 bağımsız değişken gizlendi",
+    argumentsHidden: "{count} bağımsız değişken gizlendi",
+    streamLabel: "Araç etkinliği girişleri",
+    toolCallId: "Araç çağrısı",
+    runId: "Çalıştır",
+    session: "Oturum",
+    outputTruncated: "Önizleme gizlendi ve kısaltıldı.",
+    noOutputPreview: "Çıkış önizlemesi yok.",
+    status: {
+      running: "Çalışıyor",
+      done: "Tamamlandı",
+      error: "Hata",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} sn",
+      minutes: "{minutes} dk {seconds} sn",
+    },
   },
   overview: {
     access: {
@@ -1090,6 +1130,11 @@ export const tr: TranslationMap = {
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
+    },
+    queue: {
+      retry: "Retry",
+      retrySend: "Retry send",
+      retryQueuedMessage: "Retry queued message",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

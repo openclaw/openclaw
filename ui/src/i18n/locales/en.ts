@@ -360,6 +360,8 @@ export const en: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -391,6 +393,7 @@ export const en: TranslationMap = {
   },
   tabs: {
     agents: "Agents",
+    activity: "Activity",
     overview: "Overview",
     channels: "Channels",
     instances: "Instances",
@@ -412,6 +415,7 @@ export const en: TranslationMap = {
   },
   subtitles: {
     agents: "Workspaces, tools, identities.",
+    activity: "Browser-local tool activity summaries.",
     overview: "Status, entry points, health.",
     channels: "Channels and settings.",
     instances: "Connected clients and nodes.",
@@ -430,6 +434,42 @@ export const en: TranslationMap = {
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",
     dreams: "Memory dreaming, consolidation, and reflection.",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "Search",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "Tool",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "Clear",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "Run",
+    session: "Session",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "Running",
+      done: "Done",
+      error: "Error",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -1075,6 +1115,11 @@ export const en: TranslationMap = {
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
+    },
+    queue: {
+      retry: "Retry",
+      retrySend: "Retry send",
+      retryQueuedMessage: "Retry queued message",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

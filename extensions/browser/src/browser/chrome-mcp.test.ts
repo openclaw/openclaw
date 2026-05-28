@@ -5,14 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clickChromeMcpElement,
   buildChromeMcpArgs,
+  decodeChromeMcpStderrTail,
   ensureChromeMcpAvailable,
   evaluateChromeMcpScript,
   listChromeMcpTabs,
   navigateChromeMcpPage,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
+  setChromeMcpProcessCleanupDepsForTest,
   setChromeMcpSessionFactoryForTest,
   takeChromeMcpScreenshot,
+  takeChromeMcpSnapshot,
 } from "./chrome-mcp.js";
 
 type ToolCall = {
@@ -164,6 +167,7 @@ describe("chrome MCP page parsing", () => {
       "-y",
       "chrome-devtools-mcp@latest",
       "--autoConnect",
+      "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--userDataDir",
@@ -182,6 +186,7 @@ describe("chrome MCP page parsing", () => {
       "chrome-devtools-mcp@latest",
       "--browserUrl",
       "http://127.0.0.1:9222",
+      "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
     ]);
@@ -197,6 +202,7 @@ describe("chrome MCP page parsing", () => {
       "chrome-devtools-mcp@latest",
       "--wsEndpoint",
       "ws://127.0.0.1:9222/devtools/browser/abc",
+      "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
     ]);
@@ -219,6 +225,36 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("lets explicit Chrome MCP usage-statistics args override the default opt-out", () => {
+    expect(
+      buildChromeMcpArgs({
+        mcpArgs: ["--usage-statistics"],
+      }),
+    ).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--usage-statistics",
+    ]);
+  });
+
+  it("does not duplicate an explicit Chrome MCP usage-statistics opt-out", () => {
+    expect(
+      buildChromeMcpArgs({
+        mcpArgs: ["--no-usage-statistics"],
+      }),
+    ).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--no-usage-statistics",
+    ]);
+  });
+
   it("omits the npx package prefix for a custom Chrome MCP command", () => {
     expect(
       buildChromeMcpArgs({
@@ -228,9 +264,80 @@ describe("chrome MCP page parsing", () => {
     ).toEqual([
       "--browserUrl",
       "http://127.0.0.1:9222",
+      "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
     ]);
+  });
+
+  it("terminates the owned Chrome MCP subprocess tree when closing temporary sessions", async () => {
+    const session = createFakeSession();
+    Object.assign(session, { ownsProcessTree: true });
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    session.client.close = closeMock as typeof session.client.close;
+    const killCalls: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    setChromeMcpProcessCleanupDepsForTest({
+      platform: "linux",
+      listProcesses: vi.fn().mockResolvedValue([
+        { pid: 123, ppid: 1 },
+        { pid: 124, ppid: 123 },
+        { pid: 125, ppid: 124 },
+        { pid: 126, ppid: 1 },
+      ]),
+      killProcess: (pid, signal) => {
+        killCalls.push({ pid, signal });
+      },
+      sleep: vi.fn().mockResolvedValue(undefined),
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
+
+    expect(closeMock).toHaveBeenCalledTimes(1);
+    expect(killCalls).toEqual([
+      { pid: 125, signal: "SIGTERM" },
+      { pid: 124, signal: "SIGTERM" },
+      { pid: 123, signal: "SIGTERM" },
+      { pid: 125, signal: "SIGKILL" },
+      { pid: 124, signal: "SIGKILL" },
+      { pid: 123, signal: "SIGKILL" },
+    ]);
+  });
+
+  it("uses Windows taskkill tree cleanup without waiting for SDK stdio close timeout", async () => {
+    const session = createFakeSession();
+    Object.assign(session, { ownsProcessTree: true });
+    const closeOrder: string[] = [];
+    session.client.close = vi.fn(async () => {
+      closeOrder.push("client.close");
+    }) as typeof session.client.close;
+    setChromeMcpProcessCleanupDepsForTest({
+      platform: "win32",
+      taskkillProcessTree: vi.fn(async (pid) => {
+        closeOrder.push(`taskkill:${pid}`);
+      }),
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
+
+    expect(closeOrder).toEqual(["taskkill:123"]);
+  });
+
+  it("falls back to SDK stdio close when Windows taskkill cleanup fails", async () => {
+    const session = createFakeSession();
+    Object.assign(session, { ownsProcessTree: true });
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    session.client.close = closeMock as typeof session.client.close;
+    setChromeMcpProcessCleanupDepsForTest({
+      platform: "win32",
+      taskkillProcessTree: vi.fn().mockRejectedValue(new Error("taskkill failed")),
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
+
+    expect(closeMock).toHaveBeenCalledTimes(1);
   });
 
   it("redacts remote CDP URL secrets from attach failures", async () => {
@@ -338,9 +445,19 @@ describe("chrome MCP page parsing", () => {
 
     expect(message).toContain("Chrome MCP existing-session attach failed");
     expect(message).toContain("~/Library/Application Support/Google/Chrome/Profile 1");
-    expect(message).toContain("attach failed for ~/Library/Application Support/Google/Chrome/Profile 1");
+    expect(message).toContain(
+      "attach failed for ~/Library/Application Support/Google/Chrome/Profile 1",
+    );
     expect(message).not.toContain(homeDir);
     expect(message).not.toContain(userDataDir);
+  });
+
+  it("keeps Chrome MCP stderr tails within the byte cap without splitting UTF-8", () => {
+    const output = decodeChromeMcpStderrTail(Buffer.from(`${"x".repeat(8191)}é`));
+
+    expect(output).toMatch(/é$/);
+    expect(output).not.toContain("�");
+    expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(8192);
   });
 
   it("parses new_page text responses and returns the created tab", async () => {
@@ -818,6 +935,27 @@ describe("chrome MCP page parsing", () => {
     const tabs = await listChromeMcpTabs("chrome-live");
     expect(factoryCalls).toBe(2);
     expect(tabs).toHaveLength(2);
+  });
+
+  it("forwards an explicit timeoutMs to take_snapshot via the callTool race", async () => {
+    vi.useFakeTimers();
+    const session = createFakeSession();
+    session.client.callTool = vi.fn(
+      async () => new Promise<never>(() => {}),
+    ) as typeof session.client.callTool;
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const snapshotPromise = takeChromeMcpSnapshot({
+      profileName: "chrome-live",
+      targetId: "1",
+      timeoutMs: 75,
+    });
+    void snapshotPromise.catch(() => {});
+
+    await vi.advanceTimersByTimeAsync(75);
+
+    await expect(snapshotPromise).rejects.toThrow(/Chrome MCP "take_snapshot".*timed out/);
+    vi.useRealTimers();
   });
 
   it("honors timeoutMs for ephemeral availability probes", async () => {

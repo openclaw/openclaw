@@ -12,9 +12,10 @@ The `image_generate` tool lets the agent create and edit images using your
 configured providers. In chat sessions, image generation runs asynchronously:
 OpenClaw records a background task, returns the task id immediately, and wakes
 the agent when the provider finishes. The completion agent must send generated
-images through the `message` tool. If the requester session is inactive and
-some generated images are still missing from message-tool delivery, OpenClaw
-sends an idempotent direct fallback with only the missing images.
+images through the `message` tool. If the requester session is inactive or
+its active wake fails, and some generated images are still missing from
+message-tool delivery, OpenClaw sends an idempotent direct fallback with only
+the missing images.
 
 <Note>
 The tool only appears when at least one image-generation provider is
@@ -310,7 +311,8 @@ ComfyUI support 1.
     transparent outputs require `outputFormat` `png` or `webp` and a
     transparency-capable OpenAI image model. OpenClaw routes default
     `gpt-image-2` transparent-background requests to `gpt-image-1.5`.
-    `openai.outputCompression` applies to JPEG/WebP outputs.
+    `openai.outputCompression` applies to JPEG/WebP outputs and is ignored
+    for PNG outputs.
 
     The top-level `background` hint is provider-neutral and currently maps
     to the same OpenAI `background` request field when the OpenAI provider

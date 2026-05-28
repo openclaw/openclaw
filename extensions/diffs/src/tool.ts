@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Static, Type } from "typebox";
+import { Type } from "typebox";
+import type { Static } from "typebox";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
@@ -158,6 +159,7 @@ export function createDiffsTool(params: {
   store: DiffArtifactStore;
   defaults: DiffToolDefaults;
   viewerBaseUrl?: string;
+  languagePackAvailable?: boolean;
   screenshotter?: DiffScreenshotter;
   context?: OpenClawPluginToolContext;
 }): AnyAgentTool {
@@ -197,6 +199,7 @@ export function createDiffsTool(params: {
           },
           image,
           expandUnchanged,
+          languagePackAvailable: params.languagePackAvailable,
         },
         renderTarget,
       );

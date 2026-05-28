@@ -363,6 +363,8 @@ export const uk: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "Чинна політика схвалення вимагає схвалення щоразу, тому «Дозволяти завжди» недоступно.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -394,6 +396,7 @@ export const uk: TranslationMap = {
   },
   tabs: {
     agents: "Агенти",
+    activity: "Активність",
     overview: "Огляд",
     channels: "Канали",
     instances: "Екземпляри",
@@ -415,6 +418,7 @@ export const uk: TranslationMap = {
   },
   subtitles: {
     agents: "Робочі простори, інструменти, ідентичності.",
+    activity: "Підсумки активності інструментів, локальні для браузера.",
     overview: "Стан, точки входу, справність.",
     channels: "Канали та налаштування.",
     instances: "Підключені клієнти та вузли.",
@@ -433,6 +437,42 @@ export const uk: TranslationMap = {
     debug: "Знімки, події, RPC.",
     logs: "Журнали шлюзу в реальному часі.",
     dreams: "Консолідація пам’яті під час сну.",
+  },
+  activity: {
+    title: "Активність",
+    subtitle: "Тимчасова активність інструментів, отримана з подій поточного сеансу.",
+    visibleCount: "{visible} з {total}",
+    filtersLabel: "Фільтри активності",
+    search: "Пошук",
+    searchPlaceholder: "Фільтрувати за інструментом, підсумком, запуском, сеансом",
+    toolFilter: "Інструмент",
+    allTools: "Усі інструменти",
+    statusFilters: "Фільтри стану",
+    autoFollow: "Автоматичне відстеження",
+    expandAll: "Розгорнути все",
+    collapseAll: "Згорнути все",
+    clear: "Очистити",
+    empty: "Активності інструментів поки немає.",
+    emptyFiltered: "Немає активності, що відповідає цим фільтрам.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 аргумент приховано",
+    argumentsHidden: "{count} аргументів приховано",
+    streamLabel: "Записи активності інструментів",
+    toolCallId: "Виклик інструмента",
+    runId: "Запустити",
+    session: "Сеанс",
+    outputTruncated: "Попередній перегляд відредаговано та обрізано.",
+    noOutputPreview: "Попередній перегляд виводу недоступний.",
+    status: {
+      running: "Запущено",
+      done: "Готово",
+      error: "Помилка",
+    },
+    duration: {
+      ms: "{count} мс",
+      seconds: "{count} с",
+      minutes: "{minutes}хв {seconds}с",
+    },
   },
   overview: {
     access: {
@@ -1087,6 +1127,11 @@ export const uk: TranslationMap = {
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
+    },
+    queue: {
+      retry: "Retry",
+      retrySend: "Retry send",
+      retryQueuedMessage: "Retry queued message",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

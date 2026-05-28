@@ -90,6 +90,7 @@ const respawnSignals =
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 const respawnSignalExitGraceMs = 1_000;
 const respawnSignalForceKillGraceMs = 1_000;
+const respawnSignalHardExitGraceMs = 1_000;
 
 const runRespawnedChild = (command, args, env) => {
   const child = spawn(command, args, {
@@ -103,6 +104,7 @@ const runRespawnedChild = (command, args, env) => {
   // a child that ignores SIGTERM cannot keep the launcher alive indefinitely.
   let signalExitTimer = null;
   let signalForceKillTimer = null;
+  let signalHardExitTimer = null;
   const detach = () => {
     for (const [signal, listener] of listeners) {
       process.off(signal, listener);
@@ -115,6 +117,10 @@ const runRespawnedChild = (command, args, env) => {
     if (signalForceKillTimer) {
       clearTimeout(signalForceKillTimer);
       signalForceKillTimer = null;
+    }
+    if (signalHardExitTimer) {
+      clearTimeout(signalHardExitTimer);
+      signalHardExitTimer = null;
     }
   };
   const forceKillChild = () => {
@@ -132,7 +138,10 @@ const runRespawnedChild = (command, args, env) => {
     }
     signalForceKillTimer = setTimeout(() => {
       forceKillChild();
-      process.exit(1);
+      signalHardExitTimer = setTimeout(() => {
+        process.exit(1);
+      }, respawnSignalHardExitGraceMs);
+      signalHardExitTimer.unref?.();
     }, respawnSignalForceKillGraceMs);
     signalForceKillTimer.unref?.();
   };
@@ -247,25 +256,37 @@ if (
   }
 }
 
+const getErrorMessage = (err) =>
+  err && typeof err === "object" && "message" in err && typeof err.message === "string"
+    ? err.message
+    : "";
+
 const isModuleNotFoundError = (err) =>
   err && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND";
 
 const isDirectModuleNotFoundError = (err, specifier) => {
-  if (!isModuleNotFoundError(err)) {
-    return false;
-  }
+  const message = getErrorMessage(err);
+  const bunSpecifierMiss =
+    message.includes(`Cannot find module '${specifier}'`) ||
+    message.includes(`Cannot find module "${specifier}"`);
+  const launcherPath = fileURLToPath(import.meta.url);
+  const bunLauncherImporterMiss =
+    message.includes(` from '${launcherPath}'`) || message.includes(` from "${launcherPath}"`);
 
   const expectedUrl = new URL(specifier, import.meta.url);
-  if ("url" in err && err.url === expectedUrl.href) {
-    return true;
+  const expectedPath = fileURLToPath(expectedUrl);
+  const nodePathMiss =
+    message.includes(`Cannot find module '${expectedPath}'`) ||
+    message.includes(`Cannot find module "${expectedPath}"`);
+
+  if (isModuleNotFoundError(err)) {
+    if (err && typeof err === "object" && "url" in err && err.url === expectedUrl.href) {
+      return true;
+    }
+    return nodePathMiss || (bunSpecifierMiss && bunLauncherImporterMiss);
   }
 
-  const message = "message" in err && typeof err.message === "string" ? err.message : "";
-  const expectedPath = fileURLToPath(expectedUrl);
-  return (
-    message.includes(`Cannot find module '${expectedPath}'`) ||
-    message.includes(`Cannot find module "${expectedPath}"`)
-  );
+  return bunSpecifierMiss && bunLauncherImporterMiss;
 };
 
 const installProcessWarningFilter = async () => {

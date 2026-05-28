@@ -162,7 +162,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     If you want extra headroom (logs, media, other services), **2GB is recommended**, but it's
     not a hard minimum.
 
-    Tip: a small Pi/VPS can host the Gateway, and you can pair **nodes** on your laptop/phone for
+    Tip: a small Raspberry Pi/VPS can host the Gateway, and you can pair **nodes** on your laptop/phone for
     local screen/camera/canvas or command execution. See [Nodes](/nodes).
 
   </Accordion>
@@ -578,9 +578,10 @@ and troubleshooting see the main [FAQ](/help/faq).
 
     If the message is specifically:
     `Extra usage is required for long context requests`, the request is trying to use
-    Anthropic's 1M context beta (`context1m: true`). That only works when your
-    credential is eligible for long-context billing (API key billing or the
-    OpenClaw Claude-login path with Extra Usage enabled).
+    Anthropic's 1M context window (a GA-capable 1M Claude 4.x model or legacy
+    `context1m: true` config). That only works when your credential is eligible
+    for long-context billing (API key billing or the OpenClaw Claude-login path
+    with Extra Usage enabled).
 
     Tip: set a **fallback model** so OpenClaw can keep replying while a provider is rate-limited.
     See [Models](/cli/models), [OAuth](/concepts/oauth), and
@@ -822,7 +823,7 @@ and troubleshooting see the main [FAQ](/help/faq).
   <Accordion title="How important is it to run OpenClaw on a dedicated machine?">
     Not required, but **recommended for reliability and isolation**.
 
-    - **Dedicated host (VPS/Mac mini/Pi):** always-on, fewer sleep/reboot interruptions, cleaner permissions, easier to keep running.
+    - **Dedicated host (VPS/Mac mini/Raspberry Pi):** always-on, fewer sleep/reboot interruptions, cleaner permissions, easier to keep running.
     - **Shared laptop/desktop:** totally fine for testing and active use, but expect pauses when the machine sleeps or updates.
 
     If you want the best of both worlds, keep the Gateway on a dedicated host and pair your laptop as a **node** for local screen/camera/exec tools. See [Nodes](/nodes).

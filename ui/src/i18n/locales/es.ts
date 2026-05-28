@@ -362,6 +362,8 @@ export const es: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "La política de aprobación efectiva requiere aprobación cada vez, por lo que Permitir siempre no está disponible.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -393,6 +395,7 @@ export const es: TranslationMap = {
   },
   tabs: {
     agents: "Agentes",
+    activity: "Actividad",
     overview: "Resumen",
     channels: "Canales",
     instances: "Instancias",
@@ -414,6 +417,7 @@ export const es: TranslationMap = {
   },
   subtitles: {
     agents: "Gestionar espacios de trabajo, herramientas e identidades de agentes.",
+    activity: "Resúmenes de actividad de herramientas locales del navegador.",
     overview: "Estado de la puerta de enlace, puntos de entrada y lectura rápida de salud.",
     channels: "Gestionar canales y ajustes.",
     instances: "Balizas de presencia de clientes y nodos conectados.",
@@ -432,6 +436,42 @@ export const es: TranslationMap = {
     debug: "Instantáneas de la puerta de enlace, eventos y llamadas RPC manuales.",
     logs: "Seguimiento en vivo de los registros de la puerta de enlace.",
     dreams: "Consolidación de la memoria durante el sueño.",
+  },
+  activity: {
+    title: "Actividad",
+    subtitle: "Actividad efímera de herramientas derivada de eventos de sesión en vivo.",
+    visibleCount: "{visible} de {total}",
+    filtersLabel: "Filtros de actividad",
+    search: "Buscar",
+    searchPlaceholder: "Filtrar por herramienta, resumen, ejecución, sesión",
+    toolFilter: "Herramienta",
+    allTools: "Todas las herramientas",
+    statusFilters: "Filtros de estado",
+    autoFollow: "Seguimiento automático",
+    expandAll: "Expandir todo",
+    collapseAll: "Contraer todo",
+    clear: "Borrar",
+    empty: "Aún no hay actividad de herramientas.",
+    emptyFiltered: "Ninguna actividad coincide con estos filtros.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argumento oculto",
+    argumentsHidden: "{count} argumentos ocultos",
+    streamLabel: "Entradas de actividad de herramientas",
+    toolCallId: "Llamada de herramienta",
+    runId: "Ejecución",
+    session: "Sesión",
+    outputTruncated: "Vista previa censurada y truncada.",
+    noOutputPreview: "Sin vista previa de salida.",
+    status: {
+      running: "En ejecución",
+      done: "Completado",
+      error: "Error",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -1090,6 +1130,11 @@ export const es: TranslationMap = {
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
+    },
+    queue: {
+      retry: "Retry",
+      retrySend: "Retry send",
+      retryQueuedMessage: "Retry queued message",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

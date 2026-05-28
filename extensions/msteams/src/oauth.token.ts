@@ -7,6 +7,7 @@ import {
   buildMSTeamsTokenEndpoint,
   type MSTeamsDelegatedTokens,
 } from "./oauth.shared.js";
+import { createMSTeamsHttpError } from "./http-error.js";
 
 /** Five-minute buffer subtracted from token expiry to avoid edge-case clock drift. */
 const EXPIRY_BUFFER_MS = 5 * 60 * 1000;
@@ -63,8 +64,7 @@ async function fetchMSTeamsTokens(params: {
 
   try {
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`MSTeams ${params.failureLabel} failed (${response.status}): ${errorText}`);
+      throw await createMSTeamsHttpError(response, `MSTeams ${params.failureLabel} failed`);
     }
     return await readProviderJsonResponse<MSTeamsTokenResponse>(
       response,

@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMSTeamsStorePath } from "./storage.js";
 import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
@@ -68,10 +73,7 @@ function extractSelections(value: unknown): string[] {
     return [];
   }
   if (normalized.includes(",")) {
-    return normalized
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(normalized.split(","));
   }
   return [normalized];
 }
@@ -251,12 +253,15 @@ function pruneToLimit(polls: Record<string, MSTeamsPoll>) {
 export function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[]) {
   const maxSelections = Math.max(1, poll.maxSelections);
   const mapped = selections
-    .map((entry) => Number.parseInt(entry, 10))
-    .filter((value) => Number.isFinite(value))
+    .map((entry) => {
+      const trimmed = entry.trim();
+      return /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    })
+    .filter((value) => Number.isSafeInteger(value))
     .filter((value) => value >= 0 && value < poll.options.length)
     .map((value) => String(value));
   const limited = maxSelections > 1 ? mapped.slice(0, maxSelections) : mapped.slice(0, 1);
-  return Array.from(new Set(limited));
+  return uniqueStrings(limited);
 }
 
 export function createMSTeamsPollStoreFs(params?: MSTeamsPollStoreFsOptions): MSTeamsPollStore {

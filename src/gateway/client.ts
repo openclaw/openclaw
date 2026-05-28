@@ -368,10 +368,13 @@ export class GatewayClient {
         return undefined;
       };
     }
-    const unregisterGatewayLoopbackBypass = registerManagedProxyGatewayLoopbackBypass(url);
     let ws: WebSocket;
+    const unregisterGatewayLoopbackBypass = registerManagedProxyGatewayLoopbackBypass(url);
     try {
       ws = new WebSocket(url, wsOptions as ClientOptions);
+    } catch (error) {
+      this.notifyConnectError(error instanceof Error ? error : new Error(String(error)));
+      return;
     } finally {
       unregisterGatewayLoopbackBypass?.();
     }
@@ -860,7 +863,8 @@ export class GatewayClient {
       detailCode === ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH ||
       detailCode === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
       detailCode === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
-      detailCode === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED
+      detailCode === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED ||
+      detailCode === ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH
     ) {
       return true;
     }

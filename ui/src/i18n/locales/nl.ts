@@ -364,6 +364,8 @@ export const nl: TranslationMap = {
     pending: "{count} in behandeling",
     allowOnce: "Eenmalig toestaan",
     alwaysAllow: "Altijd toestaan",
+    allowAlwaysUnavailable:
+      "Het effectieve goedkeuringsbeleid vereist elke keer goedkeuring, dus Altijd toestaan is niet beschikbaar.",
     deny: "Weigeren",
     labels: {
       host: "Host",
@@ -395,6 +397,7 @@ export const nl: TranslationMap = {
   },
   tabs: {
     agents: "Agents",
+    activity: "Activiteit",
     overview: "Overzicht",
     channels: "Kanalen",
     instances: "Instanties",
@@ -416,6 +419,7 @@ export const nl: TranslationMap = {
   },
   subtitles: {
     agents: "Werkruimten, tools, identiteiten.",
+    activity: "Browserlokale samenvattingen van toolactiviteit.",
     overview: "Status, toegangspunten, gezondheid.",
     channels: "Kanalen en instellingen.",
     instances: "Verbonden clients en nodes.",
@@ -434,6 +438,42 @@ export const nl: TranslationMap = {
     debug: "Momentopnamen, gebeurtenissen, RPC.",
     logs: "Live Gateway-logs.",
     dreams: "Geheugendromen, consolidatie en reflectie.",
+  },
+  activity: {
+    title: "Activiteit",
+    subtitle: "Tijdelijke toolactiviteit afgeleid van live sessiegebeurtenissen.",
+    visibleCount: "{visible} van {total}",
+    filtersLabel: "Activiteitsfilters",
+    search: "Zoeken",
+    searchPlaceholder: "Filteren op tool, samenvatting, uitvoering, sessie",
+    toolFilter: "Tool",
+    allTools: "Alle tools",
+    statusFilters: "Statusfilters",
+    autoFollow: "Automatisch volgen",
+    expandAll: "Alles uitvouwen",
+    collapseAll: "Alles samenvouwen",
+    clear: "Wissen",
+    empty: "Nog geen toolactiviteit.",
+    emptyFiltered: "Geen activiteit komt overeen met deze filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument verborgen",
+    argumentsHidden: "{count} argumenten verborgen",
+    streamLabel: "Toolactiviteitsvermeldingen",
+    toolCallId: "Toolaanroep",
+    runId: "Voer uit",
+    session: "Sessie",
+    outputTruncated: "Voorvertoning geredigeerd en afgekapt.",
+    noOutputPreview: "Geen uitvoervoorbeeld.",
+    status: {
+      running: "Actief",
+      done: "Voltooid",
+      error: "Fout",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -1089,6 +1129,11 @@ export const nl: TranslationMap = {
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
+    },
+    queue: {
+      retry: "Retry",
+      retrySend: "Retry send",
+      retryQueuedMessage: "Retry queued message",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

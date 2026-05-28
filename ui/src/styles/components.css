@@ -1670,8 +1670,12 @@
 :root[data-theme-mode="light"] .field input,
 :root[data-theme-mode="light"] .field textarea,
 :root[data-theme-mode="light"] .field select {
-  background: var(--card);
+  background-color: var(--card);
   border-color: var(--input);
+}
+
+:root[data-theme-mode="light"] .field select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 }
 
 :root[data-theme-mode="light"] .btn {
@@ -3633,10 +3637,26 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--card);
-  max-height: calc(100vh - 280px); /* top nav + filter bar + page padding + breathing room */
+  /* Default sizing for non-fill-height hosts; .card--fill-height overrides below. */
+  max-height: calc(100vh - 280px);
   min-height: 200px;
   overflow: auto;
   container-type: inline-size;
+}
+
+/* Fill-height card: flex column that consumes the remaining settings-workspace
+   body height. `.content--logs` owns the ancestor chain. */
+.card--fill-height {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.card--fill-height .log-stream {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
 }
 
 .log-row {
@@ -3812,6 +3832,13 @@ td.data-table-key-col {
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
+}
+
+.chat-queue__error {
+  margin-top: 4px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .chat-queue__remove {
@@ -4421,6 +4448,12 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
+.exec-approval-warning {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--warning, #b7791f);
+}
+
 .exec-approval-actions {
   margin-top: 16px;
   display: flex;
@@ -4486,6 +4519,7 @@ td.data-table-key-col {
 
 :root[data-theme-mode="light"] .agents-select {
   background-color: white;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 }
 
 .agents-select:focus {

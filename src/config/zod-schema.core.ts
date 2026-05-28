@@ -307,6 +307,22 @@ const ModelAgentRuntimePolicySchema = z
   .strict()
   .optional();
 
+const ModelImageInputSchema = z
+  .object({
+    maxBytes: z.number().int().positive().optional(),
+    maxPixels: z.number().int().positive().optional(),
+    maxSidePx: z.number().int().positive().optional(),
+    preferredSidePx: z.number().int().positive().optional(),
+    tokenMode: z.union([z.literal("tile"), z.literal("detail"), z.literal("provider")]).optional(),
+  })
+  .strict();
+
+const ModelMediaInputSchema = z
+  .object({
+    image: ModelImageInputSchema.optional(),
+  })
+  .strict();
+
 const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -348,6 +364,7 @@ const ModelDefinitionSchema = z
     agentRuntime: ModelAgentRuntimePolicySchema,
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
+    mediaInput: ModelMediaInputSchema.optional(),
     metadataSource: z.literal("models-add").optional(),
   })
   .strict();
@@ -445,6 +462,7 @@ const ModelProviderSchema = z
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    region: z.string().min(1).optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     agentRuntime: ModelAgentRuntimePolicySchema,

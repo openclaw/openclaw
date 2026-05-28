@@ -364,6 +364,8 @@ export const it: TranslationMap = {
     pending: "{count} in sospeso",
     allowOnce: "Consenti una volta",
     alwaysAllow: "Consenti sempre",
+    allowAlwaysUnavailable:
+      "Il criterio di approvazione effettivo richiede l’approvazione ogni volta, quindi Consenti sempre non è disponibile.",
     deny: "Nega",
     labels: {
       host: "Host",
@@ -395,6 +397,7 @@ export const it: TranslationMap = {
   },
   tabs: {
     agents: "Agenti",
+    activity: "Attività",
     overview: "Panoramica",
     channels: "Canali",
     instances: "Istanze",
@@ -416,6 +419,7 @@ export const it: TranslationMap = {
   },
   subtitles: {
     agents: "Spazi di lavoro, strumenti, identità.",
+    activity: "Riepiloghi dell'attività degli strumenti locali al browser.",
     overview: "Stato, punti di ingresso, integrità.",
     channels: "Canali e impostazioni.",
     instances: "Client e nodi connessi.",
@@ -434,6 +438,42 @@ export const it: TranslationMap = {
     debug: "Snapshot, eventi, RPC.",
     logs: "Log gateway live.",
     dreams: "Sogni della memoria, consolidamento e riflessione.",
+  },
+  activity: {
+    title: "Attività",
+    subtitle: "Attività effimera degli strumenti derivata dagli eventi della sessione live.",
+    visibleCount: "{visible} di {total}",
+    filtersLabel: "Filtri attività",
+    search: "Cerca",
+    searchPlaceholder: "Filtra per strumento, riepilogo, esecuzione, sessione",
+    toolFilter: "Strumento",
+    allTools: "Tutti gli strumenti",
+    statusFilters: "Filtri di stato",
+    autoFollow: "Segui automaticamente",
+    expandAll: "Espandi tutto",
+    collapseAll: "Comprimi tutto",
+    clear: "Cancella",
+    empty: "Nessuna attività degli strumenti ancora.",
+    emptyFiltered: "Nessuna attività corrisponde a questi filtri.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argomento nascosto",
+    argumentsHidden: "{count} argomenti nascosti",
+    streamLabel: "Voci dell'attività degli strumenti",
+    toolCallId: "Chiamata strumento",
+    runId: "Esegui",
+    session: "Sessione",
+    outputTruncated: "Anteprima oscurata e troncata.",
+    noOutputPreview: "Nessuna anteprima dell'output.",
+    status: {
+      running: "In esecuzione",
+      done: "Completato",
+      error: "Errore",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -1091,6 +1131,11 @@ export const it: TranslationMap = {
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
+    },
+    queue: {
+      retry: "Retry",
+      retrySend: "Retry send",
+      retryQueuedMessage: "Retry queued message",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

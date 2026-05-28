@@ -233,6 +233,14 @@ export const discordChannelConfigUiHints = {
     label: "Discord Realtime Consult Policy",
     help: "Use always to strongly prefer the OpenClaw agent brain for substantive realtime turns. agent-proxy defaults to always.",
   },
+  "voice.realtime.requireWakeName": {
+    label: "Discord Realtime Require Wake Name",
+    help: "Require a configured wake name before OpenAI agent-proxy Discord realtime voice responds. If wakeNames is unset, the routed agent name is used, falling back to the agent id.",
+  },
+  "voice.realtime.wakeNames": {
+    label: "Discord Realtime Wake Names",
+    help: "One- or two-word activation names that allow OpenAI agent-proxy Discord realtime voice to respond when requireWakeName is enabled.",
+  },
   "voice.realtime.bootstrapContextFiles": {
     label: "Discord Realtime Bootstrap Context Files",
     help: "Agent profile bootstrap files included in realtime provider instructions for direct voice identity/persona grounding. Defaults to IDENTITY.md, USER.md, and SOUL.md; set [] to disable.",
@@ -276,7 +284,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.captureSilenceGraceMs": {
     label: "Discord Voice Capture Silence Grace (ms)",
-    help: "Silence window after Discord reports a speaker ended before OpenClaw finalizes the audio segment for transcription. Default: 2500.",
+    help: "Silence window after Discord reports a speaker ended before OpenClaw finalizes the audio segment for transcription. Default: 2000.",
   },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",

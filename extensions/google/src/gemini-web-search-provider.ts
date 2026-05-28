@@ -6,6 +6,7 @@ import {
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveGeminiApiKey,
   resolveGeminiBaseUrl,
@@ -66,10 +67,6 @@ function createGeminiToolDefinition(
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function resolveGoogleModelProviderConfig(
   config?: OpenClawConfig,
 ): Record<string, unknown> | undefined {
@@ -95,17 +92,25 @@ function withGoogleModelProviderFallbacks(
     return searchConfig;
   }
   const gemini = isRecord(searchConfig?.gemini) ? { ...searchConfig.gemini } : {};
-  const mergedSearchConfig = searchConfig ? { ...searchConfig } : {};
+  const mergedSearchConfig: Record<string, unknown> = searchConfig
+    ? Object.defineProperties({}, Object.getOwnPropertyDescriptors(searchConfig))
+    : {};
+  const geminiDescriptor = searchConfig
+    ? Object.getOwnPropertyDescriptor(searchConfig, "gemini")
+    : undefined;
   if (provider.apiKey !== undefined) {
     gemini.providerApiKey = provider.apiKey;
   }
   if (provider.baseUrl !== undefined) {
     gemini.providerBaseUrl = provider.baseUrl;
   }
-  return {
-    ...mergedSearchConfig,
-    gemini,
-  };
+  Object.defineProperty(mergedSearchConfig, "gemini", {
+    value: gemini,
+    enumerable: geminiDescriptor?.enumerable ?? false,
+    configurable: true,
+    writable: true,
+  });
+  return mergedSearchConfig;
 }
 
 export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
@@ -147,5 +152,6 @@ export const testing = {
   resolveGeminiApiKey,
   resolveGeminiBaseUrl,
   resolveGeminiModel,
+  withGoogleModelProviderFallbacks,
 } as const;
 export { testing as __testing };

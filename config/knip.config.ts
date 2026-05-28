@@ -10,6 +10,7 @@ const rootEntries = [
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  "src/agents/model-provider-auth.worker.ts!",
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
@@ -49,21 +50,18 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "lit",
   "linkedom",
   "openclaw",
-  "pdfjs-dist",
+  "clawpdf",
 ] as const;
 
 const rootBundledPluginRuntimeDependencies = [
   "@anthropic-ai/sdk",
   "@anthropic-ai/vertex-sdk",
-  "@aws-sdk/client-bedrock",
-  "@aws-sdk/client-bedrock-runtime",
-  "@aws-sdk/credential-provider-node",
-  "@aws/bedrock-token-generator",
   "@google/genai",
   "@grammyjs/runner",
   "@grammyjs/transformer-throttler",
   "@homebridge/ciao",
   "@mozilla/readability",
+  "@silvia-odwyer/photon-node",
   "@slack/bolt",
   "@slack/types",
   "@slack/web-api",
@@ -72,7 +70,7 @@ const rootBundledPluginRuntimeDependencies = [
   "minimatch",
   "node-edge-tts",
   "openshell",
-  "pdfjs-dist",
+  "clawpdf",
   "tokenjuice",
 ] as const;
 
@@ -128,7 +126,7 @@ const config = {
     "test/helpers/live-image-probe.ts",
     "src/secrets/credential-matrix.ts",
     "src/agents/claude-cli-runner.ts",
-    "src/agents/pi-auth-json.ts",
+    "src/agents/agent-auth-json.ts",
     "src/agents/tool-policy.conformance.ts",
     "src/auto-reply/reply/audio-tags.ts",
     "src/gateway/live-tool-probe-utils.ts",
@@ -164,6 +162,10 @@ const config = {
     },
     "packages/sdk": {
       entry: ["src/index.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/agent-core": {
+      entry: ["src/index.ts!", "src/*.ts!", "src/harness/**/*.ts!"],
       project: ["src/**/*.ts!"],
     },
     "packages/*": {

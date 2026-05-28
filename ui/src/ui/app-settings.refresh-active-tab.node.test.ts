@@ -121,6 +121,7 @@ vi.mock("./controllers/presence.ts", () => ({
 }));
 vi.mock("./controllers/sessions.ts", () => ({
   loadSessions: mocks.loadSessionsMock,
+  syncSelectedSessionMessageSubscription: vi.fn(),
 }));
 vi.mock("./controllers/skills.ts", () => ({
   loadSkills: mocks.loadSkillsMock,
@@ -327,6 +328,23 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadChannelsMock).toHaveBeenCalled();
     expect(mocks.loadSessionsMock).toHaveBeenCalled();
     expect(mocks.loadUsageMock).toHaveBeenCalled();
+  });
+
+  it("skips overview usage refresh if the user leaves while primary loaders run", async () => {
+    const host = createHost();
+    host.tab = "overview";
+    const channels = createDeferred();
+    mocks.loadChannelsMock.mockReturnValueOnce(channels.promise);
+
+    const refresh = refreshActiveTab(host as never);
+    await Promise.resolve();
+    host.tab = "sessions";
+    channels.resolve();
+
+    await refresh;
+
+    expect(mocks.loadUsageMock).not.toHaveBeenCalled();
+    expect(mocks.loadSkillsMock).toHaveBeenCalledOnce();
   });
 
   it("does not wait for config schema before resolving config tab refresh", async () => {

@@ -1,5 +1,5 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
-import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
+import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -294,6 +294,14 @@ export async function handleInlineActions(params: {
         model,
         senderId: command.senderId,
         currentChannelId: command.channelId,
+        skillCommand: {
+          name: skillInvocation.command.name,
+          skillName: skillInvocation.command.skillName,
+          ...(skillInvocation.command.skillSource
+            ? { skillSource: skillInvocation.command.skillSource }
+            : {}),
+          toolName: dispatch.toolName,
+        },
       });
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);

@@ -43,7 +43,7 @@ OpenClaw CI runs on every push to `main` and every pull request. The `preflight`
 
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Matrix jobs use `fail-fast: false`, and `build-artifacts` reports embedded channel, core-support-boundary, and gateway-watch failures directly instead of queuing tiny verifier jobs. The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs.
 
-The `ci-timings-summary` job uploads a compact `ci-timings-summary` artifact for each non-draft CI run. It records wall time, queue time, slowest jobs, and failed jobs for the current run, so CI health checks do not need to scrape the full Actions payload repeatedly.
+The `ci-timings-summary` job uploads a compact `ci-timings-summary` artifact for each non-draft CI run. It records wall time, queue time, slowest jobs, and failed jobs for the current run, so CI health checks do not need to scrape the full Actions payload repeatedly. The `build-artifacts` job also runs the blocking startup-memory smoke and uploads a `startup-memory` artifact with per-command RSS values for `--help`, `status --json`, and `gateway status`.
 
 ## Real behavior proof
 
@@ -127,10 +127,10 @@ gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 | `blacksmith-8vcpu-ubuntu-2404`   | Linux Node test shards, bundled plugin test shards, `check-additional-*` shards, `android`                                                                                                                             |
 | `blacksmith-16vcpu-ubuntu-2404`  | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                 |
 | `blacksmith-16vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                       |
-| `blacksmith-6vcpu-macos-latest`  | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-latest`                                                                                                                                                 |
-| `blacksmith-12vcpu-macos-latest` | `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-latest`                                                                                                                                                |
+| `blacksmith-6vcpu-macos-15`      | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                     |
+| `blacksmith-12vcpu-macos-26`     | `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                    |
 
-Canonical-repo CI keeps Blacksmith as the default runner path. During `preflight`, `scripts/ci-runner-labels.mjs` checks recent queued and in-progress Actions runs for queued Blacksmith jobs. If a specific Blacksmith label already has queued jobs, downstream jobs that would use that exact label fall back to the matching GitHub-hosted runner (`ubuntu-24.04`, `windows-2025`, or `macos-latest`) for that run only. Other Blacksmith sizes in the same OS family stay on their primary labels. If the API probe fails, no fallback is applied.
+Canonical-repo CI keeps Blacksmith as the default runner path. During `preflight`, `scripts/ci-runner-labels.mjs` checks recent queued and in-progress Actions runs for queued Blacksmith jobs. If a specific Blacksmith label already has queued jobs, downstream jobs that would use that exact label fall back to the matching GitHub-hosted runner (`ubuntu-24.04`, `windows-2025`, `macos-15`, or `macos-26`) for that run only. Other Blacksmith sizes in the same OS family stay on their primary labels. If the API probe fails, no fallback is applied.
 
 ## Local equivalents
 
@@ -157,6 +157,8 @@ node scripts/ci-run-timings.mjs --latest-main # ignore issue/comment noise and c
 node scripts/ci-run-timings.mjs --recent 10   # compare recent successful main CI runs
 pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json
 pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json
+pnpm test:startup:memory
+pnpm test:extensions:memory -- --json .artifacts/openclaw-performance/source/mock-provider/extension-memory.json
 pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.json --output .artifacts/kova/summary.md
 ```
 
@@ -178,7 +180,7 @@ The workflow installs OCM from a pinned release and Kova from `openclaw/Kova` at
 - `mock-deep-profile`: CPU/heap/trace profiling for startup, gateway, and agent-turn hotspots.
 - `live-openai-candidate`: a real OpenAI `openai/gpt-5.5` agent turn, skipped when `OPENAI_API_KEY` is unavailable.
 
-The mock-provider lane also runs OpenClaw-native source probes after the Kova pass: gateway boot timing and memory across default, hook, and 50-plugin startup cases; repeated mock-OpenAI `channel-chat-baseline` hello loops; and CLI startup commands against the booted gateway. The source probe Markdown summary lives at `source/index.md` in the report bundle, with raw JSON beside it.
+The mock-provider lane also runs OpenClaw-native source probes after the Kova pass: gateway boot timing and memory across default, hook, and 50-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, and CLI startup commands against the booted gateway. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The source probe Markdown summary lives at `source/index.md` in the report bundle, with raw JSON beside it.
 
 Every lane uploads GitHub artifacts. When `CLAWGRIT_REPORTS_TOKEN` is configured, the workflow also commits `report.json`, `report.md`, bundles, `index.md`, and source-probe artifacts into `openclaw/clawgrit-reports` under `openclaw-performance/<tested-ref>/<run-id>-<attempt>/<lane>/`. The current tested-ref pointer is written as `openclaw-performance/<tested-ref>/latest-<lane>.json`.
 
@@ -278,7 +280,8 @@ Use `Package Acceptance` when the question is "does this installable OpenClaw pa
 
 - `source=npm` accepts only `openclaw@beta`, `openclaw@latest`, or an exact OpenClaw release version such as `openclaw@2026.4.27-beta.2`. Use this for published prerelease/stable acceptance.
 - `source=ref` packs a trusted `package_ref` branch, tag, or full commit SHA. The resolver fetches OpenClaw branches/tags, verifies the selected commit is reachable from repository branch history or a release tag, installs deps in a detached worktree, and packs it with `scripts/package-openclaw-for-docker.mjs`.
-- `source=url` downloads an HTTPS `.tgz`; `package_sha256` is required.
+- `source=url` downloads a public HTTPS `.tgz`; `package_sha256` is required. This path rejects URL credentials, non-default HTTPS ports, private/internal/special-use hostnames or resolved IPs, and redirects outside the same public safety policy.
+- `source=trusted-url` downloads an HTTPS `.tgz` from a named trusted-source policy in `.github/package-trusted-sources.json`; `package_sha256` and `trusted_source_id` are required. Use this only for maintainer-owned enterprise mirrors or private package repositories that need configured hosts, ports, path prefixes, redirect hosts, or private-network resolution. If the policy declares bearer auth, the workflow uses the fixed `OPENCLAW_TRUSTED_PACKAGE_TOKEN` secret; URL-embedded credentials are still rejected.
 - `source=artifact` downloads one `.tgz` from `artifact_run_id` and `artifact_name`; `package_sha256` is optional but should be supplied for externally shared artifacts.
 
 Keep `workflow_ref` and `package_ref` separate. `workflow_ref` is the trusted workflow/harness code that runs the test. `package_ref` is the source commit that gets packed when `source=ref`. This lets the current test harness validate older trusted source commits without running old workflow logic.
@@ -341,6 +344,16 @@ gh workflow run package-acceptance.yml \
   -f package_sha256=<64-char-sha256> \
   -f suite_profile=smoke
 
+# Validate a tarball from a named trusted private mirror policy.
+gh workflow run package-acceptance.yml \
+  --ref main \
+  -f workflow_ref=main \
+  -f source=trusted-url \
+  -f trusted_source_id=enterprise-artifactory \
+  -f package_url=https://packages.example.internal:8443/artifactory/openclaw/openclaw-current.tgz \
+  -f package_sha256=<64-char-sha256> \
+  -f suite_profile=smoke
+
 # Reuse a tarball uploaded by another Actions run.
 gh workflow run package-acceptance.yml \
   --ref main \
@@ -363,7 +376,7 @@ The separate `Install Smoke` workflow reuses the same scope script through its o
 
 `main` pushes (including merge commits) do not force the full path; when changed-scope logic would request full coverage on a push, the workflow keeps the fast Docker smoke and leaves the full install smoke to nightly or release validation.
 
-The slow Bun global install image-provider smoke is separately gated by `run_bun_global_install_smoke`. It runs on the nightly schedule and from the release checks workflow, and manual `Install Smoke` dispatches can opt into it, but pull requests and `main` pushes do not. QR and installer Docker tests keep their own install-focused Dockerfiles.
+The slow Bun global install image-provider smoke is separately gated by `run_bun_global_install_smoke`. It runs on the nightly schedule and from the release checks workflow, and manual `Install Smoke` dispatches can opt into it, but pull requests and `main` pushes do not. Normal PR CI still runs the fast Bun launcher regression lane for Node-relevant changes. QR and installer Docker tests keep their own install-focused Dockerfiles.
 
 ## Local Docker E2E
 
@@ -492,7 +505,7 @@ The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping 
 
 ### Test Performance Agent
 
-The `Test Performance Agent` workflow is an event-driven Codex maintenance lane for slow tests. It has no pure schedule: a successful non-bot push CI run on `main` can trigger it, but it skips if another workflow-run invocation already ran or is running that UTC day. Manual dispatch bypasses that daily activity gate. The lane builds a full-suite grouped Vitest performance report, lets Codex make only small coverage-preserving test performance fixes instead of broad refactors, then reruns the full-suite report and rejects changes that reduce the passing baseline test count. If the baseline has failing tests, Codex may fix only obvious failures and the after-agent full-suite report must pass before anything is committed. When `main` advances before the bot push lands, the lane rebases the validated patch, reruns `pnpm check:changed`, and retries the push; conflicting stale patches are skipped. It uses GitHub-hosted Ubuntu so the Codex action can keep the same drop-sudo safety posture as the docs agent.
+The `Test Performance Agent` workflow is an event-driven Codex maintenance lane for slow tests. It has no pure schedule: a successful non-bot push CI run on `main` can trigger it, but it skips if another workflow-run invocation already ran or is running that UTC day. Manual dispatch bypasses that daily activity gate. The lane builds a full-suite grouped Vitest performance report, lets Codex make only small coverage-preserving test performance fixes instead of broad refactors, then reruns the full-suite report and rejects changes that reduce the passing baseline test count. The grouped report records per-config wall time and max RSS on Linux and macOS, so the before/after comparison surfaces test memory deltas beside duration deltas. If the baseline has failing tests, Codex may fix only obvious failures and the after-agent full-suite report must pass before anything is committed. When `main` advances before the bot push lands, the lane rebases the validated patch, reruns `pnpm check:changed`, and retries the push; conflicting stale patches are skipped. It uses GitHub-hosted Ubuntu so the Codex action can keep the same drop-sudo safety posture as the docs agent.
 
 ### Duplicate PRs After Merge
 
@@ -563,7 +576,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm check:changed"
+  "corepack pnpm check:changed"
 ```
 
 Focused test rerun:
@@ -578,7 +591,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test <path-or-filter>"
+  "corepack pnpm test <path-or-filter>"
 ```
 
 Full suite:
@@ -593,7 +606,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test"
+  "corepack pnpm test"
 ```
 
 Read the final JSON summary. The useful fields are `provider`, `leaseId`, `syncDelegated`, `exitCode`, `commandMs`, and `totalMs`. One-shot Blacksmith-backed Crabbox runs should stop the Testbox automatically; if a run is interrupted or cleanup is unclear, inspect live boxes and stop only the boxes you created:
@@ -628,7 +641,7 @@ Escalate to owned Crabbox capacity only when Blacksmith is down, quota-limited, 
 CRABBOX_CAPACITY_REGIONS=eu-west-1,eu-west-2,eu-central-1,us-east-1,us-west-2 \
   pnpm crabbox:warmup -- --provider aws --class standard --market on-demand --idle-timeout 90m
 pnpm crabbox:hydrate -- --id <cbx_id-or-slug>
-pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm check:changed"
+pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "pnpm check:changed"
 pnpm crabbox:stop -- <cbx_id-or-slug>
 ```
 

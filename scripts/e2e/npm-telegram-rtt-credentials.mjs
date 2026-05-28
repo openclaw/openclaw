@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 
 const DEFAULT_ENDPOINT_PREFIX = "/qa-credentials/v1";
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 90_000;
+const DEFAULT_HTTP_BODY_MAX_BYTES = 1024 * 1024;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_LEASE_TTL_MS = 20 * 60 * 1_000;
@@ -55,6 +56,10 @@ class BrokerError extends Error {
     this.code = options.code;
     this.retryAfterMs = options.retryAfterMs;
   }
+}
+
+function taggedError(message, code) {
+  return Object.assign(new Error(message), { code });
 }
 
 function parsePositiveInteger(value, fallback, label) {
@@ -136,6 +141,11 @@ function resolveConfig() {
       "OPENCLAW_QA_CREDENTIAL_HEARTBEAT_INTERVAL_MS",
     ),
     heartbeatUrl: joinEndpoint("heartbeat"),
+    httpBodyMaxBytes: parsePositiveInteger(
+      process.env.OPENCLAW_QA_CREDENTIAL_HTTP_MAX_BODY_BYTES,
+      DEFAULT_HTTP_BODY_MAX_BYTES,
+      "OPENCLAW_QA_CREDENTIAL_HTTP_MAX_BODY_BYTES",
+    ),
     httpTimeoutMs: parsePositiveInteger(
       process.env.OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS,
       DEFAULT_HTTP_TIMEOUT_MS,
@@ -155,25 +165,84 @@ function resolveConfig() {
   };
 }
 
+async function readBoundedResponseText(response, label, byteLimit, timeoutPromise) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    const parsedLength = Number(contentLength);
+    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
+      await response.body?.cancel().catch(() => {});
+      throw taggedError(`${label} response body exceeded ${byteLimit} bytes`, "ETOOBIG");
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteCount = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
+      if (done) {
+        return text + decoder.decode();
+      }
+      byteCount += value.byteLength;
+      if (byteCount > byteLimit) {
+        await reader.cancel().catch(() => {});
+        throw taggedError(`${label} response body exceeded ${byteLimit} bytes`, "ETOOBIG");
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseBrokerPayload(rawPayload, response) {
+  if (!rawPayload.trim()) {
+    return response.ok ? { status: "ok" } : {};
+  }
+  try {
+    return JSON.parse(rawPayload);
+  } catch (error) {
+    throw new Error("Convex credential broker returned invalid JSON.", { cause: error });
+  }
+}
+
 async function postBroker(params) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), params.timeoutMs);
+  const timeoutMs = Math.max(1, params.timeoutMs);
+  const timeoutError = taggedError(`${params.label} timed out after ${timeoutMs}ms`, "ETIMEDOUT");
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    timeout.unref?.();
+  });
   try {
-    const response = await fetch(params.url, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${params.authToken}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(params.body),
-      signal: controller.signal,
-    });
-    const rawPayload = await response.text();
-    const payload = rawPayload.trim()
-      ? JSON.parse(rawPayload)
-      : response.ok
-        ? { status: "ok" }
-        : {};
+    const response = await Promise.race([
+      fetch(params.url, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${params.authToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(params.body),
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    const rawPayload = await readBoundedResponseText(
+      response,
+      params.label,
+      params.bodyMaxBytes,
+      timeoutPromise,
+    );
+    const payload = parseBrokerPayload(rawPayload, response);
     if (!response.ok || payload?.status === "error") {
       const message =
         typeof payload?.message === "string" && payload.message.trim()
@@ -233,6 +302,8 @@ async function resolveCredentialPayload(config, acquired) {
   for (let index = 0; index < marker.chunkCount; index += 1) {
     const chunk = await postBroker({
       authToken: config.authToken,
+      bodyMaxBytes: config.httpBodyMaxBytes,
+      label: "credential broker payload-chunk",
       timeoutMs: config.httpTimeoutMs,
       url: config.payloadChunkUrl,
       body: {
@@ -316,6 +387,8 @@ async function acquireWithRetry(config) {
     try {
       return await postBroker({
         authToken: config.authToken,
+        bodyMaxBytes: config.httpBodyMaxBytes,
+        label: "credential broker acquire",
         timeoutMs: config.httpTimeoutMs,
         url: config.acquireUrl,
         body: {
@@ -346,6 +419,8 @@ async function acquireWithRetry(config) {
 async function releaseLease(config, lease) {
   await postBroker({
     authToken: config.authToken,
+    bodyMaxBytes: config.httpBodyMaxBytes,
+    label: "credential broker release",
     timeoutMs: config.httpTimeoutMs,
     url: config.releaseUrl,
     body: {
@@ -373,6 +448,8 @@ async function heartbeat(opts) {
     const lease = await readLease(leaseFile);
     await postBroker({
       authToken: config.authToken,
+      bodyMaxBytes: config.httpBodyMaxBytes,
+      label: "credential broker heartbeat",
       timeoutMs: config.httpTimeoutMs,
       url: config.heartbeatUrl,
       body: {

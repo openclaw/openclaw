@@ -1,4 +1,4 @@
-import { isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
+import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -22,7 +22,7 @@ type EventHandlerChatLog = {
 };
 
 type EventHandlerTui = {
-  requestRender: () => void;
+  requestRender: (force?: boolean) => void;
 };
 
 type EventHandlerBtwPresenter = {
@@ -52,7 +52,7 @@ type EventHandlerContext = {
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
 const STREAMING_WATCHDOG_USER_MESSAGE =
-  "This response is taking longer than expected. Send another message to continue.";
+  "This response is taking longer than expected. Still waiting for the current run.";
 
 export function createEventHandlers(context: EventHandlerContext) {
   const {
@@ -72,8 +72,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearLocalBtwRunIds,
     localMode,
   } = context;
-  const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
+  const finalizedRuns = new Map<string, number>();
+  const finalizedRunsWithDisplay = new Map<string, number>();
   const postFinalizingRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
@@ -123,17 +124,16 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       streamingWatchdogRunId = null;
-      state.activeChatRunId = null;
-      state.activityStatus = "idle";
-      setActivityStatus("idle");
       if (reconnectPendingRunId === runId) {
         reconnectPendingRunId = null;
+        state.activeChatRunId = null;
+        state.activityStatus = "idle";
+        setActivityStatus("idle");
         pendingHistoryRefresh = false;
         void loadHistory?.();
         tui.requestRender();
         return;
       }
-      flushPendingHistoryRefreshIfIdle();
       chatLog.addPendingSystem(runId, STREAMING_WATCHDOG_USER_MESSAGE);
       tui.requestRender();
     }, streamingWatchdogMs);
@@ -172,6 +172,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     lastSessionKey = state.currentSessionKey;
     finalizedRuns.clear();
+    finalizedRunsWithDisplay.clear();
     sessionRuns.clear();
     postFinalizingRuns.clear();
     streamAssembler = new TuiStreamAssembler();
@@ -186,10 +187,17 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const resolveAuthErrorHint = (errorMessage: string): string | undefined => {
-    if (!localMode || !isAuthErrorMessage(errorMessage)) {
+    if (!localMode) {
       return undefined;
     }
     const provider = state.sessionInfo.modelProvider?.trim();
+    const failoverReason = classifyFailoverReason(errorMessage, { provider });
+    if (failoverReason === "billing" || failoverReason === "rate_limit") {
+      return undefined;
+    }
+    if (!isAuthErrorMessage(errorMessage)) {
+      return undefined;
+    }
     return provider
       ? `auth or provider access failed for ${provider}. Run /auth ${provider} to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.`
       : "auth or provider access failed for the current provider. Run /auth to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.";
@@ -230,11 +238,15 @@ export function createEventHandlers(context: EventHandlerContext) {
     pruneRunMap(sessionRuns);
   };
 
-  const noteFinalizedRun = (runId: string) => {
+  const noteFinalizedRun = (runId: string, opts?: { displayedFinal?: boolean }) => {
     finalizedRuns.set(runId, Date.now());
+    if (opts?.displayedFinal === true) {
+      finalizedRunsWithDisplay.set(runId, Date.now());
+    }
     sessionRuns.delete(runId);
     streamAssembler.drop(runId);
     pruneRunMap(finalizedRuns);
+    pruneRunMap(finalizedRunsWithDisplay);
   };
 
   const notePostFinalizingRun = (runId: string) => {
@@ -287,8 +299,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     runId: string;
     wasActiveRun: boolean;
     status: "idle" | "error";
+    displayedFinal?: boolean;
   }) => {
-    noteFinalizedRun(params.runId);
+    noteFinalizedRun(params.runId, { displayedFinal: params.displayedFinal });
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
@@ -356,6 +369,45 @@ export function createEventHandlers(context: EventHandlerContext) {
     void loadHistory?.();
   };
 
+  const messageHasDisplayableNonTextContent = (message: unknown): boolean => {
+    if (!message || typeof message !== "object") {
+      return false;
+    }
+    const record = message as Record<string, unknown>;
+    if (typeof record.mediaUrl === "string" && record.mediaUrl.trim()) {
+      return true;
+    }
+    if (
+      Array.isArray(record.mediaUrls) &&
+      record.mediaUrls.some((media) => typeof media === "string" && media.trim())
+    ) {
+      return true;
+    }
+    if (!Array.isArray(record.content)) {
+      return false;
+    }
+    return record.content.some((block) => {
+      if (!block || typeof block !== "object") {
+        return false;
+      }
+      const type = (block as Record<string, unknown>).type;
+      return typeof type === "string" && type !== "text" && type !== "thinking";
+    });
+  };
+
+  const hasDisplayableFinalEvent = (evt: ChatEvent): boolean => {
+    if (typeof evt.errorMessage === "string" && evt.errorMessage.trim()) {
+      return true;
+    }
+    if (!evt.message) {
+      return false;
+    }
+    if (extractTextFromMessage(evt.message, { includeThinking: state.showThinking }).trim()) {
+      return true;
+    }
+    return messageHasDisplayableNonTextContent(evt.message);
+  };
+
   const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
     const normalizedLeft = normalizeLowercaseStringOrEmpty(left);
     const normalizedRight = normalizeLowercaseStringOrEmpty(right);
@@ -393,8 +445,12 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       if (evt.state === "final") {
-        clearStaleStreamingIfNoTrackedRunRemains();
-        return;
+        const hasLateDisplayableFinal =
+          hasDisplayableFinalEvent(evt) && !finalizedRunsWithDisplay.has(evt.runId);
+        if (!hasLateDisplayableFinal) {
+          clearStaleStreamingIfNoTrackedRunRemains();
+          return;
+        }
       }
     }
     if (reconnectPendingRunId === evt.runId) {
@@ -433,7 +489,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
         clearStaleStreamingIfNoTrackedRunRemains();
-        tui.requestRender();
+        tui.requestRender(true);
         return;
       }
       if (!evt.message) {
@@ -442,7 +498,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         });
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
-        tui.requestRender();
+        tui.requestRender(true);
         return;
       }
       if (isCommandMessage(evt.message)) {
@@ -451,8 +507,8 @@ export function createEventHandlers(context: EventHandlerContext) {
         if (text) {
           chatLog.addSystem(text);
         }
-        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
-        tui.requestRender();
+        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle", displayedFinal: true });
+        tui.requestRender(true);
         return;
       }
       maybeRefreshHistoryForRun(evt.runId);
@@ -480,6 +536,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         runId: evt.runId,
         wasActiveRun,
         status: stopReason === "error" ? "error" : "idle",
+        displayedFinal: !suppressEmptyExternalPlaceholder,
       });
     }
     if (evt.state === "aborted") {

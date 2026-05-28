@@ -167,7 +167,7 @@ Before an isolated cron run enters the agent runner, OpenClaw checks reachable l
 | `webhook`  | POST finished event payload to a URL                                |
 | `none`     | No runner fallback delivery                                         |
 
-Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; direct RPC/config callers may also pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
+Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; OpenClaw also accepts the Telegram-owned `-1001234567890:123` shorthand. Direct RPC/config callers may pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
 When announce delivery uses `channel: "last"` or omits `channel`, a provider-prefixed target such as `telegram:123` can select the channel before cron falls back to session history or a single configured channel. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the target prefix must name the same provider; for example, `channel: "whatsapp"` with `to: "telegram:123"` is rejected instead of letting WhatsApp interpret the Telegram ID as a phone number. Target-kind and service prefixes such as `channel:<id>`, `user:<id>`, `imessage:<handle>`, and `sms:<number>` remain channel-owned target syntax, not provider selectors.
 
@@ -306,7 +306,7 @@ Keep hook endpoints behind loopback, tailnet, or trusted reverse proxy.
 
 - Use a dedicated hook token; do not reuse gateway auth tokens.
 - Keep `hooks.path` on a dedicated subpath; `/` is rejected.
-- Set `hooks.allowedAgentIds` to limit explicit `agentId` routing.
+- Set `hooks.allowedAgentIds` to limit which effective agent a hook can target, including the default agent when `agentId` is omitted.
 - Keep `hooks.allowRequestSessionKey=false` unless you require caller-selected sessions.
 - If you enable `hooks.allowRequestSessionKey`, also set `hooks.allowedSessionKeyPrefixes` to constrain allowed session key shapes.
 - Hook payloads are wrapped with safety boundaries by default.
@@ -436,7 +436,7 @@ Model override note:
   cron: {
     enabled: true,
     store: "~/.openclaw/cron/jobs.json",
-    maxConcurrentRuns: 1,
+    maxConcurrentRuns: 8,
     retry: {
       maxAttempts: 3,
       backoffMs: [60000, 120000, 300000],
@@ -449,7 +449,7 @@ Model override note:
 }
 ```
 
-`maxConcurrentRuns` limits both scheduled cron dispatch and isolated agent-turn execution. Isolated cron agent turns use the queue's dedicated `cron-nested` execution lane internally, so raising this value lets independent cron LLM runs progress in parallel instead of only starting their outer cron wrappers. The shared non-cron `nested` lane is not widened by this setting.
+`maxConcurrentRuns` limits both scheduled cron dispatch and isolated agent-turn execution, and defaults to 8. Isolated cron agent turns use the queue's dedicated `cron-nested` execution lane internally, so raising this value lets independent cron LLM runs progress in parallel instead of only starting their outer cron wrappers. The shared non-cron `nested` lane is not widened by this setting.
 
 The runtime state sidecar is derived from `cron.store`: a `.json` store such as `~/clawd/cron/jobs.json` uses `~/clawd/cron/jobs-state.json`, while a store path without a `.json` suffix appends `-state.json`.
 

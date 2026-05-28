@@ -6,6 +6,7 @@ import {
   resolveStateDir as resolveStateDirFromPaths,
 } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { isLoopbackIpAddress } from "../shared/net/ip.js";
@@ -19,6 +20,7 @@ import {
 } from "../utils/message-channel.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
+import { resolveGatewayAuth } from "./auth-resolve.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import {
   GatewayClient,
@@ -205,6 +207,7 @@ const defaultGatewayCallDeps = {
   resolveConfigPath: resolveConfigPathFromPaths,
   resolveStateDir: resolveStateDirFromPaths,
   loadGatewayTlsRuntime,
+  loadDeviceAuthToken,
 };
 const gatewayCallDeps = {
   ...defaultGatewayCallDeps,
@@ -296,6 +299,8 @@ export const testing = {
       deps?.resolveStateDir ?? defaultGatewayCallDeps.resolveStateDir;
     gatewayCallDeps.loadGatewayTlsRuntime =
       deps?.loadGatewayTlsRuntime ?? defaultGatewayCallDeps.loadGatewayTlsRuntime;
+    gatewayCallDeps.loadDeviceAuthToken =
+      deps?.loadDeviceAuthToken ?? defaultGatewayCallDeps.loadDeviceAuthToken;
   },
   setCreateGatewayClientForTests(createGatewayClient?: typeof defaultCreateGatewayClient): void {
     gatewayCallDeps.createGatewayClient =
@@ -309,6 +314,7 @@ export const testing = {
     gatewayCallDeps.resolveConfigPath = defaultGatewayCallDeps.resolveConfigPath;
     gatewayCallDeps.resolveStateDir = defaultGatewayCallDeps.resolveStateDir;
     gatewayCallDeps.loadGatewayTlsRuntime = defaultGatewayCallDeps.loadGatewayTlsRuntime;
+    gatewayCallDeps.loadDeviceAuthToken = defaultGatewayCallDeps.loadDeviceAuthToken;
   },
 };
 
@@ -356,6 +362,61 @@ function resolveDeviceIdentityForGatewayCall(params: {
     // gateway with token/password auth without crashing before the RPC.
     return null;
   }
+}
+
+function hasStoredOperatorDeviceAuthToken(deviceIdentity: DeviceIdentity | null): boolean {
+  if (!deviceIdentity) {
+    return false;
+  }
+  try {
+    return Boolean(
+      gatewayCallDeps.loadDeviceAuthToken({
+        deviceId: deviceIdentity.deviceId,
+        role: "operator",
+        env: process.env,
+      })?.token,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function resolveGatewayCallAuth(config: OpenClawConfig) {
+  return resolveGatewayAuth({
+    authConfig: config.gateway?.auth,
+    env: process.env,
+    tailscaleMode: config.gateway?.tailscale?.mode,
+  });
+}
+
+function ensureGatewayCallCanAuthenticate(params: {
+  opts: CallGatewayBaseOptions;
+  context: ResolvedGatewayCallContext;
+  token?: string;
+  password?: string;
+  deviceIdentity: DeviceIdentity | null;
+}): void {
+  const resolvedAuth = resolveGatewayCallAuth(params.context.config);
+  const authMode = resolvedAuth.mode;
+  if (authMode !== "token" && authMode !== "password") {
+    return;
+  }
+  if (params.token || params.password || params.opts.approvalRuntimeToken) {
+    return;
+  }
+  if (resolvedAuth.allowTailscale) {
+    return;
+  }
+  if (hasStoredOperatorDeviceAuthToken(params.deviceIdentity)) {
+    return;
+  }
+  throw new Error(
+    [
+      `gateway ${params.opts.method} requires credentials before opening a websocket`,
+      "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
+      `Config: ${params.context.configPath}`,
+    ].join("\n"),
+  );
 }
 
 export type { ExplicitGatewayAuth } from "./credentials.js";
@@ -675,6 +736,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   timeoutMs: number;
   safeTimerTimeoutMs: number;
   connectionDetails: GatewayConnectionDetails;
+  deviceIdentity: DeviceIdentity | null;
 }): Promise<T> {
   const {
     opts,
@@ -686,6 +748,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     preauthHandshakeTimeoutMs,
     timeoutMs,
     safeTimerTimeoutMs,
+    deviceIdentity,
   } = params;
   return await new Promise<T>((resolve, reject) => {
     if (opts.signal?.aborted) {
@@ -771,10 +834,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),
       role: "operator",
       scopes,
-      deviceIdentity:
-        opts.deviceIdentity === undefined
-          ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
-          : opts.deviceIdentity,
+      deviceIdentity,
       minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {
@@ -888,6 +948,17 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const { token, password } = resolvedCredentials;
+  const deviceIdentity =
+    opts.deviceIdentity === undefined
+      ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
+      : opts.deviceIdentity;
+  ensureGatewayCallCanAuthenticate({
+    opts,
+    context,
+    token,
+    password,
+    deviceIdentity,
+  });
   return await executeGatewayRequestWithScopes<T>({
     opts,
     scopes,
@@ -899,6 +970,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     timeoutMs,
     safeTimerTimeoutMs,
     connectionDetails,
+    deviceIdentity,
   });
 }
 

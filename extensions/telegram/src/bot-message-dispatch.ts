@@ -11,9 +11,17 @@ import {
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+  runChannelInboundEvent,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
+import {
   createChannelMessageReplyPipeline,
+  createOutboundPayloadPlan,
   deriveDurableFinalDeliveryRequirements,
-} from "openclaw/plugin-sdk/channel-message";
+  projectOutboundPayloadPlanForDelivery,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftGate,
@@ -29,19 +37,14 @@ import {
   resolveChannelStreamingPreviewNativeToolProgressAllowFrom,
   resolveChannelStreamingPreviewToolProgress,
   resolveTranscriptBackedChannelFinalText,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
-import {
-  createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForDelivery,
-} from "openclaw/plugin-sdk/outbound-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -54,6 +57,7 @@ import {
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeAllowFrom } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -79,7 +83,16 @@ import {
 } from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
-import { getTelegramTextParts, resolveTelegramReplyId } from "./bot/helpers.js";
+import {
+  buildTelegramGroupPeerId,
+  buildTelegramGroupFrom,
+  buildTelegramInboundOriginTarget,
+  buildGroupLabel,
+  buildTypingThreadParams,
+  getTelegramTextParts,
+  resolveTelegramReplyId,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
 import {
   addTelegramNativeQuoteCandidate,
   buildTelegramNativeQuoteCandidate,
@@ -105,6 +118,7 @@ import {
   type LaneName,
 } from "./lane-delivery.js";
 import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
+import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -234,23 +248,48 @@ type DispatchTelegramMessageParams = {
 type TelegramReasoningLevel = "off" | "on" | "stream";
 
 type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
+type TelegramSessionStore = ReturnType<typeof loadSessionStore>;
+type FreshTelegramSessionStoreLoader = ((agentId: string) => {
+  storePath: string;
+  store: TelegramSessionStore;
+}) & {
+  clear: () => void;
+};
+
+function createFreshTelegramSessionStoreLoader(params: {
+  cfg: OpenClawConfig;
+  telegramDeps: TelegramBotDeps;
+}): FreshTelegramSessionStoreLoader {
+  const storesByPath = new Map<string, TelegramSessionStore>();
+  const load = ((agentId: string) => {
+    const storePath = params.telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
+    const cachedStore = storesByPath.get(storePath);
+    if (cachedStore) {
+      return { storePath, store: cachedStore };
+    }
+    const store = (params.telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
+      skipCache: true,
+    });
+    storesByPath.set(storePath, store);
+    return { storePath, store };
+  }) as FreshTelegramSessionStoreLoader;
+  load.clear = () => storesByPath.clear();
+  return load;
+}
 
 function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId: string;
-  telegramDeps: TelegramBotDeps;
+  loadFreshSessionStore: FreshTelegramSessionStoreLoader;
 }): TelegramReasoningLevel {
-  const { cfg, sessionKey, agentId, telegramDeps } = params;
+  const { cfg, sessionKey, agentId } = params;
   const configDefault = resolveTelegramConfigReasoningDefault(cfg, agentId);
   if (!sessionKey) {
     return configDefault;
   }
   try {
-    const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
-    const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
-      skipCache: true,
-    });
+    const { store } = params.loadFreshSessionStore(agentId);
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const level = entry?.reasoningLevel;
     if (level === "on" || level === "stream" || level === "off") {
@@ -284,19 +323,14 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
   cfg: OpenClawConfig;
   route: TelegramMessageContext["route"];
   sessionKey: string;
-  telegramDeps: TelegramBotDeps;
+  loadFreshSessionStore: FreshTelegramSessionStoreLoader;
   payload: TelegramTranscriptMirrorPayload;
 }) {
   const text = resolveTelegramMirroredTranscriptText(params.payload);
   if (!text) {
     return;
   }
-  const storePath = params.telegramDeps.resolveStorePath(params.cfg.session?.store, {
-    agentId: params.route.agentId,
-  });
-  const store = (params.telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
-    skipCache: true,
-  });
+  const { storePath, store } = params.loadFreshSessionStore(params.route.agentId);
   const sessionEntry = resolveSessionStoreEntry({
     store,
     sessionKey: params.sessionKey,
@@ -351,6 +385,7 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
 }
 
 const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
+const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
 function clipProgressMarkdownText(text: string): string {
   if (text.length <= MAX_PROGRESS_MARKDOWN_TEXT_CHARS) {
@@ -368,6 +403,266 @@ function formatProgressAsMarkdownCode(text: string): string {
   return `\`${sanitizeProgressMarkdownText(clipped)}\``;
 }
 
+function normalizeTelegramThreadId(value: unknown): number | undefined {
+  const raw =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(raw)) {
+    return undefined;
+  }
+  const normalized = Math.trunc(raw);
+  return normalized > 0 ? normalized : undefined;
+}
+
+function resolveTelegramForumThreadScopeFromSessionKey(
+  sessionKey: unknown,
+): { chatId: string; threadId: number } | undefined {
+  if (typeof sessionKey !== "string") {
+    return undefined;
+  }
+  const match = /:telegram:group:(-?\d+):topic:(\d+)(?::|$)/.exec(sessionKey);
+  const threadId = normalizeTelegramThreadId(match?.[2]);
+  if (!match?.[1] || threadId == null) {
+    return undefined;
+  }
+  return { chatId: match[1], threadId };
+}
+
+function resolveDispatchTelegramThreadSpec(params: {
+  chatId: TelegramMessageContext["chatId"];
+  ctxPayload: TelegramMessageContext["ctxPayload"];
+  threadSpec: TelegramThreadSpec;
+}): TelegramThreadSpec {
+  if (
+    params.threadSpec.scope !== "forum" ||
+    (params.threadSpec.id != null && params.threadSpec.id !== TELEGRAM_GENERAL_TOPIC_ID)
+  ) {
+    return params.threadSpec;
+  }
+  const scopedThread = resolveTelegramForumThreadScopeFromSessionKey(params.ctxPayload.SessionKey);
+  const scopedThreadId =
+    scopedThread?.chatId === String(params.chatId) ? scopedThread.threadId : undefined;
+  const payloadThreadId =
+    normalizeTelegramThreadId(params.ctxPayload.MessageThreadId) ??
+    normalizeTelegramThreadId(params.ctxPayload.TransportThreadId);
+  // Missing forum IDs are normalized to General; topic-scoped turn facts are more specific.
+  const recoveredThreadId = scopedThreadId ?? payloadThreadId;
+  return recoveredThreadId == null || recoveredThreadId === params.threadSpec.id
+    ? params.threadSpec
+    : { ...params.threadSpec, id: recoveredThreadId };
+}
+
+function extractCurrentTelegramBody(body: string | undefined): string {
+  if (!body) {
+    return "";
+  }
+  const markerIndex = body.lastIndexOf(CURRENT_MESSAGE_MARKER);
+  if (markerIndex === -1) {
+    return body;
+  }
+  return body.slice(markerIndex + CURRENT_MESSAGE_MARKER.length).trimStart();
+}
+
+function buildRecoveredTelegramBody(params: {
+  cfg: OpenClawConfig;
+  context: TelegramMessageContext;
+  currentMessage: string;
+  historyKey?: string;
+  threadSpec: TelegramThreadSpec;
+}): string {
+  if (!params.context.isGroup || !params.historyKey || params.context.historyLimit <= 0) {
+    return params.currentMessage;
+  }
+  const groupLabel = buildGroupLabel(
+    params.context.msg,
+    params.context.chatId,
+    params.threadSpec.id,
+  );
+  const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
+  return createChannelHistoryWindow({
+    historyMap: params.context.groupHistories,
+  }).buildPendingContext({
+    historyKey: params.historyKey,
+    limit: params.context.historyLimit,
+    currentMessage: params.currentMessage,
+    formatEntry: (entry) =>
+      formatInboundEnvelope({
+        channel: "Telegram",
+        from: groupLabel,
+        timestamp: entry.timestamp,
+        body: `${entry.body} [id:${entry.messageId ?? "unknown"} chat:${params.context.chatId}]`,
+        chatType: "group",
+        senderLabel: entry.sender,
+        envelope: envelopeOptions,
+      }),
+  });
+}
+
+function buildRecoveredTelegramChatActionSender(params: {
+  context: TelegramMessageContext;
+  threadId?: number;
+  action: "typing" | "record_voice";
+}): () => Promise<void> {
+  return async () => {
+    try {
+      await withTelegramApiErrorLogging({
+        operation: "sendChatAction",
+        fn: () =>
+          params.context.sendChatActionHandler.sendChatAction(
+            params.context.chatId,
+            params.action,
+            buildTypingThreadParams(params.threadId),
+          ),
+      });
+    } catch (err) {
+      if (params.action !== "record_voice") {
+        throw err;
+      }
+      logVerbose(
+        `telegram record_voice cue failed for chat ${params.context.chatId}: ${String(err)}`,
+      );
+    }
+  };
+}
+
+function migrateRecoveredTelegramRoomEventHistory(params: {
+  context: TelegramMessageContext;
+  recoveredHistoryKey?: string;
+}) {
+  const originalHistoryKey = params.context.historyKey;
+  const recoveredHistoryKey = params.recoveredHistoryKey;
+  if (
+    !params.context.isGroup ||
+    params.context.ctxPayload.InboundEventKind !== "room_event" ||
+    !originalHistoryKey ||
+    !recoveredHistoryKey ||
+    originalHistoryKey === recoveredHistoryKey ||
+    params.context.historyLimit <= 0
+  ) {
+    return;
+  }
+  const originalEntries = params.context.groupHistories.get(originalHistoryKey);
+  if (!originalEntries?.length) {
+    return;
+  }
+  const messageId = params.context.ctxPayload.MessageSid;
+  const rawBody = params.context.ctxPayload.RawBody;
+  const entryIndex = originalEntries.findLastIndex((entry) => {
+    if (messageId && entry.messageId === messageId) {
+      return true;
+    }
+    return !messageId && typeof rawBody === "string" && entry.body === rawBody;
+  });
+  if (entryIndex === -1) {
+    return;
+  }
+  const [entry] = originalEntries.splice(entryIndex, 1);
+  if (!entry) {
+    return;
+  }
+  createChannelHistoryWindow({
+    historyMap: params.context.groupHistories,
+  }).record({
+    historyKey: recoveredHistoryKey,
+    limit: params.context.historyLimit,
+    entry,
+  });
+}
+
+function resolveDispatchTelegramContext(params: {
+  cfg: OpenClawConfig;
+  context: TelegramMessageContext;
+}): TelegramMessageContext {
+  const threadSpec = resolveDispatchTelegramThreadSpec({
+    chatId: params.context.chatId,
+    ctxPayload: params.context.ctxPayload,
+    threadSpec: params.context.threadSpec,
+  });
+  if (threadSpec === params.context.threadSpec || threadSpec.scope !== "forum") {
+    return params.context;
+  }
+  const recoveredRoutingTarget = buildTelegramInboundOriginTarget(
+    params.context.chatId,
+    threadSpec,
+  );
+  const recoveredFrom = params.context.isGroup
+    ? buildTelegramGroupFrom(params.context.chatId, threadSpec.id)
+    : params.context.ctxPayload.From;
+  const recoveredUpdateLastRoute =
+    params.context.turn.record.updateLastRoute && threadSpec.id != null
+      ? {
+          ...params.context.turn.record.updateLastRoute,
+          to: `telegram:${params.context.chatId}:topic:${threadSpec.id}`,
+          threadId: String(threadSpec.id),
+        }
+      : params.context.turn.record.updateLastRoute;
+  const recoveredHistoryKey = params.context.isGroup
+    ? buildTelegramGroupPeerId(params.context.chatId, threadSpec.id)
+    : params.context.historyKey;
+  migrateRecoveredTelegramRoomEventHistory({
+    context: params.context,
+    recoveredHistoryKey,
+  });
+  const recoveredInboundHistory =
+    params.context.isGroup && recoveredHistoryKey && params.context.historyLimit > 0
+      ? createChannelHistoryWindow({
+          historyMap: params.context.groupHistories,
+        }).buildInboundHistory({
+          historyKey: recoveredHistoryKey,
+          limit: params.context.historyLimit,
+        })
+      : params.context.ctxPayload.InboundHistory;
+  const recoveredBodyForAgent = extractCurrentTelegramBody(
+    params.context.ctxPayload.BodyForAgent ?? params.context.ctxPayload.Body,
+  );
+  const recoveredBody = buildRecoveredTelegramBody({
+    cfg: params.cfg,
+    context: params.context,
+    currentMessage: recoveredBodyForAgent,
+    historyKey: recoveredHistoryKey,
+    threadSpec,
+  });
+  const recoveredSendTyping = buildRecoveredTelegramChatActionSender({
+    context: params.context,
+    threadId: threadSpec.id,
+    action: "typing",
+  });
+  const recoveredSendRecordVoice = buildRecoveredTelegramChatActionSender({
+    context: params.context,
+    threadId: threadSpec.id,
+    action: "record_voice",
+  });
+  return {
+    ...params.context,
+    historyKey: recoveredHistoryKey,
+    threadSpec,
+    resolvedThreadId: threadSpec.id,
+    replyThreadId: threadSpec.id,
+    sendTyping: recoveredSendTyping,
+    sendRecordVoice: recoveredSendRecordVoice,
+    turn: {
+      ...params.context.turn,
+      record: {
+        ...params.context.turn.record,
+        updateLastRoute: recoveredUpdateLastRoute,
+      },
+    },
+    ctxPayload:
+      threadSpec.id == null
+        ? params.context.ctxPayload
+        : {
+            ...params.context.ctxPayload,
+            Body: recoveredBody,
+            BodyForAgent: recoveredBodyForAgent,
+            From: recoveredFrom,
+            InboundHistory: recoveredInboundHistory,
+            MessageThreadId: threadSpec.id,
+            OriginatingTo: recoveredRoutingTarget,
+            To: recoveredRoutingTarget,
+            TransportThreadId: threadSpec.id,
+          },
+  };
+}
+
 export const dispatchTelegramMessage = async ({
   context,
   bot,
@@ -381,8 +676,10 @@ export const dispatchTelegramMessage = async ({
   opts,
 }: DispatchTelegramMessageParams) => {
   const dispatchStartedAt = Date.now();
+  const dispatchContext = resolveDispatchTelegramContext({ cfg, context });
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
+  const loadFreshSessionStore = createFreshTelegramSessionStoreLoader({ cfg, telegramDeps });
   const {
     ctxPayload,
     msg,
@@ -402,7 +699,7 @@ export const dispatchTelegramMessage = async ({
     reactionApi,
     removeAckAfterReply,
     statusReactionController: rawStatusReactionController,
-  } = context;
+  } = dispatchContext;
   const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
   const statusReactionController = isRoomEvent ? null : rawStatusReactionController;
   const statusReactionTiming = {
@@ -498,7 +795,7 @@ export const dispatchTelegramMessage = async ({
     cfg,
     sessionKey: ctxPayload.SessionKey,
     agentId: route.agentId,
-    telegramDeps,
+    loadFreshSessionStore,
   });
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
@@ -959,12 +1256,7 @@ export const dispatchTelegramMessage = async ({
       return undefined;
     }
     try {
-      const storePath = telegramDeps.resolveStorePath(cfg.session?.store, {
-        agentId: route.agentId,
-      });
-      const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
-        skipCache: true,
-      });
+      const { storePath, store } = loadFreshSessionStore(route.agentId);
       const sessionEntry = resolveSessionStoreEntry({
         store,
         sessionKey,
@@ -1019,7 +1311,7 @@ export const dispatchTelegramMessage = async ({
             cfg,
             route,
             sessionKey,
-            telegramDeps,
+            loadFreshSessionStore,
             payload,
           });
         }
@@ -1182,7 +1474,7 @@ export const dispatchTelegramMessage = async ({
       }
       return result.delivered;
     };
-    const emitPreviewFinalizedHook = (result: LaneDeliveryResult) => {
+    const emitPreviewFinalizedHook = async (result: LaneDeliveryResult) => {
       if (isDispatchSuperseded() || result.kind !== "preview-finalized") {
         return;
       }
@@ -1196,6 +1488,26 @@ export const dispatchTelegramMessage = async ({
         isGroup: deliveryBaseOptions.mirrorIsGroup,
         groupId: deliveryBaseOptions.mirrorGroupId,
       });
+      try {
+        await (
+          telegramDeps.recordOutboundMessageForPromptContext ??
+          recordOutboundMessageForPromptContext
+        )({
+          cfg,
+          account: { accountId: route.accountId },
+          chatId: deliveryBaseOptions.chatId,
+          message: { message_id: result.delivery.messageId },
+          messageId: result.delivery.messageId,
+          text: result.delivery.promptContextContent ?? result.delivery.content,
+          ...(threadSpec.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
+        });
+      } catch (error) {
+        logVerbose(
+          `telegram: failed to record streamed reply for prompt context: ${formatErrorMessage(
+            error,
+          )}`,
+        );
+      }
       if (deliveryBaseOptions.transcriptMirror && result.delivery.content) {
         void deliveryBaseOptions
           .transcriptMirror({ text: result.delivery.content })
@@ -1264,12 +1576,7 @@ export const dispatchTelegramMessage = async ({
 
     if (isDmTopic) {
       try {
-        const storePath = telegramDeps.resolveStorePath(cfg.session?.store, {
-          agentId: route.agentId,
-        });
-        const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
-          skipCache: true,
-        });
+        const { store } = loadFreshSessionStore(route.agentId);
         const sessionKey = ctxPayload.SessionKey;
         if (sessionKey) {
           const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
@@ -1281,6 +1588,7 @@ export const dispatchTelegramMessage = async ({
         logVerbose(`auto-topic-label: session store error: ${formatErrorMessage(err)}`);
       }
     }
+    loadFreshSessionStore.clear();
 
     if (statusReactionController && !isRoomEvent) {
       void statusReactionController.setThinking();
@@ -1307,10 +1615,10 @@ export const dispatchTelegramMessage = async ({
     });
 
     try {
-      const turnResult = await runInboundReplyTurn({
+      const turnResult = await runChannelInboundEvent({
         channel: "telegram",
         accountId: route.accountId,
-        raw: context,
+        raw: dispatchContext,
         adapter: {
           ingest: () => ({
             id: ctxPayload.MessageSid ?? `${chatId}:${Date.now()}`,
@@ -1318,16 +1626,16 @@ export const dispatchTelegramMessage = async ({
             rawText: ctxPayload.RawBody ?? "",
             textForAgent: ctxPayload.BodyForAgent,
             textForCommands: ctxPayload.CommandBody,
-            raw: context,
+            raw: dispatchContext,
           }),
           resolveTurn: () => ({
             channel: "telegram",
             accountId: route.accountId,
             routeSessionKey: route.sessionKey,
-            storePath: context.turn.storePath,
+            storePath: dispatchContext.turn.storePath,
             ctxPayload,
-            recordInboundSession: context.turn.recordInboundSession,
-            record: context.turn.record,
+            recordInboundSession: dispatchContext.turn.recordInboundSession,
+            record: dispatchContext.turn.record,
             runDispatch: () => {
               const sentBlockMediaUrls = new Set<string>();
 
@@ -1442,18 +1750,27 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.noteReasoningHint();
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
-                        if (
-                          nativeToolProgressDraft &&
-                          canUseNativeToolProgressDraft({
-                            payload: effectivePayload,
-                            reply,
-                            buttons: telegramButtons,
-                          })
-                        ) {
+                        const canRepresentAsTransientProgress = canUseNativeToolProgressDraft({
+                          payload: effectivePayload,
+                          reply,
+                          buttons: telegramButtons,
+                        });
+                        if (nativeToolProgressDraft && canRepresentAsTransientProgress) {
                           if (await pushStreamToolProgress(segment.update.text)) {
                             blockDelivered = true;
                             continue;
                           }
+                        }
+                        if (
+                          canRepresentAsTransientProgress &&
+                          streamMode === "progress" &&
+                          answerLane.stream
+                        ) {
+                          // Progress-mode streams render tool status in the
+                          // live draft. Do not also emit text-only tool output
+                          // as answer text, or simple commands duplicate and
+                          // restart the progress draft.
+                          continue;
                         }
                         await prepareAnswerLaneForToolProgress();
                       }
@@ -1472,7 +1789,7 @@ export const dispatchTelegramMessage = async ({
                               buttons: telegramButtons,
                             });
                       if (info.kind === "final") {
-                        emitPreviewFinalizedHook(result);
+                        await emitPreviewFinalizedHook(result);
                       }
                       blockDelivered = blockDelivered || result.kind !== "skipped";
                       if (segment.lane === "reasoning") {

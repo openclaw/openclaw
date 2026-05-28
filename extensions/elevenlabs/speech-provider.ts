@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
@@ -72,8 +73,7 @@ function parseBooleanValue(value: string): boolean | undefined {
 }
 
 function parseNumberValue(value: string): number | undefined {
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return parseStrictFiniteNumber(value);
 }
 
 export const isValidVoiceId = isValidElevenLabsVoiceId;
@@ -305,7 +305,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
           handled: true,
           overrides: {
             ...ctx.currentOverrides,
-            seed: normalizeSeed(Number.parseInt(ctx.value, 10)),
+            seed: normalizeSeed(parseStrictInteger(ctx.value) ?? Number.NaN),
           },
         };
       default:

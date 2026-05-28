@@ -360,6 +360,8 @@ export const th: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "นโยบายการอนุมัติที่มีผลบังคับใช้กำหนดให้ต้องอนุมัติทุกครั้ง ดังนั้น Allow Always จึงไม่พร้อมใช้งาน",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -391,6 +393,7 @@ export const th: TranslationMap = {
   },
   tabs: {
     agents: "เอเจนต์",
+    activity: "กิจกรรม",
     overview: "ภาพรวม",
     channels: "ช่องทาง",
     instances: "อินสแตนซ์",
@@ -412,6 +415,7 @@ export const th: TranslationMap = {
   },
   subtitles: {
     agents: "เวิร์กสเปซ เครื่องมือ และข้อมูลประจำตัว",
+    activity: "สรุปกิจกรรมของเครื่องมือภายในเบราว์เซอร์",
     overview: "สถานะ จุดเข้าใช้งาน และความพร้อมใช้งาน",
     channels: "ช่องทางและการตั้งค่า",
     instances: "ไคลเอนต์และโหนดที่เชื่อมต่อ",
@@ -430,6 +434,42 @@ export const th: TranslationMap = {
     debug: "สแนปช็อต เหตุการณ์ และ RPC",
     logs: "บันทึกเกตเวย์แบบสด",
     dreams: "การฝันของหน่วยความจำ การรวมข้อมูล และการสะท้อนคิด",
+  },
+  activity: {
+    title: "กิจกรรม",
+    subtitle: "กิจกรรมของเครื่องมือแบบชั่วคราวที่ได้จากเหตุการณ์เซสชันสด",
+    visibleCount: "{visible} จาก {total}",
+    filtersLabel: "ตัวกรองกิจกรรม",
+    search: "ค้นหา",
+    searchPlaceholder: "กรองตามเครื่องมือ สรุป การรัน เซสชัน",
+    toolFilter: "Tool",
+    allTools: "เครื่องมือทั้งหมด",
+    statusFilters: "ตัวกรองสถานะ",
+    autoFollow: "ติดตามอัตโนมัติ",
+    expandAll: "ขยายทั้งหมด",
+    collapseAll: "ยุบทั้งหมด",
+    clear: "ล้าง",
+    empty: "ยังไม่มีกิจกรรมของเครื่องมือ",
+    emptyFiltered: "ไม่มีกิจกรรมที่ตรงกับตัวกรองเหล่านี้",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "ซ่อนอาร์กิวเมนต์ 1 รายการ",
+    argumentsHidden: "ซ่อนอาร์กิวเมนต์ {count} รายการ",
+    streamLabel: "รายการกิจกรรมของเครื่องมือ",
+    toolCallId: "การเรียกใช้เครื่องมือ",
+    runId: "รัน",
+    session: "เซสชัน",
+    outputTruncated: "ตัวอย่างถูกปกปิดและตัดให้สั้นลง",
+    noOutputPreview: "ไม่มีตัวอย่างเอาต์พุต",
+    status: {
+      running: "กำลังทำงาน",
+      done: "เสร็จสิ้น",
+      error: "ข้อผิดพลาด",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -1054,6 +1094,11 @@ export const th: TranslationMap = {
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
+    },
+    queue: {
+      retry: "Retry",
+      retrySend: "Retry send",
+      retryQueuedMessage: "Retry queued message",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

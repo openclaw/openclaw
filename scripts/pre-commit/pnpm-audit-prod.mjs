@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const BULK_ADVISORY_PATH = "/-/npm/v1/security/advisories/bulk";
 const MIN_SEVERITY = "high";
+export const BULK_ADVISORY_ERROR_BODY_MAX_CHARS = 4096;
 const SEVERITY_RANK = {
   info: 0,
   low: 1,
@@ -25,12 +26,12 @@ const IMPORTER_SECTIONS = ["dependencies", "optionalDependencies"];
 const LOCAL_REFERENCE_PREFIXES = ["file:", "link:", "portal:", "workspace:"];
 // GitHub's GHSA-3q49-cfcf-g5fm feed includes an overbroad ">=0" range alongside
 // the compromised @mistralai/mistralai versions. Keep the production audit
-// blocking for the compromised releases while allowing our pinned 2.2.1 lock.
+// blocking for the compromised releases while allowing pinned safe locks.
 const AUDIT_ADVISORY_VERSION_OVERRIDES = [
   {
     packageName: "@mistralai/mistralai",
     advisoryIds: new Set(["1118204", "GHSA-3q49-cfcf-g5fm"]),
-    unaffectedVersions: new Set(["2.2.1"]),
+    unaffectedVersions: new Set(["2.2.1", "2.2.5"]),
   },
 ];
 
@@ -676,6 +677,45 @@ function resolveRegistryBaseUrl() {
   return configured.replace(/\/+$/u, "");
 }
 
+export async function readBoundedBulkAdvisoryErrorText(
+  response,
+  maxChars = BULK_ADVISORY_ERROR_BODY_MAX_CHARS,
+) {
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let truncated = false;
+
+  try {
+    while (text.length <= maxChars) {
+      const { done, value } = await reader.read();
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+
+      text += decoder.decode(value, { stream: true });
+      if (text.length > maxChars) {
+        text = text.slice(0, maxChars);
+        truncated = true;
+        break;
+      }
+    }
+  } finally {
+    if (truncated) {
+      await reader.cancel().catch(() => undefined);
+    } else {
+      reader.releaseLock();
+    }
+  }
+
+  return truncated ? `${text}\n[truncated]` : text;
+}
+
 export async function fetchBulkAdvisories({
   payload,
   fetchImpl = fetch,
@@ -692,7 +732,7 @@ export async function fetchBulkAdvisories({
   });
 
   if (!response.ok) {
-    const bodyText = await response.text();
+    const bodyText = await readBoundedBulkAdvisoryErrorText(response);
     throw new Error(
       `Bulk advisory request failed (${response.status} ${response.statusText}): ${bodyText}`,
     );

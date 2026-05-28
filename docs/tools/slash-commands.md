@@ -136,7 +136,7 @@ Current source-of-truth:
   </Accordion>
   <Accordion title="Model and run controls">
     - `/think <level|default>` sets the thinking level or clears the session override. Options come from the active model's provider profile; common levels are `off`, `minimal`, `low`, `medium`, and `high`, with custom levels such as `xhigh`, `adaptive`, `max`, or binary `on` only where supported. Aliases: `/thinking`, `/t`.
-    - `/verbose on|off|full` toggles verbose output. Alias: `/v`.
+    - `/verbose on|off|full` toggles verbose output. Authorized external channel senders may persist the session override; internal gateway/webchat clients need `operator.admin`. Alias: `/v`.
     - `/trace on|off` toggles plugin trace output for the current session.
     - `/fast [status|on|off|default]` shows, sets, or clears fast mode.
     - `/reasoning [on|off|stream]` toggles reasoning visibility. Alias: `/reason`.
@@ -169,13 +169,11 @@ Current source-of-truth:
 
   </Accordion>
   <Accordion title="Subagents and ACP">
-    - `/subagents list|kill|log|info|send|steer|spawn` manages sub-agent runs for the current session.
+    - `/subagents list|log|info` inspects sub-agent runs for the current session.
     - `/acp spawn|cancel|steer|close|sessions|status|set-mode|set|cwd|permissions|timeout|model|reset-options|doctor|install|help` manages ACP sessions and runtime options.
     - `/focus <target>` binds the current Discord thread or Telegram topic/conversation to a session target.
     - `/unfocus` removes the current binding.
     - `/agents` lists thread-bound agents for the current session.
-    - `/kill <id|#|all>` aborts one or all running sub-agents.
-    - `/subagents steer <id|#> <message>` sends steering to a running sub-agent. See [Steer](/tools/steer).
 
   </Accordion>
   <Accordion title="Owner-only writes and admin">
@@ -314,7 +312,7 @@ For profile and override editing, use the Control UI Tools panel or config/catal
 
 - **Provider usage/quota** (example: "Claude 80% left") shows up in `/status` for the current model provider when usage tracking is enabled. OpenClaw normalizes provider windows to `% left`; for MiniMax, remaining-only percent fields are inverted before display, and `model_remains` responses prefer the chat-model entry plus a model-tagged plan label.
 - **Token/cache lines** in `/status` can fall back to the latest transcript usage entry when the live session snapshot is sparse. Existing nonzero live values still win, and transcript fallback can also recover the active runtime model label plus a larger prompt-oriented total when stored totals are missing or smaller.
-- **Execution vs runtime:** `/status` reports `Execution` for the effective sandbox path and `Runtime` for who is actually running the session: `OpenClaw Pi Default`, `OpenAI Codex`, a CLI backend, or an ACP backend.
+- **Execution vs runtime:** `/status` reports `Execution` for the effective sandbox path and `Runtime` for who is actually running the session: `OpenClaw Default`, `OpenAI Codex`, a CLI backend, or an ACP backend.
 - **Per-response tokens/cost** is controlled by `/usage off|tokens|full` (appended to normal replies).
 - `/model status` is about **models/auth/endpoints**, not usage.
 
@@ -411,7 +409,7 @@ Examples:
 ```
 
 <Note>
-`/mcp` stores config in OpenClaw config, not Pi-owned project settings. Runtime adapters decide which transports are actually executable.
+`/mcp` stores config in OpenClaw config, not embedded-agent project settings. Runtime adapters decide which transports are actually executable.
 </Note>
 
 ## Plugin updates

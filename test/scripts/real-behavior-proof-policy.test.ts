@@ -85,6 +85,42 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
   });
 
+  it("uses the latest real behavior proof section when duplicates exist", () => {
+    const validProof = proofBody(
+      [
+        "Terminal transcript:",
+        "```text",
+        "$ openclaw doctor --non-interactive",
+        "Discord external plugin is installed without explicit trust.",
+        "Add plugins.entries.discord.enabled=true to trust it.",
+        "```",
+      ].join("\n"),
+    );
+    const mockOnlyProof = proofBody("Focused tests passed: 2 files, 36 tests.", {
+      steps: "pnpm test",
+      observedResult: "CI passes.",
+    });
+
+    const laterValid = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        [mockOnlyProof, "## Summary", "- Keep the detailed proof below.", validProof].join("\n\n"),
+      ),
+    });
+    const laterInvalid = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        [validProof, "## Summary", "- Latest edit replaced proof with tests.", mockOnlyProof].join(
+          "\n\n",
+        ),
+      ),
+    });
+
+    expect(laterValid.status).toBe("passed");
+    expect(laterValid.fields?.evidence).toContain("openclaw doctor --non-interactive");
+    expect(labelsForRealBehaviorProof(laterValid)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(laterInvalid.status).toBe("mock_only");
+    expect(labelsForRealBehaviorProof(laterInvalid)).toEqual([MOCK_ONLY_PROOF_LABEL]);
+  });
+
   it("accepts out-of-scope follow-ups as not-tested proof detail", () => {
     const body = [
       "## Real behavior proof",
@@ -421,5 +457,41 @@ describe("isMaintainerTeamMember", () => {
     await expect(
       isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch }),
     ).rejects.toThrow(/500/);
+  });
+
+  it("aborts stalled membership fetches", async () => {
+    const fetch = vi.fn((_url: string, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      });
+    });
+
+    await expect(
+      isMaintainerTeamMember({
+        fetch: fetch as typeof globalThis.fetch,
+        login: "u",
+        org: "o",
+        timeoutMs: 5,
+        token: "t",
+      }),
+    ).rejects.toThrow(/maintainer membership lookup for u timed out after 5ms/);
+  });
+
+  it("times out stalled membership response bodies", async () => {
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => new Promise(() => {}),
+    });
+
+    await expect(
+      isMaintainerTeamMember({
+        fetch: fetch as typeof globalThis.fetch,
+        login: "u",
+        org: "o",
+        timeoutMs: 5,
+        token: "t",
+      }),
+    ).rejects.toThrow(/maintainer membership response for u timed out after 5ms/);
   });
 });

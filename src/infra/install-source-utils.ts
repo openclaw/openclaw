@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
@@ -15,6 +16,7 @@ export type NpmSpecResolution = {
   integrity?: string;
   shasum?: string;
   resolvedAt?: string;
+  packageOpenClaw?: Record<string, unknown>;
 };
 
 export type NpmResolutionFields = {
@@ -64,6 +66,7 @@ function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
     resolvedSpec,
     integrity: toOptionalString(rec["dist.integrity"]) ?? toOptionalString(dist.integrity),
     shasum: toOptionalString(rec["dist.shasum"]) ?? toOptionalString(dist.shasum),
+    ...(isRecord(rec.openclaw) ? { packageOpenClaw: rec.openclaw } : {}),
   };
 }
 
@@ -78,7 +81,17 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
     }
 > {
   const res = await runCommandWithTimeout(
-    ["npm", "view", params.spec, "name", "version", "dist.integrity", "dist.shasum", "--json"],
+    [
+      "npm",
+      "view",
+      params.spec,
+      "name",
+      "version",
+      "dist.integrity",
+      "dist.shasum",
+      "openclaw",
+      "--json",
+    ],
     {
       timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
       env: createNpmMetadataEnv(),
@@ -147,6 +160,10 @@ function toOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseResolvedSpecFromId(id: string): string | undefined {
@@ -233,10 +250,7 @@ function parseNpmPackJsonOutput(
 }
 
 function parsePackedArchiveFromStdout(stdout: string): string | undefined {
-  const lines = stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(stdout.split(/\r?\n/));
 
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index];

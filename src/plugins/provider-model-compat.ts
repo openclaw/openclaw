@@ -1,6 +1,7 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
 import { detectOpenAICompletionsCompat } from "../agents/openai-completions-compat.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import type { Model } from "../llm/types.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 export function extractModelCompat(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
@@ -58,10 +59,9 @@ export function resolveUnsupportedToolSchemaKeywords(
 ): ReadonlySet<string> {
   const keywords = extractModelCompat(modelOrCompat)?.unsupportedToolSchemaKeywords ?? [];
   return new Set(
-    keywords
-      .filter((keyword): keyword is string => typeof keyword === "string")
-      .map((keyword) => keyword.trim())
-      .filter(Boolean),
+    normalizeStringEntries(
+      keywords.filter((keyword): keyword is string => typeof keyword === "string"),
+    ),
   );
 }
 
@@ -74,11 +74,11 @@ export function shouldOmitEmptyArrayItems(
   return compat?.omitEmptyArrayItems === true;
 }
 
-function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-completions"> {
+function isOpenAiCompletionsModel(model: Model): model is Model<"openai-completions"> {
   return model.api === "openai-completions";
 }
 
-function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
+function isAnthropicMessagesModel(model: Model): model is Model<"anthropic-messages"> {
   return model.api === "anthropic-messages";
 }
 
@@ -86,7 +86,7 @@ function normalizeAnthropicBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/v1\/?$/, "");
 }
 
-export function normalizeModelCompat(model: Model<Api>): Model<Api> {
+export function normalizeModelCompat(model: Model): Model {
   const baseUrl = model.baseUrl ?? "";
 
   if (isAnthropicMessagesModel(model) && baseUrl) {

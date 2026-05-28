@@ -20,6 +20,7 @@ type ResetSessionEntry = {
   space?: string;
   spawnedBy?: string;
   spawnedWorkspaceDir?: string;
+  spawnedCwd?: string;
   parentSessionKey?: string;
   forkedFromParent?: boolean;
   spawnDepth?: number;
@@ -105,6 +106,66 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
   expect((await fs.stat(sessionFile)).isFile()).toBe(true);
+});
+
+test("sessions.reset clears stale estimated context budget status", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentConfig = {
+    model: {
+      primary: "openai/gpt-test-a",
+    },
+  };
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-stale-budget", {
+        totalTokens: 0,
+        totalTokensFresh: false,
+        contextTokens: 123456,
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: 1,
+          provider: "qwencode",
+          model: "qwen3.5-plus-2026-02-15",
+          route: "compact_then_truncate",
+          shouldCompact: true,
+          estimatedPromptTokens: 120_000,
+          contextTokenBudget: 80_000,
+          promptBudgetBeforeReserve: 70_000,
+          reserveTokens: 10_000,
+          effectiveReserveTokens: 10_000,
+          remainingPromptBudgetTokens: 0,
+          overflowTokens: 50_000,
+          toolResultReducibleChars: 0,
+          messageCount: 10,
+          unwindowedMessageCount: 10,
+          sessionId: "sess-stale-budget",
+        },
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    entry: {
+      sessionId: string;
+      contextBudgetStatus?: unknown;
+      contextTokens?: number;
+    };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-budget");
+  expect(reset.payload?.entry.contextBudgetStatus).toBeUndefined();
+  expect(reset.payload?.entry.contextTokens).toBeUndefined();
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { contextBudgetStatus?: unknown; contextTokens?: number }
+  >;
+  expect(store["agent:main:main"]?.contextBudgetStatus).toBeUndefined();
+  expect(store["agent:main:main"]?.contextTokens).toBeUndefined();
 });
 
 test("sessions.reset drops cached skills snapshot so /new rebuilds visible skills", async () => {
@@ -372,6 +433,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
         space: "hq",
         spawnedBy: "agent:main:main",
         spawnedWorkspaceDir: "/tmp/child-workspace",
+        spawnedCwd: "/tmp/task-repo",
         parentSessionKey: "agent:main:main",
         forkedFromParent: true,
         spawnDepth: 2,
@@ -435,6 +497,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   expect(reset.payload?.entry.space).toBe("hq");
   expect(reset.payload?.entry.spawnedBy).toBe("agent:main:main");
   expect(reset.payload?.entry.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
+  expect(reset.payload?.entry.spawnedCwd).toBe("/tmp/task-repo");
   expect(reset.payload?.entry.parentSessionKey).toBe("agent:main:main");
   expect(reset.payload?.entry.forkedFromParent).toBe(true);
   expect(reset.payload?.entry.spawnDepth).toBe(2);
@@ -491,6 +554,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   expect(store["agent:main:subagent:child"]?.space).toBe("hq");
   expect(store["agent:main:subagent:child"]?.spawnedBy).toBe("agent:main:main");
   expect(store["agent:main:subagent:child"]?.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
+  expect(store["agent:main:subagent:child"]?.spawnedCwd).toBe("/tmp/task-repo");
   expect(store["agent:main:subagent:child"]?.parentSessionKey).toBe("agent:main:main");
   expect(store["agent:main:subagent:child"]?.forkedFromParent).toBe(true);
   expect(store["agent:main:subagent:child"]?.spawnDepth).toBe(2);

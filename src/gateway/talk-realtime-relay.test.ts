@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  setActiveEmbeddedRun,
+  testing as embeddedRunTesting,
+} from "../agents/embedded-agent-runner/runs.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-types.js";
 import {
@@ -7,6 +11,7 @@ import {
   createTalkRealtimeRelaySession,
   registerTalkRealtimeRelayAgentRun,
   sendTalkRealtimeRelayAudio,
+  steerTalkRealtimeRelayAgentRun,
   stopTalkRealtimeRelaySession,
   submitTalkRealtimeRelayToolResult,
 } from "./talk-realtime-relay.js";
@@ -15,6 +20,7 @@ describe("talk realtime gateway relay", () => {
   afterEach(() => {
     clearTalkRealtimeRelaySessionsForTest();
     vi.useRealTimers();
+    embeddedRunTesting.resetActiveEmbeddedRuns();
   });
 
   function createIdleRelayProvider(): RealtimeVoiceProviderPlugin {
@@ -95,6 +101,7 @@ describe("talk realtime gateway relay", () => {
       connId: "conn-1",
       sessionKey: "main",
       runId: "run-1",
+      callId: "call-1",
     });
     return {
       abortController,
@@ -230,8 +237,8 @@ describe("talk realtime gateway relay", () => {
       providerConfig: { model: "provider-model" },
       audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
       instructions: "be brief",
-      autoRespondToAudio: false,
-      interruptResponseOnInputAudio: false,
+      autoRespondToAudio: true,
+      interruptResponseOnInputAudio: true,
     });
 
     const readyPayload = findEventPayload(events, (payload) => payload.type === "ready");
@@ -338,7 +345,7 @@ describe("talk realtime gateway relay", () => {
     stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
 
     expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
-    expect(bridge.sendUserMessage).toHaveBeenCalledWith("hello");
+    expect(bridge.sendUserMessage).not.toHaveBeenCalledWith("hello");
     expect(bridge.setMediaTimestamp).toHaveBeenCalledWith(123);
     expect(bridge.submitToolResult).toHaveBeenNthCalledWith(
       1,
@@ -439,7 +446,65 @@ describe("talk realtime gateway relay", () => {
     expectRecordFields(closePayload.talkEvent, { type: "session.closed", final: true });
   });
 
-  it("preserves provider-direct replies unless forced consult routing is configured", async () => {
+  it("does not route assistant echo transcripts back into the realtime model", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      sendUserMessage: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+
+    createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+
+    bridgeRequest?.onTranscript?.(
+      "assistant",
+      "I am checking the latest status for you now.",
+      true,
+    );
+    bridgeRequest?.onTranscript?.("user", "checking the latest status for you now", true);
+
+    expect(bridge.sendUserMessage).not.toHaveBeenCalled();
+    expect(
+      events.some((entry) => {
+        const payload = entry.payload;
+        return (
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>).type === "toolCall"
+        );
+      }),
+    ).toBe(false);
+  });
+
+  it("leaves provider-direct audio replies to server VAD unless forced consult routing is configured", async () => {
     vi.useFakeTimers();
 
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
@@ -483,7 +548,7 @@ describe("talk realtime gateway relay", () => {
     await Promise.resolve();
 
     bridgeRequest?.onTranscript?.("user", "Can you answer directly?", true);
-    expect(bridge.sendUserMessage).toHaveBeenLastCalledWith("Can you answer directly?");
+    expect(bridge.sendUserMessage).not.toHaveBeenCalled();
     expect(
       events.some((entry) => {
         const payload = entry.payload;
@@ -542,6 +607,8 @@ describe("talk realtime gateway relay", () => {
       forceAgentConsultOnFinalTranscript: true,
     });
     await Promise.resolve();
+
+    expectRecordFields(bridgeRequest, { autoRespondToAudio: false });
 
     bridgeRequest?.onTranscript?.("user", "Can you check this?", true);
     expect(bridge.sendUserMessage).not.toHaveBeenCalledWith("Can you check this?");
@@ -922,6 +989,302 @@ describe("talk realtime gateway relay", () => {
     expect(bufferedAgentEvents.has("run-1:assistant")).toBe(false);
     expectChatAbortPayload(broadcast, "barge-in");
     expectNodeAbortPayload(nodeSendToSession);
+  });
+
+  it("clears linked agent consult runs after the final tool result", () => {
+    const { abortController, broadcast, session } = createAbortableRelayRunFixture();
+
+    submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { ok: true },
+    });
+    cancelTalkRealtimeRelayTurn({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      reason: "barge-in",
+    });
+
+    expect(abortController.signal.aborted).toBe(false);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ runId: "run-1", state: "aborted" }),
+    );
+  });
+
+  it("returns structured relay steering status and emits Talk progress", async () => {
+    const provider = createIdleRelayProvider();
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      sessionKey: "agent:main:main",
+    });
+
+    await expect(
+      steerTalkRealtimeRelayAgentRun({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-1",
+        sessionKey: "agent:other:main",
+        text: "status",
+        mode: "status",
+      }),
+    ).rejects.toThrow("Realtime relay steering session key does not match the relay session");
+
+    const result = await steerTalkRealtimeRelayAgentRun({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      sessionKey: "agent:main:main",
+      text: "status",
+      mode: "status",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      mode: "status",
+      sessionKey: "agent:main:main",
+      active: false,
+    });
+    const progressPayload = findEventPayload(events, (payload) => payload.type === "toolProgress");
+    expectRecordFields(progressPayload, {
+      relaySessionId: session.relaySessionId,
+      type: "toolProgress",
+    });
+    expectRecordFields(progressPayload.talkEvent, {
+      type: "tool.progress",
+      final: true,
+    });
+  });
+
+  it("submits a final provider result when voice cancel aborts an active relay run", async () => {
+    const abortEmbeddedRun = vi.fn();
+    setActiveEmbeddedRun(
+      "embedded-session-1",
+      {
+        queueMessage: vi.fn(async () => undefined),
+        isStreaming: () => true,
+        isCompacting: () => false,
+        abort: abortEmbeddedRun,
+      },
+      "main",
+    );
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: () => bridge,
+    };
+    const { abortController, broadcast, session } = createAbortableRelayRunFixture(provider);
+
+    const result = await steerTalkRealtimeRelayAgentRun({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      text: "cancel that",
+      mode: "cancel",
+    });
+    cancelTalkRealtimeRelayTurn({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      reason: "barge-in",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      mode: "cancel",
+      providerResult: {
+        status: "cancelled",
+        message: "Cancelled the active OpenClaw run.",
+      },
+    });
+    expect(abortEmbeddedRun).toHaveBeenCalledTimes(1);
+    expect(bridge.submitToolResult).toHaveBeenCalledWith(
+      "call-1",
+      {
+        status: "cancelled",
+        message: "Cancelled the active OpenClaw run.",
+      },
+      { suppressResponse: true },
+    );
+    expect(abortController.signal.aborted).toBe(false);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ runId: "run-1", state: "aborted" }),
+    );
+
+    submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
+      result: { error: "aborted" },
+    });
+    expect(bridge.submitToolResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not submit cancel results for synthetic forced-consult calls", async () => {
+    vi.useFakeTimers();
+
+    const abortEmbeddedRun = vi.fn();
+    setActiveEmbeddedRun(
+      "embedded-session-1",
+      {
+        queueMessage: vi.fn(async () => undefined),
+        isStreaming: () => true,
+        isCompacting: () => false,
+        abort: abortEmbeddedRun,
+      },
+      "main",
+    );
+
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      supportsToolResultContinuation: true,
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      sendUserMessage: vi.fn(),
+      triggerGreeting: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "be brief",
+      tools: [],
+      forceAgentConsultOnFinalTranscript: true,
+    });
+    await Promise.resolve();
+
+    bridgeRequest?.onTranscript?.("user", "Can you check this?", true);
+    await vi.advanceTimersByTimeAsync(250);
+    const forcedToolCall = findEventPayload(
+      events,
+      (payload) => payload.type === "toolCall" && payload.forced === true,
+    );
+    const callId = String(forcedToolCall.callId);
+    registerTalkRealtimeRelayAgentRun({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      sessionKey: "main",
+      runId: "run-1",
+      callId,
+    });
+
+    const result = await steerTalkRealtimeRelayAgentRun({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      text: "cancel that",
+      mode: "cancel",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      mode: "cancel",
+      providerResult: {
+        status: "cancelled",
+        message: "Cancelled the active OpenClaw run.",
+      },
+    });
+    expect(abortEmbeddedRun).toHaveBeenCalledTimes(1);
+    expect(bridge.submitToolResult).not.toHaveBeenCalled();
+    const toolResult = findEventPayload(
+      events,
+      (payload) => payload.type === "toolResult" && payload.callId === callId,
+    );
+    expectRecordFields(toolResult, {
+      relaySessionId: session.relaySessionId,
+      type: "toolResult",
+      callId,
+    });
+  });
+
+  it("does not duplicate control-like transcripts when the linked relay run is already gone", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      sendUserMessage: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const context = {
+      broadcastToConnIds: vi.fn(),
+      chatAbortControllers: new Map(),
+    } as never;
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+    registerTalkRealtimeRelayAgentRun({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      sessionKey: "main",
+      runId: "stale-run",
+      callId: "call-1",
+    });
+
+    bridgeRequest?.onTranscript?.("user", "status", true);
+
+    expect(bridge.sendUserMessage).not.toHaveBeenCalled();
+    expect(bridge.submitToolResult).not.toHaveBeenCalled();
   });
 
   it("aborts linked agent consult runs when the relay session closes", () => {

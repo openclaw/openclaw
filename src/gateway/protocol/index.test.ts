@@ -1,4 +1,3 @@
-import AjvPkg, { type ErrorObject } from "ajv";
 import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../test-utils/talk-test-provider.js";
 import * as protocol from "./index.js";
@@ -16,7 +15,9 @@ import {
   validateTalkConfigResult,
   validateTalkEvent,
   validateTalkClientCreateParams,
+  validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
+  validateTalkAgentControlResult,
   validateTalkSessionAppendAudioParams,
   validateTalkSessionCancelOutputParams,
   validateTalkSessionCancelTurnParams,
@@ -24,12 +25,14 @@ import {
   validateTalkSessionJoinParams,
   validateTalkSessionJoinResult,
   validateTalkSessionSubmitToolResultParams,
+  validateTalkSessionSteerParams,
   validateTalkSessionTurnParams,
   validateTalkSessionTurnResult,
   validateWakeParams,
+  type ValidationError,
 } from "./index.js";
 
-const makeError = (overrides: Partial<ErrorObject>): ErrorObject => ({
+const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
   keyword: "type",
   instancePath: "",
   schemaPath: "#/",
@@ -38,29 +41,14 @@ const makeError = (overrides: Partial<ErrorObject>): ErrorObject => ({
   ...overrides,
 });
 
-type CompileMethod = (schema: unknown, meta?: boolean) => unknown;
 type ProtocolValidator = (value: unknown) => boolean;
 
 describe("lazy protocol validators", () => {
-  it("compiles on first use and reuses the compiled validator", () => {
-    const ajvPrototype = (AjvPkg as unknown as { prototype: { compile: CompileMethod } }).prototype;
-    const originalCompile = ajvPrototype.compile;
-    let compileCalls = 0;
-
-    ajvPrototype.compile = function (this: unknown, schema: unknown, meta?: boolean) {
-      compileCalls += 1;
-      return originalCompile.call(this, schema, meta);
-    };
-
-    try {
-      expect(compileCalls).toBe(0);
-      expect(validateCommandsListParams({})).toBe(true);
-      expect(compileCalls).toBe(1);
-      expect(validateCommandsListParams({ includeArgs: true })).toBe(true);
-      expect(compileCalls).toBe(1);
-    } finally {
-      ajvPrototype.compile = originalCompile;
-    }
+  it("validates through exported lazy validators", () => {
+    expect(validateCommandsListParams({})).toBe(true);
+    expect(validateCommandsListParams({ includeArgs: true })).toBe(true);
+    expect(validateCommandsListParams({ includeArgs: "yes" })).toBe(false);
+    expect(formatValidationErrors(validateCommandsListParams.errors)).toContain("must be boolean");
   });
 
   it("keeps validation errors readable on the exported validator", () => {
@@ -449,6 +437,44 @@ describe("validateTalkClientToolCallParams", () => {
         callId: "call-1",
         name: "openclaw_agent_consult",
         args: { question: "what now" },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("validateTalkAgentControlParams", () => {
+  it("accepts client and session steering params plus structured outcomes", () => {
+    expect(
+      validateTalkClientSteerParams({
+        sessionKey: "agent:main:main",
+        text: "use the safer path",
+        mode: "steer",
+      }),
+    ).toBe(true);
+    expect(
+      validateTalkSessionSteerParams({
+        sessionId: "talk-1",
+        sessionKey: "agent:main:main",
+        text: "status",
+        mode: "status",
+      }),
+    ).toBe(true);
+    expect(
+      validateTalkAgentControlResult({
+        ok: true,
+        mode: "cancel",
+        sessionKey: "agent:main:main",
+        sessionId: "session-1",
+        active: true,
+        aborted: true,
+        message: "Cancelled the active OpenClaw run.",
+        speak: true,
+        show: true,
+        suppress: false,
+        providerResult: {
+          status: "cancelled",
+          message: "Cancelled the active OpenClaw run.",
+        },
       }),
     ).toBe(true);
   });

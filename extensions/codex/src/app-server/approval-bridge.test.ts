@@ -110,6 +110,63 @@ describe("Codex app-server approval bridge", () => {
     }));
   });
 
+  it("auto-accepts app-server command approvals in yolo mode without opening plugin approvals", async () => {
+    const params = createParams();
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-yolo",
+        command: "/bin/bash -lc 'node -v'",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApprove: true,
+    });
+
+    expect(result).toEqual({ decision: "acceptForSession" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        approvalMode: "report",
+      }),
+    );
+    findApprovalEvent(params, {
+      status: "approved",
+      message: "Codex app-server approval auto-approved by runtime policy.",
+    });
+  });
+
+  it("auto-accepts app-server file approvals in yolo mode without opening plugin approvals", async () => {
+    const params = createParams();
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/fileChange/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "patch-yolo",
+        reason: "needs write access",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApprove: true,
+    });
+
+    expect(result).toEqual({ decision: "acceptForSession" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "approved",
+      reason: "needs write access",
+      message: "Codex app-server approval auto-approved by runtime policy.",
+    });
+  });
+
   it("routes command approvals through plugin approvals and accepts allowed commands", async () => {
     const params = createParams();
     mockCallGatewayTool
@@ -254,6 +311,7 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
       nativeHookRelay: {
         relayId: "relay-1",
+        generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
     });
@@ -264,6 +322,7 @@ describe("Codex app-server approval bridge", () => {
     expect(mockInvokeNativeHookRelay).toHaveBeenCalledWith({
       provider: "codex",
       relayId: "relay-1",
+      generation: "generation-1",
       event: "pre_tool_use",
       rawPayload: {
         hook_event_name: "PreToolUse",
@@ -285,6 +344,7 @@ describe("Codex app-server approval bridge", () => {
           cmd: "cat /tmp/private_key",
         },
       },
+      requireGeneration: true,
     });
     findApprovalEvent(params, {
       status: "denied",
@@ -317,6 +377,7 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
       nativeHookRelay: {
         relayId: "relay-1",
+        generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
     });
@@ -359,6 +420,7 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
       nativeHookRelay: {
         relayId: "relay-1",
+        generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
     });
@@ -398,6 +460,7 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
       nativeHookRelay: {
         relayId: "relay-1",
+        generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
     });
@@ -441,6 +504,7 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
       nativeHookRelay: {
         relayId: "relay-1",
+        generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
     });
@@ -477,6 +541,7 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
       nativeHookRelay: {
         relayId: "relay-1",
+        generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
     });
@@ -508,6 +573,7 @@ describe("Codex app-server approval bridge", () => {
       turnId: "turn-1",
       nativeHookRelay: {
         relayId: "relay-missing",
+        generation: "generation-1",
         allowedEvents: ["pre_tool_use"],
       },
     });
@@ -532,6 +598,7 @@ describe("Codex app-server approval bridge", () => {
       .mockResolvedValueOnce({ id: "plugin:permission-approval", decision: "deny" });
     const nativeHookRelay = {
       relayId: "relay-1",
+      generation: "generation-1",
       allowedEvents: ["pre_tool_use" as const],
     };
 

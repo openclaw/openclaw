@@ -361,6 +361,8 @@ export const ar: TranslationMap = {
     pending: "{count} قيد الانتظار",
     allowOnce: "السماح مرة واحدة",
     alwaysAllow: "السماح دائمًا",
+    allowAlwaysUnavailable:
+      "تتطلب سياسة الموافقة السارية الحصول على الموافقة في كل مرة، لذا فإن خيار السماح دائمًا غير متاح.",
     deny: "رفض",
     labels: {
       host: "المضيف",
@@ -392,6 +394,7 @@ export const ar: TranslationMap = {
   },
   tabs: {
     agents: "الوكلاء",
+    activity: "النشاط",
     overview: "نظرة عامة",
     channels: "القنوات",
     instances: "المثيلات",
@@ -413,6 +416,7 @@ export const ar: TranslationMap = {
   },
   subtitles: {
     agents: "مساحات العمل، والأدوات، والهويات.",
+    activity: "ملخصات نشاط الأدوات المحلية في المتصفح.",
     overview: "الحالة، ونقاط الدخول، والصحة.",
     channels: "القنوات والإعدادات.",
     instances: "العملاء والعقد المتصلة.",
@@ -431,6 +435,42 @@ export const ar: TranslationMap = {
     debug: "اللقطات، والأحداث، وRPC.",
     logs: "سجلات Gateway المباشرة.",
     dreams: "حلم الذاكرة، والدمج، والتأمل.",
+  },
+  activity: {
+    title: "النشاط",
+    subtitle: "نشاط أدوات مؤقت مشتق من أحداث الجلسة المباشرة.",
+    visibleCount: "{visible} من {total}",
+    filtersLabel: "عوامل تصفية النشاط",
+    search: "بحث",
+    searchPlaceholder: "التصفية حسب الأداة أو الملخص أو التشغيل أو الجلسة",
+    toolFilter: "الأداة",
+    allTools: "كل الأدوات",
+    statusFilters: "عوامل تصفية الحالة",
+    autoFollow: "المتابعة التلقائية",
+    expandAll: "توسيع الكل",
+    collapseAll: "طي الكل",
+    clear: "مسح",
+    empty: "لا يوجد نشاط أدوات بعد.",
+    emptyFiltered: "لا يوجد نشاط يطابق عوامل التصفية هذه.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "تم إخفاء وسيطة واحدة",
+    argumentsHidden: "تم إخفاء {count} وسيطات",
+    streamLabel: "إدخالات نشاط الأدوات",
+    toolCallId: "استدعاء الأداة",
+    runId: "شغّل",
+    session: "الجلسة",
+    outputTruncated: "تم تنقيح المعاينة واقتطاعها.",
+    noOutputPreview: "لا توجد معاينة للمخرجات.",
+    status: {
+      running: "قيد التشغيل",
+      done: "مكتمل",
+      error: "خطأ",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -1069,6 +1109,11 @@ export const ar: TranslationMap = {
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
+    },
+    queue: {
+      retry: "Retry",
+      retrySend: "Retry send",
+      retryQueuedMessage: "Retry queued message",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
