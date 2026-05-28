@@ -23,12 +23,22 @@ export function maybeGenerateSessionTitle(params: {
   storePath: string;
   agentId?: string;
   agentDir?: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
 }): void {
-  const { cfg, sessionKey, sessionEntry, storePath, agentId, agentDir } = params;
+  const {
+    cfg,
+    sessionKey,
+    sessionEntry,
+    storePath,
+    agentId,
+    agentDir,
+    authProfileId,
+    authProfileIdSource,
+  } = params;
   const titleCfg = cfg.sessionTitle;
 
-  // Feature disabled.
-  if (titleCfg?.enabled === false) {
+  if (titleCfg?.enabled !== true) {
     return;
   }
 
@@ -58,6 +68,8 @@ export function maybeGenerateSessionTitle(params: {
     agentDir,
     sessionModelProvider,
     sessionModelId,
+    authProfileId,
+    authProfileIdSource,
   }).catch((err) => {
     logVerbose(`session-title-generator: failed to generate title for ${sessionKey}: ${err}`);
   });
@@ -73,6 +85,8 @@ async function generateAndPersistTitle(params: {
   agentDir?: string;
   sessionModelProvider?: string;
   sessionModelId?: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
 }): Promise<void> {
   const {
     cfg,
@@ -84,6 +98,8 @@ async function generateAndPersistTitle(params: {
     agentDir,
     sessionModelProvider,
     sessionModelId,
+    authProfileId,
+    authProfileIdSource,
   } = params;
   const titleCfg = cfg.sessionTitle;
   const turnsBeforeTitle = titleCfg?.turnsBeforeTitle ?? 3;
@@ -125,6 +141,8 @@ async function generateAndPersistTitle(params: {
     maxLength: maxChars,
     modelProvider: sessionModelProvider,
     modelId: sessionModelId,
+    authProfileId,
+    authProfileIdSource,
   });
 
   if (!title) {

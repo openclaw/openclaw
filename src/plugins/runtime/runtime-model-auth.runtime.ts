@@ -26,12 +26,20 @@ export async function resolveApiKeyForProvider(
 export async function getRuntimeAuthForModel(params: {
   model: Model;
   cfg?: OpenClawConfig;
+  agentDir?: string;
   workspaceDir?: string;
+  profileId?: string;
+  preferredProfile?: string;
+  lockedProfile?: boolean;
 }): Promise<ResolvedProviderRuntimeAuth> {
   const resolvedAuth = await resolveModelApiKey({
     model: params.model,
     cfg: params.cfg,
+    agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
+    profileId: params.profileId,
+    preferredProfile: params.preferredProfile,
+    lockedProfile: params.lockedProfile,
   });
 
   if (!resolvedAuth.apiKey || resolvedAuth.mode === "aws-sdk") {

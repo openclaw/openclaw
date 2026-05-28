@@ -1,5 +1,5 @@
 export type SessionTitleConfig = {
-  /** Enable AI-generated session titles. Default: true. */
+  /** Enable AI-generated session titles. Default: false. */
   enabled?: boolean;
   /** Number of user-assistant exchanges before generating a title. Default: 3. */
   turnsBeforeTitle?: number;

@@ -82,6 +82,36 @@ describe("runtime-model-auth.runtime", () => {
     });
   });
 
+  it("passes explicit auth profile selections into model auth resolution", async () => {
+    hoisted.getApiKeyForModel.mockResolvedValue({
+      apiKey: "profile-api-key",
+      source: "profile:openai:work",
+      mode: "api-key",
+      profileId: "openai:work",
+    });
+    hoisted.prepareProviderRuntimeAuth.mockResolvedValue(undefined);
+
+    await getRuntimeAuthForModel({
+      model: MODEL as never,
+      cfg: { auth: { profiles: ["openai:work"] } } as never,
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      profileId: "openai:work",
+      preferredProfile: "openai:work",
+      lockedProfile: true,
+    });
+
+    expect(hoisted.getApiKeyForModel).toHaveBeenCalledWith({
+      model: MODEL,
+      cfg: { auth: { profiles: ["openai:work"] } },
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      profileId: "openai:work",
+      preferredProfile: "openai:work",
+      lockedProfile: true,
+    });
+  });
+
   it("falls back to raw auth when the provider has no runtime auth hook", async () => {
     hoisted.getApiKeyForModel.mockResolvedValue({
       apiKey: "plain-api-key",

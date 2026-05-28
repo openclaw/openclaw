@@ -230,12 +230,12 @@ export function deriveSessionTitle(
     return normalizeOptionalString(entry.displayName);
   }
 
-  if (normalizeOptionalString(entry.autoTitle)) {
-    return truncateTitle(normalizeOptionalString(entry.autoTitle)!, DERIVED_TITLE_MAX_LEN);
-  }
-
   if (normalizeOptionalString(entry.subject)) {
     return normalizeOptionalString(entry.subject);
+  }
+
+  if (normalizeOptionalString(entry.autoTitle)) {
+    return truncateTitle(normalizeOptionalString(entry.autoTitle)!, DERIVED_TITLE_MAX_LEN);
   }
 
   if (firstUserMessage?.trim()) {

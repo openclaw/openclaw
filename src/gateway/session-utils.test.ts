@@ -2304,6 +2304,16 @@ describe("deriveSessionTitle", () => {
     expect(deriveSessionTitle(entry)).toBe("Dev Team Chat");
   });
 
+  test("prefers subject over autoTitle", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+      subject: "Dev Team Chat",
+      autoTitle: "AI Generated Title",
+    } as SessionEntry;
+    expect(deriveSessionTitle(entry)).toBe("Dev Team Chat");
+  });
+
   test("uses first user message when displayName and subject missing", () => {
     const entry = {
       sessionId: "abc123",
