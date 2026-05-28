@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   clearCurrentPluginMetadataSnapshot,
-  getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
@@ -30,6 +30,7 @@ const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGI
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const trustedBundledFixturesRoot = path.resolve("dist-runtime", "extensions");
 const trustedBundledFixtureDirs: string[] = [];
+type SnapshotPluginRecord = PluginMetadataSnapshot["manifestRegistry"]["plugins"][number];
 
 function writeJsonFile(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -589,16 +590,20 @@ describe("plugin-sdk facade runtime", () => {
     useBundledPluginDirOverrideForTest(dir);
 
     function createTestSnapshot(
-      params: { config?: any; plugins?: any[] } = {},
+      params: {
+        config?: OpenClawConfig;
+        plugins?: SnapshotPluginRecord[];
+      } = {},
     ): PluginMetadataSnapshot {
+      const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
       return {
-        policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+        policyHash,
         index: {
           version: 1,
           hostContractVersion: "test",
           compatRegistryVersion: "test",
           migrationVersion: 1,
-          policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+          policyHash,
           generatedAtMs: 1,
           installRecords: {},
           plugins: [],
@@ -639,7 +644,7 @@ describe("plugin-sdk facade runtime", () => {
           demo: { enabled: true },
         },
       },
-    };
+    } satisfies OpenClawConfig;
     const matchedSnapshot = createTestSnapshot({
       config: configWithPaths,
       plugins: [
@@ -647,15 +652,14 @@ describe("plugin-sdk facade runtime", () => {
           id: "demo-snapshot",
           rootDir: path.join(dir, "demo"),
           channels: ["demo"],
+          providers: [],
           origin: "bundled" as const,
         },
       ],
     });
 
-    // 1. Snapshot has load paths: ["/path/one"] and entries
     setCurrentPluginMetadataSnapshot(matchedSnapshot, { config: configWithPaths });
 
-    // 2. Set the active config of the facade to mismatched load paths: ["/path/two"]
     setRuntimeConfigSnapshot(
       {
         plugins: {
@@ -677,7 +681,6 @@ describe("plugin-sdk facade runtime", () => {
       },
     );
 
-    // This should resolve to allowed: false because mismatched snapshot was rejected and ignored, and there is no manifest on disk
     expect(
       resolveActivationCheckBundledPluginPublicSurfaceAccess({
         dirName: "demo",
@@ -691,10 +694,8 @@ describe("plugin-sdk facade runtime", () => {
       reason: "no bundled plugin manifest found for demo",
     });
 
-    // 3. Set the active config of the facade to match load paths: ["/path/one"] and entries
     setRuntimeConfigSnapshot(configWithPaths, configWithPaths);
 
-    // This should resolve 'demo-snapshot' from the snapshot (because matched snapshot was accepted and reused)
     expect(
       resolveActivationCheckBundledPluginPublicSurfaceAccess({
         dirName: "demo",
