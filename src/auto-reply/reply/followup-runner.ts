@@ -979,9 +979,10 @@ export function createFollowupRunner(params: {
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
-      const providerUsed = normalizeSessionRouteProvider(
-        runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider,
-      );
+      const providerUsed =
+        normalizeSessionRouteProvider(
+          runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider,
+        ) ?? "openai";
       const contextTokensUsed =
         resolveContextTokensForModel({
           cfg: queued.run.config,

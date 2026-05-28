@@ -110,9 +110,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
       : undefined;
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
-  const providerUsed = normalizeSessionRouteProvider(
-    result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider,
-  );
+  const providerUsed =
+    normalizeSessionRouteProvider(
+      result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider,
+    ) ?? "openai";
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
