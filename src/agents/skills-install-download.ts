@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
@@ -19,6 +19,7 @@ import type { SkillEntry, SkillInstallSpec } from "./skills.js";
 import { resolveSkillToolsRootDir } from "./skills/tools-dir.js";
 
 const extractModuleLoader = createLazyImportLoader(() => import("./skills-install-extract.js"));
+export const MAX_SKILL_DOWNLOAD_BYTES = 256 * 1024 * 1024;
 
 async function loadExtractModule() {
   return await extractModuleLoader.load();
@@ -26,6 +27,45 @@ async function loadExtractModule() {
 
 function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
   return Boolean(value && typeof (value as NodeJS.ReadableStream).pipe === "function");
+}
+
+function formatDownloadTooLargeError(bytes: number, maxBytes: number): string {
+  return `download too large: ${bytes} bytes (limit: ${maxBytes} bytes)`;
+}
+
+function assertResponseSizeWithinLimit(
+  response: { headers?: { get?: (name: string) => string | null } },
+  maxBytes: number,
+): void {
+  const rawContentLength = response.headers?.get?.("content-length");
+  if (!rawContentLength) {
+    return;
+  }
+  const contentLength = Number(rawContentLength);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error(formatDownloadTooLargeError(contentLength, maxBytes));
+  }
+}
+
+function createDownloadSizeLimitTransform(maxBytes: number): Transform {
+  let totalBytes = 0;
+  return new Transform({
+    transform(
+      chunk: Buffer | Uint8Array | string,
+      encoding: BufferEncoding,
+      callback: (error?: Error | null, data?: Buffer | Uint8Array | string) => void,
+    ) {
+      const chunkBytes =
+        typeof chunk === "string" ? Buffer.byteLength(chunk, encoding) : chunk.byteLength;
+      const nextTotal = totalBytes + chunkBytes;
+      if (nextTotal > maxBytes) {
+        callback(new Error(formatDownloadTooLargeError(nextTotal, maxBytes)));
+        return;
+      }
+      totalBytes = nextTotal;
+      callback(null, chunk);
+    },
+  });
 }
 
 function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): string {
@@ -75,6 +115,7 @@ async function downloadFile(params: {
   rootDir: string;
   relativePath: string;
   timeoutMs: number;
+  maxBytes: number;
 }): Promise<{ bytes: number }> {
   const destPath = path.resolve(params.rootDir, params.relativePath);
   const stagingDir = path.join(params.rootDir, ".openclaw-download-staging");
@@ -93,12 +134,13 @@ async function downloadFile(params: {
     if (!response.ok || !response.body) {
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
+    assertResponseSizeWithinLimit(response, params.maxBytes);
     const file = fs.createWriteStream(tempPath);
     const body = response.body as unknown;
     const readable = isNodeReadableStream(body)
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
-    await pipeline(readable, file);
+    await pipeline(readable, createDownloadSizeLimitTransform(params.maxBytes), file);
     const root = await fsRoot(params.rootDir);
     await root.copyIn(params.relativePath, tempPath);
     const stat = await fs.promises.stat(destPath);
@@ -186,6 +228,7 @@ export async function installDownloadSpec(params: {
       rootDir: canonicalRoot,
       relativePath: archiveRelativePath,
       timeoutMs,
+      maxBytes: MAX_SKILL_DOWNLOAD_BYTES,
     });
     downloaded = result.bytes;
   } catch (err) {

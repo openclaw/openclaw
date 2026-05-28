@@ -362,7 +362,7 @@ metadata:
       without `brew`, onboarding hides brew-only dependency installers; use a
       custom image or install the dependency manually before enabling that skill.
     - **Go installs:** if `go` is missing and `brew` is available, the gateway installs Go via Homebrew first and sets `GOBIN` to Homebrew's `bin` when possible.
-    - **Download installs:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when archive detected), `stripComponents`, `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
+    - **Download installs:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when archive detected), `stripComponents`, `targetDir` (default: `~/.openclaw/tools/<skillKey>`). Downloads are rejected when the advertised or streamed response exceeds 256 MiB.
 
   </Accordion>
 </AccordionGroup>
