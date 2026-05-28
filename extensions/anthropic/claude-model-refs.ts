@@ -2,7 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_MODEL_ALIASES } from "./cli-constants.js";
 
 const DEFAULT_CLAUDE_MODEL_BY_FAMILY: Record<string, string> = {
-  opus: "claude-opus-4-7",
+  opus: "claude-opus-4-8",
   sonnet: "claude-sonnet-4-6",
   haiku: "claude-sonnet-4-6",
 };
@@ -108,6 +108,9 @@ function canonicalizeKnownClaudeCliModelId(modelId: string): string | null {
 }
 
 function upgradeOldClaudeModelId(normalized: string): string | null {
+  if (normalized.startsWith("claude-opus-4-8") || normalized.startsWith("claude-opus-4.8")) {
+    return null;
+  }
   if (normalized.startsWith("claude-opus-4-7") || normalized.startsWith("claude-opus-4.7")) {
     return null;
   }
@@ -129,7 +132,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     ]) ||
     /^claude-opus-4-20\d{6}/.test(normalized)
   ) {
-    return "claude-opus-4-7";
+    return "claude-opus-4-8";
   }
   if (
     normalized === "claude-sonnet-4" ||
@@ -162,7 +165,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     normalized === "opus-4" ||
     normalized === "opus-3"
   ) {
-    return "claude-opus-4-7";
+    return "claude-opus-4-8";
   }
   if (
     normalized === "sonnet-4.5" ||

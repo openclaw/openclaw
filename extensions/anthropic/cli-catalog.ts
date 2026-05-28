@@ -5,13 +5,14 @@ import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-
 const CLAUDE_CLI_DEFAULT_CONTEXT_WINDOW = 200_000;
 
 const CLAUDE_CLI_MODEL_LABELS: Record<string, string> = {
+  "claude-opus-4-8": "Claude Opus 4.8 (Claude CLI)",
   "claude-opus-4-7": "Claude Opus 4.7 (Claude CLI)",
   "claude-opus-4-6": "Claude Opus 4.6 (Claude CLI)",
   "claude-sonnet-4-6": "Claude Sonnet 4.6 (Claude CLI)",
 };
 
 function resolveClaudeCliImageMediaInput(id: string): ModelCatalogEntry["mediaInput"] {
-  const maxSidePx = id === "claude-opus-4-7" ? 2576 : 1568;
+  const maxSidePx = id === "claude-opus-4-8" || id === "claude-opus-4-7" ? 2576 : 1568;
   return {
     image: {
       maxSidePx,
