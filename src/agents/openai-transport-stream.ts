@@ -1158,6 +1158,7 @@ function convertResponsesMessages(
           let msgId = resolveReplayableResponsesMessageId({
             replayResponsesItemIds: shouldReplayResponsesItemIds,
             textSignatureId: textSignature?.id,
+            textSignaturePhase: textSignature?.phase,
             fallbackId: `msg_${msgIndex}`,
             fallbackOrdinal: textFallbackOrdinal,
             previousReplayItemWasReasoning,

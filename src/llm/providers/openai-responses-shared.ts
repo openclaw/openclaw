@@ -75,6 +75,21 @@ function parseTextSignature(
   return { id: signature };
 }
 
+function resolveReplayableResponsesMessageId(params: {
+  textSignatureId?: string;
+  textSignaturePhase?: TextSignatureV1["phase"];
+  fallbackId: string;
+  previousReplayItemWasReasoning: boolean;
+}): string | undefined {
+  if (!params.textSignatureId) {
+    return params.fallbackId;
+  }
+  if (params.textSignaturePhase) {
+    return params.textSignatureId;
+  }
+  return params.previousReplayItemWasReasoning ? params.textSignatureId : undefined;
+}
+
 export interface OpenAIResponsesStreamOptions {
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   resolveServiceTier?: (
@@ -221,6 +236,7 @@ export function convertResponsesMessages<TApi extends Api>(
       const output: ResponseInput = [];
       let textFallbackOrdinal = 0;
       const assistantMsg = msg;
+      let previousReplayItemWasReasoning = false;
       const isDifferentModel =
         assistantMsg.model !== model.id &&
         assistantMsg.provider === model.provider &&
@@ -231,11 +247,11 @@ export function convertResponsesMessages<TApi extends Api>(
           if (block.thinkingSignature) {
             const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
             output.push(reasoningItem);
+            previousReplayItemWasReasoning = true;
           }
         } else if (block.type === "text") {
           const textBlock = block;
           const parsedSignature = parseTextSignature(textBlock.textSignature);
-          // OpenAI requires id to be max 64 characters
           let msgId = parsedSignature?.id;
           if (!msgId) {
             // Reasoning-dropped/model-switch replay strips textSignature, which can
@@ -247,7 +263,10 @@ export function convertResponsesMessages<TApi extends Api>(
                 ? `msg_${msgIndex}`
                 : `msg_${msgIndex}_${textFallbackOrdinal}`;
             textFallbackOrdinal += 1;
-          } else if (msgId.length > 64) {
+          } else if (!parsedSignature?.phase && !previousReplayItemWasReasoning) {
+            msgId = undefined;
+          }
+          if (msgId && msgId.length > 64) {
             msgId = `msg_${shortHash(msgId)}`;
           }
           output.push({
@@ -257,9 +276,10 @@ export function convertResponsesMessages<TApi extends Api>(
               { type: "output_text", text: sanitizeSurrogates(textBlock.text), annotations: [] },
             ],
             status: "completed",
-            id: msgId,
+            ...(msgId ? { id: msgId } : {}),
             phase: parsedSignature?.phase,
           } satisfies ResponseOutputMessage);
+          previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
           const toolCall = block;
           const [callId, itemIdRaw] = toolCall.id.split("|");
@@ -279,6 +299,7 @@ export function convertResponsesMessages<TApi extends Api>(
             name: toolCall.name,
             arguments: JSON.stringify(toolCall.arguments),
           });
+          previousReplayItemWasReasoning = false;
         }
       }
       if (output.length === 0) {
