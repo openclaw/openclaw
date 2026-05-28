@@ -2946,6 +2946,53 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("keeps generic requester handoff errors visible after active wake failure", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("requester handoff exploded after dispatch");
+    }) as unknown as typeof runtimeCallGateway;
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "transcript_commit_wait_unsupported",
+      "no_active_run",
+    ]);
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      sessionId: "requester-session-channel",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-handoff-error",
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-error",
+          childSessionId: "task-error",
+          announceType: "image generation task",
+          taskLabel: "errored handoff image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-error.png",
+          mediaUrls: ["/tmp/generated-error.png"],
+          replyInstruction:
+            "Tell the user the image is ready and send it through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "requester handoff exploded after dispatch",
+    });
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("directly delivers stale isolated cron run media completions", async () => {
     const callGateway = createGatewayMock();
     const sendMessage = createSendMessageMock();
