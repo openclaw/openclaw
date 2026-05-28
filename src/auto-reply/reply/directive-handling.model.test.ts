@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
   vi.resetModules();
@@ -16,6 +15,7 @@ const authProfilesStoreMock = vi.hoisted(() => ({
   >,
 }));
 const modelsCommandMock = vi.hoisted(() => ({
+  delegateToActual: false,
   resolveModelsCommandReply: vi.fn(),
 }));
 
@@ -33,6 +33,14 @@ function defaultModelsCommandReply() {
 
 function normalizeProviderForAuthTest(provider: string) {
   return provider.trim().toLowerCase();
+}
+
+function hasAllowedPluginForAuthTest(cfg: unknown, pluginId: string): boolean {
+  if (!cfg || typeof cfg !== "object" || !("plugins" in cfg)) {
+    return false;
+  }
+  const plugins = (cfg as { plugins?: { allow?: unknown } }).plugins;
+  return Array.isArray(plugins?.allow) && plugins.allow.includes(pluginId);
 }
 
 vi.mock("../../agents/auth-profiles.js", () => {
@@ -69,8 +77,17 @@ vi.mock("../../agents/auth-profiles.js", () => {
 });
 
 vi.mock("./commands-models.js", () => ({
-  resolveModelsCommandReply: (...args: unknown[]) =>
-    modelsCommandMock.resolveModelsCommandReply(...args),
+  resolveModelsCommandReply: async (
+    params: Parameters<typeof import("./commands-models.js").resolveModelsCommandReply>[0],
+  ) => {
+    modelsCommandMock.resolveModelsCommandReply(params);
+    if (modelsCommandMock.delegateToActual) {
+      const actual =
+        await vi.importActual<typeof import("./commands-models.js")>("./commands-models.js");
+      return actual.resolveModelsCommandReply(params);
+    }
+    return defaultModelsCommandReply();
+  },
 }));
 
 vi.mock("./directive-handling.auth.js", () => ({
@@ -82,7 +99,7 @@ vi.mock("./directive-handling.auth.js", () => ({
   },
   resolveAuthLabel: async (
     provider: string,
-    _cfg: unknown,
+    cfg: unknown,
     _modelsPath: string,
     _agentDir?: string,
     _mode?: unknown,
@@ -105,7 +122,10 @@ vi.mock("./directive-handling.auth.js", () => ({
     if (
       providerKey === "anthropic" &&
       workspaceDir &&
-      (process.env.WORKSPACE_MODEL_CREDENTIALS || process.env.WORKSPACE_MODEL_LIST_CREDENTIALS)
+      ((process.env.WORKSPACE_MODEL_CREDENTIALS &&
+        hasAllowedPluginForAuthTest(cfg, "workspace-model-auth")) ||
+        (process.env.WORKSPACE_MODEL_LIST_CREDENTIALS &&
+          hasAllowedPluginForAuthTest(cfg, "workspace-model-list")))
     ) {
       return {
         label: process.env.WORKSPACE_MODEL_CREDENTIALS
@@ -196,6 +216,50 @@ vi.mock("../../agents/provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: (provider: string) => provider,
 }));
 
+vi.mock("../../agents/harness/selection.js", () => ({
+  resolveAgentHarnessPolicy: ({
+    provider,
+    modelId,
+    config,
+  }: {
+    provider?: string;
+    modelId?: string;
+    config?: OpenClawConfig;
+  }) => {
+    const modelRuntime =
+      provider && modelId
+        ? config?.agents?.defaults?.models?.[`${provider}/${modelId}`]?.agentRuntime?.id
+        : undefined;
+    const providerRuntime = provider
+      ? config?.models?.providers?.[provider]?.agentRuntime?.id
+      : undefined;
+    const runtime =
+      modelRuntime === "default"
+        ? undefined
+        : (modelRuntime ??
+          (providerRuntime === "default" ? undefined : providerRuntime) ??
+          (provider === "openai" || provider === "openai-codex" ? "codex" : "auto"));
+    return {
+      runtime,
+      runtimeSource: modelRuntime ? "model" : providerRuntime ? "provider" : "implicit",
+    };
+  },
+}));
+
+vi.mock("../../agents/runtime-plan/auth.js", () => ({
+  buildAgentRuntimeAuthPlan: ({
+    provider,
+    harnessRuntime,
+  }: {
+    provider: string;
+    harnessRuntime?: string;
+  }) => ({
+    providerForAuth: provider,
+    authProfileProviderForAuth: provider,
+    ...(harnessRuntime === "codex" ? { harnessAuthProvider: "openai-codex" } : {}),
+  }),
+}));
+
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -215,13 +279,22 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { ElevatedLevel } from "../thinking.js";
-import { handleDirectiveOnly } from "./directive-handling.impl.js";
-import {
-  maybeHandleModelDirectiveInfo,
-  resolveModelSelectionFromDirective,
-} from "./directive-handling.model.js";
-import { parseInlineDirectives } from "./directive-handling.parse.js";
-import { persistInlineDirectives } from "./directive-handling.persist.js";
+
+let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
+let cliBackendsTesting: typeof import("../../agents/cli-backends.js").testing;
+let maybeHandleModelDirectiveInfo: typeof import("./directive-handling.model.js").maybeHandleModelDirectiveInfo;
+let resolveModelSelectionFromDirective: typeof import("./directive-handling.model.js").resolveModelSelectionFromDirective;
+let parseInlineDirectives: typeof import("./directive-handling.parse.js").parseInlineDirectives;
+let persistInlineDirectives: typeof import("./directive-handling.persist.js").persistInlineDirectives;
+
+beforeAll(async () => {
+  ({ testing: cliBackendsTesting } = await import("../../agents/cli-backends.js"));
+  ({ handleDirectiveOnly } = await import("./directive-handling.impl.js"));
+  ({ maybeHandleModelDirectiveInfo, resolveModelSelectionFromDirective } =
+    await import("./directive-handling.model.js"));
+  ({ parseInlineDirectives } = await import("./directive-handling.parse.js"));
+  ({ persistInlineDirectives } = await import("./directive-handling.persist.js"));
+});
 
 const liveModelSwitchMocks = vi.hoisted(() => ({
   requestLiveSessionModelSwitch: vi.fn(),
@@ -341,6 +414,7 @@ beforeEach(() => {
   modelsCommandMock.resolveModelsCommandReply
     .mockReset()
     .mockResolvedValue(defaultModelsCommandReply());
+  modelsCommandMock.delegateToActual = false;
   clearRuntimeAuthProfileStoreSnapshots();
   replaceRuntimeAuthProfileStoreSnapshots([
     {
@@ -580,6 +654,7 @@ describe("/model chat UX", () => {
           WORKSPACE_MODEL_LIST_CREDENTIALS: credentialPath,
         },
         async () => {
+          modelsCommandMock.delegateToActual = true;
           const reply = await resolveModelInfoReply({
             directives: parseInlineDirectives("/model list"),
             workspaceDir,
@@ -744,7 +819,6 @@ describe("/model chat UX", () => {
         commands: { text: true },
         agents: {
           defaults: {
-            agentRuntime: { id: "codex" },
             model: { primary: "openai/gpt-5.5" },
             models: {
               "codex/gpt-5.5": {},
@@ -788,7 +862,6 @@ describe("/model chat UX", () => {
         commands: { text: true },
         agents: {
           defaults: {
-            agentRuntime: { id: "codex" },
             model: { primary: "openai/gpt-5.5" },
             models: {
               "openai/gpt-5.5": {},
