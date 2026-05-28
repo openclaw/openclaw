@@ -76,6 +76,16 @@ const TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS: Record<string, string> = {
   old_string: "new_string",
   oldText: "newText",
 };
+const TOOLCALL_REPAIR_JSON_STRING_ESCAPES: Record<string, string> = {
+  '"': '"',
+  "\\": "\\",
+  "/": "/",
+  b: "\b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "\t",
+};
 
 function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string): boolean {
   if (/[}\]]/.test(delta)) {
@@ -239,6 +249,14 @@ function shouldCloseSmartQuotedValueAt(raw: string, quoteIndex: number, valueKey
   return TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS[valueKey] === nextKey;
 }
 
+function decodeSmartQuotedJsonStringEscapes(value: string): string {
+  return value.replace(/\\(?:(["\\/bfnrt])|u([0-9a-fA-F]{4}))/g, (_match, escaped, hex) =>
+    typeof hex === "string"
+      ? String.fromCharCode(parseInt(hex, 16))
+      : TOOLCALL_REPAIR_JSON_STRING_ESCAPES[escaped as string],
+  );
+}
+
 function readSmartQuotedValue(
   raw: string,
   startIndex: number,
@@ -248,7 +266,7 @@ function readSmartQuotedValue(
   for (let i = startIndex + 1; i < raw.length; i += 1) {
     const char = raw[i];
     if (isToolCallRepairSmartQuote(char) && shouldCloseSmartQuotedValueAt(raw, i, key)) {
-      return { value, endIndex: i + 1 };
+      return { value: decodeSmartQuotedJsonStringEscapes(value), endIndex: i + 1 };
     }
     value += char;
   }

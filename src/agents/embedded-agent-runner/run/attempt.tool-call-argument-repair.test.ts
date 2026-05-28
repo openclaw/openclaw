@@ -312,6 +312,17 @@ const re = /\d+/;
     expectAllToolCallArgs(result, { path: "safe.txt" });
   });
 
+  it("decodes JSON escapes inside smart-quoted string args", async () => {
+    const result = await runToolCallRepairCase({
+      delta: String.raw` {“path”:“safe.txt”,“content”:“line\nnext \"quoted\" path C:\\tmp mark \u2713 invalid \d”}`,
+    });
+
+    expectAllToolCallArgs(result, {
+      path: "safe.txt",
+      content: 'line\nnext "quoted" path C:\\tmp mark ✓ invalid \\d',
+    });
+  });
+
   it("keeps duplicate-looking smart-quoted args inside content", async () => {
     const result = await runToolCallRepairCase({
       delta: String.raw` {“path”:“safe.txt”,“content”:“text ”, “path”: “other.txt””}`,
