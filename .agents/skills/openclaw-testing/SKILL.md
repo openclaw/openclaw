@@ -40,7 +40,7 @@ Prove the touched surface first. Do not reflexively run the whole suite.
 
 - Do not kill unrelated processes or tests. If something is running elsewhere, treat it as owned by the user or another agent.
 - Do not run expensive local Docker, full release checks, full `pnpm test`, or full `pnpm check` unless the user asks or the change genuinely requires it.
-- Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
+- Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and protected CI context.
 - Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
 - If deps are missing, run `pnpm install`, retry once, then report the first actionable error.
 - In a Codex worktree or linked/sparse checkout, do not run direct local
@@ -213,7 +213,7 @@ workflow only spends setup and queue time on that suite.
 ### Release Evidence
 
 After release-candidate validation or before a release decision, record the
-important run ids in the private `openclaw/releases-private` evidence ledger.
+important run ids in the restricted `openclaw/releases-private` evidence tracking log.
 Use the manual `OpenClaw Release Evidence`
 (`openclaw-release-evidence.yml`) workflow there. It writes durable summaries
 under `evidence/<release-id>/` and commits:
@@ -233,16 +233,16 @@ release-checks openclaw/openclaw <run-id> blocking
 
 Store summaries, run URLs, artifact metadata, timings, pass/fail state, and
 short release-manager notes there. Do not store raw logs, provider
-prompts/responses, channel transcripts, signing material, or secret-bearing
+prompts/responses, channel transcripts, signing material, or sensitive
 config in git; raw logs stay in Actions artifacts.
 
 When `Full Release Validation` completes and
 `OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN` is configured in the public repo, it
-requests the private `OpenClaw Release Evidence From Full Validation` workflow.
-That private workflow reads the parent full-validation run, extracts the child
+requests the restricted `OpenClaw Release Evidence From Full Validation` workflow.
+That restricted workflow reads the parent full-validation run, extracts the child
 CI/release-checks/Telegram run ids from the parent logs, and opens the evidence
 PR automatically. If the token is absent or the run predates this wiring, trigger
-that private workflow manually with the full-validation run id.
+that restricted workflow manually with the full-validation run id.
 
 ### Release Checks
 
@@ -477,10 +477,10 @@ Vitest?"
 
 In release validation, treat Package Acceptance as the package-candidate shard
 inside the larger release umbrella, not as a competing full-test path. Full
-Release Validation and private release gauntlets should call Package Acceptance
+Release Validation and restricted release gauntlets should call Package Acceptance
 for tarball resolution, Docker product/package proof, and optional Telegram QA
 against the same resolved `package-under-test` artifact; keep orchestration,
-secret policy, blocking/advisory status, and evidence rollup in the caller.
+sensitive-config policy, blocking/advisory status, and evidence rollup in the caller.
 
 Good defaults:
 
@@ -566,7 +566,7 @@ workflow in the `qa-live-shared` environment. The standalone Telegram workflow
 still accepts a published npm spec for post-publish checks, but Package
 Acceptance passes the resolved artifact for `source=npm`, `ref`, `url`, and
 `artifact`. Use `telegram_mode=none` only when intentionally skipping Telegram
-credentialed package proof for a focused rerun.
+protected package proof for a focused rerun.
 
 Docker E2E images never copy repo sources as the app under test: the bare image
 is a Node/Git runner, and the functional image installs the same prebuilt npm
@@ -574,7 +574,7 @@ tarball that bare lanes mount. `scripts/package-openclaw-for-docker.mjs` is the
 single packer for local scripts and CI and validates the tarball inventory
 before Docker consumes it. `scripts/test-docker-all.mjs --plan-json` is the
 scheduler-owned CI plan for image kind, package, live image, lane, and
-credential needs. Docker lane definitions live in the single scenario catalog
+protected-context needs. Docker lane definitions live in the single scenario catalog
 `scripts/lib/docker-e2e-scenarios.mjs`; planner logic lives in
 `scripts/lib/docker-e2e-plan.mjs`. `scripts/docker-e2e.mjs` converts plan and
 summary JSON into GitHub outputs and step summaries. Every scheduler run writes
