@@ -124,6 +124,7 @@ export function registerChatAbortController(params: {
     ownerDeviceId: params.ownerDeviceId,
     providerId: normalizeProviderIdForActiveRun(params.providerId),
     authProviderId: normalizeProviderIdForActiveRun(params.authProviderId),
+    projectSessionActive: true,
     kind: params.kind,
   };
   params.chatAbortControllers.set(params.runId, entry);
