@@ -276,7 +276,7 @@ describe("short-term promotion", () => {
 
       const entries = Object.entries(await readRecallStoreEntries(workspaceDir));
       expect(entries).toHaveLength(1);
-      const [key, entry] = entries[0]!;
+      const [key, entry] = entries[0];
       expect(key.endsWith(`:${claimHash}`)).toBe(true);
       expect(entry.claimHash).toBe(claimHash);
       expect(entry.recallCount).toBe(1);
