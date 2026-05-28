@@ -630,7 +630,8 @@ function markClaudeLiveToolCompleted(turn: ClaudeLiveTurn, toolCallId: string): 
 }
 
 function completeActiveClaudeLiveTools(turn: ClaudeLiveTurn): void {
-  for (const toolCallId of [...turn.activeTools.keys()]) {
+  const activeToolCallIds = Array.from(turn.activeTools.keys());
+  for (const toolCallId of activeToolCallIds) {
     markClaudeLiveToolCompleted(turn, toolCallId);
   }
 }
