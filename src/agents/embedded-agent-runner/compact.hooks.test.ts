@@ -2175,9 +2175,14 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     );
 
     expect(result.ok).toBe(true);
-    expectRecordFields(mockCallArg(contextEngineCompactMock), {
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg, {
       compactionTarget: "budget",
       force: true,
+    });
+    expectRecordFields(compactArg.runtimeContext, {
       forceReason: "preflight_required",
       preflightCompactionTrigger: "transcript_bytes",
     });
@@ -2187,9 +2192,14 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     const result = await compactEmbeddedAgentSession(wrappedCompactionArgs({ trigger: "manual" }));
 
     expect(result.ok).toBe(true);
-    expectRecordFields(mockCallArg(contextEngineCompactMock), {
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg, {
       compactionTarget: "threshold",
       force: true,
+    });
+    expectRecordFields(compactArg.runtimeContext, {
       forceReason: "manual",
     });
   });
