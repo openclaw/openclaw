@@ -15,7 +15,10 @@ function normalizeUtcIso(raw: string) {
   return raw;
 }
 
-export function parseAbsoluteTimeMs(input: string): number | null {
+export function parseAbsoluteTimeMs(input: string | null | undefined): number | null {
+  if (input == null) {
+    return null;
+  }
   const raw = input.trim();
   if (!raw) {
     return null;
