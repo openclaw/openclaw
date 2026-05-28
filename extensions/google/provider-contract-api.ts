@@ -98,7 +98,16 @@ export function createGoogleVertexProvider(): ProviderPlugin {
               : VERTEX_DEFAULT_LOCATION;
 
           return {
-            profiles: [],
+            profiles: [
+              {
+                profileId: "google-vertex:default",
+                credential: {
+                  type: "api_key" as const,
+                  provider: "google-vertex",
+                  key: "gcp-vertex-credentials",
+                },
+              },
+            ],
             defaultModel: VERTEX_DEFAULT_MODEL,
             configPatch: {
               env: {
