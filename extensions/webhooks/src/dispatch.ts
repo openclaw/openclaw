@@ -59,35 +59,55 @@ export async function executeAgentDispatch(params: {
       context,
     });
   }
-  void scheduler(scheduleRequest).then(
-    (handle) => {
-      if (!handle) {
-        params.logger?.warn?.("[webhooks] agent dispatch was rejected", {
-          routeId: target.routeId,
-          sessionKey: target.sessionKey,
-          ...(context.eventType ? { eventType: context.eventType } : {}),
-          ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
-        });
-        return;
-      }
-      params.logger?.info?.("[webhooks] agent dispatch scheduled", {
+  let handle: Awaited<ReturnType<ScheduleSessionTurn>>;
+  try {
+    handle = await scheduler(scheduleRequest);
+  } catch (error) {
+    params.logger?.warn?.("[webhooks] agent dispatch failed", {
+      routeId: target.routeId,
+      sessionKey: target.sessionKey,
+      ...(context.eventType ? { eventType: context.eventType } : {}),
+      ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      statusCode: 503,
+      body: {
+        ok: false,
         routeId: target.routeId,
-        sessionKey: handle.sessionKey,
-        jobId: handle.id,
-        ...(context.eventType ? { eventType: context.eventType } : {}),
-        ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
-      });
-    },
-    (error) => {
-      params.logger?.warn?.("[webhooks] agent dispatch failed", {
-        routeId: target.routeId,
-        sessionKey: target.sessionKey,
-        ...(context.eventType ? { eventType: context.eventType } : {}),
-        ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
+        code: "agent_dispatch_failed",
         error: error instanceof Error ? error.message : String(error),
-      });
-    },
-  );
+      },
+    };
+  }
+  if (!handle) {
+    params.logger?.warn?.("[webhooks] agent dispatch was rejected", {
+      routeId: target.routeId,
+      sessionKey: target.sessionKey,
+      ...(context.eventType ? { eventType: context.eventType } : {}),
+      ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
+      deliveryMode: target.agent.deliveryMode,
+      delayMs: target.agent.delayMs,
+      ...(name ? { name } : {}),
+      ...(tag ? { tag } : {}),
+    });
+    return {
+      statusCode: 503,
+      body: {
+        ok: false,
+        routeId: target.routeId,
+        code: "agent_dispatch_rejected",
+        error: "Agent dispatch was rejected by the Gateway scheduler.",
+      },
+    };
+  }
+  params.logger?.info?.("[webhooks] agent dispatch scheduled", {
+    routeId: target.routeId,
+    sessionKey: handle.sessionKey,
+    jobId: handle.id,
+    ...(context.eventType ? { eventType: context.eventType } : {}),
+    ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
+  });
   return {
     statusCode: 202,
     body: {
@@ -97,6 +117,7 @@ export async function executeAgentDispatch(params: {
         action: "agent_dispatch",
         sessionKey: target.sessionKey,
         accepted: true,
+        jobId: handle.id,
         ...(target.agent.onCompletion ? { completionDelivery: true } : {}),
       },
     },

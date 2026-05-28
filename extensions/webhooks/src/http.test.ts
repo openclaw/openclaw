@@ -791,6 +791,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         action: "agent_dispatch",
         sessionKey: "agent:main:main",
         accepted: true,
+        jobId: "job-1",
       },
     });
     await vi.waitFor(() => expect(scheduleSessionTurn).toHaveBeenCalledTimes(1));
@@ -1532,6 +1533,7 @@ process.stdin.on("end", () => {
           action: "agent_dispatch",
           sessionKey: "agent:main:main",
           accepted: true,
+          jobId: `job-${app.routeId}`,
         },
       });
       await vi.waitFor(() => expect(scheduleSessionTurn, app.routeId).toHaveBeenCalledTimes(1));
