@@ -56,6 +56,29 @@ function resolveNodeAutoReviewReason(params: {
   return "approval-required";
 }
 
+function execSecurityFloorRank(security: ExecSecurity): number {
+  switch (security) {
+    case "full":
+      return 0;
+    case "allowlist":
+      return 1;
+    case "deny":
+      return 2;
+  }
+}
+
+function nodePolicyBlocksAutoReview(params: {
+  hostSecurity: ExecSecurity;
+  nodeSecurity?: ExecSecurity;
+  nodeAsk?: "off" | "on-miss" | "always";
+}): boolean {
+  return (
+    params.nodeAsk === "always" ||
+    (params.nodeSecurity !== undefined &&
+      execSecurityFloorRank(params.nodeSecurity) > execSecurityFloorRank(params.hostSecurity))
+  );
+}
+
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {
@@ -88,6 +111,8 @@ export async function executeNodeHostCommand(
     analysisOk,
     allowlistSatisfied,
     durableApprovalSatisfied,
+    nodeSecurity,
+    nodeAsk,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
     autoReviewArgv,
@@ -142,6 +167,7 @@ export async function executeNodeHostCommand(
     if (
       params.autoReview === true &&
       hostAsk !== "always" &&
+      !nodePolicyBlocksAutoReview({ hostSecurity, nodeSecurity, nodeAsk }) &&
       !requiresSecurityAuditSuppressionApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;

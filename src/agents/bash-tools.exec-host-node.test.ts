@@ -38,6 +38,18 @@ const evaluateShellAllowlistMock = vi.hoisted(() =>
     segmentAllowlistEntries: [],
   })),
 );
+const resolveExecApprovalsFromFileMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    allowlist: [],
+    file: { version: 1, agents: {} },
+    agent: {
+      security: "full",
+      ask: "off",
+      askFallback: "deny",
+      autoAllowSkills: false,
+    },
+  })),
+);
 const requiresExecApprovalMock = vi.hoisted(() => vi.fn(() => true));
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   vi.fn(() => ({
@@ -93,10 +105,7 @@ vi.mock("../infra/exec-approvals.js", () => ({
   hasDurableExecApproval: vi.fn(() => false),
   requiresExecApproval: requiresExecApprovalMock,
   resolveExecApprovalAllowedDecisions: vi.fn(() => ["allow-once", "allow-always", "deny"]),
-  resolveExecApprovalsFromFile: vi.fn(() => ({
-    allowlist: [],
-    file: { version: 1, agents: {} },
-  })),
+  resolveExecApprovalsFromFile: resolveExecApprovalsFromFileMock,
 }));
 
 vi.mock("../infra/command-analysis/inline-eval.js", () => ({
@@ -274,6 +283,17 @@ describe("executeNodeHostCommand", () => {
       allowlistSatisfied: false,
       segments: [{ resolution: null, argv: ["bun", "./script.ts"] }],
       segmentAllowlistEntries: [],
+    });
+    resolveExecApprovalsFromFileMock.mockReset();
+    resolveExecApprovalsFromFileMock.mockReturnValue({
+      allowlist: [],
+      file: { version: 1, agents: {} },
+      agent: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
     });
     requiresExecApprovalMock.mockReset();
     requiresExecApprovalMock.mockReturnValue(true);
@@ -459,6 +479,94 @@ describe("executeNodeHostCommand", () => {
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
     expect(warnings.join("\n")).toContain("needs a person");
   });
+
+  it.each([
+    {
+      name: "ask always",
+      nodeSecurity: "full",
+      nodeAsk: "always",
+    },
+    {
+      name: "deny security",
+      nodeSecurity: "deny",
+      nodeAsk: "off",
+    },
+  ] as const)(
+    "requests human approval when node policy has $name floor",
+    async ({ nodeSecurity, nodeAsk }) => {
+      const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+        decision: "allow-once",
+        risk: "low",
+        rationale: "test reviewer would allow it",
+      }));
+      resolveExecHostApprovalContextMock.mockReturnValue({
+        approvals: { allowlist: [], file: { version: 1, agents: {} } },
+        hostSecurity: "allowlist",
+        hostAsk: "on-miss",
+        askFallback: "deny",
+      });
+      resolveExecApprovalsFromFileMock.mockReturnValue({
+        allowlist: [],
+        file: { version: 1, agents: {} },
+        agent: {
+          security: nodeSecurity,
+          ask: nodeAsk,
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+      });
+      callGatewayToolMock.mockImplementation(
+        async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
+          if (method === "exec.approvals.node.get") {
+            return { file: { version: 1, agents: {} } };
+          }
+          if (method === "exec.approval.resolve") {
+            return { payload: {} };
+          }
+          if (method !== "node.invoke") {
+            throw new Error(`unexpected gateway method: ${method}`);
+          }
+          if (params?.command === "system.run.prepare") {
+            return { payload: { plan: preparedPlan } };
+          }
+          if (params?.command === "system.run") {
+            return {
+              payload: {
+                success: true,
+                stdout: "ok",
+                stderr: "",
+                exitCode: 0,
+                timedOut: false,
+              },
+            };
+          }
+          throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
+        },
+      );
+
+      const result = await executeNodeHostCommand({
+        command: "bun ./script.ts",
+        workdir: "/tmp/work",
+        env: {},
+        security: "allowlist",
+        ask: "on-miss",
+        autoReview: true,
+        autoReviewer,
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+      });
+
+      expect(result.details?.status).toBe("approval-pending");
+      expect(autoReviewer).not.toHaveBeenCalled();
+      expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+      expect(
+        callGatewayToolMock.mock.calls.some(([method]) => method === "exec.approval.resolve"),
+      ).toBe(false);
+    },
+  );
 
   it("auto-reviews strict inline-eval commands before asking a human", async () => {
     const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({

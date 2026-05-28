@@ -48,6 +48,8 @@ type NodeApprovalAnalysis = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   durableApprovalSatisfied: boolean;
+  nodeSecurity?: ExecSecurity;
+  nodeAsk?: ExecAsk;
   inlineEvalHit: InterpreterInlineEvalHit | null;
   requiresSecurityAuditSuppressionApproval: boolean;
   autoReviewArgv?: string[];
@@ -314,6 +316,8 @@ export async function analyzeNodeApprovalRequirement(params: {
   let analysisOk = baseAllowlistEval.analysisOk;
   let allowlistSatisfied = false;
   let durableApprovalSatisfied = false;
+  let nodeSecurity: ExecSecurity | undefined;
+  let nodeAsk: ExecAsk | undefined;
   const inlineEvalHit =
     params.request.strictInlineEval === true
       ? detectPolicyInlineEval(baseAllowlistEval.segments)
@@ -349,6 +353,8 @@ export async function analyzeNodeApprovalRequirement(params: {
           agentId: params.request.agentId,
           overrides: { security: "full" },
         });
+        nodeSecurity = resolved.agent.security;
+        nodeAsk = resolved.agent.ask;
         // Allowlist-only precheck; safe bins are node-local and may diverge.
         const allowlistEval = evaluateShellAllowlist({
           command: params.request.command,
@@ -376,6 +382,8 @@ export async function analyzeNodeApprovalRequirement(params: {
     analysisOk,
     allowlistSatisfied,
     durableApprovalSatisfied,
+    nodeSecurity,
+    nodeAsk,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
     autoReviewArgv:
