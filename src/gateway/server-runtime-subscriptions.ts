@@ -49,7 +49,7 @@ export function startGatewayEventSubscriptions(params: {
           for (const candidateRunId of new Set([runId, clientRunId])) {
             const entry = params.chatAbortControllers.get(candidateRunId);
             if (entry?.sessionKey === sessionKey) {
-              params.chatAbortControllers.delete(candidateRunId);
+              entry.projectSessionActive = false;
             }
           }
         },
