@@ -1313,7 +1313,7 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.qmd.update.updateTimeoutMs":
     "Sets maximum runtime for each `qmd update` cycle in milliseconds (default: 120000). Raise this for larger collections; lower it when you want quicker failure detection in automation.",
   "memory.qmd.update.embedTimeoutMs":
-    "Sets maximum runtime for each `qmd embed` cycle in milliseconds (default: 120000). Increase for heavier embedding workloads or slower hardware, and lower to fail fast under tight SLAs.",
+    "Sets maximum runtime for each `qmd embed` cycle in milliseconds (default: 600000). Increase for heavier embedding workloads or slower hardware (especially local GGUF models), and lower to fail fast under tight SLAs.",
   "memory.qmd.limits.maxResults":
     "Limits how many QMD hits are returned into the agent loop for each recall request (default: 6). Increase for broader recall context, or lower to keep prompts tighter and faster.",
   "memory.qmd.limits.maxSnippetChars":
