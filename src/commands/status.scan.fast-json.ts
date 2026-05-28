@@ -24,7 +24,6 @@ type StatusJsonScanPolicy = {
   commandName: string;
   allowMissingConfigFastPath?: boolean;
   includeChannelSummary?: boolean;
-  skipUpdateCheck?: boolean;
   fetchGitUpdate?: boolean;
   includeRegistryUpdate?: boolean;
   includeLocalStatusRpcFallback?: boolean;
@@ -95,7 +94,6 @@ export async function scanStatusJsonWithPolicy(
     includeChannelsData: false,
     includeChannelSecretTargets: false,
     skipConfigPluginValidation: true,
-    skipUpdateCheck: policy.skipUpdateCheck,
     fetchGitUpdate: policy.fetchGitUpdate,
     includeRegistryUpdate: policy.includeRegistryUpdate,
     includeLocalStatusRpcFallback: policy.includeLocalStatusRpcFallback,
@@ -125,7 +123,6 @@ export async function scanStatusJsonFast(
     commandName: "status --json",
     allowMissingConfigFastPath: true,
     includeChannelSummary: false,
-    skipUpdateCheck: opts.all !== true,
     fetchGitUpdate: opts.all === true,
     includeRegistryUpdate: opts.all === true,
     includeLocalStatusRpcFallback: opts.all === true,

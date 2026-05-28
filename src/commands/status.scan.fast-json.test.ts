@@ -113,12 +113,18 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
   });
 
-  it("keeps update checks off the default fast JSON path", async () => {
+  it("keeps default fast JSON update scans local-only", async () => {
     mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
 
     await scanStatusJsonFast({ timeoutMs: 1234 }, {} as never);
 
-    expect(mocks.getUpdateCheckResult).not.toHaveBeenCalled();
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 1234,
+        fetchGit: false,
+        includeRegistry: false,
+      }),
+    );
   });
 
   it("restores registry-backed update checks and remote git fetches when --all is requested", async () => {
@@ -245,7 +251,7 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.probeGateway).not.toHaveBeenCalled();
   });
 
-  it("keeps cold-start gateway probes but skips update checks when a channel is configured from manifest env vars", async () => {
+  it("keeps cold-start gateway probes with local-only updates when a channel is configured from manifest env vars", async () => {
     await withTemporaryEnv(
       {
         OPENCLAW_TWITCH_ACCESS_TOKEN: "token",
@@ -258,7 +264,12 @@ describe("scanStatusJsonFast", () => {
       },
     );
 
-    expect(mocks.getUpdateCheckResult).not.toHaveBeenCalled();
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fetchGit: false,
+        includeRegistry: false,
+      }),
+    );
     expect(mocks.probeGateway).toHaveBeenCalled();
   });
 });
