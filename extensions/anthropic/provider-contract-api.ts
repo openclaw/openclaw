@@ -7,7 +7,7 @@ export function createAnthropicProvider(): ProviderPlugin {
     id: "anthropic",
     label: "Anthropic",
     docsPath: "/providers/models",
-    hookAliases: ["claude-cli"],
+    hookAliases: ["claude-cli", "claude-cli-interactive"],
     envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
     auth: [
       {

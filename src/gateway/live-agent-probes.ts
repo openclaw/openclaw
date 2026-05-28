@@ -6,6 +6,7 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isClaudeCliCompatibleBackend } from "@openclaw/model-catalog-core/provider-id";
 
 const execFileAsync = promisify(execFile);
 const LIVE_CRON_PROBE_DELAY_SECONDS = 7 * 24 * 60 * 60;
@@ -33,7 +34,8 @@ type LiveCronProbeSpec = {
 
 export function isClaudeLikeLiveAgent(raw: string): boolean {
   const normalized = normalizeOptionalLowercaseString(raw);
-  return normalized === "claude" || normalized === "claude-cli";
+  if (normalized === "claude") {return true;}
+  return isClaudeCliCompatibleBackend(normalized);
 }
 
 export function assertLiveImageProbeReply(text: string): void {

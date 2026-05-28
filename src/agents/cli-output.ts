@@ -1,3 +1,4 @@
+import { isClaudeCliCompatibleBackend } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { CliBackendConfig } from "../config/types.js";
@@ -23,6 +24,10 @@ export type CliOutput = {
 export type CliStreamingDelta = {
   text: string;
   delta: string;
+  /** Present when this delta carries a thinking chunk rather than assistant text. */
+  thinkingDelta?: string;
+  /** Accumulated thinking text so far; set whenever thinkingDelta is present. */
+  thinkingText?: string;
   sessionId?: string;
   usage?: CliUsage;
 };
@@ -41,7 +46,7 @@ export type CliToolResultDelta = {
 };
 
 function isClaudeCliProvider(providerId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
+  return isClaudeCliCompatibleBackend(providerId);
 }
 
 function usesClaudeStreamJsonDialect(params: {
@@ -393,6 +398,15 @@ function parseClaudeCliStreamingDelta(params: {
     return null;
   }
   const delta = event.delta;
+  if (delta.type === "thinking_delta" && typeof delta.thinking === "string" && delta.thinking) {
+    return {
+      text: params.textSoFar,
+      delta: "",
+      thinkingDelta: delta.thinking,
+      sessionId: params.sessionId,
+      usage: params.usage,
+    };
+  }
   if (delta.type !== "text_delta" || typeof delta.text !== "string") {
     return null;
   }
@@ -618,6 +632,7 @@ export function createCliJsonlStreamingParser(params: {
 }) {
   let lineBuffer = "";
   let assistantText = "";
+  let thinkingText = "";
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   let output: CliOutput | null = null;
@@ -680,6 +695,11 @@ export function createCliJsonlStreamingParser(params: {
       usage,
     });
     if (!delta) {
+      return;
+    }
+    if (delta.thinkingDelta !== undefined) {
+      thinkingText += delta.thinkingDelta;
+      params.onAssistantDelta({ ...delta, thinkingText });
       return;
     }
     assistantText = delta.text;

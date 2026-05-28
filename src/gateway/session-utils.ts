@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isClaudeCliCompatibleBackend } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -1699,7 +1700,7 @@ export async function resolveGatewayModelSupportsImages(params: {
         return true;
       }
       if (
-        normalizedProvider === "claude-cli" &&
+        isClaudeCliCompatibleBackend(normalizedProvider) &&
         normalizedCandidates.some(
           (candidate) =>
             candidate === "opus" ||
@@ -1713,7 +1714,7 @@ export async function resolveGatewayModelSupportsImages(params: {
       return false;
     }
     if (
-      normalizedProvider === "claude-cli" &&
+      isClaudeCliCompatibleBackend(normalizedProvider) &&
       normalizedCandidates.some(
         (candidate) =>
           candidate === "opus" ||

@@ -3,7 +3,10 @@
 // Keep provider-owned exports out of this subpath so plugin loaders can import it
 // without recursing through provider-specific facades.
 
-import { normalizeProviderId as normalizeProviderIdCore } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeLegacyCliBackendKey as normalizeLegacyCliBackendKeyCore,
+  normalizeProviderId as normalizeProviderIdCore,
+} from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeAntigravityPreviewModelId as normalizeAntigravityPreviewModelIdCore,
   normalizeGooglePreviewModelId as normalizeGooglePreviewModelIdCore,
@@ -87,6 +90,9 @@ export {
 
 export function normalizeProviderId(provider: string): string {
   return normalizeProviderIdCore(provider);
+}
+export function normalizeLegacyCliBackendKey(key: string): string {
+  return normalizeLegacyCliBackendKeyCore(key);
 }
 export {
   createMoonshotThinkingWrapper,

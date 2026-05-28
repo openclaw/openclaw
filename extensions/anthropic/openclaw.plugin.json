@@ -150,8 +150,8 @@
       }
     }
   },
-  "cliBackends": ["claude-cli"],
-  "syntheticAuthRefs": ["claude-cli"],
+  "cliBackends": ["claude-cli", "claude-cli-interactive"],
+  "syntheticAuthRefs": ["claude-cli", "claude-cli-interactive"],
   "setup": {
     "providers": [
       {

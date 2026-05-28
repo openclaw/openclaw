@@ -36,7 +36,8 @@ export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./relia
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 
 function isClaudeCliProvider(providerId: string): boolean {
-  return normalizeOptionalLowercaseString(providerId) === "claude-cli";
+  const p = normalizeOptionalLowercaseString(providerId);
+  return p === "claude-cli" || p === "claude-cli-interactive";
 }
 
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
@@ -380,14 +381,14 @@ export function buildCliArgs(params: {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (
-    (!params.useResume || params.backend.systemPromptWhen === "always") &&
+    !params.useResume &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileArg
   ) {
     args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
   } else if (
-    (!params.useResume || params.backend.systemPromptWhen === "always") &&
+    !params.useResume &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileConfigKey

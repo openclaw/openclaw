@@ -1,4 +1,5 @@
 export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
+export const CLAUDE_CLI_INTERACTIVE_BACKEND_ID = "claude-cli-interactive";
 export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-8`;
 export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
   CLAUDE_CLI_DEFAULT_MODEL_REF,

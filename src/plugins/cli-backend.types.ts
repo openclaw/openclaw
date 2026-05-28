@@ -189,4 +189,17 @@ export type CliBackendPlugin = {
    * closed instead of launching a native harness.
    */
   nativeToolMode?: CliBackendNativeToolMode;
+  /**
+   * Variant backends can inherit a user override defined for a sibling backend
+   * when no direct override exists, so customizations made for the canonical
+   * backend (e.g. `claude-cli`) automatically apply to its variants
+   * (e.g. `claude-cli-interactive`) without duplicate config entries.
+   *
+   * `filterArgs`, when provided, sanitizes inherited `args`/`resumeArgs` —
+   * use it to drop flags that don't apply to this backend's dialect.
+   */
+  inheritUserConfigFrom?: {
+    backendId: string;
+    filterArgs?: (args: readonly string[]) => readonly string[];
+  };
 };
