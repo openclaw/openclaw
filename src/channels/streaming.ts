@@ -21,10 +21,10 @@ export type {
   ChannelStreamingConfig,
   ChannelStreamingProgressConfig,
   ChannelStreamingPreviewConfig,
-  SlackChannelStreamingConfig,
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
+export type { SlackChannelStreamingConfig } from "../config/types.slack.js";
 
 type StreamingCompatEntry = {
   streaming?: unknown;
