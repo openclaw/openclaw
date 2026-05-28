@@ -1,4 +1,7 @@
-import { resolveAgentConfig } from "../../agents/agent-scope.js";
+import {
+  hasLegacyAutoFallbackWithoutOrigin,
+  resolveAgentConfig,
+} from "../../agents/agent-scope.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -215,8 +218,20 @@ export async function createModelSelectionState(params: {
     primaryHarnessPolicy.runtime === "codex" &&
     normalizeRuntimeModelRef(OPENAI_PROVIDER_ID, directStoredModelOverride.model).model ===
       normalizeRuntimeModelRef(OPENAI_PROVIDER_ID, primaryModel).model;
+  const normalizedCurrentSelection = normalizeRuntimeModelRef(provider, model);
+  const normalizedDirectOverride = directStoredOverride
+    ? normalizeRuntimeModelRef(directStoredOverride.provider, directStoredOverride.model)
+    : null;
+  const staleLegacyAutoFallbackWithoutOrigin =
+    directStoredModelOverride?.source === "session" &&
+    hasLegacyAutoFallbackWithoutOrigin(sessionEntry) &&
+    normalizedDirectOverride !== null &&
+    modelKey(normalizedCurrentSelection.provider, normalizedCurrentSelection.model) !==
+      modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model);
   const staleDirectStoredOverride =
-    staleHeartbeatAutoFallbackOverride || staleLegacyOpenAICodexAutoOverride;
+    staleHeartbeatAutoFallbackOverride ||
+    staleLegacyOpenAICodexAutoOverride ||
+    staleLegacyAutoFallbackWithoutOrigin;
 
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
@@ -283,14 +298,10 @@ export async function createModelSelectionState(params: {
     }
   }
   if (staleDirectStoredOverride) {
-    const normalizedCurrentSelection = normalizeRuntimeModelRef(provider, model);
     const currentSelectionKey = modelKey(
       normalizedCurrentSelection.provider,
       normalizedCurrentSelection.model,
     );
-    const normalizedDirectOverride = directStoredOverride
-      ? normalizeRuntimeModelRef(directStoredOverride.provider, directStoredOverride.model)
-      : null;
     const directStoredOverrideKey = normalizedDirectOverride
       ? modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model)
       : undefined;

@@ -66,6 +66,7 @@ import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
+  hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
   listAgentIds,
   markAutoFallbackPrimaryProbe,
@@ -1197,6 +1198,8 @@ async function agentCommandInternal(
       : undefined;
     const hasStoredAutoFallbackProvenance =
       hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
+    const hasLegacyAutoFallbackOverrideWithoutOrigin =
+      hasStoredOverride && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
     const explicitProviderOverride =
       typeof opts.provider === "string"
         ? normalizeExplicitOverrideInput(opts.provider, "provider")
@@ -1245,6 +1248,21 @@ async function agentCommandInternal(
       !suppressVisibleSessionEffects
     ) {
       const entry = sessionEntry;
+      if (hasLegacyAutoFallbackOverrideWithoutOrigin) {
+        const { updated } = applyModelOverrideToSessionEntry({
+          entry,
+          selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+        });
+        if (updated) {
+          storedModelOverrideSource = undefined;
+          await persistSessionEntry({
+            sessionStore,
+            sessionKey,
+            storePath,
+            entry,
+          });
+        }
+      }
       const repaired = repairProviderWrappedModelOverride({
         entry,
         defaultProvider,
@@ -1285,8 +1303,12 @@ async function agentCommandInternal(
       }
     }
 
-    const storedProviderOverride = sessionEntry?.providerOverride?.trim();
-    let storedModelOverride = sessionEntry?.modelOverride?.trim();
+    const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
+      ? undefined
+      : sessionEntry?.providerOverride?.trim();
+    let storedModelOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
+      ? undefined
+      : sessionEntry?.modelOverride?.trim();
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
       const normalizedStored = normalizeAgentCommandModelRef(
@@ -1620,7 +1642,9 @@ async function agentCommandInternal(
           agentId: sessionAgentId,
           sessionKey,
           hasSessionModelOverride:
-            hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
+            hasExplicitRunOverride ||
+            (!hasLegacyAutoFallbackOverrideWithoutOrigin &&
+              Boolean(storedProviderOverride || storedModelOverride)),
           modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
           hasAutoFallbackProvenance: hasExplicitRunOverride
             ? false
