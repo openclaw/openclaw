@@ -682,6 +682,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   it("does not auto-review direct system.run security audit suppression edits", async () => {
     const tmp = createFixtureDir("openclaw-system-run-auto-review-suppression-");
+    const executablePath = createTempExecutable({ dir: tmp, name: "openclaw" });
     setRuntimeConfigSnapshot({
       tools: {
         exec: {
@@ -697,7 +698,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       }));
       const runCommand = vi.fn(async () => createLocalRunResult("should-not-run"));
       const prepared = buildSystemRunApprovalPlan({
-        command: ["openclaw", "config", "set", "security.audit.suppressions", "[]"],
+        command: [executablePath, "config", "set", "security.audit.suppressions", "[]"],
         cwd: tmp,
       });
       expect(prepared.ok).toBe(true);
