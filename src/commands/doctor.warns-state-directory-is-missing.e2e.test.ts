@@ -476,6 +476,48 @@ describe("doctor command", () => {
     });
   });
 
+  it("keeps gateway health probes for non-token auth with exec SecretRefs", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "password",
+            password: "configured-password",
+            token: {
+              source: "exec",
+              provider: "default",
+              id: "gateway/token",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: {
+              source: "exec",
+              command: process.execPath,
+            },
+          },
+        },
+      },
+    });
+
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
+      return (
+        title === "Gateway" &&
+        String(message).includes(
+          "Gateway health probes skipped because gateway.auth.token uses an exec SecretRef.",
+        )
+      );
+    });
+    expect(skippedGatewayHealth).toBe(false);
+  });
+
   it("skips gateway auth warning when SecretRef-managed token resolves", async () => {
     mockDoctorConfigSnapshot({
       config: {

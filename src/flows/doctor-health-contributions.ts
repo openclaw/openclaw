@@ -727,7 +727,18 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
     value: ctx.cfg.gateway?.auth?.token,
     defaults: ctx.cfg.secrets?.defaults,
   }).ref;
-  if (gatewayTokenRef?.source === "exec" && ctx.options.allowExec !== true) {
+  const { resolveGatewayAuth } = await import("../gateway/auth.js");
+  const auth = resolveGatewayAuth({
+    authConfig: ctx.cfg.gateway?.auth,
+    tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
+  });
+  const gatewayHealthNeedsToken =
+    auth.mode !== "password" && auth.mode !== "none" && auth.mode !== "trusted-proxy";
+  if (
+    gatewayHealthNeedsToken &&
+    gatewayTokenRef?.source === "exec" &&
+    ctx.options.allowExec !== true
+  ) {
     note(
       "Gateway health probes skipped because gateway.auth.token uses an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs.",
       "Gateway",
