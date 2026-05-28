@@ -469,6 +469,73 @@ describe("config io write prepare", () => {
     expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
   });
 
+  it("preserves $includeText-owned values during unrelated writes", () => {
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        channels: {
+          slack: { channels: { C0: { systemPrompt: "resolved prompt text" } } },
+        },
+        gateway: { mode: "local" },
+      },
+      sourceConfig: {
+        channels: {
+          slack: { channels: { C0: { systemPrompt: "resolved prompt text" } } },
+        },
+        gateway: { mode: "local" },
+      },
+      rootAuthoredConfig: {
+        channels: {
+          slack: {
+            channels: { C0: { systemPrompt: { $includeText: "./prompts/slack.md" } } },
+          },
+        },
+        gateway: { mode: "local" },
+      },
+      nextConfig: {
+        channels: {
+          slack: { channels: { C0: { systemPrompt: "resolved prompt text" } } },
+        },
+        gateway: { mode: "local", port: 18789 },
+      },
+    }) as Record<string, unknown>;
+
+    expect(persisted.channels).toEqual({
+      slack: { channels: { C0: { systemPrompt: { $includeText: "./prompts/slack.md" } } } },
+    });
+    expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+  });
+
+  it("rejects writes that would flatten $includeText-owned values", () => {
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: {
+          channels: {
+            slack: { channels: { C0: { systemPrompt: "resolved prompt text" } } },
+          },
+        },
+        sourceConfig: {
+          channels: {
+            slack: { channels: { C0: { systemPrompt: "resolved prompt text" } } },
+          },
+        },
+        rootAuthoredConfig: {
+          channels: {
+            slack: {
+              channels: { C0: { systemPrompt: { $includeText: "./prompts/slack.md" } } },
+            },
+          },
+        },
+        nextConfig: {
+          channels: {
+            slack: { channels: { C0: { systemPrompt: "different prompt" } } },
+          },
+        },
+      }),
+    ).toThrow(
+      "Config write would flatten $include-owned config at channels.slack.channels.C0.systemPrompt",
+    );
+  });
+
   it("rejects writes that would flatten include-owned subtrees", () => {
     expect(() =>
       resolvePersistCandidateForWrite({

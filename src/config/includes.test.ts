@@ -49,6 +49,27 @@ function resolve(obj: unknown, files: Record<string, unknown> = {}, basePath = D
   return resolveConfigIncludes(obj, basePath, createMockResolver(files));
 }
 
+/** Resolver that returns file contents verbatim (no JSON.stringify), for $includeText. */
+function createTextMockResolver(files: Record<string, string>): IncludeResolver {
+  return {
+    readFile: (filePath: string) => {
+      if (filePath in files) {
+        return files[filePath];
+      }
+      throw new Error(`ENOENT: no such file: ${filePath}`);
+    },
+    parseJson: JSON.parse,
+  };
+}
+
+function resolveText(
+  obj: unknown,
+  files: Record<string, string> = {},
+  basePath = DEFAULT_BASE_PATH,
+) {
+  return resolveConfigIncludes(obj, basePath, createTextMockResolver(files));
+}
+
 function expectResolveIncludeError(
   run: () => unknown,
   expectedPattern?: RegExp,
@@ -811,6 +832,143 @@ describe("OPENCLAW_INCLUDE_ROOTS allowlist", () => {
           { allowedRoots: [allowedDir] },
         ),
       ).toThrow(/resolves outside config directory/);
+    });
+  });
+});
+
+describe("$includeText raw-text includes", () => {
+  it("injects raw file text at a nested string position", () => {
+    expect(
+      resolveText(
+        { agents: { defaults: { systemPrompt: { $includeText: "./prompt.md" } } } },
+        { [configPath("prompt.md")]: "You are a helpful assistant." },
+      ),
+    ).toEqual({ agents: { defaults: { systemPrompt: "You are a helpful assistant." } } });
+  });
+
+  it("does not JSON-parse the included text (literal string is preserved)", () => {
+    expect(
+      resolveText(
+        { systemPrompt: { $includeText: "./prompt.md" } },
+        { [configPath("prompt.md")]: '{"a":1}' },
+      ),
+    ).toEqual({ systemPrompt: '{"a":1}' });
+  });
+
+  it("preserves trailing newlines (real FS)", async () => {
+    await withTempDir({ prefix: "openclaw-include-text-" }, async (tempRoot) => {
+      const configDir = path.join(tempRoot, "config");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(path.join(configDir, "prompt.md"), "line one\nline two\n", "utf-8");
+      const result = resolveConfigIncludes(
+        { systemPrompt: { $includeText: "./prompt.md" } },
+        path.join(configDir, "openclaw.json"),
+      );
+      expect(result).toEqual({ systemPrompt: "line one\nline two\n" });
+    });
+  });
+
+  it("rejects sibling keys", () => {
+    expectResolveIncludeError(
+      () =>
+        resolveText(
+          { systemPrompt: { $includeText: "./p.md", extra: true } },
+          { [configPath("p.md")]: "x" },
+        ),
+      /\$includeText cannot be combined with sibling keys/,
+    );
+  });
+
+  it.each([
+    { name: "array", value: ["./a.md", "./b.md"], expectedType: "array" },
+    { name: "number", value: 42, expectedType: "number" },
+    { name: "boolean", value: true, expectedType: "boolean" },
+    { name: "null", value: null, expectedType: "object" },
+    { name: "object", value: { path: "./a.md" }, expectedType: "object" },
+  ] as const)("rejects non-string $includeText value: $name", ({ value, expectedType }) => {
+    expectResolveIncludeError(
+      () => resolveText({ systemPrompt: { $includeText: value } }),
+      new RegExp(`Invalid \\$includeText value: expected string path, got ${expectedType}`),
+    );
+  });
+
+  it("rejects combining $include and $includeText in the same object", () => {
+    expectResolveIncludeError(
+      () => resolveText({ x: { $include: "./a.json", $includeText: "./b.md" } }),
+      /Cannot combine \$include and \$includeText/,
+    );
+  });
+
+  it.each([
+    { name: "absolute path outside config dir", includePath: "/etc/passwd" },
+    { name: "relative traversal", includePath: "../../x.md" },
+  ] as const)("rejects $includeText path that escapes config dir: $name", ({ includePath }) => {
+    expectResolveIncludeError(
+      () => resolveText({ systemPrompt: { $includeText: includePath } }),
+      /escapes config directory/,
+    );
+  });
+
+  it("rejects $includeText path with null bytes", () => {
+    expectResolveIncludeError(
+      () => resolveText({ systemPrompt: { $includeText: "./p\x00.md" } }),
+      /null bytes?/i,
+    );
+  });
+
+  it("rejects over-length $includeText path", () => {
+    expectResolveIncludeError(
+      () =>
+        resolveText({ systemPrompt: { $includeText: "a".repeat(MAX_INCLUDE_PATH_LENGTH + 1) } }),
+      /maximum length/,
+    );
+  });
+
+  it("enforces the size cap on $includeText files (real FS)", async () => {
+    await withTempDir({ prefix: "openclaw-include-text-big-" }, async (tempRoot) => {
+      const configDir = path.join(tempRoot, "config");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "big.md"),
+        "a".repeat(MAX_INCLUDE_FILE_BYTES + 1),
+        "utf-8",
+      );
+      expect(() =>
+        resolveConfigIncludes(
+          { systemPrompt: { $includeText: "./big.md" } },
+          path.join(configDir, "openclaw.json"),
+        ),
+      ).toThrow(/security checks|max/i);
+    });
+  });
+
+  it("rejects hardlinked $includeText files (real FS)", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir({ prefix: "openclaw-include-text-hardlink-" }, async (tempRoot) => {
+      const configDir = path.join(tempRoot, "config");
+      const outsideDir = path.join(tempRoot, "outside");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      const includePath = path.join(configDir, "prompt.md");
+      const outsidePath = path.join(outsideDir, "secret.md");
+      await fs.writeFile(outsidePath, "secret text\n", "utf-8");
+      try {
+        await fs.link(outsidePath, includePath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+
+      expect(() =>
+        resolveConfigIncludes(
+          { systemPrompt: { $includeText: "./prompt.md" } },
+          path.join(configDir, "openclaw.json"),
+        ),
+      ).toThrow(/security checks|hardlink/i);
     });
   });
 });

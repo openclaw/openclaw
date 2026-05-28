@@ -19,6 +19,7 @@ import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 
 export const INCLUDE_KEY = "$include";
+export const INCLUDE_TEXT_KEY = "$includeText";
 export const MAX_INCLUDE_DEPTH = 10;
 export const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -140,11 +141,59 @@ class IncludeProcessor {
       return obj;
     }
 
-    if (!(INCLUDE_KEY in obj)) {
-      return this.processObject(obj);
+    if (INCLUDE_KEY in obj) {
+      // A string leaf and an object-merge can't coexist; reject the ambiguity
+      // rather than silently preferring one directive over the other.
+      if (INCLUDE_TEXT_KEY in obj) {
+        throw new ConfigIncludeError(
+          "Cannot combine $include and $includeText in the same object",
+          INCLUDE_TEXT_KEY,
+        );
+      }
+      return this.processInclude(obj);
     }
 
-    return this.processInclude(obj);
+    if (INCLUDE_TEXT_KEY in obj) {
+      return this.processTextInclude(obj);
+    }
+
+    return this.processObject(obj);
+  }
+
+  private processTextInclude(obj: Record<string, unknown>): string {
+    const otherKeys = Object.keys(obj).filter((k) => k !== INCLUDE_TEXT_KEY);
+    if (otherKeys.length > 0) {
+      // A raw string can't deep-merge into surrounding keys, unlike $include.
+      throw new ConfigIncludeError(
+        `$includeText cannot be combined with sibling keys: ${otherKeys.join(", ")}`,
+        INCLUDE_TEXT_KEY,
+      );
+    }
+
+    const value = obj[INCLUDE_TEXT_KEY];
+    if (typeof value !== "string") {
+      // Arrays are intentionally unsupported: there is no unambiguous concat
+      // semantics for raw text. This can be added later without breaking the
+      // string contract.
+      const valueType = Array.isArray(value) ? "array" : typeof value;
+      throw new ConfigIncludeError(
+        `Invalid $includeText value: expected string path, got ${valueType}`,
+        INCLUDE_TEXT_KEY,
+      );
+    }
+
+    return this.loadTextFile(value);
+  }
+
+  private loadTextFile(includePath: string): string {
+    // Reuse the same security checks and guarded reader as loadFile, but skip
+    // parseFile/processNested/checkCircular: a text leaf cannot include further,
+    // so there is no recursion or cycle risk. checkDepth is kept to preserve the
+    // uniform depth bound. The raw string is returned verbatim (trailing
+    // newlines preserved).
+    const { resolvedPath, root } = this.resolvePath(includePath);
+    this.checkDepth(includePath);
+    return this.readFile(includePath, resolvedPath, root);
   }
 
   private processObject(obj: Record<string, unknown>): Record<string, unknown> {
