@@ -511,8 +511,8 @@ importers:
   extensions/claude:
     dependencies:
       '@zeroaltitude/openclaw-claude-bridge':
-        specifier: 0.2.7
-        version: 0.2.7(@anthropic-ai/sdk@0.98.0(zod@4.4.3))(zod@4.4.3)
+        specifier: 0.2.8
+        version: 0.2.8(@anthropic-ai/sdk@0.98.0(zod@4.4.3))(zod@4.4.3)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -4348,8 +4348,8 @@ packages:
     resolution: {integrity: sha512-eAv7sGBeiYrYkOulF729nrM51szS7WIhBtugRj5wWq6csRKZUhAZfoUZlF8xUWdHPtOIzd/eT6MNG6gMHu6z0w==}
     hasBin: true
 
-  '@zeroaltitude/openclaw-claude-bridge@0.2.7':
-    resolution: {integrity: sha512-TD6PsokGQydoSy5ftD3vqEYtqzNLswerFCmnK1uHHHYbQ6Tapv0jGuhW6hfuY9D1mnvu5w3sBc+9p/KibZgleg==}
+  '@zeroaltitude/openclaw-claude-bridge@0.2.8':
+    resolution: {integrity: sha512-AppuAzyiL0ID9v7Rr0RSPWoDjcbt/1L/qKhqTbIDXglZwtKoLtjzLGiZRgh2X1Vd77bpPIkELrX5pSNsHQfHqw==}
     engines: {node: '>=22.0.0'}
     hasBin: true
 
@@ -10003,7 +10003,7 @@ snapshots:
       '@zed-industries/codex-acp-win32-arm64': 0.15.0
       '@zed-industries/codex-acp-win32-x64': 0.15.0
 
-  '@zeroaltitude/openclaw-claude-bridge@0.2.7(@anthropic-ai/sdk@0.98.0(zod@4.4.3))(zod@4.4.3)':
+  '@zeroaltitude/openclaw-claude-bridge@0.2.8(@anthropic-ai/sdk@0.98.0(zod@4.4.3))(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/claude-agent-sdk': 0.3.146(@anthropic-ai/sdk@0.98.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
