@@ -25,8 +25,12 @@ export function resolveInterleavedProgressEnabled(params: {
   configEnabled: boolean | undefined;
   hasReasoningLane: boolean;
 }): boolean {
+  // DEPLOY-LOCAL: on-by-default for this build. Upstream PR keeps the gate
+  // opt-in (=== true); this deploy flips to !== false so the interleaved lane
+  // engages without operator config, while still respecting an explicit
+  // `interleavedProgress: false` override.
   return (
-    params.toolProgressEnabled && params.configEnabled === true && params.hasReasoningLane
+    params.toolProgressEnabled && params.configEnabled !== false && params.hasReasoningLane
   );
 }
 

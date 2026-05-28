@@ -45,10 +45,10 @@ describe("resolveInterleavedProgressEnabled", () => {
     expect(resolveInterleavedProgressEnabled(base)).toBe(true);
   });
 
-  // Disabled mode preserves current behaviour exactly: the gate is off, so the
-  // renderer is inert and callers fall back to the default tool-progress lane.
-  it("is disabled by default (config flag unset)", () => {
-    expect(resolveInterleavedProgressEnabled({ ...base, configEnabled: undefined })).toBe(false);
+  // DEPLOY-LOCAL: on-by-default for this build (resolver uses !== false), so
+  // the lane engages without operator config. Explicit `false` still opts out.
+  it("is ENABLED by default in this deploy when the config flag is unset", () => {
+    expect(resolveInterleavedProgressEnabled({ ...base, configEnabled: undefined })).toBe(true);
   });
 
   it("is disabled when explicitly opted out", () => {
