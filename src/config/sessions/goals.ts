@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { formatTokenCount } from "../../utils/usage-format.js";
 import { getSessionEntry, patchSessionEntry } from "./store.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
@@ -62,6 +61,25 @@ function cloneGoal(goal: SessionGoal): SessionGoal {
   return { ...goal };
 }
 
+function formatGoalTokenCount(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) {
+    return "0";
+  }
+  const safe = Math.max(0, value);
+  if (safe >= 1_000_000) {
+    return `${(safe / 1_000_000).toFixed(1)}m`;
+  }
+  if (safe >= 1_000) {
+    const precision = safe >= 10_000 ? 0 : 1;
+    const formattedThousands = (safe / 1_000).toFixed(precision);
+    if (Number(formattedThousands) >= 1_000) {
+      return `${(safe / 1_000_000).toFixed(1)}m`;
+    }
+    return `${formattedThousands}k`;
+  }
+  return String(Math.round(safe));
+}
+
 export function resolveSessionGoalDisplayState(
   entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh">,
   now?: number,
@@ -122,14 +140,14 @@ export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
   const budget =
     goal.tokenBudget === undefined
       ? ""
-      : `\nToken budget: ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
+      : `\nToken budget: ${formatGoalTokenCount(goal.tokensUsed)}/${formatGoalTokenCount(goal.tokenBudget)}`;
   const note = goal.lastStatusNote ? `\nNote: ${goal.lastStatusNote}` : "";
   const commands = resolveGoalCommandHint(goal.status);
   return [
     "Goal",
     `Status: ${goal.status}`,
     `Objective: ${goal.objective}`,
-    `Tokens used: ${formatTokenCount(goal.tokensUsed)}`,
+    `Tokens used: ${formatGoalTokenCount(goal.tokensUsed)}`,
     ...(budget ? [budget.slice(1)] : []),
     ...(note ? [note.slice(1)] : []),
     "",

@@ -13,11 +13,19 @@ const getRuntimeConfigMock = vi.fn(() => ({}));
 const loadGatewayModelCatalogMock = vi.fn(
   (_params?: unknown): Array<{ id: string; name: string; provider: string }> => [],
 );
-const loadSessionEntryMock = vi.fn((sessionKey: string) => ({
-  cfg: {},
-  canonicalKey: sessionKey,
-  entry: {},
-}));
+type LoadSessionEntryMockResult = {
+  cfg: Record<string, unknown>;
+  canonicalKey: string;
+  storePath?: string;
+  entry?: Record<string, unknown>;
+};
+const loadSessionEntryMock = vi.fn(
+  (sessionKey: string): LoadSessionEntryMockResult => ({
+    cfg: {},
+    canonicalKey: sessionKey,
+    entry: {},
+  }),
+);
 let registeredListener: ((evt: unknown) => void) | undefined;
 const embeddedEventTimestamp = Date.parse("2026-05-09T07:26:00.000Z");
 
@@ -443,7 +451,6 @@ describe("EmbeddedTuiBackend", () => {
       cfg: {},
       canonicalKey: "agent:main:main",
       storePath: "/tmp/openclaw-sessions.json",
-      entry: undefined,
     });
     applySessionsPatchToStoreMock.mockResolvedValueOnce({ ok: true, entry });
 
