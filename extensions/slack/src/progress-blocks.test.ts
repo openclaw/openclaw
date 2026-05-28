@@ -165,15 +165,9 @@ describe("buildSlackProgressDraftBlocks", () => {
   it("uses a blank legacy rich draft detail when structured detail is absent", () => {
     expect(
       buildSlackProgressDraftBlocks({
-        lines: [
-          itemLine("prepare the workspace", "Preamble"),
-          toolLine("run tests"),
-        ],
+        lines: [itemLine("prepare the workspace", "Preamble"), toolLine("run tests")],
       }),
-    ).toEqual([
-      legacyLineBlock("• *Preamble*", "—"),
-      legacyLineBlock("🛠️ *Exec*", "run tests"),
-    ]);
+    ).toEqual([legacyLineBlock("• *Preamble*", "—"), legacyLineBlock("🛠️ *Exec*", "run tests")]);
   });
 
   it("does not emit legacy rich draft blocks when there are no lines or heading", () => {
@@ -297,6 +291,20 @@ describe("native Slack progress stream chunks", () => {
       planUpdate("Exec — run tests"),
       taskUpdate("exec_1", "Exec — run tests", "in_progress"),
     ]);
+  });
+
+  it("caps explicit native plan titles to Slack chunk limits", () => {
+    const chunks = buildSlackProgressStreamStartChunks({
+      title: `Shelling ${"x".repeat(300)}`,
+      lines: [toolLine("run tests")],
+    });
+    const title =
+      chunks?.[0] && typeof chunks[0] === "object" && "title" in chunks[0]
+        ? chunks[0].title
+        : undefined;
+
+    expect(title).toHaveLength(256);
+    expect(title?.endsWith("…")).toBe(true);
   });
 
   it("preserves visible text in native tasks without structured detail", () => {

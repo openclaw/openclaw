@@ -9,6 +9,7 @@ import { truncateSlackText } from "./truncate.js";
 const SLACK_PROGRESS_FIELD_MAX = 1800;
 const DEFAULT_SLACK_PROGRESS_DETAIL_MAX_CHARS = 120;
 const DEFAULT_SLACK_PROGRESS_TASK_DETAIL_MAX_CHARS = 48;
+const SLACK_PROGRESS_CHUNK_TEXT_MAX = 256;
 const SLACK_PROGRESS_TASK_TITLE_MAX = 120;
 const SLACK_PROGRESS_PLAN_FALLBACK_TITLE = "Thinking";
 
@@ -50,6 +51,10 @@ function compactDetail(value: string, maxChars: number): string {
 
 function compactTitle(value: string): string {
   return truncateSlackText(value.replace(/\s+/g, " ").trim(), SLACK_PROGRESS_TASK_TITLE_MAX);
+}
+
+function compactChunkText(value: string): string {
+  return truncateSlackText(value.replace(/\s+/g, " ").trim(), SLACK_PROGRESS_CHUNK_TEXT_MAX);
 }
 
 function lineDetailParts(line: ChannelProgressDraftLine): string[] {
@@ -144,11 +149,11 @@ function resolvePlanTitle(params: {
   title?: string;
   tasks: readonly SlackPlanTask[];
 }): string {
-  return (
+  return compactChunkText(
     params.title?.trim() ||
-    params.label?.trim() ||
-    params.tasks.at(-1)?.title ||
-    SLACK_PROGRESS_PLAN_FALLBACK_TITLE
+      params.label?.trim() ||
+      params.tasks.at(-1)?.title ||
+      SLACK_PROGRESS_PLAN_FALLBACK_TITLE,
   );
 }
 
