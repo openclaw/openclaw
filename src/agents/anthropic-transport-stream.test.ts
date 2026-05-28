@@ -697,7 +697,7 @@ describe("anthropic transport stream", () => {
     const thinkingContent = requireRecord(result.content[0], "thinking content");
     expect(thinkingContent.type).toBe("thinking");
     expect(thinkingContent.thinking).toBe("checking");
-    expect(thinkingContent.thinkingSignature).toBe("sig_1sig_2");
+    expect(thinkingContent.thinkingSignature).toBe("sig_2");
     expect(result.content[1]).toEqual({ type: "text", text: "NO_REPLY" });
     expect(events.some((event) => event.type === "text_delta" && event.delta === "NO_REPLY")).toBe(
       true,
@@ -728,6 +728,11 @@ describe("anthropic transport stream", () => {
           delta: { type: "signature_delta", signature: "sig_2" },
         },
         {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "sig_3" },
+        },
+        {
           type: "content_block_stop",
           index: 0,
         },
@@ -752,7 +757,48 @@ describe("anthropic transport stream", () => {
     expect(result.content[0]).toMatchObject({
       type: "thinking",
       thinking: signedThinking,
-      thinkingSignature: "sig_1sig_2",
+      thinkingSignature: "sig_2sig_3",
+    });
+  });
+
+  it("preserves provider-seeded thinking signatures when no signature_delta follows", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "thinking", thinking: "seeded", signature: "seed_signature" },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 6, output_tokens: 5 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "think" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.content[0]).toMatchObject({
+      type: "thinking",
+      thinking: "seeded",
+      thinkingSignature: "seed_signature",
     });
   });
 
