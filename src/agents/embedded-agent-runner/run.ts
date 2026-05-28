@@ -72,6 +72,7 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import { runAgentHarnessBeforeAgentFinalizeHook } from "../harness/lifecycle-hook-helpers.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
@@ -209,6 +210,9 @@ const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
+const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
+  "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
+const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 
 function isNoRealConversationCompactionNoop(params: {
@@ -265,6 +269,10 @@ function resolveAttemptDispatchApiKey(params: {
     return undefined;
   }
   return params.apiKeyInfo?.apiKey;
+}
+
+function buildBeforeAgentFinalizeRetryPrompt(reason: string): string {
+  return `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${reason}`;
 }
 
 function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
@@ -1172,6 +1180,7 @@ export async function runEmbeddedAgent(
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
+      let beforeAgentFinalizeRevisionAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
       // Cost-runaway breaker for #76293. State lives at the run-loop level
       // on purpose so it survives across attempt boundaries and across
@@ -3479,6 +3488,83 @@ export async function runEmbeddedAgent(
               successfulCronAdds: attempt.successfulCronAdds,
               acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
+          }
+
+          const beforeAgentFinalizeLastAssistantMessage =
+            normalizeOptionalString(finalAssistantVisibleText) ??
+            normalizeOptionalString(finalAssistantRawText) ??
+            normalizeOptionalString((attempt.assistantTexts ?? []).join("\n\n"));
+          if (
+            beforeAgentFinalizeLastAssistantMessage &&
+            !aborted &&
+            !promptError &&
+            !timedOut &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
+            !emptyAssistantReplyIsSilent &&
+            hookRunner?.hasHooks("before_agent_finalize")
+          ) {
+            const finalizeOutcome = await runAgentHarnessBeforeAgentFinalizeHook({
+              event: {
+                runId: params.runId,
+                sessionId: sessionIdUsed,
+                ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                provider: reportedModelRef.provider,
+                model: reportedModelRef.model,
+                ...((params.cwd ?? resolvedWorkspace)
+                  ? { cwd: params.cwd ?? resolvedWorkspace }
+                  : {}),
+                ...(activeSessionFile ? { transcriptPath: activeSessionFile } : {}),
+                stopHookActive: false,
+                lastAssistantMessage: beforeAgentFinalizeLastAssistantMessage,
+                messages: attempt.messagesSnapshot,
+              },
+              ctx: {
+                runId: params.runId,
+                agentId: workspaceResolution.agentId,
+                sessionKey: params.sessionKey,
+                sessionId: sessionIdUsed,
+                workspaceDir: resolvedWorkspace,
+                modelProviderId: reportedModelRef.provider,
+                modelId: reportedModelRef.model,
+                trigger: params.trigger,
+                ...buildAgentHookContextChannelFields(params),
+              },
+              hookRunner,
+            });
+            if (finalizeOutcome.action === "revise") {
+              const replayMetadataForFinalize = resolveAttemptReplayMetadata(attempt);
+              if (replayMetadataForFinalize.hadPotentialSideEffects) {
+                log.warn(
+                  `before_agent_finalize requested revision after potential side effects; finalizing ` +
+                    `runId=${params.runId} sessionId=${params.sessionId}`,
+                );
+              } else if (
+                beforeAgentFinalizeRevisionAttempts >= MAX_BEFORE_AGENT_FINALIZE_REVISIONS
+              ) {
+                log.warn(
+                  `before_agent_finalize revision limit reached; finalizing ` +
+                    `runId=${params.runId} sessionId=${params.sessionId} ` +
+                    `attempts=${beforeAgentFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS}`,
+                );
+              } else {
+                beforeAgentFinalizeRevisionAttempts += 1;
+                nextAttemptPromptOverride = buildBeforeAgentFinalizeRetryPrompt(
+                  finalizeOutcome.reason,
+                );
+                suppressNextUserMessagePersistence = true;
+                planningOnlyRetryInstruction = null;
+                reasoningOnlyRetryInstruction = null;
+                emptyResponseRetryInstruction = null;
+                compactionContinuationRetryInstruction = null;
+                log.warn(
+                  `before_agent_finalize requested one more pass: ` +
+                    `runId=${params.runId} sessionId=${params.sessionId} ` +
+                    `attempt=${beforeAgentFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS}`,
+                );
+                continue;
+              }
+            }
           }
 
           log.debug(
