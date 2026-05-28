@@ -24,10 +24,14 @@ import {
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
+  ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID,
+  ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
+  ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   EMBEDDED_RUN_MODEL_SWITCH_REQUESTS,
   EMBEDDED_RUN_WAITERS,
   getActiveEmbeddedRunCount,
   type ActiveEmbeddedRunSnapshot,
+  type AbandonedEmbeddedRun,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
   type EmbeddedRunModelSwitchRequest,
@@ -133,6 +137,135 @@ function setActiveRunSessionFile(sessionFile: string | undefined, sessionId: str
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(
     resolveEmbeddedSessionFileKey(sessionFile),
     sessionId,
+  );
+}
+
+function clearEmbeddedRunAbandonmentBySessionId(sessionId: string): void {
+  const abandonedRun = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId);
+  if (!abandonedRun) {
+    return;
+  }
+  ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.delete(sessionId);
+  const normalizedSessionKey = abandonedRun.sessionKey?.trim();
+  if (
+    normalizedSessionKey &&
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey) === sessionId
+  ) {
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(normalizedSessionKey);
+  }
+  const normalizedSessionFile = abandonedRun.sessionFile?.trim();
+  if (normalizedSessionFile) {
+    const sessionFileKey = resolveEmbeddedSessionFileKey(normalizedSessionFile);
+    if (ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey) === sessionId) {
+      ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
+    }
+  }
+}
+
+function clearEmbeddedRunAbandonmentBySessionKey(sessionKey: string | undefined): void {
+  const normalizedSessionKey = sessionKey?.trim();
+  if (!normalizedSessionKey) {
+    return;
+  }
+  const sessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey);
+  if (sessionId) {
+    clearEmbeddedRunAbandonmentBySessionId(sessionId);
+  }
+}
+
+function clearEmbeddedRunAbandonmentBySessionFile(sessionFile: string | undefined): void {
+  const normalizedSessionFile = sessionFile?.trim();
+  if (!normalizedSessionFile) {
+    return;
+  }
+  const sessionFileKey = resolveEmbeddedSessionFileKey(normalizedSessionFile);
+  const sessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey);
+  if (sessionId) {
+    clearEmbeddedRunAbandonmentBySessionId(sessionId);
+  }
+}
+
+export function clearEmbeddedRunAbandonment(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  sessionFile?: string;
+}): void {
+  const normalizedSessionId = params.sessionId?.trim();
+  if (normalizedSessionId) {
+    clearEmbeddedRunAbandonmentBySessionId(normalizedSessionId);
+  }
+  clearEmbeddedRunAbandonmentBySessionKey(params.sessionKey);
+  clearEmbeddedRunAbandonmentBySessionFile(params.sessionFile);
+}
+
+export function markEmbeddedRunAbandoned(params: {
+  sessionId: string;
+  sessionKey?: string;
+  sessionFile?: string;
+  reason: AbandonedEmbeddedRun["reason"];
+}): void {
+  const sessionId = params.sessionId.trim();
+  if (!sessionId) {
+    return;
+  }
+  clearEmbeddedRunAbandonment({
+    sessionId,
+    sessionKey: params.sessionKey,
+    sessionFile: params.sessionFile,
+  });
+  const abandonedRun: AbandonedEmbeddedRun = {
+    sessionId,
+    abandonedAtMs: Date.now(),
+    reason: params.reason,
+    ...(params.sessionKey?.trim() ? { sessionKey: params.sessionKey.trim() } : {}),
+    ...(params.sessionFile?.trim() ? { sessionFile: params.sessionFile.trim() } : {}),
+  };
+  ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.set(sessionId, abandonedRun);
+  if (abandonedRun.sessionKey) {
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(abandonedRun.sessionKey, sessionId);
+  }
+  if (abandonedRun.sessionFile) {
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(
+      resolveEmbeddedSessionFileKey(abandonedRun.sessionFile),
+      sessionId,
+    );
+  }
+}
+
+export function markActiveEmbeddedRunAbandoned(params: {
+  sessionId: string;
+  handle: EmbeddedAgentQueueHandle;
+  sessionKey?: string;
+  sessionFile?: string;
+  reason: AbandonedEmbeddedRun["reason"];
+}): boolean {
+  const sessionId = params.sessionId.trim();
+  if (!sessionId || ACTIVE_EMBEDDED_RUNS.get(sessionId) !== params.handle) {
+    return false;
+  }
+  markEmbeddedRunAbandoned(params);
+  return true;
+}
+
+export function isEmbeddedRunAbandoned(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  sessionFile?: string;
+}): boolean {
+  const normalizedSessionId = params.sessionId?.trim();
+  if (normalizedSessionId && ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.has(normalizedSessionId)) {
+    return true;
+  }
+  const normalizedSessionKey = params.sessionKey?.trim();
+  if (normalizedSessionKey && ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.has(normalizedSessionKey)) {
+    return true;
+  }
+  const normalizedSessionFile = params.sessionFile?.trim();
+  return Boolean(
+    normalizedSessionFile &&
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.has(
+      resolveEmbeddedSessionFileKey(normalizedSessionFile),
+    ),
   );
 }
 
@@ -586,6 +719,7 @@ export function setActiveEmbeddedRun(
   sessionFile?: string,
 ) {
   const wasActive = ACTIVE_EMBEDDED_RUNS.has(sessionId);
+  clearEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile });
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
   setActiveRunSessionKey(sessionKey, sessionId);
   clearActiveRunSessionFiles(sessionId);
@@ -692,6 +826,9 @@ export const testing = {
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.clear();
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
+    ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.clear();
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.clear();
   },
 };

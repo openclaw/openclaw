@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { appendQaLiveLaneIssue as appendLiveLaneIssue } from "openclaw/plugin-sdk/qa-runtime";
+import { appendQaLiveLaneIssue as appendLiveLaneIssue } from "./live-artifacts.js";
 import {
   startQaGatewayChild,
   type QaCliBackendAuthMode,

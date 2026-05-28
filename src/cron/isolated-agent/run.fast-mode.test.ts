@@ -25,7 +25,7 @@ function mockSuccessfulModelFallback() {
     return {
       result: {
         payloads: [{ text: "ok" }],
-        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+        meta: { agentMeta: {} },
       },
       provider,
       model,
@@ -126,7 +126,7 @@ async function runFastModeCase(params: {
 }
 
 describe("runCronIsolatedAgentTurn — fast mode", () => {
-  setupRunCronIsolatedAgentTurnSuite();
+  setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
   it("passes config-driven fast mode into embedded cron runs", async () => {
     await runFastModeCase({

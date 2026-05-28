@@ -380,7 +380,10 @@ function convertAnthropicMessages(
               text: sanitizeTransportPayloadText(block.thinking),
             });
           } else {
-            const thinking = sanitizeTransportPayloadText(block.thinking);
+            const thinking =
+              block.thinkingSignature === "reasoning_content"
+                ? sanitizeTransportPayloadText(block.thinking)
+                : block.thinking;
             if (block.thinkingSignature === "reasoning_content") {
               if (allowReasoningContentReplay) {
                 blocks.push({
@@ -1121,9 +1124,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             }
             if (contentBlock?.type === "thinking") {
               const thinking =
-                typeof contentBlock.thinking === "string"
-                  ? sanitizeTransportPayloadText(contentBlock.thinking)
-                  : "";
+                typeof contentBlock.thinking === "string" ? contentBlock.thinking : "";
               const block: TransportContentBlock = {
                 type: "thinking",
                 thinking,

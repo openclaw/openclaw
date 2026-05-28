@@ -46,6 +46,7 @@ export const resolveAgentModelFallbacksOverrideMock = createMock();
 export const resolveAgentSkillsFilterMock = createMock();
 export const getModelRefStatusMock = createMock();
 export const isCliProviderMock = createMock();
+export const resolveCliRuntimeExecutionProviderMock = createMock();
 export const resolveAllowedModelRefMock = createMock();
 export const resolveConfiguredModelRefMock = createMock();
 export const resolveHooksGmailModelMock = createMock();
@@ -129,6 +130,13 @@ vi.mock("./run.runtime.js", () => ({
   isExternalHookSession: isExternalHookSessionMock,
   resolveHookExternalContentSource: resolveHookExternalContentSourceMock,
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
+}));
+
+vi.mock("../../agents/model-runtime-aliases.js", async () => ({
+  ...(await vi.importActual<typeof import("../../agents/model-runtime-aliases.js")>(
+    "../../agents/model-runtime-aliases.js",
+  )),
+  resolveCliRuntimeExecutionProvider: resolveCliRuntimeExecutionProviderMock,
 }));
 
 vi.mock("./run-external-content.runtime.js", () => ({
@@ -296,7 +304,7 @@ function makeDefaultModelFallbackResult() {
   return {
     result: {
       payloads: [{ text: "test output" }],
-      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      meta: { agentMeta: {} },
     },
     provider: "openai",
     model: "gpt-5.4",
@@ -306,7 +314,7 @@ function makeDefaultModelFallbackResult() {
 function makeDefaultEmbeddedResult() {
   return {
     payloads: [{ text: "test output" }],
-    meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    meta: { agentMeta: {} },
   };
 }
 
@@ -379,6 +387,7 @@ function resetRunConfigMocks(): void {
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
   resolveAgentSkillsFilterMock.mockReturnValue(undefined);
   resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
+  resolveCliRuntimeExecutionProviderMock.mockReturnValue(undefined);
   resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-5.4" } });
   resolveHooksGmailModelMock.mockReturnValue(null);
   resolveThinkingDefaultMock.mockReturnValue("off");
@@ -389,7 +398,11 @@ function resetRunConfigMocks(): void {
   });
   resolveAgentTimeoutMsMock.mockReturnValue(60_000);
   deriveSessionTotalTokensMock.mockReturnValue(30);
-  hasNonzeroUsageMock.mockReturnValue(true);
+  hasNonzeroUsageMock.mockImplementation(
+    (usage: { input?: unknown; output?: unknown } | undefined) =>
+      (typeof usage?.input === "number" && usage.input > 0) ||
+      (typeof usage?.output === "number" && usage.output > 0),
+  );
   ensureAgentWorkspaceMock.mockResolvedValue({ dir: "/tmp/workspace" });
   normalizeThinkLevelMock.mockImplementation((value: unknown) => value);
   isThinkingLevelSupportedMock.mockReturnValue(true);

@@ -20,6 +20,7 @@ import {
 import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
+import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -977,6 +978,7 @@ async function runUpgradeLane(params) {
           env,
           packageSpec: params.candidateUrl,
           logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
+          ignoreScripts: true,
         });
       });
     } else {
@@ -3686,6 +3688,7 @@ export async function startStaticFileServer(params) {
   const logStream = createWriteStream(params.logPath, { flags: "a" });
   const fileName = String(params.filePath.split(/[/\\]/u).at(-1) ?? "artifact");
   const fileStat = statSync(params.filePath);
+  const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
     logStream.write(`${new Date().toISOString()} ${request.method} ${request.url}\n`);
     if (request.url !== `/${fileName}`) {
@@ -3710,6 +3713,12 @@ export async function startStaticFileServer(params) {
     });
     fileStream.pipe(response);
   });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => {
+      sockets.delete(socket);
+    });
+  });
   await new Promise((resolvePromise, rejectPromise) => {
     server.once("error", rejectPromise);
     server.listen(0, "127.0.0.1", resolvePromise);
@@ -3731,6 +3740,9 @@ export async function startStaticFileServer(params) {
           }
           resolvePromise();
         });
+        for (const socket of sockets) {
+          socket.destroy();
+        }
       }),
   };
 }
