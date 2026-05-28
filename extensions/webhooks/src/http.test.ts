@@ -182,6 +182,98 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     expect(hoisted.resolveConfiguredSecretInputStringMock).not.toHaveBeenCalled();
   });
 
+  it("answers route verification challenges after route-specific auth", async () => {
+    const scheduleSessionTurn = vi.fn();
+    const target: WebhookTarget = {
+      routeId: "meego",
+      path: "/plugins/webhooks/meego-requirement-created",
+      dispatchMode: "agent",
+      sessionKey: "agent:requirement-triager:main",
+      auth: {
+        mode: "header",
+        header: "x-meego-webhook-token",
+        secret: "shared-secret",
+      },
+      event: {
+        payloadPath: "type",
+      },
+      verification: {
+        event: "url_verification",
+        challengePath: "challenge",
+        responsePath: "challenge",
+      },
+      agent: {
+        deliveryMode: "none",
+        delayMs: 1,
+      },
+    };
+    const handler = createHandlerWithTarget(target, {} as OpenClawConfig, {
+      scheduleSessionTurn,
+    });
+
+    const res = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      headers: {
+        "x-meego-webhook-token": "shared-secret",
+      },
+      body: {
+        type: "url_verification",
+        challenge: "verify-me",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(parseJsonBody(res)).toEqual({ challenge: "verify-me" });
+    expect(scheduleSessionTurn).not.toHaveBeenCalled();
+  });
+
+  it("does not answer verification challenges without matching auth", async () => {
+    const scheduleSessionTurn = vi.fn();
+    const target: WebhookTarget = {
+      routeId: "meego",
+      path: "/plugins/webhooks/meego-requirement-created",
+      dispatchMode: "agent",
+      sessionKey: "agent:requirement-triager:main",
+      auth: {
+        mode: "header",
+        header: "x-meego-webhook-token",
+        secret: "shared-secret",
+      },
+      event: {
+        payloadPath: "type",
+      },
+      verification: {
+        event: "url_verification",
+        challengePath: "challenge",
+        responsePath: "challenge",
+      },
+      agent: {
+        deliveryMode: "none",
+        delayMs: 1,
+      },
+    };
+    const handler = createHandlerWithTarget(target, {} as OpenClawConfig, {
+      scheduleSessionTurn,
+    });
+
+    const res = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      headers: {
+        "x-meego-webhook-token": "wrong-secret",
+      },
+      body: {
+        type: "url_verification",
+        challenge: "verify-me",
+      },
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toBe("unauthorized");
+    expect(scheduleSessionTurn).not.toHaveBeenCalled();
+  });
+
   it("re-resolves SecretRef-backed secrets across requests", async () => {
     const runtime = createRuntimeTaskFlow();
     const target: TaskFlowWebhookTarget = {

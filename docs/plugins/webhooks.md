@@ -398,6 +398,9 @@ ingress, an enterprise gateway, or a temporary development tunnel.
   together.
 - Always configure idempotency for systems that retry webhooks. Use the source
   delivery id, not a hash of the whole payload.
+- For providers that verify webhook URLs with a challenge payload, add
+  `verification`. Challenge requests are answered only after route-specific auth
+  succeeds and are not dispatched to an agent or TaskFlow.
 - Start in `ack` or `deliver: "log"` mode, capture real payloads, then switch to
   `agent` or templated `taskflow` after the prompt is stable.
 - Keep prompts explicit about authority. Tell the agent whether it should only

@@ -25,6 +25,7 @@ import type {
   ConfiguredWebhookDeliveryConfig,
   ConfiguredWebhookEventConfig,
   ConfiguredWebhookIdempotencyConfig,
+  ConfiguredWebhookVerificationConfig,
   ConfiguredWebhookTaskFlowTemplateConfig,
   WebhookSecretInput,
 } from "./config.js";
@@ -38,6 +39,7 @@ import {
 } from "./idempotency.js";
 import { executeTaskFlowActionDispatch, executeTaskFlowTemplateDispatch } from "./taskflow.js";
 import type { WebhookDispatchContext } from "./template.js";
+import { normalizePathString, readTemplatePath } from "./template.js";
 
 type BoundTaskFlowRuntime = ReturnType<PluginRuntime["tasks"]["managedFlows"]["bindSession"]>;
 type LoadChannelOutboundAdapter = PluginRuntime["channel"]["outbound"]["loadAdapter"];
@@ -73,6 +75,7 @@ export type TaskFlowWebhookTarget = {
   event?: ConfiguredWebhookEventConfig;
   events?: string[];
   idempotency?: ConfiguredWebhookIdempotencyConfig;
+  verification?: ConfiguredWebhookVerificationConfig;
   prompt?: string;
   skills?: string[];
   taskflow?: ConfiguredWebhookTaskFlowTemplateConfig;
@@ -88,6 +91,7 @@ export type AckWebhookTarget = {
   event?: ConfiguredWebhookEventConfig;
   events?: string[];
   idempotency?: ConfiguredWebhookIdempotencyConfig;
+  verification?: ConfiguredWebhookVerificationConfig;
   prompt?: string;
   skills?: string[];
 };
@@ -101,6 +105,7 @@ export type AgentWebhookTarget = {
   event?: ConfiguredWebhookEventConfig;
   events?: string[];
   idempotency?: ConfiguredWebhookIdempotencyConfig;
+  verification?: ConfiguredWebhookVerificationConfig;
   prompt?: string;
   skills?: string[];
   sessionKey: string;
@@ -116,6 +121,7 @@ export type DeliverWebhookTarget = {
   event?: ConfiguredWebhookEventConfig;
   events?: string[];
   idempotency?: ConfiguredWebhookIdempotencyConfig;
+  verification?: ConfiguredWebhookVerificationConfig;
   prompt?: string;
   skills?: string[];
   delivery: ConfiguredWebhookDeliveryConfig;
@@ -191,6 +197,27 @@ function jsonResult(statusCode: number, body: unknown): WebhookEnvelopeResult {
 
 function textResult(statusCode: number, body: string): WebhookEnvelopeResult {
   return { statusCode, body, contentType: "text" };
+}
+
+function maybeCreateVerificationResult(params: {
+  target: WebhookTarget;
+  eventType?: string;
+  body: unknown;
+}): WebhookEnvelopeResult | undefined {
+  const verification = params.target.verification;
+  if (!verification) {
+    return undefined;
+  }
+  if (verification.event && params.eventType !== verification.event) {
+    return undefined;
+  }
+  const challenge = normalizePathString(readTemplatePath(params.body, verification.challengePath));
+  if (!challenge) {
+    return undefined;
+  }
+  return jsonResult(200, {
+    [verification.responsePath]: challenge,
+  });
 }
 
 async function resolveTargetSecret(params: {
@@ -277,6 +304,15 @@ export async function handleWebhookEnvelope(params: {
     body: parsedBody.value,
     config: target.event,
   });
+  const verificationResult = maybeCreateVerificationResult({
+    target,
+    eventType,
+    body: parsedBody.value,
+  });
+  if (verificationResult) {
+    return verificationResult;
+  }
+
   if (target.events?.length && (!eventType || !target.events.includes(eventType))) {
     return jsonResult(200, {
       ok: true,

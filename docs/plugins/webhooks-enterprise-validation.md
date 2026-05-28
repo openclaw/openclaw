@@ -37,6 +37,8 @@ The enterprise webhook implementation was verified with three layers:
 - Edge-case tests for authentication failure, event allowlists, duplicate
   deliveries, missing template fields, raw payload preservation, and
   route-specific authentication on shared paths.
+- Provider URL verification challenge coverage after route-specific auth, with
+  no agent dispatch for verification requests.
 - Array payload-path coverage for batched webhooks, where `events.0.type` and
   `events.0.id` resolve to event type and idempotency key.
 - A live GitHub end-to-end run where a repository webhook delivered
@@ -57,8 +59,8 @@ node scripts/run-vitest.mjs run --config test/vitest/vitest.extension-misc.confi
 ```
 
 The targeted Webhooks plugin suite now covers auth, event allowlists,
-idempotency, templating, agent dispatch, dynamic subscriptions, and completion
-delivery.
+idempotency, templating, provider verification challenges, agent dispatch,
+dynamic subscriptions, and completion delivery.
 
 A local HTTP smoke test also posted real HTTP requests to a running Node server
 using the Webhooks plugin handler. The first batched event returned `ack` with

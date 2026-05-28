@@ -128,6 +128,15 @@
           "ttlHours": { "type": "number", "exclusiveMinimum": 0 }
         }
       },
+      "verification": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event": { "type": "string", "minLength": 1 },
+          "challengePath": { "type": "string", "minLength": 1 },
+          "responsePath": { "type": "string", "minLength": 1 }
+        }
+      },
       "deliverTarget": {
         "anyOf": [
           { "type": "string", "minLength": 1 },
@@ -190,6 +199,7 @@
           },
           "event": { "$ref": "#/$defs/event" },
           "idempotency": { "$ref": "#/$defs/idempotency" },
+          "verification": { "$ref": "#/$defs/verification" },
           "controllerId": { "type": "string", "minLength": 1 },
           "prompt": { "type": "string", "minLength": 1 },
           "skills": {

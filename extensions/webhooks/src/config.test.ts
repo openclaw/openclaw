@@ -160,6 +160,42 @@ describe("resolveWebhooksPluginConfig", () => {
     ]);
   });
 
+  it("normalizes provider URL verification challenge settings", () => {
+    const routes = resolveWebhooksPluginConfig({
+      pluginConfig: {
+        routes: {
+          meego: {
+            path: "/plugins/webhooks/meego-requirement-created",
+            dispatch: { mode: "ack" },
+            auth: {
+              mode: "header",
+              header: "x-meego-webhook-token",
+              secret: "shared-secret",
+            },
+            event: {
+              payloadPath: "type",
+            },
+            verification: {
+              event: "url_verification",
+              challengePath: "challenge",
+              responsePath: "challenge",
+            },
+          },
+        },
+      },
+    });
+
+    expect(routes[0]).toMatchObject({
+      routeId: "meego",
+      path: "/plugins/webhooks/meego-requirement-created",
+      verification: {
+        event: "url_verification",
+        challengePath: "challenge",
+        responsePath: "challenge",
+      },
+    });
+  });
+
   it("normalizes hmac routes", () => {
     const routes = resolveWebhooksPluginConfig({
       pluginConfig: {

@@ -130,6 +130,14 @@ const webhookIdempotencyConfigSchema = z
   })
   .strict();
 
+const webhookVerificationConfigSchema = z
+  .object({
+    event: z.string().trim().min(1).optional(),
+    challengePath: z.string().trim().min(1).optional(),
+    responsePath: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
 const webhookRouteConfigSchema = z
   .object({
     enabled: z.boolean().optional().default(true),
@@ -141,6 +149,7 @@ const webhookRouteConfigSchema = z
     events: z.array(z.string().trim().min(1)).optional(),
     event: webhookEventConfigSchema,
     idempotency: webhookIdempotencyConfigSchema.optional(),
+    verification: webhookVerificationConfigSchema.optional(),
     controllerId: z.string().trim().min(1).optional(),
     prompt: z.string().trim().min(1).optional(),
     skills: z.array(z.string().trim().min(1)).optional(),
@@ -230,6 +239,12 @@ export type ConfiguredWebhookIdempotencyConfig = {
   ttlMs: number;
 };
 
+export type ConfiguredWebhookVerificationConfig = {
+  event?: string;
+  challengePath: string;
+  responsePath: string;
+};
+
 export type ConfiguredWebhookTaskFlowTemplateConfig = {
   goalTemplate?: string;
   currentStep?: string | null;
@@ -293,6 +308,7 @@ type ConfiguredWebhookRouteBase = {
   events?: string[];
   event: ConfiguredWebhookEventConfig;
   idempotency?: ConfiguredWebhookIdempotencyConfig;
+  verification?: ConfiguredWebhookVerificationConfig;
   prompt?: string;
   skills?: string[];
   description?: string;
@@ -374,6 +390,19 @@ function normalizeStringTemplate(value: string | number | boolean | undefined): 
     return undefined;
   }
   return String(value).trim() || undefined;
+}
+
+function normalizeVerificationConfig(
+  route: RawWebhookRouteConfig,
+): ConfiguredWebhookVerificationConfig | undefined {
+  if (!route.verification) {
+    return undefined;
+  }
+  return {
+    ...(route.verification.event ? { event: route.verification.event } : {}),
+    challengePath: route.verification.challengePath ?? "challenge",
+    responsePath: route.verification.responsePath ?? "challenge",
+  };
 }
 
 function normalizeDeliveryConfigFromInput(
@@ -566,6 +595,7 @@ export function resolveWebhooksPluginConfig(params: {
             },
           }
         : {}),
+      ...(route.verification ? { verification: normalizeVerificationConfig(route) } : {}),
       ...(route.description ? { description: route.description } : {}),
       ...(route.prompt ? { prompt: route.prompt } : {}),
       ...(route.skills?.length ? { skills: [...route.skills] } : {}),

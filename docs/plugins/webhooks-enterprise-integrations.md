@@ -181,6 +181,12 @@ meego_requirement_created: {
     // Replace this with the real header or payload path from the first delivery.
     payloadPath: "event.type",
   },
+  verification: {
+    // Optional. Use only if the Meego webhook setup sends a URL verification event.
+    event: "url_verification",
+    challengePath: "challenge",
+    responsePath: "challenge",
+  },
   events: ["requirement.created"],
   idempotency: {
     // Replace this with the real delivery id header or payload path.
@@ -202,6 +208,10 @@ Operational notes:
   subscription, or callback management commands, so the real provider webhook
   must be configured from the Meego project/admin surface or another official
   project API.
+- If the Meego setup flow sends a URL verification request, configure
+  `verification` with the real event type and challenge/response payload paths.
+  OpenClaw answers the challenge only after the route-specific auth check passes
+  and does not dispatch an agent for verification requests.
 - For end-to-end validation, create a real test requirement, record the provider
   delivery id, verify OpenClaw returns `202`, confirm the agent run id, and
   write back a Meego comment or send a channel notification. A CLI-created work
