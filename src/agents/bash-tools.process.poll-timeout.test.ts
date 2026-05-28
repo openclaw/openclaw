@@ -10,6 +10,13 @@ import { createProcessSessionFixture } from "./bash-process-registry.test-helper
 import { createProcessTool } from "./bash-tools.process.js";
 import { processSchema } from "./bash-tools.schemas.js";
 
+const fakeSecretOutput = "OPENAI_API_KEY=sk-proj-redaction-canary-1234567890";
+const fakeFlagSecret = "sk-proj-redaction-canary-abcdefghijklmnopqrstuvwxyz1234567890";
+
+function resultText(result: Awaited<ReturnType<ReturnType<typeof createProcessTool>["execute"]>>) {
+  return (result.content[0] as { text?: string }).text ?? "";
+}
+
 afterEach(() => {
   resetProcessRegistryForTests();
   resetDiagnosticSessionStateForTest();
@@ -24,6 +31,16 @@ function createProcessSessionHarness(sessionId: string) {
   });
   addSession(session);
   return { processTool, session };
+}
+
+function attachWritableStdin(session: ReturnType<typeof createProcessSessionFixture>) {
+  session.stdin = {
+    write(_data: string, cb?: (err?: Error | null) => void) {
+      cb?.();
+    },
+    end() {},
+    destroyed: false,
+  };
 }
 
 async function pollSession(
@@ -104,6 +121,21 @@ test("process poll accepts string timeout values", async () => {
   });
 });
 
+test("process poll ignores partial string timeout values", async () => {
+  vi.useFakeTimers();
+  try {
+    const { processTool } = createProcessSessionHarness("sess-partial-timeout");
+
+    const pollPromise = pollSession(processTool, "toolcall", "sess-partial-timeout", "10ms");
+
+    await expect(pollPromise).resolves.toMatchObject({
+      details: expect.objectContaining({ status: "running" }),
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("process poll clamps long waits to 30 seconds", async () => {
   vi.useFakeTimers();
   try {
@@ -157,6 +189,117 @@ test("process poll aborts while waiting for completion", async () => {
     expect((err as Error).name).toBe("AbortError");
   } finally {
     vi.useRealTimers();
+  }
+});
+
+test("process poll redacts secret-shaped output before returning results", async () => {
+  const sessionId = "sess-redact-poll";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+
+  appendOutput(session, "stdout", `${fakeSecretOutput}\n`);
+  markExited(session, 0, null, "completed");
+
+  const poll = await pollSession(processTool, "toolcall-redact-poll", sessionId);
+  const details = poll.details as { aggregated?: string };
+  expect(resultText(poll)).not.toContain(fakeSecretOutput);
+  expect(details.aggregated).not.toContain(fakeSecretOutput);
+  expect(resultText(poll)).toContain("OPENAI_API_KEY=sk-pro…7890");
+  expect(details.aggregated).toContain("OPENAI_API_KEY=sk-pro…7890");
+});
+
+test("process log redacts secret-shaped output before returning results", async () => {
+  const sessionId = "sess-redact-log";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+
+  appendOutput(session, "stdout", `${fakeSecretOutput}\n`);
+  const log = await processTool.execute("toolcall-redact-log", {
+    action: "log",
+    sessionId,
+  });
+
+  expect(resultText(log)).not.toContain(fakeSecretOutput);
+  expect(resultText(log)).toContain("OPENAI_API_KEY=sk-pro…7890");
+});
+
+test("process list redacts secret-shaped command and tail details", async () => {
+  const sessionId = "sess-redact-list";
+  const processTool = createProcessTool();
+  const session = createProcessSessionFixture({
+    id: sessionId,
+    command: `echo ${fakeSecretOutput}`,
+    backgrounded: true,
+  });
+  addSession(session);
+  appendOutput(session, "stdout", `${fakeSecretOutput}\n`);
+
+  const listed = await processTool.execute("toolcall-redact-list", {
+    action: "list",
+  });
+  const details = listed.details as { sessions?: Array<{ command?: string; tail?: string }> };
+  const listedSession = details.sessions?.find((entry) =>
+    entry.command?.includes("OPENAI_API_KEY"),
+  );
+
+  expect(resultText(listed)).not.toContain(fakeSecretOutput);
+  expect(JSON.stringify(details)).not.toContain(fakeSecretOutput);
+  expect(resultText(listed)).toContain("OPENAI_API_KEY=");
+  expect(listedSession?.command).toContain("OPENAI_API_KEY=***");
+  expect(listedSession?.tail).toContain("OPENAI_API_KEY=***");
+});
+
+test("process write redacts secret-shaped command-derived details name", async () => {
+  const sessionId = "sess-redact-write-name";
+  const processTool = createProcessTool();
+  const session = createProcessSessionFixture({
+    id: sessionId,
+    command: `echo ${fakeSecretOutput}`,
+    backgrounded: true,
+  });
+  attachWritableStdin(session);
+  addSession(session);
+
+  const written = await processTool.execute("toolcall-redact-write-name", {
+    action: "write",
+    sessionId,
+    data: "input\n",
+  });
+  const details = written.details as { name?: string };
+
+  expect(resultText(written)).not.toContain(fakeSecretOutput);
+  expect(JSON.stringify(details)).not.toContain(fakeSecretOutput);
+  expect(details.name).toContain("OPENAI_API_KEY=");
+});
+
+test("process list, poll, log, and write redact secret-shaped flag values before deriving details name", async () => {
+  const sessionId = "sess-redact-flag-name";
+  const processTool = createProcessTool();
+  const session = createProcessSessionFixture({
+    id: sessionId,
+    command: `tool --api-key ${fakeFlagSecret}`,
+    backgrounded: true,
+  });
+  attachWritableStdin(session);
+  addSession(session);
+
+  const listed = await processTool.execute("toolcall-redact-flag-list", {
+    action: "list",
+  });
+  const polled = await pollSession(processTool, "toolcall-redact-flag-poll", sessionId);
+  const logged = await processTool.execute("toolcall-redact-flag-log", {
+    action: "log",
+    sessionId,
+  });
+  const written = await processTool.execute("toolcall-redact-flag-write", {
+    action: "write",
+    sessionId,
+    data: "input\n",
+  });
+
+  for (const result of [listed, polled, logged, written]) {
+    const serialized = JSON.stringify(result.details);
+    expect(serialized).not.toContain(fakeFlagSecret);
+    expect(serialized).not.toContain("abcdefghijklmnopqrstuvwxyz1234567890");
+    expect(serialized).toContain("sk-pro…7890");
   }
 });
 

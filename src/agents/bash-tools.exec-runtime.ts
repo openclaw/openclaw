@@ -30,6 +30,7 @@ export {
   normalizeExecTarget,
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
@@ -722,8 +723,9 @@ export async function runExecProcess(opts: {
     if (session.backgrounded || session.exited || updatesDisabled) {
       return;
     }
-    const tailText = session.tail || session.aggregated;
-    // Note: opts.onUpdate() is provided by agent runtime's agent-loop and
+    const tailText = redactToolPayloadText(session.tail || session.aggregated);
+    const warnings = opts.warnings?.map((warning) => redactToolPayloadText(warning));
+    // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
     // internally pushes Promise.resolve(emit(event)) into an updateEvents
     // array.  Because emit → processEvents is async, any failure (e.g.
     // activeRun cleared) produces a *rejected Promise*, not a synchronous
@@ -733,16 +735,14 @@ export async function runExecProcess(opts: {
     // signal (Layer 2) — both of which prevent this call from ever being
     // reached after the agent run has ended.
     opts.onUpdate({
-      content: [
-        { type: "text", text: renderExecUpdateText({ tailText, warnings: opts.warnings }) },
-      ],
+      content: [{ type: "text", text: renderExecUpdateText({ tailText, warnings }) }],
       details: {
         status: "running",
         sessionId,
         pid: session.pid ?? undefined,
         startedAt,
         cwd: session.cwd,
-        tail: session.tail,
+        tail: redactToolPayloadText(session.tail),
       },
     });
   };
