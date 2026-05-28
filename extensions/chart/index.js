@@ -1,6 +1,3 @@
-// index.ts
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-
 // src/chart-tool.ts
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -9,8 +6,10 @@ import { imageResultFromFile } from "openclaw/plugin-sdk/channel-actions";
 import {
   readNumberParam,
   readStringArrayParam,
-  readStringParam
+  readStringParam,
 } from "openclaw/plugin-sdk/param-readers";
+// index.ts
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 // src/render-svg.ts
@@ -24,7 +23,7 @@ var COLORS = [
   "#B07AA1",
   "#FF9DA7",
   "#9C755F",
-  "#BAB0AC"
+  "#BAB0AC",
 ];
 var MARGIN = { top: 60, right: 40, bottom: 70, left: 70 };
 var MAX_LABELS = 60;
@@ -32,7 +31,10 @@ function rgb(hex) {
   return `${Number.parseInt(hex.slice(1, 3), 16)},${Number.parseInt(hex.slice(3, 5), 16)},${Number.parseInt(hex.slice(5, 7), 16)}`;
 }
 function el(tag, a, body) {
-  const as = Object.entries(a).filter(([, v]) => v !== "").map(([k, v]) => `${k}="${v}"`).join(" ");
+  const as = Object.entries(a)
+    .filter(([, v]) => v !== "")
+    .map(([k, v]) => `${k}="${v}"`)
+    .join(" ");
   return body ? `<${tag} ${as}>${body}</${tag}>` : `<${tag} ${as}/>`;
 }
 function tx(x, y, s, o = {}) {
@@ -42,7 +44,7 @@ function tx(x, y, s, o = {}) {
     "font-family": "system-ui,sans-serif",
     "font-size": String(o.fs ?? 12),
     fill: o.f ?? "#333",
-    "text-anchor": o.a ?? "start"
+    "text-anchor": o.a ?? "start",
   };
   if (o.b) {
     attrs["font-weight"] = "bold";
@@ -53,7 +55,11 @@ function tx(x, y, s, o = {}) {
   return el("text", attrs, esc(s));
 }
 function esc(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 function ln(x1, y1, x2, y2, c, d) {
   return el("line", {
@@ -63,7 +69,7 @@ function ln(x1, y1, x2, y2, c, d) {
     y2: String(y2),
     stroke: c,
     "stroke-width": "1",
-    ...d ? { "stroke-dasharray": d } : {}
+    ...(d ? { "stroke-dasharray": d } : {}),
   });
 }
 function rc(x, y, w, h, f) {
@@ -72,7 +78,7 @@ function rc(x, y, w, h, f) {
     y: String(y),
     width: String(Math.max(0, w)),
     height: String(Math.max(0, h)),
-    fill: f
+    fill: f,
   });
 }
 function ci(cx, cy, r, f) {
@@ -85,14 +91,14 @@ function pl(pts, c, w, f) {
     "stroke-width": String(w),
     fill: f ?? "none",
     "stroke-linejoin": "round",
-    "stroke-linecap": "round"
+    "stroke-linecap": "round",
   });
 }
 function pg(pts, f) {
   return el("polygon", {
     points: pts.map((p) => `${p.x},${p.y}`).join(" "),
     fill: f,
-    stroke: "none"
+    stroke: "none",
   });
 }
 function fmt(n) {
@@ -138,8 +144,8 @@ function grid(pW, pH, ymin, ymax, lbs, bw) {
   let o = "";
   const r = ymax - ymin || 1;
   for (let i = 0; i <= 5; i++) {
-    const v = ymin + r * i / 5;
-    const py = MARGIN.top + pH - (v - ymin) / r * pH;
+    const v = ymin + (r * i) / 5;
+    const py = MARGIN.top + pH - ((v - ymin) / r) * pH;
     o += ln(MARGIN.left, py, MARGIN.left + pW, py, "#e0e0e0", "4,4");
     o += tx(MARGIN.left - 8, py + 4, fmt(v), { a: "end", fs: 11, f: "#666" });
   }
@@ -148,13 +154,16 @@ function grid(pW, pH, ymin, ymax, lbs, bw) {
     o += tx(MARGIN.left + s * i + bw / 2 + (s - bw) / 2, MARGIN.top + pH + 22, lbs[i], {
       a: "middle",
       fs: 10,
-      f: "#666"
+      f: "#666",
     });
   }
   return o;
 }
 function axis(pW, pH) {
-  return ln(MARGIN.left, MARGIN.top, MARGIN.left, MARGIN.top + pH, "#333") + ln(MARGIN.left, MARGIN.top + pH, MARGIN.left + pW, MARGIN.top + pH, "#333");
+  return (
+    ln(MARGIN.left, MARGIN.top, MARGIN.left, MARGIN.top + pH, "#333") +
+    ln(MARGIN.left, MARGIN.top + pH, MARGIN.left + pW, MARGIN.top + pH, "#333")
+  );
 }
 function drawBarChart(o) {
   const pW = o.width - MARGIN.left - MARGIN.right;
@@ -172,7 +181,7 @@ function drawBarChart(o) {
     const gx = MARGIN.left + gW * g + gap;
     for (let s = 0; s < nS; s++) {
       const v = o.series[s].values[g] ?? 0;
-      const h = Math.abs((v - yMin) / (yMax - yMin || 1) * pH);
+      const h = Math.abs(((v - yMin) / (yMax - yMin || 1)) * pH);
       const by = v >= yMin ? MARGIN.top + pH - h : MARGIN.top + pH;
       const co = o.series[s].color ?? COLORS[s % COLORS.length];
       if (h > 0) {
@@ -188,7 +197,7 @@ function drawBarChart(o) {
       o.width / 2,
       o.height - 10,
       `(showing first ${MAX_LABELS} of ${o.labels.length} labels)`,
-      { a: "middle", fs: 10, f: "#999" }
+      { a: "middle", fs: 10, f: "#999" },
     );
   }
   return out;
@@ -198,14 +207,15 @@ function drawLineChart(o, area) {
   const pH = o.height - MARGIN.top - MARGIN.bottom;
   const { yMin, yMax } = yRange(o.series);
   const st = pW / Math.max(o.labels.length - 1, 1);
-  let out = grid(pW, pH, yMin, yMax, o.labels, pW / o.labels.length) + axis(pW, pH) + axisLabels(o, pW, pH);
+  let out =
+    grid(pW, pH, yMin, yMax, o.labels, pW / o.labels.length) + axis(pW, pH) + axisLabels(o, pW, pH);
   for (let s = 0; s < o.series.length; s++) {
     const co = o.series[s].color ?? COLORS[s % COLORS.length];
     const pts = [];
     for (let i = 0; i < o.series[s].values.length; i++) {
       const x = MARGIN.left + st * i;
       const v = o.series[s].values[i] ?? 0;
-      const y = MARGIN.top + pH - (v - yMin) / (yMax - yMin || 1) * pH;
+      const y = MARGIN.top + pH - ((v - yMin) / (yMax - yMin || 1)) * pH;
       pts.push({ x, y });
       out += ci(x, y, 3, co);
     }
@@ -213,7 +223,7 @@ function drawLineChart(o, area) {
       const ap = [
         ...pts,
         { x: pts[pts.length - 1].x, y: MARGIN.top + pH },
-        { x: pts[0].x, y: MARGIN.top + pH }
+        { x: pts[0].x, y: MARGIN.top + pH },
       ];
       out += pg(ap, `rgba(${rgb(co)}, 0.15)`);
     }
@@ -239,24 +249,24 @@ function drawPieChart(o) {
   let out = "";
   let a = -90;
   for (let i = 0; i < vs.length; i++) {
-    const sa = vs[i] / t * 360;
+    const sa = (vs[i] / t) * 360;
     const ea = a + sa;
-    const x1 = cx + r * Math.cos(a * Math.PI / 180);
-    const y1 = cy + r * Math.sin(a * Math.PI / 180);
-    const x2 = cx + r * Math.cos(ea * Math.PI / 180);
-    const y2 = cy + r * Math.sin(ea * Math.PI / 180);
+    const x1 = cx + r * Math.cos((a * Math.PI) / 180);
+    const y1 = cy + r * Math.sin((a * Math.PI) / 180);
+    const x2 = cx + r * Math.cos((ea * Math.PI) / 180);
+    const y2 = cy + r * Math.sin((ea * Math.PI) / 180);
     const l = sa > 180 ? 1 : 0;
     const co = s.color ?? COLORS[i % COLORS.length];
     out += el("path", {
       d: `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${l} 1 ${x2} ${y2} Z`,
       fill: co,
       stroke: "#fff",
-      "stroke-width": "2"
+      "stroke-width": "2",
     });
     const m = (a + ea) / 2;
-    const lx = cx + r * 0.7 * Math.cos(m * Math.PI / 180);
-    const ly = cy + r * 0.7 * Math.sin(m * Math.PI / 180);
-    const pct = `${(vs[i] / t * 100).toFixed(1)}%`;
+    const lx = cx + r * 0.7 * Math.cos((m * Math.PI) / 180);
+    const ly = cy + r * 0.7 * Math.sin((m * Math.PI) / 180);
+    const pct = `${((vs[i] / t) * 100).toFixed(1)}%`;
     out += tx(lx, ly - 6, o.labels[i] ?? "", { a: "middle", fs: 11, f: "#fff", b: true });
     out += tx(lx, ly + 8, pct, { a: "middle", fs: 10, f: "#fff" });
     a = ea;
@@ -267,13 +277,14 @@ function drawScatterChart(o) {
   const pW = o.width - MARGIN.left - MARGIN.right;
   const pH = o.height - MARGIN.top - MARGIN.bottom;
   const { yMin, yMax } = yRange(o.series);
-  let out = grid(pW, pH, yMin, yMax, o.labels, pW / o.labels.length) + axis(pW, pH) + axisLabels(o, pW, pH);
+  let out =
+    grid(pW, pH, yMin, yMax, o.labels, pW / o.labels.length) + axis(pW, pH) + axisLabels(o, pW, pH);
   for (let s = 0; s < o.series.length; s++) {
     const co = o.series[s].color ?? COLORS[s % COLORS.length];
     for (let i = 0; i < o.series[s].values.length && i < o.labels.length; i++) {
-      const x = MARGIN.left + i / Math.max(o.labels.length - 1, 1) * pW;
+      const x = MARGIN.left + (i / Math.max(o.labels.length - 1, 1)) * pW;
       const v = o.series[s].values[i] ?? 0;
-      const y = MARGIN.top + pH - (v - yMin) / (yMax - yMin || 1) * pH;
+      const y = MARGIN.top + pH - ((v - yMin) / (yMax - yMin || 1)) * pH;
       out += ci(x, y, 5, co);
     }
   }
@@ -312,16 +323,18 @@ function renderChartSVG(o) {
       c = drawScatterChart(o);
       break;
   }
-  const titleEl = o.title ? tx(o.width / 2, 30, o.title, { a: "middle", fs: 16, b: true, f: "#222" }) : "";
+  const titleEl = o.title
+    ? tx(o.width / 2, 30, o.title, { a: "middle", fs: 16, b: true, f: "#222" })
+    : "";
   return el(
     "svg",
     {
       xmlns: "http://www.w3.org/2000/svg",
       width: String(o.width),
       height: String(o.height),
-      viewBox: `0 0 ${o.width} ${o.height}`
+      viewBox: `0 0 ${o.width} ${o.height}`,
     },
-    `<style>text{font-family:system-ui,-apple-system,sans-serif}</style>${titleEl}${c}${drawLegend(o)}`
+    `<style>text{font-family:system-ui,-apple-system,sans-serif}</style>${titleEl}${c}${drawLegend(o)}`,
   );
 }
 
@@ -333,13 +346,13 @@ var ChartToolSchema = {
     type: {
       type: "string",
       description: "Chart type: bar, line, pie, scatter, or area.",
-      enum: CHART_TYPES
+      enum: CHART_TYPES,
     },
     title: { type: "string", description: "Optional chart title." },
     labels: {
       type: "array",
       items: { type: "string" },
-      description: "Labels for the x-axis, or segment names for pie charts."
+      description: "Labels for the x-axis, or segment names for pie charts.",
     },
     series: {
       type: "array",
@@ -350,36 +363,36 @@ var ChartToolSchema = {
           values: {
             type: "array",
             items: { type: "number" },
-            description: "Data values for this series. Must have the same length as labels."
+            description: "Data values for this series. Must have the same length as labels.",
           },
-          color: { type: "string", description: "Optional hex color (e.g. #4E79A7)." }
+          color: { type: "string", description: "Optional hex color (e.g. #4E79A7)." },
         },
         required: ["label", "values"],
-        additionalProperties: false
+        additionalProperties: false,
       },
-      description: "One or more data series to plot."
+      description: "One or more data series to plot.",
     },
     width: {
       type: "integer",
       description: "Image width in pixels (200\u20134000, default 800).",
       minimum: 200,
-      maximum: 4e3
+      maximum: 4e3,
     },
     height: {
       type: "integer",
       description: "Image height in pixels (200\u20134000, default 500).",
       minimum: 200,
-      maximum: 4e3
+      maximum: 4e3,
     },
     xLabel: { type: "string", description: "Optional label for the x-axis." },
     yLabel: { type: "string", description: "Optional label for the y-axis." },
     showLegend: {
       type: "boolean",
-      description: "Whether to show the legend. Defaults to true for multi-series charts."
-    }
+      description: "Whether to show the legend. Defaults to true for multi-series charts.",
+    },
   },
   required: ["type", "labels", "series"],
-  additionalProperties: false
+  additionalProperties: false,
 };
 function parseSeries(raw, labelsLen) {
   if (!Array.isArray(raw) || raw.length === 0) {
@@ -390,11 +403,12 @@ function parseSeries(raw, labelsLen) {
       throw new Error(`series[${idx}] must be an object with "label" and "values" fields.`);
     }
     const obj = item;
-    const label = typeof obj.label === "string" && obj.label.trim() ? obj.label : `Series ${idx + 1}`;
+    const label =
+      typeof obj.label === "string" && obj.label.trim() ? obj.label : `Series ${idx + 1}`;
     const values = Array.isArray(obj.values) ? obj.values.map(Number) : [];
     if (values.length !== labelsLen) {
       throw new Error(
-        `series[${idx}] ("${label}"): values length (${values.length}) does not match labels length (${labelsLen}). Each series must have one value per label.`
+        `series[${idx}] ("${label}"): values length (${values.length}) does not match labels length (${labelsLen}). Each series must have one value per label.`,
       );
     }
     const color = typeof obj.color === "string" ? obj.color : void 0;
@@ -405,7 +419,8 @@ function createChartTool() {
   return {
     name: "chart",
     label: "Generate Chart",
-    description: "Generate a chart (bar, line, pie, scatter, or area) from structured data as an SVG image. Use this to visualize data, create reports, or show trends. Each series must have the same number of values as the labels array.",
+    description:
+      "Generate a chart (bar, line, pie, scatter, or area) from structured data as an SVG image. Use this to visualize data, create reports, or show trends. Each series must have the same number of values as the labels array.",
     parameters: ChartToolSchema,
     execute: async (...executeArgs) => {
       const [, args] = executeArgs;
@@ -413,7 +428,7 @@ function createChartTool() {
       const chartType = readStringParam(a, "type", { required: true });
       if (!CHART_TYPES.includes(chartType)) {
         throw new Error(
-          `Unknown chart type "${chartType}". Valid types: ${CHART_TYPES.join(", ")}.`
+          `Unknown chart type "${chartType}". Valid types: ${CHART_TYPES.join(", ")}.`,
         );
       }
       const labels = readStringArrayParam(a, "labels", { required: true });
@@ -439,14 +454,14 @@ function createChartTool() {
         series,
         xLabel: readStringParam(a, "xLabel"),
         yLabel: readStringParam(a, "yLabel"),
-        legend: showLegend
+        legend: showLegend,
       });
       const dir = path.join(resolvePreferredOpenClawTmpDir(), "charts");
       await fs.mkdir(dir, { recursive: true });
       const filePath = path.join(dir, `chart-${chartType}-${randomUUID().slice(0, 8)}.svg`);
       await fs.writeFile(filePath, svg, "utf-8");
       return imageResultFromFile({ label: `chart-${chartType}`, path: filePath });
-    }
+    },
   };
 }
 
@@ -457,8 +472,6 @@ var index_default = definePluginEntry({
   description: "Bundled chart generation plugin \u2014 bar, line, pie, scatter, and area charts",
   register(api) {
     api.registerTool(createChartTool());
-  }
+  },
 });
-export {
-  index_default as default
-};
+export { index_default as default };
