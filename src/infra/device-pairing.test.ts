@@ -789,6 +789,26 @@ describe("device pairing tokens", () => {
     });
   });
 
+  test("device token verification refreshes paired device last-seen metadata", async () => {
+    const { baseDir, token } = await setupOperatorToken(["operator.read"]);
+    const beforeVerifyAtMs = Date.now();
+
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token,
+        role: "operator",
+        scopes: ["operator.read"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.lastSeenReason).toBe("device-token-auth");
+    expect(typeof paired?.lastSeenAtMs).toBe("number");
+    expect(paired?.lastSeenAtMs ?? 0).toBeGreaterThanOrEqual(beforeVerifyAtMs);
+  });
+
   test("generates base64url device tokens with 256-bit entropy output length", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
