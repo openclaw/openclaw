@@ -508,7 +508,7 @@ describe("registerCoreHealthChecks", () => {
     const previousFallbackToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token";
 
-    let findings: HealthFinding[] | undefined;
+    let findings: readonly HealthFinding[] | undefined;
     try {
       findings = await check?.detect({
         mode: "lint",
