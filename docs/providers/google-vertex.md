@@ -130,7 +130,7 @@ After onboarding, your `openclaw.json` will include:
 {
   agents: {
     defaults: {
-      model: { primary: "google-vertex/gemini-2.5-flash" },
+      model: { primary: "google-vertex/gemini-flash-latest" },
     },
   },
   env: {
@@ -158,7 +158,22 @@ After onboarding, your `openclaw.json` will include:
 
 ## Available models
 
-Use the `google-vertex/` prefix with any Gemini model available on Vertex AI:
+Use the `google-vertex/` prefix with any Gemini model available on Vertex AI.
+
+### Latest aliases (recommended)
+
+These auto-updating aliases always point to the latest stable version of each
+model family. Recommended for most users:
+
+| Model | ID |
+| :--- | :--- |
+| Gemini Flash (latest) | `google-vertex/gemini-flash-latest` |
+| Gemini Pro (latest) | `google-vertex/gemini-pro-latest` |
+| Gemini Flash-Lite (latest) | `google-vertex/gemini-flash-lite-latest` |
+
+### Specific versions
+
+Pin to a specific version when you need deterministic behavior:
 
 | Model | ID |
 | :--- | :--- |
