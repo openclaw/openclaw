@@ -818,7 +818,8 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
     gatewayDetailsMessage: ctx.gatewayDetails?.message ?? "",
     // A skipped exec-backed token probe is unknown, not unhealthy. Do not let
     // doctor --fix restart services only because probing would require exec.
-    healthOk: ctx.gatewayHealthSkipped === true ? true : (ctx.healthOk ?? false),
+    healthOk: ctx.healthOk ?? false,
+    healthSkipped: ctx.gatewayHealthSkipped === true,
   });
 }
 

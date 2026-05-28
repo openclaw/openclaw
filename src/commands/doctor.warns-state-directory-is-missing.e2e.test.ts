@@ -895,6 +895,9 @@ describe("doctor command", () => {
       config: {
         gateway: {
           mode: "remote",
+          auth: {
+            mode: "password",
+          },
           remote: {
             url: "https://gateway.example.test",
             password: {
@@ -946,6 +949,9 @@ describe("doctor command", () => {
       config: {
         gateway: {
           mode: "remote",
+          auth: {
+            mode: "token",
+          },
           remote: {
             url: "https://gateway.example.test",
             token: {
