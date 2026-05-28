@@ -187,27 +187,14 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
         request: {
           ...pluginRequest.request,
           title: "World proof required for exec",
-          actions: [
-            {
-              kind: "command",
-              label: "Verify once",
-              command: "/agentkit approve plugin:agentkit allow-once",
-              style: "success",
-            },
-            {
-              kind: "decision",
-              label: "Deny",
-              command: "/approve plugin:agentkit deny",
-              decision: "deny",
-              style: "danger",
-            },
-          ],
         },
       },
       view: {
         approvalKind: "plugin",
         approvalId: "plugin:agentkit",
+        phase: "pending",
         title: "World proof required for exec",
+        metadata: [],
         severity: "warning",
         actions: [
           {
@@ -224,7 +211,8 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
             style: "danger",
           },
         ],
-      } as never,
+        expiresAtMs: 61_000,
+      },
       nowMs: 1_000,
     });
 
