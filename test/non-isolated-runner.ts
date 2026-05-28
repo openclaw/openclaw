@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { TestRunner, type RunnerTask, type RunnerTestCase, type RunnerTestSuite, vi } from "vitest";
+import { TestRunner, type RunnerTask, type RunnerTestSuite, vi } from "vitest";
 
 type EvaluatedModuleNode = {
   promise?: unknown;
@@ -79,11 +79,6 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
   override async onBeforeRunTask(test: RunnerTask) {
     restoreRealTimers();
     await super.onBeforeRunTask(test);
-  }
-
-  override onAfterTryTask(test: RunnerTestCase) {
-    super.onAfterTryTask(test);
-    restoreRealTimers();
   }
 
   async onAfterRetryTask() {
