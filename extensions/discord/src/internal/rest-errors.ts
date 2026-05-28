@@ -37,7 +37,10 @@ function coerceRetryAfterSeconds(value: unknown): number | undefined {
     return undefined;
   }
   const seconds = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(seconds) && seconds >= 0 ? Math.max(0, seconds) : undefined;
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return undefined;
+  }
+  return Math.max(0, seconds);
 }
 
 export function readRetryAfter(body: unknown, response: Response, fallbackSeconds = 0): number {
