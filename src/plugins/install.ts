@@ -441,7 +441,7 @@ async function resolveLatestCompatibleNpmResolution(params: {
     .filter((version) => !isPrereleaseSemverVersion(version))
     .filter((version) => compareNpmSemver(version, currentVersion) < 0)
     .toSorted(compareNpmSemver)
-    .reverse();
+    .toReversed();
   for (const version of candidates) {
     const spec = `${params.parsedSpec.name}@${version}`;
     const metadataResult = await resolveNpmSpecMetadata({
