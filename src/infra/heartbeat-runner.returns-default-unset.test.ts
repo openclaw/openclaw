@@ -171,6 +171,31 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+async function readStoredSessionEntry(
+  storePath: string,
+  sessionKey: string,
+  sessionId: string,
+): Promise<Record<string, unknown>> {
+  const store = requireRecord(JSON.parse(await fs.readFile(storePath, "utf-8")), "session store");
+  const directEntry = store[sessionKey];
+  if (directEntry) {
+    return requireRecord(directEntry, `session ${sessionKey}`);
+  }
+  for (const entry of Object.values(store)) {
+    const record = requireRecord(entry, "session entry");
+    if (record.sessionId === sessionId) {
+      return record;
+    }
+  }
+  const seen = Object.entries(store)
+    .map(([key, entry]) => {
+      const record = requireRecord(entry, "session entry");
+      return `${key}:${String(record.sessionId)}`;
+    })
+    .join(", ");
+  throw new Error(`expected session ${sessionKey} or sessionId ${sessionId}; saw ${seen}`);
+}
+
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
     expect(record[key]).toEqual(value);
@@ -1222,6 +1247,157 @@ describe("runHeartbeatOnce", () => {
       });
 
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
+    } finally {
+      replySpy.mockReset();
+    }
+  });
+
+  it("clears pending final delivery after sending a matching heartbeat payload", async () => {
+    const tmpDir = await createCaseDir("hb-pending-clear-sent");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.fn();
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      const pendingText = "Final alert";
+      const nowMs = Date.now();
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: nowMs - 30_000,
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: pendingText,
+            pendingFinalDeliveryCreatedAt: 1,
+            pendingFinalDeliveryLastAttemptAt: 2,
+            pendingFinalDeliveryAttemptCount: 3,
+            pendingFinalDeliveryLastError: "previous failure",
+            pendingFinalDeliveryContext: { source: "heartbeat" },
+            pendingFinalDeliveryIntentId: "intent-1",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: pendingText }]);
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp, {
+          nowMs,
+          getReplyFromConfig: replySpy,
+        }),
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      const stored = await readStoredSessionEntry(storePath, sessionKey, "sid");
+      expect(stored.pendingFinalDelivery).toBeUndefined();
+      expect(stored.pendingFinalDeliveryText).toBeUndefined();
+      expect(stored.pendingFinalDeliveryCreatedAt).toBeUndefined();
+      expect(stored.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+      expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+      expect(stored.pendingFinalDeliveryLastError).toBeUndefined();
+      expect(stored.pendingFinalDeliveryContext).toBeUndefined();
+      expect(stored.pendingFinalDeliveryIntentId).toBeUndefined();
+      expect(stored.lastHeartbeatText).toBe(pendingText);
+      expect(stored.lastHeartbeatSentAt).toBe(nowMs);
+    } finally {
+      replySpy.mockReset();
+    }
+  });
+
+  it("clears matching pending final delivery when duplicate heartbeat is skipped", async () => {
+    const tmpDir = await createCaseDir("hb-pending-clear-duplicate");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.fn();
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      const pendingText = "Final alert";
+      const nowMs = Date.now();
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: nowMs - 30_000,
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+            lastHeartbeatText: pendingText,
+            lastHeartbeatSentAt: nowMs - 60_000,
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: pendingText,
+            pendingFinalDeliveryCreatedAt: 1,
+            pendingFinalDeliveryLastAttemptAt: 2,
+            pendingFinalDeliveryAttemptCount: 3,
+            pendingFinalDeliveryLastError: "previous failure",
+            pendingFinalDeliveryContext: { source: "heartbeat" },
+            pendingFinalDeliveryIntentId: "intent-1",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: pendingText }]);
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp, {
+          nowMs,
+          getReplyFromConfig: replySpy,
+        }),
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledTimes(0);
+      const stored = await readStoredSessionEntry(storePath, sessionKey, "sid");
+      expect(stored.pendingFinalDelivery).toBeUndefined();
+      expect(stored.pendingFinalDeliveryText).toBeUndefined();
+      expect(stored.pendingFinalDeliveryCreatedAt).toBeUndefined();
+      expect(stored.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+      expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+      expect(stored.pendingFinalDeliveryLastError).toBeUndefined();
+      expect(stored.pendingFinalDeliveryContext).toBeUndefined();
+      expect(stored.pendingFinalDeliveryIntentId).toBeUndefined();
+      expect(stored.lastHeartbeatText).toBe(pendingText);
     } finally {
       replySpy.mockReset();
     }

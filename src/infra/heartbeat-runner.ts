@@ -1643,6 +1643,43 @@ export async function runHeartbeatOnce(opts: {
     }
     consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
   };
+  const clearDeliveredPendingFinalDelivery = async (deliveredText: string) => {
+    const normalizedDeliveredText = deliveredText.trim();
+    if (!normalizedDeliveredText) {
+      return false;
+    }
+    let cleared = false;
+    await updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
+      const pendingText =
+        typeof current?.pendingFinalDeliveryText === "string"
+          ? current.pendingFinalDeliveryText.trim()
+          : "";
+      if (
+        current?.pendingFinalDelivery !== true ||
+        !pendingText ||
+        pendingText !== normalizedDeliveredText
+      ) {
+        return;
+      }
+      store[sessionKey] = {
+        ...current,
+        pendingFinalDelivery: undefined,
+        pendingFinalDeliveryText: undefined,
+        pendingFinalDeliveryCreatedAt: undefined,
+        pendingFinalDeliveryLastAttemptAt: undefined,
+        pendingFinalDeliveryAttemptCount: undefined,
+        pendingFinalDeliveryLastError: undefined,
+        pendingFinalDeliveryContext: undefined,
+        pendingFinalDeliveryIntentId: undefined,
+      };
+      cleared = true;
+    });
+    if (cleared) {
+      log.info("heartbeat: cleared delivered pending final delivery", { sessionKey });
+    }
+    return cleared;
+  };
 
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
@@ -1922,6 +1959,7 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      await clearDeliveredPendingFinalDelivery(normalized.text);
 
       emitHeartbeatEvent({
         status: "skipped",
@@ -2055,6 +2093,7 @@ export async function runHeartbeatOnce(opts: {
           lastHeartbeatSentAt: startedAt,
         };
       });
+      await clearDeliveredPendingFinalDelivery(normalized.text);
     }
 
     const sentStatus = deliveredAgentRunFailure ? "failed" : "sent";
