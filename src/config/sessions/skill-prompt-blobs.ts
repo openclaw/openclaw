@@ -9,7 +9,6 @@ const PROMPT_BLOB_ALGORITHM: SessionSkillPromptRef["algorithm"] = "sha256";
 const PROMPT_BLOB_VERSION: SessionSkillPromptRef["version"] = 1;
 const MIN_PROMPT_BLOB_CHARS = 512;
 const MAX_PROMPT_BLOB_BYTES = 512 * 1024;
-const verifiedPromptBlobPaths = new Set<string>();
 
 type PersistedSessionStore = {
   store: Record<string, SessionEntry>;
@@ -97,7 +96,7 @@ async function ensurePromptBlob(storePath: string, prompt: string): Promise<Sess
   if (!blobPath) {
     return ref;
   }
-  if (!verifiedPromptBlobPaths.has(blobPath) && readValidPromptBlob(storePath, ref) !== prompt) {
+  if (readValidPromptBlob(storePath, ref) !== prompt) {
     await fs.promises.mkdir(path.dirname(blobPath), { recursive: true });
     await writeTextAtomic(blobPath, prompt, {
       durable: false,
@@ -105,7 +104,6 @@ async function ensurePromptBlob(storePath: string, prompt: string): Promise<Sess
       tempPrefix: path.basename(blobPath),
     });
   }
-  verifiedPromptBlobPaths.add(blobPath);
   return ref;
 }
 

@@ -481,4 +481,71 @@ describe("pruneUnreferencedSessionArtifacts", () => {
       expect(result.removedFiles).toBeGreaterThanOrEqual(1);
     });
   });
+
+  it("reclaims unreferenced skills prompt blobs during normal artifact cleanup", async () => {
+    await withTempDir({ prefix: "openclaw-prune-prompt-blob-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const oldKey = "agent:main:old";
+      const keepKey = "agent:main:keep";
+      const oldPrompt = `<available_skills>\n${"old prompt\n".repeat(200)}</available_skills>`;
+      const keepPrompt = `<available_skills>\n${"keep prompt\n".repeat(200)}</available_skills>`;
+      const store: Record<string, SessionEntry> = {
+        [oldKey]: {
+          sessionId: "old",
+          updatedAt: 1,
+          skillsSnapshot: {
+            prompt: oldPrompt,
+            skills: [{ name: "old" }],
+            version: 1,
+          },
+        },
+        [keepKey]: {
+          sessionId: "keep",
+          updatedAt: 2,
+          skillsSnapshot: {
+            prompt: keepPrompt,
+            skills: [{ name: "keep" }],
+            version: 1,
+          },
+        },
+      };
+      await saveSessionStore(storePath, store, { skipMaintenance: true });
+
+      const raw = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+      const oldHash = raw[oldKey]?.skillsSnapshot?.promptRef?.hash;
+      const keepHash = raw[keepKey]?.skillsSnapshot?.promptRef?.hash;
+      if (!oldHash || !keepHash) {
+        throw new Error("expected prompt refs");
+      }
+      const oldBlob = path.join(
+        dir,
+        "skills-prompts",
+        "sha256",
+        oldHash.slice(0, 2),
+        `${oldHash}.txt`,
+      );
+      const keepBlob = path.join(
+        dir,
+        "skills-prompts",
+        "sha256",
+        keepHash.slice(0, 2),
+        `${keepHash}.txt`,
+      );
+      await expectPathExists(oldBlob);
+      await expectPathExists(keepBlob);
+      const oldMtime = new Date(Date.now() - 2 * 60 * 1000);
+      await fs.utimes(oldBlob, oldMtime, oldMtime);
+      delete store[oldKey];
+
+      const result = await pruneUnreferencedSessionArtifacts({
+        store,
+        storePath,
+        olderThanMs: 60_000,
+      });
+
+      await expectPathMissing(oldBlob);
+      await expectPathExists(keepBlob);
+      expect(result.removedFiles).toBe(1);
+    });
+  });
 });

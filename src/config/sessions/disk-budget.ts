@@ -360,26 +360,45 @@ export async function pruneUnreferencedSessionArtifacts(params: {
     Number.isFinite(params.olderThanMs) && params.olderThanMs > 0 ? params.olderThanMs : 0;
   const sessionsDir = path.dirname(params.storePath);
   const files = await readSessionsDirFiles(sessionsDir);
-  const fileSizesByPath = new Map(files.map((file) => [file.canonicalPath, file.size]));
+  const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
+  const fileSizesByPath = new Map(
+    [...files, ...promptBlobFiles].map((file) => [file.canonicalPath, file.size]),
+  );
   const simulatedRemovedPaths = new Set<string>();
   const referencedPaths = resolveReferencedSessionArtifactPaths({
     sessionsDir,
     store: params.store,
   });
+  const projectedPromptBlobRefCounts = buildProjectedPromptBlobRefCounts(
+    projectSessionStoreForPersistence({
+      storePath: params.storePath,
+      store: params.store,
+    }).store,
+  );
   const cutoffMs = Date.now() - olderThanMs;
   const tempCutoffMs = Date.now() - SESSION_STORE_TEMP_STALE_MS;
   const storeBasename = path.basename(params.storePath);
-  const removableFiles = files
+  const removableStoreFiles = files.filter((file) => {
+    if (params.excludeCanonicalPaths?.has(file.canonicalPath)) {
+      return false;
+    }
+    // Orphaned store atomic-write temps are reclaimed on their own short
+    // staleness window, independent of the unreferenced-artifact age (#56827).
+    if (isSessionStoreTempArtifactName(file.name, storeBasename)) {
+      return file.mtimeMs <= tempCutoffMs;
+    }
+    return file.mtimeMs <= cutoffMs && isUnreferencedSessionArtifactFile(file, referencedPaths);
+  });
+  const removablePromptBlobFiles = promptBlobFiles.filter((file) => {
+    if (params.excludeCanonicalPaths?.has(file.canonicalPath) || file.mtimeMs > cutoffMs) {
+      return false;
+    }
+    const hash = resolvePromptBlobFileHash(file);
+    return hash ? !projectedPromptBlobRefCounts.has(hash) : false;
+  });
+  const removableFiles = [...removableStoreFiles, ...removablePromptBlobFiles]
     .filter((file) => {
-      if (params.excludeCanonicalPaths?.has(file.canonicalPath)) {
-        return false;
-      }
-      // Orphaned store atomic-write temps are reclaimed on their own short
-      // staleness window, independent of the unreferenced-artifact age (#56827).
-      if (isSessionStoreTempArtifactName(file.name, storeBasename)) {
-        return file.mtimeMs <= tempCutoffMs;
-      }
-      return file.mtimeMs <= cutoffMs && isUnreferencedSessionArtifactFile(file, referencedPaths);
+      return !params.excludeCanonicalPaths?.has(file.canonicalPath);
     })
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
 
@@ -401,7 +420,7 @@ export async function pruneUnreferencedSessionArtifacts(params: {
   }
 
   return {
-    scannedFiles: files.length,
+    scannedFiles: files.length + promptBlobFiles.length,
     removedFiles,
     freedBytes,
     olderThanMs,

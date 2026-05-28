@@ -233,6 +233,31 @@ describe("session store strips resolvedSkills from persistence", () => {
     expect(loaded["agent:main:test:1"]?.skillsSnapshot?.resolvedSkills).toBeUndefined();
   });
 
+  it("rewrites a verified prompt blob when cleanup removed it in the same process", async () => {
+    const prompt = `<available_skills>\n${"rewritten prompt\n".repeat(200)}</available_skills>`;
+    const store = {
+      "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
+    };
+    await saveSessionStore(storePath, store, { skipMaintenance: true });
+    const raw = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+    const hash = raw["agent:main:test:1"]?.skillsSnapshot?.promptRef?.hash;
+    if (!hash) {
+      throw new Error("expected prompt ref");
+    }
+    const blobPath = path.join(
+      testDir,
+      "skills-prompts",
+      "sha256",
+      hash.slice(0, 2),
+      `${hash}.txt`,
+    );
+    await fs.rm(blobPath);
+
+    await saveSessionStore(storePath, store, { skipMaintenance: true });
+
+    expect(await fs.readFile(blobPath, "utf-8")).toBe(prompt);
+  });
+
   it("keeps cache clones hydrated when disk JSON uses prompt refs", async () => {
     process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "45000";
     clearSessionStoreCacheForTest();
