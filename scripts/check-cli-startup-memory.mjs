@@ -27,7 +27,7 @@ function readPositiveNumberEnv(name, fallback, env = process.env) {
   if (raw === undefined || raw === "") {
     return fallback;
   }
-  const text = String(raw).trim();
+  const text = raw.trim();
   if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
     return fallback;
   }
