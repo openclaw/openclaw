@@ -651,8 +651,13 @@ describe("plugin-sdk facade runtime", () => {
         {
           id: "demo-snapshot",
           rootDir: path.join(dir, "demo"),
+          source: path.join(dir, "demo", "runtime-api.js"),
+          manifestPath: path.join(dir, "demo", "openclaw.plugin.json"),
           channels: ["demo"],
           providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
           origin: "bundled" as const,
         },
       ],
