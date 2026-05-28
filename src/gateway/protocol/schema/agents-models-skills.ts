@@ -284,6 +284,7 @@ export const SkillsInstallParamsSchema = Type.Union([
     {
       source: Type.Literal("clawhub"),
       slug: NonEmptyString,
+      ownerHandle: Type.Optional(NonEmptyString),
       version: Type.Optional(NonEmptyString),
       force: Type.Optional(Type.Boolean()),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
@@ -317,6 +318,7 @@ export const SkillsUpdateParamsSchema = Type.Union([
     {
       source: Type.Literal("clawhub"),
       slug: Type.Optional(NonEmptyString),
+      ownerHandle: Type.Optional(NonEmptyString),
       all: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },
@@ -353,6 +355,7 @@ export const SkillsSearchResultSchema = Type.Object(
 export const SkillsDetailParamsSchema = Type.Object(
   {
     slug: NonEmptyString,
+    ownerHandle: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

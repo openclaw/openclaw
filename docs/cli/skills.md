@@ -24,24 +24,24 @@ Related:
 ```bash
 openclaw skills search "calendar"
 openclaw skills search --limit 20 --json
-openclaw skills install <slug>
-openclaw skills install <slug> --version <version>
+openclaw skills install @owner/slug
+openclaw skills install @owner/slug --version <version>
 openclaw skills install git:owner/repo
 openclaw skills install git:owner/repo@main
 openclaw skills install ./path/to/skill --as custom-name
-openclaw skills install <slug> --force
-openclaw skills install <slug> --agent <id>
-openclaw skills install <slug> --global
-openclaw skills update <slug>
-openclaw skills update <slug> --global
+openclaw skills install @owner/slug --force
+openclaw skills install @owner/slug --agent <id>
+openclaw skills install @owner/slug --global
+openclaw skills update @owner/slug
+openclaw skills update @owner/slug --global
 openclaw skills update --all
 openclaw skills update --all --agent <id>
 openclaw skills update --all --global
-openclaw skills verify <slug>
-openclaw skills verify <slug> --version <version>
-openclaw skills verify <slug> --tag <tag>
-openclaw skills verify <slug> --card
-openclaw skills verify <slug> --global
+openclaw skills verify @owner/slug
+openclaw skills verify @owner/slug --version <version>
+openclaw skills verify @owner/slug --tag <tag>
+openclaw skills verify @owner/slug --card
+openclaw skills verify @owner/slug --global
 openclaw skills list
 openclaw skills list --eligible
 openclaw skills list --json
@@ -55,8 +55,8 @@ openclaw skills check --agent <id>
 openclaw skills check --json
 ```
 
-`search`, `update`, and `verify` use ClawHub directly. `install <slug>` installs
-a ClawHub skill, `install git:owner/repo[@ref]` clones a Git skill, and
+`search`, `update`, and `verify` use ClawHub directly. `install @owner/slug`
+installs a ClawHub skill, `install git:owner/repo[@ref]` clones a Git skill, and
 `install ./path` copies a local skill directory. By default, `install`, `update`,
 and `verify` target the active workspace `skills/` directory; with `--global`,
 they target the shared managed skills directory. `list`/`info`/`check` still
@@ -85,6 +85,8 @@ Notes:
   `SKILL.md`.
 - `install --as <slug>` overrides the inferred slug for Git and local directory
   installs.
+- ClawHub skill refs should use `@owner/slug`. Bare slugs still work for
+  legacy installs when ClawHub can resolve them unambiguously.
 - `install --version <version>` applies only to ClawHub skill slugs.
 - `install --force` overwrites an existing workspace skill folder for the same
   slug.
@@ -92,11 +94,12 @@ Notes:
   with `--agent <id>`.
 - `--agent <id>` targets one configured agent workspace and overrides current
   working directory inference.
-- `update <slug>` updates a single tracked skill. Add `--global` to target the
+- `update @owner/slug` updates a single tracked skill. Bare slugs remain
+  supported for existing unambiguous installs. Add `--global` to target the
   shared managed skills directory instead of the workspace.
 - `update --all` updates tracked ClawHub installs in the selected workspace, or
   in the shared managed skills directory when combined with `--global`.
-- `verify <slug>` prints ClawHub's `clawhub.skill.verify.v1` JSON envelope by
+- `verify @owner/slug` prints ClawHub's `clawhub.skill.verify.v1` JSON envelope by
   default. There is no `--json` flag because JSON is already the default.
 - `verify` uses `.clawhub/origin.json` for installed ClawHub skills, so it
   verifies the installed version against the registry it came from. `--version`

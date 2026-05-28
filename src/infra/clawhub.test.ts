@@ -8,6 +8,7 @@ import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
   fetchClawHubSkillCard,
+  fetchClawHubSkillDetail,
   fetchClawHubSkillSecurityVerdicts,
   fetchClawHubPackageArtifact,
   fetchClawHubPackageReadiness,
@@ -355,6 +356,116 @@ describe("clawhub helpers", () => {
     expect(url.pathname).toBe("/api/v1/skills/agentreceipt/verify");
     expect(url.searchParams.get("version")).toBe("1.2.3");
     expect(url.searchParams.has("tag")).toBe(false);
+  });
+
+  it("adds ownerHandle to scoped skill detail, verify, card, and download requests", async () => {
+    const requestedUrls: string[] = [];
+    const skillDetail = {
+      skill: { slug: "discrawl", displayName: "Discrawl", createdAt: 1, updatedAt: 2 },
+      latestVersion: { version: "1.2.3", createdAt: 3 },
+      owner: { handle: "openclaw", displayName: "OpenClaw" },
+    };
+    const verification = {
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      skill: { slug: "discrawl" },
+      publisher: { handle: "openclaw" },
+      version: { version: "1.2.3" },
+      card: { available: true },
+      artifact: null,
+      provenance: null,
+      security: null,
+      signature: null,
+    };
+    const zipBytes = new TextEncoder().encode("zip");
+    const fetchImpl = async (input: string | URL | Request) => {
+      const url = input instanceof Request ? input.url : String(input);
+      requestedUrls.push(url);
+      if (url.includes("/verify")) {
+        return new Response(JSON.stringify(verification), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/card")) {
+        return new Response("# Discrawl\n", {
+          status: 200,
+          headers: { "content-type": "text/markdown" },
+        });
+      }
+      if (url.includes("/download")) {
+        return new Response(zipBytes, { status: 200 });
+      }
+      return new Response(JSON.stringify(skillDetail), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    await fetchClawHubSkillDetail({ slug: "discrawl", ownerHandle: "openclaw", fetchImpl });
+    await fetchClawHubSkillVerification({
+      slug: "discrawl",
+      ownerHandle: "openclaw",
+      version: "1.2.3",
+      fetchImpl,
+    });
+    await fetchClawHubSkillCard({
+      slug: "discrawl",
+      ownerHandle: "openclaw",
+      tag: "latest",
+      fetchImpl,
+    });
+    const archive = await downloadClawHubSkillArchive({
+      slug: "discrawl",
+      ownerHandle: "openclaw",
+      version: "1.2.3",
+      fetchImpl,
+    });
+    await archive.cleanup();
+
+    expect(requestedUrls).toHaveLength(4);
+    for (const requestedUrl of requestedUrls) {
+      expect(new URL(requestedUrl).searchParams.get("ownerHandle")).toBe("openclaw");
+    }
+  });
+
+  it("formats ambiguous legacy skill slug errors with OpenClaw scoped install guidance", async () => {
+    await expect(
+      fetchClawHubSkillDetail({
+        slug: "discrawl",
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              code: "AMBIGUOUS_SKILL_SLUG",
+              message:
+                'Found multiple skills with the slug "discrawl"; specify which one you want to install:',
+              slug: "discrawl",
+              matches: [
+                {
+                  ownerHandle: "openclaw",
+                  slug: "discrawl",
+                  ref: "@openclaw/discrawl",
+                  url: "https://clawhub.ai/openclaw/discrawl",
+                },
+              ],
+            }),
+            {
+              status: 409,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+      }),
+    ).rejects.toThrow(
+      [
+        'Found multiple skills with the slug "discrawl"; specify which one you want to install:',
+        "  1.",
+        "     Skill: openclaw/discrawl",
+        "     Page:  https://clawhub.ai/openclaw/discrawl",
+        "     Run:   openclaw skills install @openclaw/discrawl",
+      ].join("\n"),
+    );
   });
 
   it("posts bulk skill security verdict requests", async () => {

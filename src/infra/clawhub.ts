@@ -428,6 +428,20 @@ export class ClawHubRequestError extends Error {
   }
 }
 
+type ClawHubAmbiguousSkillSlugMatch = {
+  ownerHandle?: unknown;
+  slug?: unknown;
+  ref?: unknown;
+  url?: unknown;
+};
+
+type ClawHubAmbiguousSkillSlugBody = {
+  code?: unknown;
+  message?: unknown;
+  matches?: unknown;
+  choices?: unknown;
+};
+
 function normalizeBaseUrl(baseUrl?: string): string {
   const envValue =
     normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_URL) ||
@@ -703,12 +717,61 @@ async function readErrorBody(response: Response): Promise<string> {
   }
 }
 
+function formatAmbiguousSkillSlugBody(rawBody: string): string | null {
+  let parsed: ClawHubAmbiguousSkillSlugBody;
+  try {
+    parsed = JSON.parse(rawBody) as ClawHubAmbiguousSkillSlugBody;
+  } catch {
+    return null;
+  }
+  if (parsed.code !== "AMBIGUOUS_SKILL_SLUG") {
+    return null;
+  }
+  const message =
+    typeof parsed.message === "string" && parsed.message.trim()
+      ? parsed.message.trim()
+      : "Found multiple skills with that slug; specify which one you want to install:";
+  const matches = Array.isArray(parsed.matches)
+    ? parsed.matches
+    : Array.isArray(parsed.choices)
+      ? parsed.choices
+      : [];
+  const lines = [message];
+  matches.forEach((rawMatch, index) => {
+    if (!rawMatch || typeof rawMatch !== "object") {
+      return;
+    }
+    const match = rawMatch as ClawHubAmbiguousSkillSlugMatch;
+    const ref =
+      typeof match.ref === "string" && match.ref.trim()
+        ? match.ref.trim()
+        : typeof match.ownerHandle === "string" &&
+            match.ownerHandle.trim() &&
+            typeof match.slug === "string" &&
+            match.slug.trim()
+          ? `@${match.ownerHandle.trim()}/${match.slug.trim()}`
+          : undefined;
+    if (!ref) {
+      return;
+    }
+    const page = typeof match.url === "string" && match.url.trim() ? match.url.trim() : undefined;
+    lines.push(`  ${index + 1}.`);
+    lines.push(`     Skill: ${ref.startsWith("@") ? ref.slice(1) : ref}`);
+    if (page) {
+      lines.push(`     Page:  ${page}`);
+    }
+    lines.push(`     Run:   openclaw skills install ${ref}`);
+  });
+  return lines.join("\n");
+}
+
 async function buildClawHubError(
   response: Response,
   url: URL,
   hasToken: boolean,
 ): Promise<ClawHubRequestError> {
   let body = await readErrorBody(response);
+  body = formatAmbiguousSkillSlugBody(body) ?? body;
   if (response.status === 429) {
     const suffix = formatRateLimitSuffix(response.headers, hasToken);
     if (suffix) {
@@ -773,13 +836,18 @@ export function resolveClawHubBaseUrl(baseUrl?: string): string {
 function buildVersionOrTagSearch(params: {
   version?: string;
   tag?: string;
-}): { version?: string; tag?: string } | undefined {
+  ownerHandle?: string;
+}): { version?: string; tag?: string; ownerHandle?: string } | undefined {
+  const ownerHandle = normalizeOptionalString(params.ownerHandle);
   const version = normalizeOptionalString(params.version);
   if (version) {
-    return { version };
+    return { version, ownerHandle };
   }
   const tag = normalizeOptionalString(params.tag);
-  return tag ? { tag } : undefined;
+  if (tag) {
+    return { tag, ownerHandle };
+  }
+  return ownerHandle ? { ownerHandle } : undefined;
 }
 
 function formatSha256Integrity(bytes: Uint8Array): string {
@@ -985,6 +1053,7 @@ export async function searchClawHubSkills(params: {
 
 export async function fetchClawHubSkillDetail(params: {
   slug: string;
+  ownerHandle?: string;
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
@@ -996,11 +1065,15 @@ export async function fetchClawHubSkillDetail(params: {
     token: params.token,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
+    search: {
+      ownerHandle: normalizeOptionalString(params.ownerHandle),
+    },
   });
 }
 
 export async function fetchClawHubSkillVerification(params: {
   slug: string;
+  ownerHandle?: string;
   version?: string;
   tag?: string;
   baseUrl?: string;
@@ -1041,6 +1114,7 @@ export async function fetchClawHubSkillSecurityVerdicts(params: {
 export async function fetchClawHubSkillCard(params: {
   slug?: string;
   url?: string;
+  ownerHandle?: string;
   version?: string;
   tag?: string;
   baseUrl?: string;
@@ -1228,6 +1302,7 @@ export async function downloadClawHubPackageArchive(params: {
 
 export async function downloadClawHubSkillArchive(params: {
   slug: string;
+  ownerHandle?: string;
   version?: string;
   tag?: string;
   baseUrl?: string;
@@ -1243,6 +1318,7 @@ export async function downloadClawHubSkillArchive(params: {
     fetchImpl: params.fetchImpl,
     search: {
       slug: params.slug,
+      ownerHandle: normalizeOptionalString(params.ownerHandle),
       version: params.version,
       tag: params.version ? undefined : params.tag,
     },

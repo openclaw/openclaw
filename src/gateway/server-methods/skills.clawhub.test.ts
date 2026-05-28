@@ -323,6 +323,45 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.version).toBe("1.2.3");
   });
 
+  it("passes ownerHandle through ClawHub skills.install", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "discrawl",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/discrawl",
+    });
+
+    const respond = vi.fn();
+    await skillsHandlers["skills.install"]({
+      params: {
+        source: "clawhub",
+        slug: "discrawl",
+        ownerHandle: "openclaw",
+      },
+      respond,
+      context: makeContext() as never,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      slug: "discrawl",
+      ownerHandle: "openclaw",
+      version: undefined,
+      force: false,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        slug: "discrawl",
+        version: "1.2.3",
+      }),
+      undefined,
+    );
+  });
+
   it("forwards dangerous override for local skill installs", async () => {
     installSkillMock.mockResolvedValue({
       ok: true,
@@ -387,6 +426,7 @@ describe("skills gateway handlers (clawhub)", () => {
       params: {
         source: "clawhub",
         slug: "calendar",
+        ownerHandle: "openclaw",
       },
       req: {} as never,
       client: null as never,
@@ -402,6 +442,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
       slug: "calendar",
+      ownerHandle: "openclaw",
     });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();

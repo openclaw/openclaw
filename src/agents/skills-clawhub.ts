@@ -30,6 +30,7 @@ export type ClawHubSkillOrigin = {
   version: 1;
   registry: string;
   slug: string;
+  ownerHandle?: string;
   installedVersion: string;
   installedAt: number;
 };
@@ -42,6 +43,7 @@ export type ClawHubSkillsLockfile = {
       version: string;
       installedAt: number;
       registry?: string;
+      ownerHandle?: string;
     }
   >;
 };
@@ -57,6 +59,7 @@ export type ClawHubSkillStatusLink =
       valid: true;
       registry: string;
       slug: string;
+      ownerHandle?: string;
       installedVersion: string;
       installedAt: number;
       originPath: string;
@@ -68,6 +71,7 @@ export type ClawHubSkillStatusLink =
       reason: string;
       registry?: string;
       slug?: string;
+      ownerHandle?: string;
       installedVersion?: string;
       installedAt?: number;
       originPath?: string;
@@ -109,23 +113,103 @@ type Logger = {
   info?: (message: string) => void;
 };
 
+type ParsedClawHubSkillRef = {
+  slug: string;
+  ownerHandle?: string;
+};
+
+function normalizeOwnerHandle(raw: string): string {
+  try {
+    return validateRequestedSkillSlug(raw);
+  } catch {
+    throw new Error(`Invalid ClawHub skill owner: ${raw}`);
+  }
+}
+
+function normalizeOptionalOwnerHandle(raw: string | null | undefined): string | undefined {
+  const trimmed = raw?.trim();
+  return trimmed ? normalizeOwnerHandle(trimmed) : undefined;
+}
+
+function parseRequestedClawHubSkillRef(raw: string): ParsedClawHubSkillRef {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("@")) {
+    return { slug: validateRequestedSkillSlug(raw) };
+  }
+  const match = /^@([^/]+)\/([^/]+)$/.exec(trimmed);
+  if (!match?.[1] || !match[2]) {
+    throw new Error(`Invalid skill slug: ${raw}`);
+  }
+  return {
+    ownerHandle: normalizeOwnerHandle(match[1]),
+    slug: validateRequestedSkillSlug(match[2]),
+  };
+}
+
+function mergeOwnerHandles(
+  primary: string | undefined,
+  fallback: string | null | undefined,
+): string | undefined {
+  return primary ?? normalizeOptionalOwnerHandle(fallback);
+}
+
+function ownerScopedRef(ownerHandle: string, slug: string): string {
+  return `@${ownerHandle}/${slug}`;
+}
+
+function ownerMismatchMessage(params: {
+  action: string;
+  slug: string;
+  requestedOwnerHandle: string;
+  installedOwnerHandle?: string;
+}): string {
+  const requested = ownerScopedRef(params.requestedOwnerHandle, params.slug);
+  const installed = params.installedOwnerHandle
+    ? ownerScopedRef(params.installedOwnerHandle, params.slug)
+    : params.slug;
+  return `Cannot ${params.action} ${requested}; local ClawHub metadata is for ${installed}. Reinstall the requested skill before ${params.action}ing it.`;
+}
+
 async function resolveRequestedUpdateSlug(params: {
   workspaceDir: string;
   requestedSlug: string;
   lock: ClawHubSkillsLockfile;
-}): Promise<string> {
-  const trackedSlug = normalizeTrackedSkillSlug(params.requestedSlug);
+}): Promise<ParsedClawHubSkillRef> {
+  const requested = params.requestedSlug.trim().startsWith("@")
+    ? parseRequestedClawHubSkillRef(params.requestedSlug)
+    : { slug: normalizeTrackedSkillSlug(params.requestedSlug) };
+  const trackedSlug = requested.slug;
   const trackedTargetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, trackedSlug);
   const trackedOrigin = await readClawHubSkillOrigin(trackedTargetDir);
-  if (trackedOrigin || params.lock.skills[trackedSlug]) {
-    return trackedSlug;
+  const locked = params.lock.skills[trackedSlug];
+  if (trackedOrigin || locked) {
+    const installedOwnerHandle = trackedOrigin?.ownerHandle ?? locked?.ownerHandle;
+    if (
+      requested.ownerHandle &&
+      installedOwnerHandle &&
+      requested.ownerHandle !== installedOwnerHandle
+    ) {
+      throw new Error(
+        ownerMismatchMessage({
+          action: "update",
+          slug: trackedSlug,
+          requestedOwnerHandle: requested.ownerHandle,
+          installedOwnerHandle,
+        }),
+      );
+    }
+    return {
+      slug: trackedSlug,
+      ownerHandle: requested.ownerHandle ?? installedOwnerHandle,
+    };
   }
-  return validateRequestedSkillSlug(params.requestedSlug);
+  return parseRequestedClawHubSkillRef(params.requestedSlug);
 }
 
 type ClawHubInstallParams = {
   workspaceDir: string;
   slug: string;
+  ownerHandle?: string;
   version?: string;
   baseUrl?: string;
   force?: boolean;
@@ -136,6 +220,7 @@ type TrackedUpdateTarget =
   | {
       ok: true;
       slug: string;
+      ownerHandle?: string;
       baseUrl?: string;
       previousVersion: string | null;
     }
@@ -153,6 +238,7 @@ export type ClawHubSkillVerificationTargetResult =
       ok: true;
       slug: string;
       baseUrl: string;
+      ownerHandle: string | undefined;
       version: string | undefined;
       tag: string | undefined;
       resolution: {
@@ -288,6 +374,7 @@ function normalizeClawHubSkillOrigin(
       version: 1,
       registry: normalizeStoredRegistry(raw.registry),
       slug: raw.slug,
+      ownerHandle: normalizeOptionalOwnerHandle(raw.ownerHandle),
       installedVersion: raw.installedVersion,
       installedAt: raw.installedAt,
     };
@@ -634,7 +721,8 @@ export async function resolveClawHubSkillVerificationTarget(params: {
       return { ok: false, error: "Use either --version or --tag." };
     }
 
-    const trackedSlug = normalizeTrackedSkillSlug(params.slug);
+    const requested = parseRequestedClawHubSkillRef(params.slug);
+    const trackedSlug = normalizeTrackedSkillSlug(requested.slug);
     const skillDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, trackedSlug);
     const originRead = await readClawHubSkillOriginStrict(skillDir);
     if (originRead.kind === "malformed") {
@@ -663,6 +751,24 @@ export async function resolveClawHubSkillVerificationTarget(params: {
       const originRegistry = normalizeStoredRegistry(originRead.origin.registry);
       const lockedRegistry =
         locked.registry === undefined ? originRegistry : normalizeStoredRegistry(locked.registry);
+      const ownerHandle =
+        requested.ownerHandle ?? originRead.origin.ownerHandle ?? locked.ownerHandle;
+      const installedOwnerHandle = originRead.origin.ownerHandle ?? locked.ownerHandle;
+      if (
+        requested.ownerHandle &&
+        installedOwnerHandle &&
+        requested.ownerHandle !== installedOwnerHandle
+      ) {
+        return {
+          ok: false,
+          error: ownerMismatchMessage({
+            action: "verify",
+            slug: trackedSlug,
+            requestedOwnerHandle: requested.ownerHandle,
+            installedOwnerHandle,
+          }),
+        };
+      }
       if (
         locked.version !== originRead.origin.installedVersion ||
         locked.installedAt !== originRead.origin.installedAt ||
@@ -681,6 +787,7 @@ export async function resolveClawHubSkillVerificationTarget(params: {
       return {
         ok: true,
         slug: trackedSlug,
+        ownerHandle,
         baseUrl: lockedRegistry,
         version: version ?? (tag ? undefined : locked.version),
         tag,
@@ -708,12 +815,13 @@ export async function resolveClawHubSkillVerificationTarget(params: {
       };
     }
 
-    const slug = validateRequestedSkillSlug(params.slug);
+    const { slug, ownerHandle } = requested;
     const registry = resolveClawHubBaseUrl(params.baseUrl);
     const selector: ClawHubSkillVerificationSelector = version ? "version" : tag ? "tag" : "latest";
     return {
       ok: true,
       slug,
+      ownerHandle,
       baseUrl: registry,
       version,
       tag,
@@ -732,11 +840,13 @@ export async function resolveClawHubSkillVerificationTarget(params: {
 
 async function resolveInstallVersion(params: {
   slug: string;
+  ownerHandle?: string;
   version?: string;
   baseUrl?: string;
 }): Promise<{ detail: ClawHubSkillDetail; version: string }> {
   const detail = await fetchClawHubSkillDetail({
     slug: params.slug,
+    ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
     baseUrl: params.baseUrl,
   });
   if (!detail.skill) {
@@ -758,9 +868,23 @@ async function performClawHubSkillInstall(
   try {
     const { detail, version } = await resolveInstallVersion({
       slug: params.slug,
+      ownerHandle: params.ownerHandle,
       version: params.version,
       baseUrl: params.baseUrl,
     });
+    const resolvedOwnerHandle = normalizeOptionalOwnerHandle(detail.owner?.handle);
+    if (params.ownerHandle && resolvedOwnerHandle !== params.ownerHandle) {
+      const resolved = resolvedOwnerHandle
+        ? ownerScopedRef(resolvedOwnerHandle, params.slug)
+        : "an unknown publisher";
+      throw new Error(
+        `ClawHub returned ${resolved} for requested ${ownerScopedRef(
+          params.ownerHandle,
+          params.slug,
+        )}.`,
+      );
+    }
+    const ownerHandle = mergeOwnerHandles(params.ownerHandle, resolvedOwnerHandle);
     const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
     if (!params.force && (await pathExists(targetDir))) {
       return {
@@ -772,6 +896,7 @@ async function performClawHubSkillInstall(
     params.logger?.info?.(`Downloading ${params.slug}@${version} from ClawHub…`);
     const archive = await downloadClawHubSkillArchive({
       slug: params.slug,
+      ...(ownerHandle ? { ownerHandle } : {}),
       version,
       baseUrl: params.baseUrl,
     });
@@ -801,6 +926,7 @@ async function performClawHubSkillInstall(
         version: 1,
         registry: resolveClawHubBaseUrl(params.baseUrl),
         slug: params.slug,
+        ownerHandle,
         installedVersion: version,
         installedAt,
       });
@@ -809,6 +935,7 @@ async function performClawHubSkillInstall(
         version,
         installedAt,
         registry: resolveClawHubBaseUrl(params.baseUrl),
+        ownerHandle,
       };
       await writeClawHubSkillsLockfile(params.workspaceDir, lock);
 
@@ -834,9 +961,17 @@ async function installRequestedSkillFromClawHub(
   params: ClawHubInstallParams,
 ): Promise<InstallClawHubSkillResult> {
   try {
+    const parsed = parseRequestedClawHubSkillRef(params.slug);
+    const explicitOwnerHandle = normalizeOptionalOwnerHandle(params.ownerHandle);
+    if (parsed.ownerHandle && explicitOwnerHandle && parsed.ownerHandle !== explicitOwnerHandle) {
+      throw new Error(
+        `ClawHub owner mismatch: ${parsed.ownerHandle} in skill ref, ${explicitOwnerHandle} in ownerHandle.`,
+      );
+    }
     return await performClawHubSkillInstall({
       ...params,
-      slug: validateRequestedSkillSlug(params.slug),
+      slug: parsed.slug,
+      ownerHandle: parsed.ownerHandle ?? explicitOwnerHandle,
     });
   } catch (err) {
     return {
@@ -853,6 +988,7 @@ async function installTrackedSkillFromClawHub(
     return await performClawHubSkillInstall({
       ...params,
       slug: normalizeTrackedSkillSlug(params.slug),
+      ownerHandle: normalizeOptionalOwnerHandle(params.ownerHandle),
     });
   } catch (err) {
     return {
@@ -880,6 +1016,7 @@ async function resolveTrackedUpdateTarget(params: {
   return {
     ok: true,
     slug: params.slug,
+    ownerHandle: origin?.ownerHandle ?? params.lock.skills[params.slug]?.ownerHandle,
     baseUrl: origin?.registry ?? params.baseUrl,
     previousVersion: origin?.installedVersion ?? params.lock.skills[params.slug]?.version ?? null,
   };
@@ -888,6 +1025,7 @@ async function resolveTrackedUpdateTarget(params: {
 export async function installSkillFromClawHub(params: {
   workspaceDir: string;
   slug: string;
+  ownerHandle?: string;
   version?: string;
   baseUrl?: string;
   force?: boolean;
@@ -899,11 +1037,12 @@ export async function installSkillFromClawHub(params: {
 export async function updateSkillsFromClawHub(params: {
   workspaceDir: string;
   slug?: string;
+  ownerHandle?: string;
   baseUrl?: string;
   logger?: Logger;
 }): Promise<UpdateClawHubSkillResult[]> {
   const lock = await readClawHubSkillsLockfile(params.workspaceDir);
-  const slugs = params.slug
+  const targets = params.slug
     ? [
         await resolveRequestedUpdateSlug({
           workspaceDir: params.workspaceDir,
@@ -911,12 +1050,15 @@ export async function updateSkillsFromClawHub(params: {
           lock,
         }),
       ]
-    : Object.keys(lock.skills).map((slug) => normalizeTrackedSkillSlug(slug));
+    : Object.keys(lock.skills).map((slug) => ({
+        slug: normalizeTrackedSkillSlug(slug),
+        ownerHandle: lock.skills[slug]?.ownerHandle,
+      }));
   const results: UpdateClawHubSkillResult[] = [];
-  for (const slug of slugs) {
+  for (const target of targets) {
     const tracked = await resolveTrackedUpdateTarget({
       workspaceDir: params.workspaceDir,
-      slug,
+      slug: target.slug,
       lock,
       baseUrl: params.baseUrl,
     });
@@ -927,9 +1069,28 @@ export async function updateSkillsFromClawHub(params: {
       });
       continue;
     }
+    const requestedOwnerHandle = params.ownerHandle ?? target.ownerHandle;
+    if (
+      requestedOwnerHandle &&
+      tracked.ownerHandle &&
+      requestedOwnerHandle !== tracked.ownerHandle
+    ) {
+      results.push({
+        ok: false,
+        slug: tracked.slug,
+        error: ownerMismatchMessage({
+          action: "update",
+          slug: tracked.slug,
+          requestedOwnerHandle,
+          installedOwnerHandle: tracked.ownerHandle,
+        }),
+      });
+      continue;
+    }
     const install = await installTrackedSkillFromClawHub({
       workspaceDir: params.workspaceDir,
       slug: tracked.slug,
+      ownerHandle: requestedOwnerHandle ?? tracked.ownerHandle,
       baseUrl: tracked.baseUrl,
       force: true,
       logger: params.logger,

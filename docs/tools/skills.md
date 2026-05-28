@@ -144,15 +144,15 @@ separate `clawhub` CLI for publish/sync workflows. Full guide:
 
 | Action                                 | Command                                                |
 | -------------------------------------- | ------------------------------------------------------ |
-| Install a ClawHub skill into workspace | `openclaw skills install <skill-slug>`                 |
+| Install a ClawHub skill into workspace | `openclaw skills install @owner/skill-slug`            |
 | Install a Git skill into workspace     | `openclaw skills install git:owner/repo@ref`           |
 | Install a local skill into workspace   | `openclaw skills install ./path/to/skill --as my-tool` |
-| Install a skill for all local agents   | `openclaw skills install <skill-slug> --global`        |
+| Install a skill for all local agents   | `openclaw skills install @owner/skill-slug --global`   |
 | Update all workspace-installed skills  | `openclaw skills update --all`                         |
-| Update a single shared managed skill   | `openclaw skills update <skill-slug> --global`         |
+| Update a single shared managed skill   | `openclaw skills update @owner/skill-slug --global`    |
 | Update all shared managed/local skills | `openclaw skills update --all --global`                |
-| Verify a ClawHub skill                 | `openclaw skills verify <skill-slug>`                  |
-| Print the generated Skill Card         | `openclaw skills verify <skill-slug> --card`           |
+| Verify a ClawHub skill                 | `openclaw skills verify @owner/skill-slug`             |
+| Print the generated Skill Card         | `openclaw skills verify @owner/skill-slug --card`      |
 | Sync (scan + publish updates)          | `clawhub sync --all`                                   |
 
 Native `openclaw skills install` installs into the active workspace
@@ -171,12 +171,13 @@ names when grouping, for example `skills/imported/research/SKILL.md` with
 Git and local directory installs expect a `SKILL.md` at the source root. The
 install slug comes from `SKILL.md` frontmatter `name` when it is a valid slug,
 then falls back to the source directory or repository name. Use `--as <slug>` to
-override the inferred slug. `--version` applies only to ClawHub installs. Skill
-installs do not support npm package specs or zip/archive paths. `openclaw skills
-update` updates ClawHub-tracked installs only; reinstall Git or local sources to
-refresh them.
+override the inferred slug. ClawHub refs should use `@owner/slug`; bare slugs
+still work for legacy unambiguous installs. `--version` applies only to ClawHub
+installs. Skill installs do not support npm package specs or zip/archive paths.
+`openclaw skills update` updates ClawHub-tracked installs only; reinstall Git or
+local sources to refresh them.
 
-Use `openclaw skills verify <slug>` to ask ClawHub for the skill's
+Use `openclaw skills verify @owner/slug` to ask ClawHub for the skill's
 `clawhub.skill.verify.v1` trust envelope. Output is JSON by default; use
 `--card` to print the generated Skill Card Markdown. Installed ClawHub skills
 verify against the version and registry recorded in `.clawhub/origin.json`;
@@ -190,7 +191,7 @@ archive with `skills.upload.begin`, `skills.upload.chunk`, and
 `skills.upload.commit`, then install the committed upload with
 `skills.install({ source: "upload", uploadId, slug, force?, sha256? })`. This is
 an explicit admin upload path for trusted clients, not the normal
-`openclaw skills install <slug>` or ClawHub install flow. It is off by default
+`openclaw skills install @owner/slug` or ClawHub install flow. It is off by default
 and only works when `skills.install.allowUploadedArchives: true` is set in
 `openclaw.json`. Upload mode still installs into the default agent workspace
 `skills/<slug>` directory; the archive's internal folder name is ignored for the
@@ -198,7 +199,7 @@ final install target.
 
 ClawHub skill pages expose the latest security scan state before install,
 with scanner detail pages for VirusTotal, ClawScan, and static analysis.
-`openclaw skills install <slug>` remains only the install path; publishers
+`openclaw skills install @owner/slug` remains only the install path; publishers
 recover false positives through the ClawHub dashboard or
 `clawhub skill rescan <slug>`.
 
@@ -223,7 +224,7 @@ Prefer sandboxed runs for untrusted inputs and risky tools. See
   `skills.install.allowUploadedArchives`; normal ClawHub installs do not require
   that setting.
 - Gateway-backed skill dependency installs (`skills.install`, onboarding, and the Skills settings UI) run the built-in dangerous-code scanner before executing installer metadata. `critical` findings block by default unless the caller explicitly sets the dangerous override; suspicious findings still warn only.
-- `openclaw skills install <slug>` is different — it downloads a ClawHub skill
+- `openclaw skills install @owner/slug` is different — it downloads a ClawHub skill
   folder into the workspace, or into shared managed/local skills with
   `--global`, and does not use the installer-metadata path above. Git and local
   directory installs copy a trusted `SKILL.md` directory into the same skills

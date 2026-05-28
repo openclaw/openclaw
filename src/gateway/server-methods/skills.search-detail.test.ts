@@ -180,6 +180,33 @@ describe("skills.detail handler", () => {
     expect(response).toEqual(detail);
   });
 
+  it("fetches detail with ownerHandle for scoped ClawHub refs", async () => {
+    const detail = {
+      skill: {
+        slug: "github",
+        displayName: "GitHub",
+        createdAt: 1700000000,
+        updatedAt: 1700000000,
+      },
+      owner: {
+        handle: "openclaw",
+      },
+    };
+    fetchClawHubSkillDetailMock.mockResolvedValue(detail);
+
+    const { ok, response } = await callHandler("skills.detail", {
+      slug: "github",
+      ownerHandle: "openclaw",
+    });
+
+    expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({
+      slug: "github",
+      ownerHandle: "openclaw",
+    });
+    expect(ok).toBe(true);
+    expect(response).toEqual(detail);
+  });
+
   it("returns error when slug is not found", async () => {
     fetchClawHubSkillDetailMock.mockRejectedValue(new Error("not found"));
 

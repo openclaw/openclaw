@@ -378,6 +378,7 @@ export function registerSkillsCli(program: Command) {
           } else {
             const verification = await fetchClawHubSkillVerification({
               slug: target.slug,
+              ...(target.ownerHandle ? { ownerHandle: target.ownerHandle } : {}),
               version: target.version,
               tag: target.tag,
               baseUrl: target.baseUrl,

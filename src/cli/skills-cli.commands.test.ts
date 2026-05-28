@@ -373,6 +373,23 @@ describe("skills cli commands", () => {
     ).toBe(true);
   });
 
+  it("forwards owner-scoped ClawHub install refs", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "discrawl",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/discrawl",
+    });
+
+    await runCommand(["skills", "install", "@openclaw/discrawl"]);
+
+    expectObjectFields(mockFirstObjectArg(installSkillFromClawHubMock), {
+      workspaceDir: "/tmp/workspace",
+      slug: "@openclaw/discrawl",
+    });
+    expect(runtimeLogs).toContain("Installed discrawl@1.2.3 -> /tmp/workspace/skills/discrawl");
+  });
+
   it("installs a skill from a git source into the active workspace", async () => {
     installSkillFromSourceMock.mockResolvedValue({
       ok: true,
@@ -593,6 +610,27 @@ describe("skills cli commands", () => {
     expect(runtimeErrors).toStrictEqual([]);
   });
 
+  it("forwards owner-scoped ClawHub update refs", async () => {
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "discrawl",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/workspace/skills/discrawl",
+      },
+    ]);
+
+    await runCommand(["skills", "update", "@openclaw/discrawl"]);
+
+    expectObjectFields(mockFirstObjectArg(updateSkillsFromClawHubMock), {
+      workspaceDir: "/tmp/workspace",
+      slug: "@openclaw/discrawl",
+    });
+    expect(runtimeLogs).toContain("Updated discrawl: 1.2.2 -> 1.2.3");
+  });
+
   it("updates tracked ClawHub skills in the cwd-inferred agent workspace", async () => {
     routeWorkspaceByAgent();
     resolveAgentIdByWorkspacePathMock.mockReturnValue("writer");
@@ -750,6 +788,40 @@ describe("skills cli commands", () => {
       },
     });
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("passes resolved owner handles to ClawHub verify requests", async () => {
+    resolveClawHubSkillVerificationTargetMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "discrawl",
+      ownerHandle: "openclaw",
+      baseUrl: "https://clawhub.ai",
+      version: undefined,
+      tag: "latest",
+      resolution: {
+        source: "registry",
+        selector: "tag",
+        registry: "https://clawhub.ai",
+        skillDir: undefined,
+        installedVersion: undefined,
+      },
+    });
+
+    await runCommand(["skills", "verify", "@openclaw/discrawl", "--tag", "latest"]);
+
+    expect(resolveClawHubSkillVerificationTargetMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      slug: "@openclaw/discrawl",
+      version: undefined,
+      tag: "latest",
+    });
+    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+      slug: "discrawl",
+      ownerHandle: "openclaw",
+      version: undefined,
+      tag: "latest",
+      baseUrl: "https://clawhub.ai",
+    });
   });
 
   it("passes explicit verify selectors and shared workspace options to the resolver", async () => {

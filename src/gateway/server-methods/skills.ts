@@ -432,6 +432,9 @@ export const skillsHandlers: GatewayRequestHandlers = {
     try {
       const detail = await fetchClawHubSkillDetail({
         slug: (params as { slug: string }).slug,
+        ...((params as { ownerHandle?: string }).ownerHandle
+          ? { ownerHandle: (params as { ownerHandle?: string }).ownerHandle }
+          : {}),
       });
       respond(true, detail, undefined);
     } catch (err) {
@@ -456,12 +459,14 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const p = params as {
         source: "clawhub";
         slug: string;
+        ownerHandle?: string;
         version?: string;
         force?: boolean;
       };
       const result = await installSkillFromClawHub({
         workspaceDir: workspaceDirRaw,
         slug: p.slug,
+        ...(p.ownerHandle ? { ownerHandle: p.ownerHandle } : {}),
         version: p.version,
         force: Boolean(p.force),
       });
@@ -544,6 +549,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const p = params as {
         source: "clawhub";
         slug?: string;
+        ownerHandle?: string;
         all?: boolean;
       };
       if (!p.slug && !p.all) {
@@ -570,6 +576,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const results = await updateSkillsFromClawHub({
         workspaceDir,
         slug: p.slug,
+        ...(p.ownerHandle ? { ownerHandle: p.ownerHandle } : {}),
       });
       const errors = results.filter((result) => !result.ok);
       respond(
