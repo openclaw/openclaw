@@ -1586,6 +1586,14 @@ describe("host-hook fixture plugin contract", () => {
         handler: () => ({ text: "unused" }),
       }),
     ).toBe("Command requiredScopes contains unknown operator scope: operator.unknown");
+    expect(
+      validatePluginCommandDefinition({
+        name: "invalid-owner-status-fixture",
+        description: "Invalid owner status exposure.",
+        exposeSenderIsOwner: "yes" as never,
+        handler: () => ({ text: "unused" }),
+      }),
+    ).toBe("Command exposeSenderIsOwner must be a boolean");
 
     await expect(
       executePluginCommand({

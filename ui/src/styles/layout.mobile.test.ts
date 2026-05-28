@@ -55,6 +55,53 @@ describe("chat header responsive mobile styles", () => {
     expect(css).toContain("width: 44px;");
     expect(css).toContain("min-width: 44px;");
   });
+
+  it("keeps focused chat from reserving hidden page-header height", () => {
+    const layoutCss = readLayoutCss();
+    const mobileCss = readMobileCss();
+    const focusedShell = selectorBlocks(layoutCss, ".shell--chat-focus").join("\n");
+    const focusedMobileShell = selectorBlocks(mobileCss, ".shell--chat-focus").join("\n");
+    const focusedTopbar = selectorBlocks(layoutCss, ".shell--chat-focus .topbar").join("\n");
+    const focusedHeaderSelector = ".shell--chat-focus .content--chat .content-header";
+    const expectedDeclarations = [
+      "min-height: 0;",
+      "max-height: 0;",
+      "padding-top: 0;",
+      "padding-bottom: 0;",
+      "overflow: hidden;",
+    ];
+
+    expect(focusedShell).toContain("grid-template-rows: 0 minmax(0, 1fr);");
+    expect(focusedMobileShell).toContain("grid-template-rows: 0 minmax(0, 1fr);");
+    expect(focusedTopbar).toContain("min-height: 0;");
+    expect(focusedTopbar).toContain("height: 0;");
+    expect(focusedTopbar).toContain("padding-top: 0;");
+    expect(focusedTopbar).toContain("padding-bottom: 0;");
+    expect(focusedTopbar).toContain("overflow: hidden;");
+
+    for (const css of [layoutCss, mobileCss]) {
+      const block = selectorBlocks(css, focusedHeaderSelector).join("\n");
+      expect(block).toBeTruthy();
+      for (const declaration of expectedDeclarations) {
+        expect(block).toContain(declaration);
+      }
+    }
+  });
+
+  it("restores single-page logs scrolling on mobile", () => {
+    const mobileCss = readMobileCss();
+
+    expect(mobileCss).toContain(".content.content--logs {");
+    expect(mobileCss).toMatch(
+      /\.content\.content--logs \{[\s\S]*display: block;[\s\S]*overflow-y: auto;/,
+    );
+    expect(mobileCss).toMatch(
+      /\.content\.content--logs \.settings-workspace \{[\s\S]*display: block;/,
+    );
+    expect(mobileCss).toMatch(
+      /\.card--fill-height\.card--fill-height \.log-stream \{[\s\S]*max-height: 380px;/,
+    );
+  });
 });
 
 describe("sidebar menu trigger styles", () => {
@@ -113,5 +160,16 @@ describe("grouped chat width styles", () => {
     const css = readGroupedChatCss();
 
     expect(css).toContain("max-width: var(--chat-message-max-width, min(900px, 68%));");
+  });
+
+  it("excludes tool shells from light hover without overriding user bubble hover", () => {
+    const css = readGroupedChatCss();
+
+    expect(css).toContain(
+      ':root[data-theme-mode="light"] .chat-bubble:not(:where(.chat-bubble--tool-shell)):hover',
+    );
+    expect(css).not.toContain(
+      ':root[data-theme-mode="light"] .chat-bubble:not(.chat-bubble--tool-shell):hover',
+    );
   });
 });

@@ -18,7 +18,11 @@ const agentRuntimeMocks = vi.hoisted(() => ({
   saveAuthProfileStore: vi.fn(),
 }));
 
-vi.mock("./app-server/shared-client.js", () => sharedClientMocks);
+vi.mock("./app-server/shared-client.js", () => ({
+  ...sharedClientMocks,
+  getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient: vi.fn(),
+}));
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
 
 import {
@@ -113,6 +117,7 @@ describe("codex conversation binding", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("thread/start");
     expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
+    expect(requests[0]?.params.personality).toBe("none");
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
       '"authProfileId": "openai-codex:default"',
@@ -169,6 +174,7 @@ describe("codex conversation binding", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("thread/start");
     expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
+    expect(requests[0]?.params.personality).toBe("none");
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
       '"authProfileId": "work"',
@@ -271,9 +277,11 @@ describe("codex conversation binding", () => {
         channel: "discord",
         isGroup: true,
         commandAuthorized: true,
+        sessionKey: "node-session",
       },
       {
         channelId: "discord",
+        sessionKey: "node-session",
         pluginBinding: {
           bindingId: "binding-1",
           pluginId: "codex",
@@ -292,6 +300,7 @@ describe("codex conversation binding", () => {
         },
       },
       {
+        config: { tools: { exec: { host: "node", node: "mb-m5" } } },
         resumeCodexCliSessionOnNode,
         timeoutMs: 1234,
       },
@@ -351,6 +360,56 @@ describe("codex conversation binding", () => {
       reply: {
         text: expect.stringContaining(
           "Codex-native Codex app-server conversation binding is unavailable because OpenClaw sandboxing is active for this session.",
+        ),
+      },
+    });
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("blocks bound Codex app-server turns when exec host=node is active", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-1", cwd: tempDir }),
+    );
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+        sessionKey: "node-session",
+      },
+      {
+        channelId: "discord",
+        sessionKey: "node-session",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      {
+        config: { tools: { exec: { host: "node", node: "worker-1" } } },
+      },
+    );
+
+    expect(result).toEqual({
+      handled: true,
+      reply: {
+        text: expect.stringContaining(
+          "Codex-native Codex app-server conversation binding is unavailable because OpenClaw exec host=node is active for this session.",
         ),
       },
     });
@@ -534,6 +593,85 @@ describe("codex conversation binding", () => {
     expect(savedBinding.sandbox).toBe("workspace-write");
     expect(savedBinding.serviceTier).toBe("priority");
     expect(savedBinding).not.toHaveProperty("modelProvider");
+  });
+
+  it("creates a fresh thread when recovery finds the binding already cleared", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const notificationHandlers: Array<(notification: Record<string, unknown>) => void> = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        if (method === "thread/start") {
+          return {
+            thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
+            model: "gpt-5.5-mini",
+          };
+        }
+        if (method === "turn/start" && requestParams.threadId === "thread-new") {
+          setImmediate(() => {
+            for (const handler of notificationHandlers) {
+              handler({
+                method: "turn/completed",
+                params: {
+                  threadId: "thread-new",
+                  turn: {
+                    id: "turn-new",
+                    status: "completed",
+                    items: [{ id: "assistant-1", type: "agentMessage", text: "Recovered fresh" }],
+                  },
+                },
+              });
+            }
+          });
+          return { turn: { id: "turn-new" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler) => {
+        notificationHandlers.push(handler);
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "hi again",
+        bodyForAgent: "hi again",
+        channel: "telegram",
+        isGroup: true,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "redacted-group",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 500 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "Recovered fresh" } });
+    expect(requests.map((request) => request.method)).toEqual(["thread/start", "turn/start"]);
+    expect(requests[1]?.params.threadId).toBe("thread-new");
+    expect(requests[1]?.params.personality).toBe("none");
+    const savedBinding = JSON.parse(
+      await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
+    );
+    expect(savedBinding.threadId).toBe("thread-new");
   });
 
   it("returns a clean failure reply when app-server turn start rejects", async () => {

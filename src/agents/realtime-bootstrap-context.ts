@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath, truncateUtf16Safe } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveBootstrapFilesForRun } from "./bootstrap-files.js";
-import { buildBootstrapContextFiles } from "./pi-embedded-helpers.js";
+import { buildBootstrapContextFiles } from "./embedded-agent-helpers.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_SOUL_FILENAME,
@@ -22,7 +22,7 @@ export type RealtimeBootstrapContextFileName =
 const REALTIME_BOOTSTRAP_CONTEXT_FILE_NAME_SET: ReadonlySet<string> = new Set(
   REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES,
 );
-const DEFAULT_REALTIME_BOOTSTRAP_CONTEXT_MAX_CHARS = 4_000;
+const DEFAULT_REALTIME_BOOTSTRAP_CONTEXT_MAX_CHARS = 12_000;
 const REALTIME_BOOTSTRAP_CONTEXT_TITLE = "OpenClaw realtime voice profile context:";
 const REALTIME_BOOTSTRAP_CONTEXT_GUIDANCE =
   "Use these profile files for identity, persona, and user grounding; do not mention them unless asked.";

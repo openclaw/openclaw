@@ -80,6 +80,7 @@ export type CodexThreadStartParams = JsonObject & {
   cwd?: string;
   model?: string;
   modelProvider?: string | null;
+  personality?: string | null;
   approvalPolicy?: string | JsonObject;
   approvalsReviewer?: string | null;
   sandbox?: string;
@@ -95,6 +96,7 @@ export type CodexThreadResumeParams = JsonObject & {
   threadId: string;
   model?: string;
   modelProvider?: string | null;
+  personality?: string | null;
   approvalPolicy?: string | JsonObject;
   approvalsReviewer?: string | null;
   sandbox?: string;
@@ -150,6 +152,7 @@ export type CodexTurnStartParams = JsonObject & {
   sandboxPolicy?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;
   effort?: string | null;
+  personality?: string | null;
   environments?: CodexTurnEnvironmentParams[] | null;
   collaborationMode?: {
     mode: string;
@@ -268,6 +271,7 @@ export type CodexDynamicToolCallParams = {
 };
 
 export type CodexDynamicToolCallResponse = {
+  asyncStarted?: boolean;
   contentItems: CodexDynamicToolCallOutputContentItem[];
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
   sideEffectEvidence?: boolean;
@@ -444,9 +448,32 @@ export type CodexSkillsListParams = {
   forceReload?: boolean;
 };
 
+export type CodexSkillScope = "user" | "repo" | "system" | "admin";
+
+export type CodexSkillMetadata = {
+  name: string;
+  description: string;
+  shortDescription?: string;
+  interface?: JsonObject;
+  dependencies?: JsonObject;
+  path: string;
+  scope: CodexSkillScope;
+  enabled: boolean;
+};
+
+export type CodexSkillErrorInfo = {
+  path: string;
+  message: string;
+};
+
+export type CodexSkillsListEntry = {
+  cwd: string;
+  skills: CodexSkillMetadata[];
+  errors: CodexSkillErrorInfo[];
+};
+
 export type CodexSkillsListResponse = {
-  data: JsonValue[];
-  nextCursor?: string | null;
+  data: CodexSkillsListEntry[];
 };
 
 export type CodexHooksListParams = {
@@ -529,7 +556,7 @@ type CodexAppServerRequestResultMap = {
   "turn/steer": JsonValue;
 };
 
-export function isJsonObject(value: JsonValue | undefined): value is JsonObject {
+export function isJsonObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 

@@ -23,6 +23,73 @@ function Fail-Install {
     return $false
 }
 
+function Test-BooleanSuccessResult {
+    param([object[]]$Results)
+
+    return ($Results.Count -gt 0 -and $Results[-1] -eq $true)
+}
+
+function Remove-MatchingQuotes {
+    param([string]$Value)
+
+    if ([string]::IsNullOrEmpty($Value) -or $Value.Length -lt 2) {
+        return $Value
+    }
+
+    $first = $Value[0]
+    $last = $Value[$Value.Length - 1]
+    if (($first -eq '"' -and $last -eq '"') -or ($first -eq "'" -and $last -eq "'")) {
+        return $Value.Substring(1, $Value.Length - 2)
+    }
+    return $Value
+}
+
+function Resolve-NodeOptionsWithMinOldSpace {
+    param(
+        [string]$NodeOptions,
+        [int]$MinOldSpaceMb = 8192
+    )
+
+    $parts = @($NodeOptions -split '\s+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $resolved = New-Object System.Collections.Generic.List[string]
+    $foundOldSpace = $false
+    for ($index = 0; $index -lt $parts.Count; $index++) {
+        $part = $parts[$index]
+        $normalizedPart = Remove-MatchingQuotes -Value $part
+        if ($normalizedPart -match '^--max[-_]old[-_]space[-_]size=(?<value>.+)$') {
+            $parsed = 0
+            $parsedValue = Remove-MatchingQuotes -Value $Matches["value"]
+            if (-not [int]::TryParse($parsedValue, [ref]$parsed)) {
+                $parsed = $MinOldSpaceMb
+            }
+            $foundOldSpace = $true
+            $value = [Math]::Max($parsed, $MinOldSpaceMb)
+            $resolved.Add("--max-old-space-size=$value")
+            continue
+        }
+        if ($normalizedPart -match '^--max[-_]old[-_]space[-_]size$') {
+            $foundOldSpace = $true
+            $next = if ($index + 1 -lt $parts.Count) { $parts[$index + 1] } else { $null }
+            $parsed = 0
+            $parsedNext = Remove-MatchingQuotes -Value $next
+            if (-not [int]::TryParse($parsedNext, [ref]$parsed)) {
+                $parsed = $MinOldSpaceMb
+            }
+            $value = [Math]::Max($parsed, $MinOldSpaceMb)
+            $resolved.Add("--max-old-space-size=$value")
+            if ($next) {
+                $index += 1
+            }
+            continue
+        }
+        $resolved.Add($part)
+    }
+    if (-not $foundOldSpace) {
+        $resolved.Add("--max-old-space-size=$MinOldSpaceMb")
+    }
+    return ($resolved -join " ")
+}
+
 function Complete-Install {
     param([bool]$Succeeded)
 
@@ -705,10 +772,7 @@ function Ensure-OpenClawOnPath {
             continue
         }
 
-        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-        if (-not ($userPath -split ";" | Where-Object { $_ -ieq $npmBin })) {
-            [Environment]::SetEnvironmentVariable("Path", "$userPath;$npmBin", "User")
-            $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        if (Add-ToUserPath $npmBin) {
             Write-Host "[!] Added $npmBin to user PATH (restart terminal if command not found)" -ForegroundColor Yellow
         }
         return $true
@@ -779,6 +843,8 @@ function Test-PnpmCommandMatchesVersion {
         }
         $currentVersion = (& $pnpmCommand --version 2>$null)
         return ($LASTEXITCODE -eq 0 -and $currentVersion -and $currentVersion.Trim() -eq $PnpmVersion)
+    } catch {
+        return $false
     } finally {
         if ($pushedLocation) {
             Pop-Location
@@ -812,7 +878,17 @@ function Ensure-Pnpm {
     $prevScriptShell = $env:NPM_CONFIG_SCRIPT_SHELL
     $env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"
     try {
-        Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)
+        $pnpmInstalled = $false
+        try {
+            Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)
+            $pnpmInstalled = ($LASTEXITCODE -eq 0)
+        } catch {
+            $pnpmInstalled = $false
+        }
+        if (-not $pnpmInstalled) {
+            Write-Host "[!] pnpm install hit an existing or broken shim; retrying with --force" -ForegroundColor Yellow
+            Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)
+        }
     } finally {
         $env:NPM_CONFIG_SCRIPT_SHELL = $prevScriptShell
     }
@@ -924,6 +1000,63 @@ function Test-OpenClawSourcePackageInstallSpec {
     )
 }
 
+function Resolve-NpmConfigPath {
+    param([string]$RawPath)
+    if ([string]::IsNullOrWhiteSpace($RawPath) -or $RawPath -eq "null" -or $RawPath -eq "undefined") {
+        return $null
+    }
+    if (($RawPath.StartsWith("~/") -or $RawPath.StartsWith("~\")) -and -not [string]::IsNullOrWhiteSpace($HOME)) {
+        return (Join-Path $HOME $RawPath.Substring(2))
+    }
+    if (($RawPath.StartsWith('${HOME}/') -or $RawPath.StartsWith('${HOME}\')) -and -not [string]::IsNullOrWhiteSpace($HOME)) {
+        return (Join-Path $HOME $RawPath.Substring(8))
+    }
+    return $RawPath
+}
+
+function Test-NpmConfigFileKey {
+    param(
+        [string]$Path,
+        [string]$Key
+    )
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $false
+    }
+    $escapedKey = [regex]::Escape($Key)
+    return [bool](Select-String -LiteralPath $Path -Pattern "^\s*$escapedKey\s*=" -Quiet)
+}
+
+function Test-NpmConfigRawKey {
+    param([string]$Key)
+    $files = New-Object System.Collections.Generic.List[string]
+    $userConfig = if ($env:NPM_CONFIG_USERCONFIG) { $env:NPM_CONFIG_USERCONFIG } else { $env:npm_config_userconfig }
+    if ($userConfig) {
+        $resolvedUserConfig = Resolve-NpmConfigPath $userConfig
+        if ($resolvedUserConfig) { $files.Add($resolvedUserConfig) }
+    } elseif (-not [string]::IsNullOrWhiteSpace($HOME)) {
+        $files.Add((Join-Path $HOME ".npmrc"))
+    }
+
+    $globalConfig = if ($env:NPM_CONFIG_GLOBALCONFIG) { $env:NPM_CONFIG_GLOBALCONFIG } else { $env:npm_config_globalconfig }
+    if ($globalConfig) {
+        $resolvedGlobalConfig = Resolve-NpmConfigPath $globalConfig
+        if ($resolvedGlobalConfig) { $files.Add($resolvedGlobalConfig) }
+    }
+
+    $detectedGlobalConfig = (Invoke-NpmCommand -Arguments @("config", "get", "globalconfig", "--global") 2>$null)
+    if ($LASTEXITCODE -eq 0) {
+        $resolvedDetectedGlobalConfig = Resolve-NpmConfigPath $detectedGlobalConfig
+        if ($resolvedDetectedGlobalConfig) { $files.Add($resolvedDetectedGlobalConfig) }
+    }
+
+    foreach ($file in ($files | Select-Object -Unique)) {
+        if (Test-NpmConfigFileKey -Path $file -Key $Key) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Install-OpenClaw {
     if ([string]::IsNullOrWhiteSpace($Tag)) {
         $Tag = "latest"
@@ -945,9 +1078,12 @@ function Install-OpenClaw {
     $installSpec = Resolve-NpmOpenClawInstallSpec -PackageName $packageName -RequestedTag $Tag
     Write-Host "[*] Installing OpenClaw ($installSpec)..." -ForegroundColor Yellow
     $freshnessArgs = @("--min-release-age=0")
-    $minReleaseAge = (Invoke-NpmCommand -Arguments @("config", "get", "min-release-age") 2>$null)
-    if ($LASTEXITCODE -ne 0 -or -not $minReleaseAge -or $minReleaseAge.Trim() -eq "null" -or $minReleaseAge.Trim() -eq "undefined") {
-        $beforeValue = (Invoke-NpmCommand -Arguments @("config", "get", "before") 2>$null)
+    $minReleaseAge = (Invoke-NpmCommand -Arguments @("config", "get", "min-release-age", "--global") 2>$null)
+    $minReleaseAgeStatus = $LASTEXITCODE
+    if (Test-NpmConfigRawKey -Key "min-release-age") {
+        $freshnessArgs = @("--min-release-age=0")
+    } elseif ($minReleaseAgeStatus -ne 0 -or -not $minReleaseAge -or $minReleaseAge.Trim() -eq "null" -or $minReleaseAge.Trim() -eq "undefined") {
+        $beforeValue = (Invoke-NpmCommand -Arguments @("config", "get", "before", "--global") 2>$null)
         if ($LASTEXITCODE -eq 0 -and $beforeValue -and $beforeValue.Trim() -ne "null" -and $beforeValue.Trim() -ne "undefined") {
             $freshnessArgs = @("--before=$((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ"))")
         }
@@ -1033,25 +1169,76 @@ function Install-OpenClawFromGit {
     Remove-LegacySubmodule -RepoDir $RepoDir
 
     $prevPnpmScriptShell = $env:NPM_CONFIG_SCRIPT_SHELL
+    $prevPnpmChildConcurrency = $env:PNPM_CONFIG_CHILD_CONCURRENCY
+    $prevPnpmNetworkConcurrency = $env:PNPM_CONFIG_NETWORK_CONCURRENCY
+    $prevPnpmWorkspaceConcurrency = $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY
+    $prevPnpmVerifyDepsBeforeRun = $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN
+    $prevPnpmSideEffectsCache = $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE
+    $prevNodeOptions = $env:NODE_OPTIONS
     $pnpmCommand = Get-PnpmCommandPath
     if (-not $pnpmCommand) {
         throw "pnpm not found after installation."
     }
     $env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"
+    $env:PNPM_CONFIG_CHILD_CONCURRENCY = "1"
+    $env:PNPM_CONFIG_NETWORK_CONCURRENCY = "4"
+    $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = "1"
+    $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"
+    $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = "false"
     $pushedRepoLocation = $false
     try {
         Push-Location -LiteralPath $RepoDir
         $pushedRepoLocation = $true
-        & $pnpmCommand install
+        $sourceInstallArgs = @(
+            "install",
+            "--prefer-offline",
+            "--config.node-linker=hoisted",
+            "--config.engine-strict=false",
+            "--config.enable-pre-post-scripts=true",
+            "--config.side-effects-cache=false",
+            "--no-frozen-lockfile",
+            "--child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
+            "--network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY",
+            "--config.workspace-concurrency=$env:PNPM_CONFIG_WORKSPACE_CONCURRENCY"
+        )
+        & $pnpmCommand @sourceInstallArgs
+        $installSucceeded = ($LASTEXITCODE -eq 0)
+        if (-not $installSucceeded) {
+            Write-Host "[!] pnpm install failed for the Git checkout; clearing node_modules and retrying once" -ForegroundColor Yellow
+            Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
+            & $pnpmCommand @sourceInstallArgs
+            $installSucceeded = ($LASTEXITCODE -eq 0)
+        }
+        if (-not $installSucceeded) {
+            Write-Host "[!] pnpm install failed for the Git checkout" -ForegroundColor Red
+            return $false
+        }
         if (-not (& $pnpmCommand ui:build)) {
             Write-Host "[!] UI build failed; continuing (CLI may still work)" -ForegroundColor Yellow
         }
+        $env:NODE_OPTIONS = Resolve-NodeOptionsWithMinOldSpace -NodeOptions $prevNodeOptions -MinOldSpaceMb 8192
         & $pnpmCommand build
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[!] pnpm build failed for the Git checkout" -ForegroundColor Red
+            return $false
+        }
     } finally {
         if ($pushedRepoLocation) {
             Pop-Location
         }
         $env:NPM_CONFIG_SCRIPT_SHELL = $prevPnpmScriptShell
+        $env:PNPM_CONFIG_CHILD_CONCURRENCY = $prevPnpmChildConcurrency
+        $env:PNPM_CONFIG_NETWORK_CONCURRENCY = $prevPnpmNetworkConcurrency
+        $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = $prevPnpmWorkspaceConcurrency
+        $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = $prevPnpmVerifyDepsBeforeRun
+        $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = $prevPnpmSideEffectsCache
+        $env:NODE_OPTIONS = $prevNodeOptions
+    }
+
+    $entryPath = Join-Path $RepoDir "dist\\entry.js"
+    if (-not (Test-Path $entryPath)) {
+        Write-Host "[!] OpenClaw build did not produce $entryPath" -ForegroundColor Red
+        return $false
     }
 
     $binDir = Join-Path $env:USERPROFILE ".local\\bin"
@@ -1059,13 +1246,10 @@ function Install-OpenClawFromGit {
         New-Item -ItemType Directory -Force -Path $binDir | Out-Null
     }
     $cmdPath = Join-Path $binDir "openclaw.cmd"
-    $cmdContents = "@echo off`r`nnode ""$RepoDir\\dist\\entry.js"" %*`r`n"
+    $cmdContents = "@echo off`r`nnode ""$entryPath"" %*`r`n"
     Set-Content -Path $cmdPath -Value $cmdContents -NoNewline
 
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    if (-not ($userPath -split ";" | Where-Object { $_ -ieq $binDir })) {
-        [Environment]::SetEnvironmentVariable("Path", "$userPath;$binDir", "User")
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    if (Add-ToUserPath $binDir) {
         Write-Host "[!] Added $binDir to user PATH (restart terminal if command not found)" -ForegroundColor Yellow
     }
 
@@ -1202,7 +1386,8 @@ function Main {
             }
         } catch { }
         $finalGitDir = $GitDir
-        if (-not (Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)) {
+        $gitInstallResults = @(Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)
+        if (-not (Test-BooleanSuccessResult -Results $gitInstallResults)) {
             return (Fail-Install)
         }
     } else {
@@ -1211,7 +1396,8 @@ function Main {
             Remove-Item -Force $gitWrapper
             Write-Host "[OK] Removed git wrapper (switching to npm)" -ForegroundColor Green
         }
-        if (-not (Install-OpenClaw)) {
+        $npmInstallResults = @(Install-OpenClaw)
+        if (-not (Test-BooleanSuccessResult -Results $npmInstallResults)) {
             return (Fail-Install)
         }
     }
@@ -1321,5 +1507,5 @@ function Main {
 }
 
 $mainResults = @(Main)
-$installSucceeded = $mainResults.Count -gt 0 -and $mainResults[-1] -eq $true
+$installSucceeded = Test-BooleanSuccessResult -Results $mainResults
 Complete-Install -Succeeded:$installSucceeded

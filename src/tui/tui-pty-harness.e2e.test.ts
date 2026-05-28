@@ -3,8 +3,13 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { spawn as spawnPty, type PtyExitEvent, type PtyHandle } from "@lydell/node-pty";
+import * as nodePty from "@lydell/node-pty";
+import type { PtyExitEvent, PtyHandle } from "@lydell/node-pty";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+type NodePtyRuntimeModule = typeof nodePty & {
+  default?: Partial<typeof nodePty>;
+};
 
 type KillablePtyHandle = PtyHandle & {
   kill?: (signal?: string) => void;
@@ -29,6 +34,19 @@ const OUTPUT_TIMEOUT_MS = 2_000;
 const EXIT_TIMEOUT_MS = 4_000;
 const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 10_000;
+
+function resolveSpawnPty() {
+  const runtime = nodePty as NodePtyRuntimeModule;
+  if (typeof runtime.spawn === "function") {
+    return runtime.spawn;
+  }
+  if (typeof runtime.default?.spawn === "function") {
+    return runtime.default.spawn;
+  }
+  throw new TypeError("@lydell/node-pty spawn export is unavailable");
+}
+
+const spawnPty = resolveSpawnPty();
 
 function waitFor<T>(params: {
   timeoutMs: number;
@@ -201,15 +219,28 @@ function objectFieldEquals(entry: FixtureLogEntry, field: string, value: unknown
 async function writeTuiPtyFixtureScript(dir: string) {
   const scriptPath = path.join(dir, "run-tui-pty-fixture.ts");
   const tuiModuleUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui.ts")).href;
+  const payloadsModuleUrl = pathToFileURL(
+    path.join(process.cwd(), "src/agents/embedded-agent-runner/run/payloads.ts"),
+  ).href;
+  const replyPayloadModuleUrl = pathToFileURL(
+    path.join(process.cwd(), "src/auto-reply/reply-payload.ts"),
+  ).href;
+  const outboundPayloadsModuleUrl = pathToFileURL(
+    path.join(process.cwd(), "src/infra/outbound/payloads.ts"),
+  ).href;
   await writeFile(
     scriptPath,
     `
       import { appendFileSync } from "node:fs";
+      import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
+      import { getReplyPayloadMetadata } from ${JSON.stringify(replyPayloadModuleUrl)};
+      import { normalizeReplyPayloadsForDelivery } from ${JSON.stringify(outboundPayloadsModuleUrl)};
       import type { TuiBackend } from ${JSON.stringify(tuiModuleUrl.replace("/tui.ts", "/tui-backend.ts"))};
       import { runTui } from ${JSON.stringify(tuiModuleUrl)};
 
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
+      const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
       let currentModel = "fixture-provider/fixture-model";
       let fastMode = process.env.OPENCLAW_TUI_PTY_FAST_MODE === "true";
 
@@ -229,6 +260,32 @@ async function writeTuiPtyFixtureScript(dir: string) {
           contextTokens: 128,
           fastMode,
           thinkingLevels: [],
+        };
+      }
+
+      function assistantMessageFromSourceReplyPayloads(payloads: ReturnType<typeof buildEmbeddedRunPayloads>) {
+        if (payloads.length === 0) {
+          throw new Error("expected source reply payload");
+        }
+        for (const payload of payloads) {
+          const metadata = getReplyPayloadMetadata(payload);
+          if (!metadata?.sourceReplyTranscriptMirror) {
+            throw new Error("expected source reply transcript mirror metadata");
+          }
+          record("sourceReplyMetadata", metadata.sourceReplyTranscriptMirror);
+        }
+        const normalized = normalizeReplyPayloadsForDelivery(payloads);
+        const content = normalized.flatMap((payload) => {
+          const text = payload.text?.trim();
+          return text ? [{ type: "text", text }] : [];
+        });
+        if (content.length === 0) {
+          throw new Error("expected displayable source reply content");
+        }
+        return {
+          role: "assistant",
+          content,
+          timestamp: Date.now(),
         };
       }
 
@@ -253,19 +310,70 @@ async function writeTuiPtyFixtureScript(dir: string) {
             thinking: opts.thinking,
           });
           const runId = opts.runId ?? "run-pty-fixture";
-          const responseDelayMs = opts.message === "slow prompt" ? 500 : 20;
+          const responseDelayMs =
+            opts.message === "slow prompt" || opts.message === "streaming prompt" ? 500 : 20;
+          if (opts.message === "streaming prompt") {
+            setTimeout(() => {
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  state: "delta",
+                  message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: "PTY_STREAMING: streaming prompt" }],
+                    timestamp: Date.now(),
+                  },
+                },
+              });
+            }, 5);
+          }
+          const isSourceReplyProof = opts.message === "message tool only source reply proof";
+          const isXaiLimitProof = opts.message === "xai limit proof";
           setTimeout(() => {
+            if (isXaiLimitProof) {
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  state: "error",
+                  errorMessage: xaiLimitError,
+                },
+              });
+              return;
+            }
+            const sourceReplyPayloads = isSourceReplyProof
+              ? buildEmbeddedRunPayloads({
+                  assistantTexts: [],
+                  toolMetas: [],
+                  lastAssistant: undefined,
+                  inlineToolResultsAllowed: false,
+                  sessionKey: opts.sessionKey,
+                  sourceReplyDeliveryMode: "message_tool_only",
+                  messagingToolSourceReplyPayloads: [
+                    {
+                      text: "VISIBLE_TUI_SOURCE_REPLY_PROOF",
+                    },
+                  ],
+                  runId,
+                })
+              : [];
+            const message = isSourceReplyProof
+              ? assistantMessageFromSourceReplyPayloads(sourceReplyPayloads)
+              : {
+                  role: "assistant",
+                  content: [{ type: "text", text: "PTY_RESPONSE: " + opts.message }],
+                  timestamp: Date.now(),
+                };
             this.onEvent?.({
               event: "chat",
               payload: {
                 runId,
                 sessionKey: opts.sessionKey,
                 state: "final",
-                message: {
-                  role: "assistant",
-                  content: [{ type: "text", text: "PTY_RESPONSE: " + opts.message }],
-                  timestamp: Date.now(),
-                },
+                message,
               },
             });
           }, responseDelayMs);
@@ -404,7 +512,8 @@ describe.sequential("TUI PTY harness", () => {
     for (const run of activeRuns.splice(0)) {
       run.dispose();
     }
-    await fixture.cleanup();
+    const startedFixture = fixture as Awaited<ReturnType<typeof startTuiFixture>> | undefined;
+    await startedFixture?.cleanup();
   });
 
   it("renders local ready on startup", () => {
@@ -440,6 +549,39 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "renders message-tool-only internal ui source replies in the terminal",
+    async () => {
+      await fixture.run.write("message tool only source reply proof\r");
+      await fixture.run.waitForOutput("VISIBLE_TUI_SOURCE_REPLY_PROOF");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" &&
+          objectFieldEquals(entry, "message", "message tool only source reply proof"),
+      );
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sourceReplyMetadata" &&
+          objectFieldEquals(entry, "text", "VISIBLE_TUI_SOURCE_REPLY_PROOF"),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "preserves xAI account limit errors in terminal output",
+    async () => {
+      await fixture.run.write("xai limit proof\r");
+      await fixture.run.waitForOutput("monthly spending limit");
+      expect(fixture.run.output()).not.toContain("Run /auth");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" && objectFieldEquals(entry, "message", "xai limit proof"),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "blocks overlapping normal messages while a run is busy",
     async () => {
       await fixture.run.write("slow prompt\r");
@@ -456,6 +598,23 @@ describe.sequential("TUI PTY harness", () => {
       expect(slowPromptCalls).toHaveLength(1);
       expect(slowPromptCalls[0]?.payload).toMatchObject({ message: "slow prompt" });
       await fixture.run.write("\x15", { delay: false });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "submits a follow-up prompt while a run is streaming",
+    async () => {
+      await fixture.run.write("\x15", { delay: false });
+      await fixture.run.write("streaming prompt\r");
+      await fixture.run.waitForOutput("PTY_STREAMING: streaming prompt");
+      await fixture.run.write("queued while streaming\r");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" &&
+          objectFieldEquals(entry, "message", "queued while streaming"),
+      );
+      await fixture.run.waitForOutput("PTY_RESPONSE: streaming prompt");
     },
     TEST_TIMEOUT_MS,
   );

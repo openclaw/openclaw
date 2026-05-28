@@ -117,6 +117,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@latest");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@beta");
+    expect(script).toContain("OPENCLAW_KITCHEN_SINK_PLUGIN_MAX_MEMORY_MIB");
     expect(script).toContain(
       "npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||${KITCHEN_SINK_NPM_SPEC}",
     );
@@ -159,7 +160,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
       "X-ClawHub-Artifact-Sha256",
     );
-    expect(script).toContain("docker stats --no-stream");
+    expect(script).toContain("docker_e2e_docker_cmd stats --no-stream");
     expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
   });
 
@@ -181,7 +182,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       weight: 3,
     });
     expect(script).toContain("OPENCLAW_ENTRY=/app/openclaw.mjs");
-    expect(script).toContain("docker stats --no-stream");
+    expect(script).toContain("docker_e2e_docker_cmd stats --no-stream");
     expect(script).toContain("node scripts/e2e/kitchen-sink-rpc-walk.mjs");
     expect(script).not.toContain("--import tsx");
     expect(walkScript).toContain("commands.list");
@@ -189,8 +190,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(walkScript).toContain("tts.providers");
     expect(walkScript).toContain("plugins.uiDescriptors");
     expect(walkScript).toContain("loadCallGatewayModule(options.runner)");
-    expect(walkScript).toContain("usesPackagedOpenClawEntry(runner)");
-    expect(walkScript).toContain("src/gateway/call.ts");
+    expect(walkScript).toContain("usesBuiltOpenClawEntry(runner)");
+    expect(walkScript).toContain('"gateway"');
+    expect(walkScript).toContain('"call"');
+    expect(walkScript).not.toContain("src/gateway/call.ts");
     expect(walkScript).toContain("^call(?:\\.runtime)?");
   });
 
@@ -277,7 +280,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
           with: {
             "fetch-depth": 1,
             "fetch-tags": false,
-            "persist-credentials": false,
+            "persist-credentials": true,
             ref: "${{ needs.preflight.outputs.checkout_revision }}",
             submodules: false,
           },
@@ -536,11 +539,16 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
       "inputs.rerun_group == 'all'",
     );
-    expect(
-      fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
-        (step) => step.name === "Verify Docker runtime-assets prune path",
-      ).run,
-    ).toContain("--target runtime-assets");
+    const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
+      (step) => step.name === "Build and smoke test final Docker runtime image",
+    );
+    expect(dockerPreflightStep).toBeDefined();
+    expect(dockerPreflightStep?.run).toContain("docker build");
+    expect(dockerPreflightStep?.run).toContain("node /app/openclaw.mjs agent");
+    expect(dockerPreflightStep?.run).toContain(
+      '--build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex"',
+    );
+    expect(dockerPreflightStep?.run).toContain("/app/src/agents/templates/HEARTBEAT.md");
     expect(fullReleaseWorkflow.jobs.plugin_prerelease["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}",
     );

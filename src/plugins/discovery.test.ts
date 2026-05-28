@@ -154,11 +154,16 @@ function writePluginPackageManifest(params: {
   );
 }
 
-function writePluginManifest(params: { pluginDir: string; id: string }) {
+function writePluginManifest(params: {
+  pluginDir: string;
+  id: string;
+  requiresPlugins?: string[];
+}) {
   fs.writeFileSync(
     path.join(params.pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
       id: params.id,
+      ...(params.requiresPlugins ? { requiresPlugins: params.requiresPlugins } : {}),
       configSchema: { type: "object" },
     }),
     "utf-8",
@@ -469,6 +474,61 @@ describe("discoverOpenClawPlugins", () => {
 
     const { candidates } = await discoverWithStateDir(stateDir, { workspaceDir });
     expectCandidateIds(candidates, { includes: ["alpha", "beta"] });
+  });
+
+  it("warns without blocking when a plugin requires a missing plugin", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "diffs-language-pack");
+    createPackagePluginWithEntry({
+      packageDir: pluginDir,
+      packageName: "@openclaw/diffs-language-pack",
+      pluginId: "diffs-language-pack",
+    });
+    writePluginManifest({
+      pluginDir,
+      id: "diffs-language-pack",
+      requiresPlugins: ["diffs"],
+    });
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expectCandidatePresence(result, { present: ["diffs-language-pack"] });
+    expectDiagnostic({
+      diagnostics: result.diagnostics,
+      level: "warn",
+      pluginId: "diffs-language-pack",
+      messageIncludes: 'requires plugin "diffs"',
+    });
+  });
+
+  it("does not warn when a required plugin is discoverable", async () => {
+    const stateDir = makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    const languagePackDir = path.join(extensionsDir, "diffs-language-pack");
+    createPackagePluginWithEntry({
+      packageDir: languagePackDir,
+      packageName: "@openclaw/diffs-language-pack",
+      pluginId: "diffs-language-pack",
+    });
+    writePluginManifest({
+      pluginDir: languagePackDir,
+      id: "diffs-language-pack",
+      requiresPlugins: ["diffs"],
+    });
+    createPackagePluginWithEntry({
+      packageDir: path.join(extensionsDir, "diffs"),
+      packageName: "@openclaw/diffs",
+      pluginId: "diffs",
+    });
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expectCandidatePresence(result, { present: ["diffs-language-pack", "diffs"] });
+    expectNoDiagnostic({
+      diagnostics: result.diagnostics,
+      pluginId: "diffs-language-pack",
+      messageIncludes: 'requires plugin "diffs"',
+    });
   });
 
   it.skipIf(!canCreateDirectorySymlinks)(
@@ -879,6 +939,45 @@ describe("discoverOpenClawPlugins", () => {
     });
   });
 
+  it("allows linked local install records to point at TypeScript source entries", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "linked-source-pack");
+    mkdirSafe(path.join(pluginDir, "src"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/linked-source-pack",
+      extensions: ["./src/index.ts"],
+      setupEntry: "./src/setup-entry.ts",
+    });
+    writePluginManifest({ pluginDir, id: "linked-source-pack" });
+    writePluginEntry(path.join(pluginDir, "src", "index.ts"));
+    writePluginEntry(path.join(pluginDir, "src", "setup-entry.ts"));
+
+    const installRecords = {
+      "linked-source-pack": {
+        source: "path",
+        installPath: pluginDir,
+        sourcePath: pluginDir,
+      },
+    } satisfies Record<string, PluginInstallRecord>;
+    const result = await discoverWithStateDir(stateDir, { installRecords });
+
+    expectCandidateSource(
+      result.candidates,
+      "linked-source-pack",
+      fs.realpathSync(path.join(pluginDir, "src", "index.ts")),
+    );
+    expectCandidateFields(requireCandidateById(result.candidates, "linked-source-pack"), {
+      setupSource: fs.realpathSync(path.join(pluginDir, "src", "setup-entry.ts")),
+    });
+    expectNoDiagnostic({
+      diagnostics: result.diagnostics,
+      pluginId: "linked-source-pack",
+      messageIncludes: "requires compiled runtime output",
+    });
+  });
+
   it("still requires compiled runtime output for tracked installed package plugins", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "source-only-pack");
@@ -911,6 +1010,12 @@ describe("discoverOpenClawPlugins", () => {
           entry.message.includes("disable/uninstall the plugin"),
       ),
     ).toBe(true);
+    expect(
+      result.diagnostics.some(
+        (entry) =>
+          entry.pluginId === "source-only-pack" && entry.message.includes("openclaw doctor --fix"),
+      ),
+    ).toBe(false);
     expect(result.diagnostics).toHaveLength(1);
   });
 
