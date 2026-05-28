@@ -728,6 +728,7 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   const { note } = await import("../terminal/note.js");
   const credentialPlan = createGatewayCredentialPlan({ config: ctx.cfg, env: process.env });
   const ambiguousLocalAuthRefs = credentialPlan.authMode === undefined;
+  const remoteHealthCredentialsActive = credentialPlan.configuredMode === "remote";
   const activeSecretRefPaths = [
     credentialPlan.localTokenSurfaceActive || ambiguousLocalAuthRefs
       ? credentialPlan.localToken.refPath
@@ -735,8 +736,12 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
     credentialPlan.localPasswordCanWin || ambiguousLocalAuthRefs
       ? credentialPlan.localPassword.refPath
       : undefined,
-    credentialPlan.remoteTokenActive ? credentialPlan.remoteToken.refPath : undefined,
-    credentialPlan.remotePasswordActive ? credentialPlan.remotePassword.refPath : undefined,
+    remoteHealthCredentialsActive && credentialPlan.remoteTokenActive
+      ? credentialPlan.remoteToken.refPath
+      : undefined,
+    remoteHealthCredentialsActive && credentialPlan.remotePasswordActive
+      ? credentialPlan.remotePassword.refPath
+      : undefined,
   ].filter((path): path is NonNullable<typeof path> => Boolean(path));
   const hasActiveExecCredential = activeSecretRefPaths.some((path) => {
     const ref = resolveSecretInputRef({
