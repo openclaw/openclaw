@@ -1,6 +1,9 @@
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
+import {
+  isSubagentModelInheritSelection,
+  resolveSubagentSpawnModelSelection,
+} from "./model-selection.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
 export function splitModelRef(ref?: string) {
@@ -44,13 +47,23 @@ export function resolveSubagentModelAndThinkingPlan(params: {
   targetAgentId: string;
   targetAgentConfig?: unknown;
   modelOverride?: string;
+  inheritedModel?: string;
   thinkingOverrideRaw?: string;
 }) {
   const resolvedModel = resolveSubagentSpawnModelSelection({
     cfg: params.cfg,
     agentId: params.targetAgentId,
     modelOverride: params.modelOverride,
+    inheritedModel: params.inheritedModel,
   });
+  if (isSubagentModelInheritSelection(resolvedModel)) {
+    return {
+      status: "error" as const,
+      resolvedModel,
+      error:
+        "Cannot inherit subagent model because the requester session has no active model. Pass an explicit model or configure a concrete agents.defaults.subagents.model value.",
+    };
+  }
 
   const thinkingPlan = resolveSubagentThinkingOverride({
     cfg: params.cfg,

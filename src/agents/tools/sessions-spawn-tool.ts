@@ -254,6 +254,8 @@ export function createSessionsSpawnTool(
     agentThreadId?: string | number;
     sandboxed?: boolean;
     config?: OpenClawConfig;
+    modelProvider?: string;
+    modelId?: string;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
   } & SpawnedToolContext,
@@ -491,6 +493,8 @@ export function createSessionsSpawnTool(
           agentGroupSpace: opts?.agentGroupSpace,
           agentMemberRoleIds: opts?.agentMemberRoleIds,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+          modelProvider: opts?.modelProvider,
+          modelId: opts?.modelId,
           workspaceDir: opts?.workspaceDir,
           inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,

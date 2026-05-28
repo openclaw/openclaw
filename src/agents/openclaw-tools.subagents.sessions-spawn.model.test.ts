@@ -47,6 +47,35 @@ describe("subagent spawn model + thinking plan", () => {
     });
   });
 
+  it("can explicitly inherit the requester session model", () => {
+    const plan = resolveSubagentModelAndThinkingPlan({
+      cfg: createConfig(),
+      targetAgentId: "research",
+      modelOverride: "inherit",
+      inheritedModel: "openai/gpt-5.4",
+    });
+    expect(plan).toMatchObject({
+      status: "ok",
+      resolvedModel: "openai/gpt-5.4",
+      initialSessionPatch: { model: "openai/gpt-5.4" },
+    });
+  });
+
+  it("rejects model inheritance when the requester model is unavailable", () => {
+    const plan = resolveSubagentModelAndThinkingPlan({
+      cfg: createConfig(),
+      targetAgentId: "research",
+      modelOverride: "inherit",
+    });
+    expect(plan).toMatchObject({
+      status: "error",
+      resolvedModel: "inherit",
+    });
+    if (plan.status === "error") {
+      expect(plan.error).toContain("requester session has no active model");
+    }
+  });
+
   it("normalizes thinking overrides into the initial patch", () => {
     const plan = expectOkPlan(
       resolveSubagentModelAndThinkingPlan({
@@ -83,6 +112,21 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.resolvedModel).toBe("minimax/MiniMax-M2.7");
     expect(plan.initialSessionPatch.model).toBe("minimax/MiniMax-M2.7");
     expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+  });
+
+  it("applies inherit from default subagent model config", () => {
+    const plan = resolveSubagentModelAndThinkingPlan({
+      cfg: createConfig({
+        agents: { defaults: { subagents: { model: "inherit" } } },
+      }),
+      targetAgentId: "research",
+      inheritedModel: "anthropic/claude-sonnet-4-6",
+    });
+    expect(plan).toMatchObject({
+      status: "ok",
+      resolvedModel: "anthropic/claude-sonnet-4-6",
+      initialSessionPatch: { model: "anthropic/claude-sonnet-4-6" },
+    });
   });
 
   it("falls back to runtime default model when no model config is set", () => {
@@ -142,6 +186,36 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.resolvedModel).toBe("minimax/MiniMax-M2.7");
     expect(plan.initialSessionPatch.model).toBe("minimax/MiniMax-M2.7");
     expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+  });
+
+  it("prefers per-agent inherit over the target agent primary model", () => {
+    const cfg = createConfig({
+      agents: {
+        list: [
+          {
+            id: "research",
+            model: { primary: "opencode/claude" },
+            subagents: { model: "inherit" },
+          },
+        ],
+      },
+    });
+    const targetAgentConfig = {
+      id: "research",
+      model: { primary: "opencode/claude" },
+      subagents: { model: "inherit" },
+    };
+    const plan = resolveSubagentModelAndThinkingPlan({
+      cfg,
+      targetAgentId: "research",
+      targetAgentConfig,
+      inheritedModel: "openai/gpt-5.4",
+    });
+    expect(plan).toMatchObject({
+      status: "ok",
+      resolvedModel: "openai/gpt-5.4",
+      initialSessionPatch: { model: "openai/gpt-5.4" },
+    });
   });
 
   it("prefers target agent primary model over global default", () => {

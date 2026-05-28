@@ -479,6 +479,29 @@ describe("sessions_spawn tool", () => {
     expect(spawnContext.workspaceDir).toBe("/parent/workspace");
   });
 
+  it("passes active requester model context to subagent spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+    });
+
+    await tool.execute("call-model-context", {
+      task: "inspect model inheritance",
+      model: "inherit",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "inherit",
+      }),
+      expect.objectContaining({
+        modelProvider: "openai",
+        modelId: "gpt-5.4",
+      }),
+    );
+  });
+
   it("passes lightContext through to subagent spawns", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

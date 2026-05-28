@@ -133,7 +133,7 @@ export type AgentConfig = {
     delegationMode?: SubagentDelegationMode;
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any configured target. */
     allowAgents?: string[];
-    /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
+    /** Per-agent default model for spawned sub-agents (string, "inherit", or {primary,fallbacks}). */
     model?: AgentModelConfig;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;

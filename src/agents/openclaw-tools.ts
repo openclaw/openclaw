@@ -459,6 +459,8 @@ export function createOpenClawTools(
             config: resolvedConfig,
             requesterAgentIdOverride: options?.requesterAgentIdOverride,
             workspaceDir: spawnWorkspaceDir,
+            modelProvider: options?.modelProvider,
+            modelId: options?.modelId,
             inheritedToolAllowlist: options?.inheritedToolAllowlist,
             inheritedToolDenylist: options?.inheritedToolDenylist,
           }),

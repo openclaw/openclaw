@@ -310,6 +310,51 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams).not.toHaveProperty("workspaceDir");
   });
 
+  it("resolves model=inherit from the active requester model context", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          return { runId: "run-inherit" };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "inherit requester model",
+        model: "inherit",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        modelProvider: "openai",
+        modelId: "gpt-5.4",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "run-inherit",
+      modelApplied: true,
+    });
+    expectPersistedRuntimeModel({
+      persistedStore,
+      sessionKey: /^agent:main:subagent:/,
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+  });
+
   it("omits requesterOrigin threadId when no requester thread is provided", async () => {
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent") {
