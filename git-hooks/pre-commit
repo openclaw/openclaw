@@ -36,14 +36,27 @@ for file in "${files[@]}"; do
 done
 
 format_files=()
-while IFS= read -r -d '' file; do
-  format_files+=("$file")
-done < <(node "$FILTER_FILES" format -- "${restage_files[@]}")
+# Windows ENAMETOOLONG 防護：filter-staged-files 也需分批
+BATCH_SIZE=50
+for (( i=0; i<${#restage_files[@]}; i+=BATCH_SIZE )); do
+  batch=("${restage_files[@]:i:BATCH_SIZE}")
+  while IFS= read -r -d '' file; do
+    format_files+=("$file")
+  done < <(node "$FILTER_FILES" format -- "${batch[@]}")
+done
 
 if [ "${#format_files[@]}" -gt 0 ]; then
-  "$RUN_NODE_TOOL" oxfmt --write --no-error-on-unmatched-pattern "${format_files[@]}"
+  # 分批執行 oxfmt 避免 Windows 路徑長度限制
+  for (( i=0; i<${#format_files[@]}; i+=BATCH_SIZE )); do
+    batch=("${format_files[@]:i:BATCH_SIZE}")
+    "$RUN_NODE_TOOL" oxfmt --write --no-error-on-unmatched-pattern "${batch[@]}"
+  done
 fi
 
 if [ "${#restage_files[@]}" -gt 0 ]; then
-  git add -- "${restage_files[@]}"
+  # 分批 git add 避免參數過長
+  for (( i=0; i<${#restage_files[@]}; i+=BATCH_SIZE )); do
+    batch=("${restage_files[@]:i:BATCH_SIZE}")
+    git add -- "${batch[@]}"
+  done
 fi
