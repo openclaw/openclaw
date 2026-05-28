@@ -1318,6 +1318,45 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     );
   });
 
+  it("preserves explicit read-only sandbox for host exec approval ask floors", () => {
+    const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
+      config: {
+        tools: {
+          exec: {
+            mode: "full",
+          },
+        },
+      },
+      approvals: {
+        version: 1,
+        defaults: {
+          ask: "always",
+        },
+        agents: {},
+      },
+    });
+
+    expect(execPolicy.mode).toBe("ask");
+    expectRuntimePolicy(
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            mode: "yolo",
+            approvalPolicy: "never",
+            sandbox: "read-only",
+            approvalsReviewer: "auto_review",
+          },
+        },
+        execPolicy,
+      }),
+      {
+        approvalPolicy: "on-request",
+        sandbox: "read-only",
+        approvalsReviewer: "user",
+      },
+    );
+  });
+
   it("applies agent-scoped exec approval security floors before starting Codex app-server", () => {
     const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
       config: {

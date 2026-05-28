@@ -464,6 +464,7 @@ export function resolveCodexAppServerRuntimeOptions(
           ? undefined
           : forceDangerFullAccessSandbox
             ? selectForcedDangerFullAccessSandbox({
+                configuredSandbox,
                 defaultPolicy,
                 openClawSandboxActive: params.openClawSandboxActive === true,
               })
@@ -1074,9 +1075,13 @@ function selectForcedPromptingSandbox(params: {
 }
 
 function selectForcedDangerFullAccessSandbox(params: {
+  configuredSandbox?: CodexAppServerSandboxMode;
   defaultPolicy: CodexAppServerDefaultPolicy | undefined;
   openClawSandboxActive: boolean;
 }): CodexAppServerSandboxMode {
+  if (params.configuredSandbox === "read-only") {
+    return "read-only";
+  }
   if (params.defaultPolicy?.dangerFullAccessAllowed === false) {
     if (params.openClawSandboxActive) {
       return params.defaultPolicy.sandbox ?? "workspace-write";
