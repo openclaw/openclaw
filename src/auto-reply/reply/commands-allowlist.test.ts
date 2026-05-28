@@ -37,12 +37,10 @@ vi.mock("../../config/config.js", () => ({
     transform: (
       currentConfig: OpenClawConfig,
       context: { snapshot: ConfigSnapshotMock; previousHash: string | null; attempt: number },
-    ) =>
-      | Promise<{ nextConfig: OpenClawConfig; result?: unknown }>
-      | {
-          nextConfig: OpenClawConfig;
-          result?: unknown;
-        };
+    ) => Promise<{ nextConfig: OpenClawConfig; result?: unknown }> | {
+      nextConfig: OpenClawConfig;
+      result?: unknown;
+    };
   }) => {
     const snapshot = (await readConfigFileSnapshotMock()) as ConfigSnapshotMock;
     const previousHash = snapshot.hash ?? null;

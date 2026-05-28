@@ -333,7 +333,10 @@ export function registerModelsCli(program: Command) {
     .option("--provider <id>", "Provider id registered by a plugin")
     .option("--method <id>", "Provider auth method id")
     .option("--device-code", "Use the provider device-code auth method", false)
-    .option("--profile-id <id>", "Auth profile id override for single-profile login methods")
+    .option(
+      "--profile-id <id>",
+      "Auth profile id override for single-profile login methods",
+    )
     .option("--set-default", "Apply the provider's default model recommendation", false)
     .action(async (opts, command) => {
       if (opts.deviceCode && typeof opts.method === "string" && opts.method !== "device-code") {

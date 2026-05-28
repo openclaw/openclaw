@@ -188,9 +188,7 @@ async function main() {
   if (unmatchedExplicitTargets.length > 0) {
     for (const unmatched of unmatchedExplicitTargets) {
       const suffix = unmatched.includePattern ? ` (${unmatched.includePattern})` : "";
-      console.error(
-        `[test] explicit test target matched no test files: ${unmatched.target}${suffix}`,
-      );
+      console.error(`[test] explicit test target matched no test files: ${unmatched.target}${suffix}`);
     }
     printTestSummary("failed", 1, performance.now() - suiteStartedAt);
     process.exitCode = 1;

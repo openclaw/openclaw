@@ -15,10 +15,7 @@
             "id": "amazon-bedrock",
             "name": "Amazon Bedrock",
             "docs": "/providers/bedrock",
-            "categories": [
-              "cloud",
-              "llm"
-            ]
+            "categories": ["cloud", "llm"]
           }
         ],
         "install": {
@@ -43,10 +40,7 @@
             "id": "amazon-bedrock-mantle",
             "name": "Amazon Bedrock Mantle",
             "docs": "/providers/bedrock-mantle",
-            "categories": [
-              "cloud",
-              "llm"
-            ]
+            "categories": ["cloud", "llm"]
           }
         ],
         "install": {
@@ -71,10 +65,7 @@
             "id": "anthropic-vertex",
             "name": "Anthropic Vertex",
             "docs": "/providers/models",
-            "categories": [
-              "cloud",
-              "llm"
-            ]
+            "categories": ["cloud", "llm"]
           }
         ],
         "install": {
@@ -99,10 +90,7 @@
             "id": "codex",
             "name": "Codex",
             "docs": "/providers/models",
-            "categories": [
-              "cloud",
-              "llm"
-            ],
+            "categories": ["cloud", "llm"],
             "authChoices": [
               {
                 "method": "app-server",
@@ -113,9 +101,7 @@
                 "groupId": "codex",
                 "groupLabel": "Codex",
                 "groupHint": "Codex app-server model provider",
-                "onboardingScopes": [
-                  "text-inference"
-                ]
+                "onboardingScopes": ["text-inference"]
               }
             ]
           }

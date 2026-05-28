@@ -17,6 +17,19 @@ function resolveHomePath(value) {
   return value;
 }
 
+function comparablePath(value) {
+  const resolved = path.resolve(resolveHomePath(value));
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function pathsEqual(left, right) {
+  return comparablePath(left) === comparablePath(right);
+}
+
 function getInstallRecords() {
   const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
   const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
@@ -67,7 +80,7 @@ function rememberPluginInstallPath(params) {
   if (params.source && record.source !== params.source) {
     throw new Error(`unexpected source for ${params.pluginId}: ${record.source}`);
   }
-  if (params.sourcePath && record.sourcePath !== params.sourcePath) {
+  if (params.sourcePath && !pathsEqual(record.sourcePath, params.sourcePath)) {
     throw new Error(
       `unexpected source path for ${params.pluginId}: ${record.sourcePath}, expected ${params.sourcePath}`,
     );
@@ -96,7 +109,8 @@ function assertManagedInstallRemoved(params) {
   if (sourcePath && !fs.existsSync(sourcePath)) {
     throw new Error(`${params.pluginId} source path was deleted during uninstall: ${sourcePath}`);
   }
-  if (installPath !== sourcePath && fs.existsSync(installPath)) {
+  const installPathIsSourcePath = sourcePath ? pathsEqual(installPath, sourcePath) : false;
+  if (!installPathIsSourcePath && fs.existsSync(installPath)) {
     throw new Error(
       `${params.pluginId} managed install path still exists after uninstall: ${installPath}`,
     );
@@ -406,18 +420,12 @@ function assertGitPlugin() {
   }
   assertRealPathInside(installPath, dependencyPackagePath, "git plugin installed dependency");
   fs.writeFileSync(scratchFile("plugins-git-install-path.txt"), installPath, "utf8");
-  fs.writeFileSync(
-    scratchFile("plugins-git-install-parent.txt"),
-    path.dirname(installPath),
-    "utf8",
-  );
+  fs.writeFileSync(scratchFile("plugins-git-install-parent.txt"), path.dirname(installPath), "utf8");
 }
 
 function assertGitPluginRemoved() {
   const installPath = fs.readFileSync(scratchFile("plugins-git-install-path.txt"), "utf8").trim();
-  const installParent = fs
-    .readFileSync(scratchFile("plugins-git-install-parent.txt"), "utf8")
-    .trim();
+  const installParent = fs.readFileSync(scratchFile("plugins-git-install-parent.txt"), "utf8").trim();
   assertPluginRemoved({
     pluginId: "demo-plugin-git",
     listFile: scratchFile("plugins-git-uninstalled.json"),
@@ -502,7 +510,7 @@ function assertPluginDirDeps() {
   if (record.source !== "path") {
     throw new Error(`unexpected local dependency plugin source: ${record.source}`);
   }
-  if (record.sourcePath !== sourceDir) {
+  if (!pathsEqual(record.sourcePath, sourceDir)) {
     throw new Error(`unexpected local dependency plugin source path: ${record.sourcePath}`);
   }
   const installPath = resolveHomePath(record.installPath);
@@ -589,10 +597,7 @@ function assertNpmPlugin() {
 }
 
 function assertNpmPluginUpdateUnchanged() {
-  assertUpdateOutput(
-    scratchFile("plugins-npm-update.log"),
-    "demo-plugin-npm is up to date (0.0.1).",
-  );
+  assertUpdateOutput(scratchFile("plugins-npm-update.log"), "demo-plugin-npm is up to date (0.0.1).");
   assertNpmPlugin();
 }
 
@@ -829,9 +834,7 @@ function assertClawHubInstalled() {
 
 function assertClawHubRemoved() {
   const pluginId = process.env.CLAWHUB_PLUGIN_ID;
-  const installPath = fs
-    .readFileSync(scratchFile("plugins-clawhub-install-path.txt"), "utf8")
-    .trim();
+  const installPath = fs.readFileSync(scratchFile("plugins-clawhub-install-path.txt"), "utf8").trim();
   const list = readJson(scratchFile("plugins-clawhub-uninstalled.json"));
   if ((list.plugins || []).some((entry) => entry.id === pluginId)) {
     throw new Error(`ClawHub plugin still listed after uninstall: ${pluginId}`);

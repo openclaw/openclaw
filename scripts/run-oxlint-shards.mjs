@@ -32,7 +32,9 @@ export function createOxlintShards({
   readDir = fs.readdirSync,
 } = {}) {
   const extensionShards =
-    platform === "win32" ? createWindowsExtensionShards({ cwd, env, readDir }) : [EXTENSIONS_SHARD];
+    platform === "win32"
+      ? createWindowsExtensionShards({ cwd, env, readDir })
+      : [EXTENSIONS_SHARD];
 
   return [CORE_SHARD, ...extensionShards, SCRIPTS_SHARD];
 }

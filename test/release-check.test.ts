@@ -174,7 +174,12 @@ describe("resolveReleaseNpmCommand", () => {
       }),
     ).toEqual({
       command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", '""C:\\Program Files\\nodejs\\npm.cmd" pack --dry-run --json"'],
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '""C:\\Program Files\\nodejs\\npm.cmd" pack --dry-run --json"',
+      ],
       shell: false,
       windowsVerbatimArguments: true,
     });
