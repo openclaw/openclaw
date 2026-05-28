@@ -70,6 +70,7 @@ import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+import { resolveSkillRoute } from "../../../skills/loading/router-integration.js";
 import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
 import {
@@ -1121,6 +1122,18 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
       eligibility: skillsEligibility,
     });
+
+    // Pre-filter: call configured skill router before building the system prompt.
+    // When a router matches, its narrowed result replaces the full skills catalog.
+    const skillRouterConfig = params.config?.skills?.router;
+    const skillRoute = await resolveSkillRoute({
+      routerName: skillRouterConfig?.name,
+      routerConfig: skillRouterConfig?.config,
+      resolvedSkills: skillsSnapshotForRun?.resolvedSkills,
+      entries: skillEntries,
+      query: params.prompt,
+    });
+
     prepStages.mark("skills");
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -1939,7 +1952,14 @@ export async function runEmbeddedAttempt(
 
     // When toolsAllow is set, use minimal prompt and strip skills catalog
     const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
-    const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
+    // Suppress full skills catalog when:
+    // - toolsAllow is set (minimal mode)
+    // - router returned a match (narrowed result goes into user prompt)
+    // - router explicitly said nomatch (no skill applies)
+    // Fall back to full catalog when no router is configured or router failed.
+    const suppressSkillsCatalog =
+      params.toolsAllow?.length || (typeof skillRoute === "object" && !("error" in skillRoute));
+    const effectiveSkillsPrompt = suppressSkillsCatalog ? undefined : skillsPrompt;
     const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
@@ -3985,6 +4005,17 @@ export async function runEmbeddedAttempt(
             );
           }
         }
+        // Apply skill router result to prompt (narrowed match or full fallback).
+        if (skillRoute && typeof skillRoute === "object") {
+          if ("xml" in skillRoute && !isRawModelRun) {
+            effectivePrompt = skillRoute.xml + "\n\n" + effectivePrompt;
+            log.debug(`skill router: injected ${skillRoute.mode} match`);
+          } else if ("error" in skillRoute) {
+            log.warn(`skill router: ${skillRoute.reason}, falling back to full catalog`);
+          }
+          // { mode: "nomatch" } — no injection, no log. Router said no skill applies.
+        }
+
         // The model identity line is appended below; for a marker-free hook systemPrompt
         // override ensure the cache boundary first so the identity lands in the dynamic
         // suffix, not the cached prefix — otherwise an idle turn's prefix (O + identity)

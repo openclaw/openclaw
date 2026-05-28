@@ -25,13 +25,15 @@ function escapeXml(str: string): string {
     .replace(/'/g, "&apos;");
 }
 
+export type SkillForPrompt = Pick<Skill, "name" | "description" | "filePath">;
+
 /**
  * Keep this formatter's XML layout byte-for-byte aligned with the upstream
  * Agent Skills formatter so we can avoid importing the full session runtime
  * package root on the cold skills path. Visibility policy is applied upstream
  * before calling this helper.
  */
-export function formatSkillsForPrompt(skills: Skill[]): string {
+export function formatSkillsForPrompt(skills: SkillForPrompt[]): string {
   if (skills.length === 0) {
     return "";
   }
