@@ -9,6 +9,7 @@ import {
   formatCost,
   formatIsoDate,
   formatTokens,
+  getUtcQuarterHourBucketDate,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
 } from "./usage-metrics.ts";
@@ -87,6 +88,102 @@ function addUsageTotals(
   acc.cacheWriteCost += usage.cacheWriteCost ?? 0;
   acc.missingCostEntries += usage.missingCostEntries ?? 0;
   return acc;
+}
+
+function mapUtcBucketToDateKey(
+  bucketDate: string,
+  quarterIndex: number,
+  timeZone: "local" | "utc",
+): string | null {
+  const date = getUtcQuarterHourBucketDate(bucketDate, quarterIndex);
+  if (!date) {
+    return null;
+  }
+  if (timeZone === "utc") {
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  }
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function buildSelectedDayTotalsFromSessions(
+  sessions: UsageSessionEntry[],
+  selectedDays: string[],
+  timeZone: "local" | "utc",
+): UsageTotals {
+  const selectedDaySet = new Set(selectedDays);
+  return sessions.reduce((acc, session) => {
+    const buckets = session.usage?.utcQuarterHourTokenUsage;
+    if (buckets && buckets.length > 0) {
+      for (const bucket of buckets) {
+        const dateKey = mapUtcBucketToDateKey(bucket.date, bucket.quarterIndex, timeZone);
+        if (!dateKey || !selectedDaySet.has(dateKey)) {
+          continue;
+        }
+        addUsageTotals(acc, {
+          input: bucket.input,
+          output: bucket.output,
+          cacheRead: bucket.cacheRead,
+          cacheWrite: bucket.cacheWrite,
+          totalTokens: bucket.totalTokens,
+          totalCost: bucket.totalCost,
+          inputCost: 0,
+          outputCost: 0,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+        });
+      }
+      return acc;
+    }
+
+    const dayMatches =
+      session.usage?.activityDates?.filter((date) => selectedDaySet.has(date)).length ?? 0;
+    if (dayMatches > 0 && session.usage) {
+      const breakdown = session.usage.dailyBreakdown?.reduce(
+        (sum, day) =>
+          selectedDaySet.has(day.date)
+            ? {
+                tokens: sum.tokens + day.tokens,
+                cost: sum.cost + day.cost,
+              }
+            : sum,
+        { tokens: 0, cost: 0 },
+      ) ?? { tokens: 0, cost: 0 };
+      addUsageTotals(acc, {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: breakdown.tokens,
+        totalCost: breakdown.cost,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: session.usage.missingCostEntries ?? 0,
+      });
+    }
+    return acc;
+  }, createEmptyUsageTotals());
+}
+
+function buildSessionDerivedDailyCost(
+  aggregates: NonNullable<UsageProps["data"]["aggregates"]>,
+) {
+  return aggregates.daily.map((day) => ({
+    date: day.date,
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: day.tokens,
+    totalCost: day.cost,
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  }));
 }
 
 function renderUsageLoadingState(filters: UsageFilterState) {
@@ -240,11 +337,16 @@ export function renderUsage(props: UsageProps) {
     );
   };
 
-  // Compute totals from daily data for selected days (more accurate than session totals)
-  const computeDailyTotals = (days: string[]): UsageTotals => {
-    const matchingDays = data.costDaily.filter((d) => days.includes(d.date));
-    return matchingDays.reduce((acc, day) => addUsageTotals(acc, day), createEmptyUsageTotals());
-  };
+  const aggregateSessions =
+    filters.selectedSessions.length > 0
+      ? filteredSessions.filter((s) => filters.selectedSessions.includes(s.key))
+      : hasQuery || filters.selectedHours.length > 0
+        ? filteredSessions
+        : filters.selectedDays.length > 0
+          ? dayFilteredSessions
+          : sortedSessions;
+  const activeAggregates = buildAggregatesFromSessions(aggregateSessions, data.aggregates);
+  const filteredDailyFromSessions = buildSessionDerivedDailyCost(activeAggregates);
 
   // Compute display totals and count based on filters
   let displayTotals: UsageTotals | null;
@@ -252,15 +354,14 @@ export function renderUsage(props: UsageProps) {
   const totalSessions = sortedSessions.length;
 
   if (filters.selectedSessions.length > 0) {
-    // Sessions selected - compute totals from selected sessions
-    const selectedSessionEntries = filteredSessions.filter((s) =>
-      filters.selectedSessions.includes(s.key),
-    );
-    displayTotals = computeSessionTotals(selectedSessionEntries);
-    displaySessionCount = selectedSessionEntries.length;
+    displayTotals = computeSessionTotals(aggregateSessions);
+    displaySessionCount = aggregateSessions.length;
   } else if (filters.selectedDays.length > 0 && filters.selectedHours.length === 0) {
-    // Days selected - use daily aggregates for accurate per-day totals
-    displayTotals = computeDailyTotals(filters.selectedDays);
+    displayTotals = buildSelectedDayTotalsFromSessions(
+      aggregateSessions,
+      filters.selectedDays,
+      filters.timeZone,
+    );
     displaySessionCount = filteredSessions.length;
   } else if (filters.selectedHours.length > 0) {
     displayTotals = computeSessionTotals(filteredSessions);
@@ -273,16 +374,6 @@ export function renderUsage(props: UsageProps) {
     displayTotals = data.totals;
     displaySessionCount = totalSessions;
   }
-
-  const aggregateSessions =
-    filters.selectedSessions.length > 0
-      ? filteredSessions.filter((s) => filters.selectedSessions.includes(s.key))
-      : hasQuery || filters.selectedHours.length > 0
-        ? filteredSessions
-        : filters.selectedDays.length > 0
-          ? dayFilteredSessions
-          : sortedSessions;
-  const activeAggregates = buildAggregatesFromSessions(aggregateSessions, data.aggregates);
   const shouldUseSessionDerivedDaily =
     Boolean(filters.usageAgentId) ||
     filters.selectedSessions.length > 0 ||
@@ -290,24 +381,7 @@ export function renderUsage(props: UsageProps) {
     filters.selectedHours.length > 0 ||
     hasQuery;
 
-  const filteredDaily = shouldUseSessionDerivedDaily
-    ? activeAggregates.daily.map((day) => {
-        return {
-          date: day.date,
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: day.tokens,
-          totalCost: day.cost,
-          inputCost: 0,
-          outputCost: 0,
-          cacheReadCost: 0,
-          cacheWriteCost: 0,
-          missingCostEntries: 0,
-        };
-      })
-    : data.costDaily;
+  const filteredDaily = shouldUseSessionDerivedDaily ? filteredDailyFromSessions : data.costDaily;
 
   const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
   const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;

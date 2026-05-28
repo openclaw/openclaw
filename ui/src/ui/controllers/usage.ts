@@ -283,6 +283,12 @@ export async function loadUsage(
     let includeDateInterpretation = shouldSendLegacyDateInterpretation(state);
     let includeUsageScope = shouldSendLegacyUsageScopeParams(state);
     let includeAgentId = Boolean(selectedAgentId) && shouldSendLegacyUsageAgentId(state);
+    if (selectedAgentId && !includeAgentId) {
+      state.usageResult = null;
+      state.usageCostSummary = null;
+      state.usageError = formatLegacyUsageAgentIdUnsupportedMessage(selectedAgentId);
+      return;
+    }
     while (true) {
       try {
         const [sessionsRes, costRes] = await runUsageRequests(

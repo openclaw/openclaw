@@ -189,6 +189,49 @@ describe("usage controller date interpretation params", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps showing the unsupported-agent error after legacy agentId compatibility is cached", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage as unknown as Storage);
+
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.usage") {
+        const record = (params ?? {}) as Record<string, unknown>;
+        if ("agentId" in record) {
+          throw new Error("invalid sessions.usage params: at root: unexpected property 'agentId'");
+        }
+        return { sessions: [{ key: "default-agent-session" }] };
+      }
+      return { totals: { totalTokens: 999 } };
+    });
+
+    const state = createState(request, {
+      usageAgentId: "opus",
+      usageTimeZone: "utc",
+      settings: { gatewayUrl: "ws://127.0.0.1:18789" },
+    });
+
+    await loadUsage(state);
+    expect(state.usageError).toBe(
+      'This gateway does not support filtering usage by agent yet, so "opus" cannot be loaded here.',
+    );
+
+    request.mockClear();
+    state.usageError = null;
+    state.usageResult = null;
+    state.usageCostSummary = null;
+
+    await loadUsage(state);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.usageResult).toBeNull();
+    expect(state.usageCostSummary).toBeNull();
+    expect(state.usageError).toBe(
+      'This gateway does not support filtering usage by agent yet, so "opus" cannot be loaded here.',
+    );
+
+    vi.unstubAllGlobals();
+  });
+
   it("serializes non-Error objects without object-to-string coercion", () => {
     expect(testApi.toErrorMessage({ reason: "nope" })).toBe('{"reason":"nope"}');
   });

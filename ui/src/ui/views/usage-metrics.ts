@@ -762,6 +762,7 @@ export {
   formatHourLabel,
   formatIsoDate,
   formatTokens,
+  getUtcQuarterHourBucketDate,
   getHourAndWeekdayForUtcQuarterBucket,
   getZonedHour,
   renderUsageMosaic,
