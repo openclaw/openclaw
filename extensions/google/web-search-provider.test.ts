@@ -133,6 +133,34 @@ describe("google web search provider", () => {
     expect(provider.getConfiguredCredentialValue?.(config)).toBe("AIza-plugin-test");
   });
 
+  it("keeps model-provider fallback config runtime-only when Gemini config was injected", () => {
+    const searchConfig = Object.defineProperty({ provider: "gemini" }, "gemini", {
+      value: { apiKey: "AIza-plugin-test" },
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+
+    const merged = testing.withGoogleModelProviderFallbacks(searchConfig, {
+      models: {
+        providers: {
+          google: createGoogleModelProviderConfig({
+            apiKey: "AIza-provider-test",
+            baseUrl: "https://generativelanguage.googleapis.com/proxy/v1beta/",
+          }),
+        },
+      },
+    });
+
+    expect(merged?.gemini).toEqual({
+      apiKey: "AIza-plugin-test",
+      providerApiKey: "AIza-provider-test",
+      providerBaseUrl: "https://generativelanguage.googleapis.com/proxy/v1beta/",
+    });
+    expect(Object.keys(merged ?? {})).toEqual(["provider"]);
+    expect(Object.getOwnPropertyDescriptor(merged, "gemini")?.enumerable).toBe(false);
+  });
+
   it("defaults the Gemini web search model and trims explicit overrides", () => {
     expect(testing.resolveGeminiModel()).toBe("gemini-2.5-flash");
     expect(testing.resolveGeminiModel({ model: "  gemini-2.5-pro  " })).toBe("gemini-2.5-pro");
@@ -401,8 +429,44 @@ describe("google web search provider", () => {
   });
 
   it("passes freshness to Gemini Google Search grounding as a time range", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-15T12:00:00Z"));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // Use a wall-clock-realistic moment with non-zero milliseconds; the helper
+    // must strip them to avoid Gemini's "Granularity of nano is not supported".
+    vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
+    const mockFetch = installGeminiFetch();
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await tool?.execute({ query: "latest ai news timestamp precision", freshness: "week" });
+
+    const body = parseGeminiFetchBody(mockFetch);
+    expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
+      startTime: "2026-04-08T12:00:00Z",
+      endTime: "2026-04-15T12:00:00Z",
+    });
+  });
+
+  it("strips sub-second precision from freshness timestamps so Gemini accepts them", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // "now" with non-zero milliseconds. Without stripping, toISOString() emits
+    // "2026-04-15T12:00:00.123Z", which Gemini's google_search.time_range_filter
+    // rejects with "Granularity of nano is not supported".
+    vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
     const mockFetch = installGeminiFetch();
     const provider = createGeminiWebSearchProvider();
     const tool = provider.createTool({
@@ -425,9 +489,14 @@ describe("google web search provider", () => {
     await tool?.execute({ query: "latest ai news", freshness: "week" });
 
     const body = parseGeminiFetchBody(mockFetch);
-    expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
-      startTime: "2026-04-08T12:00:00.000Z",
-      endTime: "2026-04-15T12:00:00.000Z",
+    const filter = body.tools?.[0]?.google_search?.timeRangeFilter as
+      | { startTime: string; endTime: string }
+      | undefined;
+    expect(filter?.startTime).not.toMatch(/\.\d+Z$/);
+    expect(filter?.endTime).not.toMatch(/\.\d+Z$/);
+    expect(filter).toEqual({
+      startTime: "2026-04-08T12:00:00Z",
+      endTime: "2026-04-15T12:00:00Z",
     });
   });
 
@@ -460,7 +529,7 @@ describe("google web search provider", () => {
     const body = parseGeminiFetchBody(mockFetch);
     expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
       startTime: "2026-04-01T00:00:00Z",
-      endTime: "2026-05-01T00:00:00.000Z",
+      endTime: "2026-05-01T00:00:00Z",
     });
   });
 

@@ -8,6 +8,40 @@ import {
 } from "./registry.js";
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
+const sourceRootsForDeprecatedCallGuard = [
+  "src",
+  "extensions",
+  "packages",
+  "test",
+  "scripts",
+] as const;
+const deprecatedTargetParserCallPattern =
+  /\.parseExplicitTarget\?\.\s*\(|parseExplicitTargetFor(?:Channel|LoadedChannel)\s*\(|resolveRouteTargetFor(?:Channel|LoadedChannel)\s*\(/u;
+const deprecatedTargetParserCompatFiles = new Set([
+  "src/auto-reply/reply/group-id.ts",
+  "src/channels/plugins/target-parsing-loaded.ts",
+  "src/channels/plugins/target-parsing.test.ts",
+  "src/infra/outbound/outbound-session.ts",
+  "src/infra/outbound/outbound-session.test-helpers.ts",
+  "src/plugins/compat/registry.test.ts",
+]);
+
+function listTsFiles(root: string): string[] {
+  const results: string[] = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const childPath = `${root}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (entry.name !== "node_modules") {
+        results.push(...listTsFiles(childPath));
+      }
+      continue;
+    }
+    if (/\.(?:ts|tsx)$/u.test(entry.name)) {
+      results.push(childPath);
+    }
+  }
+  return results;
+}
 
 const knownDeprecatedSurfaceMarkers = [
   {
@@ -44,6 +78,11 @@ const knownDeprecatedSurfaceMarkers = [
     code: "agent-tool-result-harness-alias",
     file: "src/plugins/agent-tool-result-middleware-types.ts",
     marker: "AgentToolResultMiddlewareHarness",
+  },
+  {
+    code: "embedded-pi-agent-sdk-aliases",
+    file: "src/plugins/runtime/types-core.ts",
+    marker: "runEmbeddedPiAgent",
   },
   {
     code: "runtime-config-load-write",
@@ -133,12 +172,17 @@ const knownDeprecatedSurfaceMarkers = [
   {
     code: "legacy-root-sdk-import",
     file: "src/plugin-sdk/compat.ts",
-    marker: "@deprecated Use `openclaw/plugin-sdk/channel-message`.",
+    marker: "@deprecated Use `openclaw/plugin-sdk/channel-outbound`.",
   },
   {
     code: "legacy-deactivate-hook-alias",
     file: "src/plugins/hook-types.ts",
     marker: "@deprecated Use gateway_stop",
+  },
+  {
+    code: "deprecated-memory-embedding-provider-api",
+    file: "src/plugins/types.ts",
+    marker: "registerMemoryEmbeddingProvider",
   },
   {
     code: "channel-route-key-aliases",
@@ -149,6 +193,36 @@ const knownDeprecatedSurfaceMarkers = [
     code: "channel-target-comparable-aliases",
     file: "src/channels/plugins/target-parsing-loaded.ts",
     marker: "ComparableChannelTarget",
+  },
+  {
+    code: "channel-explicit-target-parser",
+    file: "src/channels/plugins/types.core.ts",
+    marker: "parseExplicitTarget?:",
+  },
+  {
+    code: "channel-explicit-target-parser",
+    file: "src/plugin-sdk/channel-route.ts",
+    marker: "resolveChannelRouteTargetWithParser",
+  },
+  {
+    code: "channel-explicit-target-parser",
+    file: "src/channels/plugins/target-parsing-loaded.ts",
+    marker: "ParsedChannelExplicitTarget",
+  },
+  {
+    code: "channel-explicit-target-parser",
+    file: "src/channels/plugins/target-parsing-loaded.ts",
+    marker: "parseExplicitTargetForLoadedChannel",
+  },
+  {
+    code: "channel-explicit-target-parser",
+    file: "src/channels/plugins/target-parsing-loaded.ts",
+    marker: "resolveRouteTargetForLoadedChannel",
+  },
+  {
+    code: "channel-messaging-targets-subpath",
+    file: "src/plugin-sdk/messaging-targets.ts",
+    marker: "openclaw/plugin-sdk/channel-targets",
   },
 ] as const;
 
@@ -167,6 +241,20 @@ function expectNonEmptyStringList(values: readonly string[], label: string) {
   for (const value of values) {
     expect(value, label).toMatch(/\S/u);
   }
+}
+
+function listSourceFiles(dir: string): string[] {
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  return entries.flatMap((entry) => {
+    const path = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (entry.name === "dist" || entry.name === "node_modules") {
+        return [];
+      }
+      return listSourceFiles(path);
+    }
+    return /\.(?:ts|tsx|mts|cts)$/u.test(entry.name) ? [path] : [];
+  });
 }
 
 describe("plugin compatibility registry", () => {
@@ -214,5 +302,14 @@ describe("plugin compatibility registry", () => {
       expect(isPluginCompatCode(surface.code), surface.code).toBe(true);
       expect(fs.readFileSync(surface.file, "utf8"), surface.file).toContain(surface.marker);
     }
+  });
+
+  it("keeps deprecated explicit target parser calls inside compatibility shims", () => {
+    const offenders = sourceRootsForDeprecatedCallGuard
+      .flatMap((root) => listSourceFiles(root))
+      .filter((file) => !deprecatedTargetParserCompatFiles.has(file))
+      .filter((file) => deprecatedTargetParserCallPattern.test(fs.readFileSync(file, "utf8")));
+
+    expect(offenders).toEqual([]);
   });
 });

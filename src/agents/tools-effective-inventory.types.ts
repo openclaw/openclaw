@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 
 export type EffectiveToolSource = "core" | "plugin" | "channel";
 
@@ -41,7 +42,6 @@ export type ResolveEffectiveToolInventoryParams = {
   workspaceDir?: string;
   agentDir?: string;
   messageProvider?: string;
-  senderIsOwner?: boolean;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -49,6 +49,8 @@ export type ResolveEffectiveToolInventoryParams = {
   accountId?: string | null;
   modelProvider?: string;
   modelId?: string;
+  modelApi?: string | null;
+  runtimeModel?: ProviderRuntimeModel;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;

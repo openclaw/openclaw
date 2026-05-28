@@ -10,6 +10,8 @@ const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_COMBINED_TIMEOUT_MS = 180_000;
 const DEFAULT_TOP = 10;
+const OUTPUT_CAPTURE_MAX_CHARS = 128 * 1024;
+const STDERR_PREVIEW_MAX_CHARS = 8 * 1024;
 const RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 
 function printHelp() {
@@ -37,8 +39,12 @@ Examples:
 }
 
 function parsePositiveInt(raw, flagName) {
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const text = String(raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${flagName} must be a positive integer`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`${flagName} must be a positive integer`);
   }
   return parsed;
@@ -116,8 +122,49 @@ function parseMaxRssMb(stderr) {
   return last ? Number(last[1]) / 1024 : null;
 }
 
-function summarizeStderr(stderr, lines = 8) {
-  return stderr.trim().split("\n").filter(Boolean).slice(0, lines).join("\n");
+function createOutputCapture() {
+  return { text: "", truncatedChars: 0 };
+}
+
+function appendBoundedOutput(capture, chunk, maxChars = OUTPUT_CAPTURE_MAX_CHARS) {
+  const nextText = capture.text + String(chunk);
+  if (nextText.length <= maxChars) {
+    return capture.truncatedChars === 0
+      ? { text: nextText, truncatedChars: 0 }
+      : { text: nextText, truncatedChars: capture.truncatedChars };
+  }
+  const truncatedChars = capture.truncatedChars + nextText.length - maxChars;
+  return { text: nextText.slice(-maxChars), truncatedChars };
+}
+
+function formatCapturedOutput(capture) {
+  if (capture.truncatedChars === 0) {
+    return capture.text;
+  }
+  return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
+}
+
+function scanMaxRssMb(tail, chunk, current) {
+  const text = `${tail}${String(chunk)}`;
+  const parsed = parseMaxRssMb(text);
+  const lineBreakIndex = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r"));
+  const openLine = lineBreakIndex === -1 ? text : text.slice(lineBreakIndex + 1);
+  return {
+    maxRssMb: parsed ?? current,
+    tail: openLine.slice(-(RSS_MARKER.length + 32)),
+  };
+}
+
+function summarizeStderr(stderr, lines = 8, maxChars = STDERR_PREVIEW_MAX_CHARS) {
+  const text = stderr.trim().split("\n").filter(Boolean).slice(0, lines).join("\n");
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const firstLine = text.split("\n", 1)[0] ?? "";
+  const prefix = firstLine.startsWith("[output truncated") ? `${firstLine}\n` : "";
+  return `${prefix}[stderr preview truncated ${text.length - maxChars} chars; showing tail]\n${text.slice(
+    -maxChars,
+  )}`;
 }
 
 async function runCase({ repoRoot, env, hookPath, name, body, timeoutMs }) {
@@ -132,8 +179,10 @@ async function runCase({ repoRoot, env, hookPath, name, body, timeoutMs }) {
       },
     );
 
-    let stdout = "";
-    let stderr = "";
+    let stdout = createOutputCapture();
+    let stderr = createOutputCapture();
+    let stderrRssTail = "";
+    let maxRssMb = null;
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -141,21 +190,25 @@ async function runCase({ repoRoot, env, hookPath, name, body, timeoutMs }) {
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendBoundedOutput(stdout, chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      const rssScan = scanMaxRssMb(stderrRssTail, chunk, maxRssMb);
+      stderrRssTail = rssScan.tail;
+      maxRssMb = rssScan.maxRssMb;
+      stderr = appendBoundedOutput(stderr, chunk);
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
+      const stderrText = formatCapturedOutput(stderr);
       resolve({
         name,
         code,
         signal,
         timedOut,
-        stdout,
-        stderr,
-        maxRssMb: parseMaxRssMb(stderr),
+        stdout: formatCapturedOutput(stdout),
+        stderr: stderrText,
+        maxRssMb: maxRssMb ?? parseMaxRssMb(stderrText),
       });
     });
   });
@@ -209,9 +262,10 @@ async function main() {
   writeFileSync(
     hookPath,
     [
+      "import { writeSync } from 'node:fs';",
       "process.on('exit', () => {",
       "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
-      `  if (usage && typeof usage.maxRSS === 'number') console.error('${RSS_MARKER}' + String(usage.maxRSS));`,
+      `  if (usage && typeof usage.maxRSS === 'number') writeSync(2, '${RSS_MARKER}' + String(usage.maxRSS) + '\\n');`,
       "});",
       "",
     ].join("\n"),

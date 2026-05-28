@@ -89,7 +89,9 @@ export function isExplicitPackageInstallSpec(value: string): boolean {
 function stripPrimaryPackageAlias(spec: string): string {
   const normalized = normalizePackageTarget(spec);
   const prefix = `${PRIMARY_PACKAGE_NAME}@`;
-  return normalized.startsWith(prefix) ? normalized.slice(prefix.length).trim() : normalized;
+  return normalized.toLowerCase().startsWith(prefix)
+    ? normalized.slice(prefix.length).trim()
+    : normalized;
 }
 
 function isPnpmOpenClawSourceInstallSpec(spec: string): boolean {

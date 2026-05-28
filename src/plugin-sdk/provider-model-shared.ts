@@ -26,7 +26,10 @@ import {
   normalizeGooglePreviewModelId,
 } from "./provider-model-id-normalize.js";
 
-export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
+export type {
+  ModelApi,
+  ModelProviderDeclarationConfig as ModelProviderConfig,
+} from "../config/types.models.js";
 export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,
@@ -84,7 +87,7 @@ export {
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,

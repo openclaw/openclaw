@@ -1,7 +1,8 @@
 #!/usr/bin/env -S node --import tsx
 
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdtempSync,
@@ -9,8 +10,10 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
+import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -33,14 +36,20 @@ import {
 } from "./lib/bundled-plugin-build-entries.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mjs";
-import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
+import {
+  listPluginSdkDistArtifacts,
+  listPrivateLocalOnlyPluginSdkDistArtifacts,
+} from "./lib/plugin-sdk-entries.mjs";
 import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
 } from "./lib/workspace-bootstrap-smoke.mjs";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
+  resolveInstalledBinaryCommandInvocation,
+  resolveInstalledBinaryPath,
 } from "./openclaw-npm-postpublish-verify.ts";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
@@ -54,6 +63,7 @@ type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number
 
 const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs();
 const requiredPathGroups = [
+  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
@@ -65,6 +75,7 @@ const requiredPathGroups = [
   }),
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
   "scripts/npm-runner.mjs",
+  "scripts/prepare-git-hooks.mjs",
   "scripts/preinstall-package-manager-warning.mjs",
   "scripts/lib/official-external-channel-catalog.json",
   "scripts/lib/official-external-plugin-catalog.json",
@@ -73,6 +84,7 @@ const requiredPathGroups = [
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
+  "dist/agents/model-provider-auth.worker.js",
   "dist/task-registry-control.runtime.js",
   "dist/telegram-ingress-worker.runtime.js",
   "dist/build-info.json",
@@ -91,10 +103,12 @@ const forbiddenPrefixes = [
   "dist/plugin-sdk/qa-channel-protocol.",
   "dist/plugin-sdk/qa-lab.",
   "dist/plugin-sdk/qa-runtime.",
+  "dist/plugin-sdk/src/",
   "dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
+  ...listPrivateLocalOnlyPluginSdkDistArtifacts(),
   "dist/qa-runtime-",
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",
@@ -109,20 +123,25 @@ const forbiddenPrivateQaContentMarkers = [
   "qa-lab/cli.js",
   "qa-lab/runtime-api.js",
 ] as const;
+const forbiddenPrivatePluginSdkDeclarationMarkers = [
+  "//#region src/agents/test-helpers/",
+  "//#region src/plugin-sdk/test-helpers/",
+  "//#region src/test-helpers/",
+  "//#region src/test-utils/",
+] as const;
 const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
+const forbiddenPluginSdkRootAliasMinifiedExportPattern = /\bmod\.[A-Za-z_$]\b/u;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
 export const MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES = 2 * 1024 * 1024;
 export const CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS = [
-  "openclaw/plugin-sdk/agent-runtime-test-contracts",
-  "openclaw/plugin-sdk/plugin-test-contracts",
-  "openclaw/plugin-sdk/provider-test-contracts",
+  "openclaw/plugin-sdk/core",
+  "openclaw/plugin-sdk/provider-entry",
+  "openclaw/plugin-sdk/runtime",
 ] as const;
-export const CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS = [
-  "openclaw/plugin-sdk/plugin-test-contracts",
-] as const;
+export const CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS = ["openclaw/plugin-sdk/core"] as const;
 export const PACKED_CLI_SMOKE_COMMANDS = [
   ["--help"],
   ["onboard", "--help"],
@@ -142,6 +161,49 @@ export const PACKED_COMPLETION_SMOKE_ARGS = [
   "--shell",
   "zsh",
 ] as const;
+const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = resolve(
+  "scripts/fixtures/packed-plugin-sdk-type-smoke.ts",
+);
+export function collectSkillShellScriptExecutableErrors(rootDir = resolve(".")): string[] {
+  if (process.platform === "win32") {
+    return [];
+  }
+
+  const skillsDir = join(rootDir, "skills");
+  const errors: string[] = [];
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(skillsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const scriptsDir = join(skillsDir, entry.name, "scripts");
+    let scriptEntries: Dirent[];
+    try {
+      scriptEntries = readdirSync(scriptsDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const scriptEntry of scriptEntries) {
+      if (!scriptEntry.isFile() || !scriptEntry.name.endsWith(".sh")) {
+        continue;
+      }
+      const scriptPath = join(scriptsDir, scriptEntry.name);
+      if ((statSync(scriptPath).mode & 0o111) === 0) {
+        errors.push(
+          `skill shell script is not executable: skills/${entry.name}/scripts/${scriptEntry.name}`,
+        );
+      }
+    }
+  }
+
+  return errors;
+}
 
 function collectBundledExtensions(): BundledExtension[] {
   const extensionsDir = resolve("extensions");
@@ -188,8 +250,59 @@ function checkBundledExtensionMetadata() {
   }
 }
 
+function checkSkillShellScriptsExecutable() {
+  const errors = collectSkillShellScriptExecutableErrors();
+  if (errors.length > 0) {
+    console.error("release-check: skill shell script permission validation failed:");
+    for (const error of errors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+}
+
+export function resolveReleaseNpmCommand(
+  args: string[],
+  params: {
+    comSpec?: string;
+    env?: NodeJS.ProcessEnv;
+    execPath?: string;
+    existsSync?: typeof existsSync;
+    platform?: NodeJS.Platform;
+  } = {},
+) {
+  return resolveNpmRunner({
+    comSpec: params.comSpec,
+    env: params.env,
+    execPath: params.execPath,
+    existsSync: params.existsSync,
+    npmArgs: args,
+    platform: params.platform,
+  });
+}
+
+function execNpm(
+  args: string[],
+  options: {
+    cwd?: string;
+    encoding: BufferEncoding;
+    maxBuffer?: number;
+    stdio: "inherit" | ["ignore", "pipe", "pipe"];
+  },
+): string {
+  const invocation = resolveReleaseNpmCommand(args, { env: process.env });
+  return execFileSync(invocation.command, invocation.args, {
+    ...options,
+    ...(invocation.env ? { env: invocation.env } : {}),
+    ...(invocation.shell !== undefined ? { shell: invocation.shell } : {}),
+    ...(invocation.windowsVerbatimArguments !== undefined
+      ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
+      : {}),
+  });
+}
+
 function runPackDry(): PackResult[] {
-  const raw = execSync("npm pack --dry-run --json --ignore-scripts", {
+  const raw = execNpm(["pack", "--dry-run", "--json", "--ignore-scripts"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 1024 * 1024 * 100,
@@ -198,8 +311,7 @@ function runPackDry(): PackResult[] {
 }
 
 function runPack(packDestination: string): PackResult[] {
-  const raw = execFileSync(
-    "npm",
+  const raw = execNpm(
     ["pack", "--json", "--ignore-scripts", "--pack-destination", packDestination],
     {
       encoding: "utf8",
@@ -223,8 +335,7 @@ function resolvePackedTarballPath(packDestination: string, results: PackResult[]
 }
 
 function installPackedTarball(prefixDir: string, tarballPath: string, cwd: string): void {
-  execFileSync(
-    "npm",
+  execNpm(
     [
       "install",
       "-g",
@@ -244,17 +355,11 @@ function installPackedTarball(prefixDir: string, tarballPath: string, cwd: strin
 }
 
 function resolveGlobalRoot(prefixDir: string, cwd: string): string {
-  return execFileSync("npm", ["root", "-g", "--prefix", prefixDir], {
+  return execNpm(["root", "-g", "--prefix", prefixDir], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
-}
-
-function resolveInstalledBinaryPath(prefixDir: string): string {
-  return process.platform === "win32"
-    ? join(prefixDir, "openclaw.cmd")
-    : join(prefixDir, "bin", "openclaw");
 }
 
 export function createPackedBundledPluginPostinstallEnv(
@@ -355,6 +460,15 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
       `installed openclaw binary version mismatch: expected ${params.expectedVersion}, found ${params.installedBinaryVersion || "<missing>"}.`,
     );
   }
+  const rootAliasPath = join(params.packageRoot, "dist", "plugin-sdk", "root-alias.cjs");
+  if (existsSync(rootAliasPath)) {
+    const rootAliasSource = readFileSync(rootAliasPath, "utf8");
+    if (forbiddenPluginSdkRootAliasMinifiedExportPattern.test(rootAliasSource)) {
+      errors.push(
+        "installed package dist/plugin-sdk/root-alias.cjs depends on a single-letter bundled export alias.",
+      );
+    }
+  }
   return errors;
 }
 
@@ -364,16 +478,13 @@ function verifyPackedInstalledPackage(params: {
   prefixDir: string;
   tmpRoot: string;
 }): void {
-  const installedBinaryVersion = execFileSync(
-    resolveInstalledBinaryPath(params.prefixDir),
-    ["--version"],
-    {
-      cwd: params.tmpRoot,
-      encoding: "utf8",
-      shell: process.platform === "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  ).trim();
+  const invocation = resolveInstalledBinaryCommandInvocation(params.prefixDir, ["--version"]);
+  const installedBinaryVersion = execFileSync(invocation.command, invocation.args, {
+    cwd: params.tmpRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  }).trim();
   const errors = collectPackedInstalledPackageVerificationErrors({
     expectedVersion: params.expectedVersion,
     installedBinaryVersion,
@@ -384,6 +495,78 @@ function verifyPackedInstalledPackage(params: {
       `release-check: packed installed package verification failed:\n- ${errors.join("\n- ")}`,
     );
   }
+}
+
+export function createPackedPluginSdkTypescriptSmokeProject(params: {
+  consumerDir: string;
+  packageSpec: string;
+}): void {
+  mkdirSync(join(params.consumerDir, "src"), { recursive: true });
+  writeFileSync(
+    join(params.consumerDir, "package.json"),
+    `${JSON.stringify(
+      {
+        name: "openclaw-plugin-sdk-type-smoke",
+        private: true,
+        type: "module",
+        dependencies: {
+          openclaw: params.packageSpec,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  writeFileSync(
+    join(params.consumerDir, "tsconfig.json"),
+    `${JSON.stringify(
+      {
+        compilerOptions: {
+          module: "NodeNext",
+          moduleResolution: "NodeNext",
+          noEmit: true,
+          strict: true,
+          skipLibCheck: true,
+          target: "ES2022",
+        },
+        include: ["src/index.ts"],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  copyFileSync(
+    PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE,
+    join(params.consumerDir, "src", "index.ts"),
+  );
+}
+
+function runPackedPluginSdkTypescriptSmoke(tarballPath: string, tmpRoot: string): void {
+  const consumerDir = join(tmpRoot, "plugin-sdk-type-consumer");
+  createPackedPluginSdkTypescriptSmokeProject({
+    consumerDir,
+    packageSpec: `file:${tarballPath}`,
+  });
+  execNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund"], {
+    cwd: consumerDir,
+    encoding: "utf8",
+    stdio: "inherit",
+  });
+
+  const installedOpenClawRoot = join(consumerDir, "node_modules", "openclaw");
+  const tscPath = [
+    join(consumerDir, "node_modules", "typescript", "bin", "tsc"),
+    join(installedOpenClawRoot, "node_modules", "typescript", "bin", "tsc"),
+  ].find((candidate) => existsSync(candidate));
+  if (!tscPath) {
+    throw new Error("release-check: packed plugin SDK TypeScript smoke could not find tsc.");
+  }
+  execFileSync(process.execPath, [tscPath, "-p", "tsconfig.json", "--pretty", "false"], {
+    cwd: consumerDir,
+    stdio: "inherit",
+  });
 }
 
 export function writePackedBundledPluginActivationConfig(homeDir: string): void {
@@ -555,6 +738,7 @@ function runPackedBundledChannelEntrySmoke(): void {
     runPackedBundledPluginPostinstall(packageRoot);
     runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
     runPackedTaskRegistryControlRuntimeSmoke(packageRoot);
+    runPackedPluginSdkTypescriptSmoke(tarballPath, tmpRoot);
     execFileSync(
       process.execPath,
       [
@@ -662,7 +846,10 @@ export function collectForbiddenPackContentPaths(
       } catch {
         return false;
       }
-      return forbiddenPrivateQaContentMarkers.some((marker) => content.includes(marker));
+      return (
+        forbiddenPrivateQaContentMarkers.some((marker) => content.includes(marker)) ||
+        forbiddenPrivatePluginSdkDeclarationMarkers.some((marker) => content.includes(marker))
+      );
     })
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -841,7 +1028,7 @@ export function collectCriticalPluginSdkEntrypointSizeErrors(rootDir = process.c
     }
     if (stat.size > MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES) {
       errors.push(
-        `${relativePath} is ${stat.size} bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK test-contract entrypoints lazy and avoid bundling compiler/runtime internals.`,
+        `${relativePath} is ${stat.size} bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK package entrypoints lazy and avoid bundling compiler/runtime internals.`,
       );
     }
   }
@@ -864,6 +1051,7 @@ function runCriticalPluginSdkEntrypointImportSmoke() {
 
 async function main() {
   checkAppcastSparkleVersions();
+  checkSkillShellScriptsExecutable();
   checkCliBootstrapExternalImports({
     logger: {
       error: (message: string) => console.error(`release-check: ${message}`),

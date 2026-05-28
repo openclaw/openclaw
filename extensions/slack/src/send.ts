@@ -5,7 +5,7 @@ import {
   type MessageReceipt,
   type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -22,6 +22,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  normalizeOptionalString as normalizeSlackApiString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -172,10 +173,6 @@ function buildSlackPostMessagePayload(params: {
     ...threadPayload,
     ...unfurlPayload,
   };
-}
-
-function normalizeSlackApiString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeSlackScopeList(value: unknown): string[] {
@@ -493,6 +490,13 @@ function resolveDirectUserPostChannelId(params: {
   return params.recipient.id;
 }
 
+function resolvePostedMessageChannelId(response: { channel?: unknown }, fallback: string): string {
+  return (
+    (typeof response.channel === "string" ? normalizeOptionalString(response.channel) : null) ??
+    fallback
+  );
+}
+
 async function resolveChannelId(
   client: WebClient,
   recipient: SlackRecipient,
@@ -730,12 +734,13 @@ async function sendMessageSlackQueuedInner(params: {
       unfurl,
     });
     const messageId = response.ts ?? "unknown";
+    const deliveredChannelId = resolvePostedMessageChannelId(response, channelId);
     return {
       messageId,
-      channelId,
+      channelId: deliveredChannelId,
       receipt: createSlackSendReceipt({
         platformMessageIds: [messageId],
-        channelId,
+        channelId: deliveredChannelId,
         kind: "card",
         threadTs: opts.threadTs,
       }),
@@ -766,6 +771,7 @@ async function sendMessageSlackQueuedInner(params: {
 
   const sentMessageIds: string[] = [];
   let lastMessageId = "";
+  let deliveredChannelId = channelId;
   if (opts.mediaUrl) {
     const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
@@ -794,6 +800,7 @@ async function sendMessageSlackQueuedInner(params: {
         unfurl,
       });
       lastMessageId = response.ts ?? lastMessageId;
+      deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
       if (response.ts) {
         sentMessageIds.push(response.ts);
       }
@@ -811,6 +818,7 @@ async function sendMessageSlackQueuedInner(params: {
         unfurl,
       });
       lastMessageId = response.ts ?? lastMessageId;
+      deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
       if (response.ts) {
         sentMessageIds.push(response.ts);
       }
@@ -820,10 +828,10 @@ async function sendMessageSlackQueuedInner(params: {
   const messageId = lastMessageId || "unknown";
   return {
     messageId,
-    channelId,
+    channelId: deliveredChannelId,
     receipt: createSlackSendReceipt({
       platformMessageIds: sentMessageIds.length ? sentMessageIds : [messageId],
-      channelId,
+      channelId: deliveredChannelId,
       kind: opts.mediaUrl ? "media" : "text",
       threadTs: opts.threadTs,
     }),

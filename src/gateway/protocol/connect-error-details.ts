@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeArrayBackedTrimmedStringList } from "../../shared/string-normalization.js";
 
 export const ConnectErrorDetailCodes = {
   AUTH_REQUIRED: "AUTH_REQUIRED",
@@ -29,6 +30,7 @@ export const ConnectErrorDetailCodes = {
   DEVICE_AUTH_SIGNATURE_INVALID: "DEVICE_AUTH_SIGNATURE_INVALID",
   DEVICE_AUTH_PUBLIC_KEY_INVALID: "DEVICE_AUTH_PUBLIC_KEY_INVALID",
   PAIRING_REQUIRED: "PAIRING_REQUIRED",
+  CLIENT_VERSION_MISMATCH: "CLIENT_VERSION_MISMATCH",
 } as const;
 
 export type ConnectErrorDetailCode =
@@ -236,13 +238,7 @@ export function normalizePairingConnectRequestId(value: unknown): string | undef
 }
 
 function normalizeStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized = value
-    .map((item) => normalizeOptionalString(item))
-    .filter((item): item is string => Boolean(item));
-  return normalized.length > 0 ? normalized : [];
+  return normalizeArrayBackedTrimmedStringList(value);
 }
 
 function createPairingConnectErrorDetails(params: {

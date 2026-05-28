@@ -1,13 +1,14 @@
-import { createOpenClawTools } from "../../agents/openclaw-tools.runtime.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
-} from "../../agents/pi-tools.policy.js";
-import type { AnyAgentTool } from "../../agents/pi-tools.types.js";
+} from "../../agents/agent-tools.policy.js";
+import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
+import { createOpenClawTools } from "../../agents/openclaw-tools.runtime.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSenderToolPolicy } from "../../agents/sender-tool-policy.js";
+import type { SkillCommandSpec } from "../../agents/skills.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -17,7 +18,6 @@ import {
   buildDefaultToolPolicyPipelineSteps,
 } from "../../agents/tool-policy-pipeline.js";
 import {
-  applyOwnerOnlyToolPolicy,
   collectExplicitDenylist,
   collectExplicitAllowlist,
   hasRestrictiveAllowPolicy,
@@ -49,8 +49,10 @@ export function resolveSkillDispatchTools(params: {
   provider: string;
   model: string;
   senderId?: string;
-  senderIsOwner: boolean;
   currentChannelId?: string;
+  skillCommand?: Pick<SkillCommandSpec, "name" | "skillName" | "skillSource"> & {
+    toolName?: string;
+  };
 }): AnyAgentTool[] {
   const channel =
     resolveGatewayMessageChannel(params.ctx.Surface) ??
@@ -137,6 +139,21 @@ export function resolveSkillDispatchTools(params: {
     inheritedToolPolicy,
   ];
   const inheritedToolAllowlist: string[] = [];
+  const beforeToolCallHookContext = params.skillCommand
+    ? {
+        cwd: params.workspaceDir,
+        workspaceDir: params.workspaceDir,
+        ...(params.sessionEntry?.skillsSnapshot
+          ? { skillsSnapshot: params.sessionEntry.skillsSnapshot }
+          : {}),
+        skillCommand: {
+          commandName: params.skillCommand.name,
+          skillName: params.skillCommand.skillName,
+          skillSource: params.skillCommand.skillSource ?? "unknown",
+          ...(params.skillCommand.toolName ? { toolName: params.skillCommand.toolName } : {}),
+        },
+      }
+    : undefined;
   const tools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
@@ -154,9 +171,9 @@ export function resolveSkillDispatchTools(params: {
     sandboxed: sandboxRuntime.sandboxed,
     requesterAgentIdOverride: params.agentId,
     requesterSenderId: params.senderId,
-    senderIsOwner: params.senderIsOwner,
     sessionId: params.sessionEntry?.sessionId,
     currentChannelId: params.currentChannelId,
+    ...(beforeToolCallHookContext ? { beforeToolCallHookContext } : {}),
     modelProvider: params.provider,
     modelId: params.model,
     pluginToolAllowlist: collectExplicitAllowlist(explicitPolicyList),
@@ -189,9 +206,8 @@ export function resolveSkillDispatchTools(params: {
       { policy: inheritedToolPolicy, label: "inherited tools" },
     ],
   });
-  const authorizedTools = applyOwnerOnlyToolPolicy(policyFiltered, params.senderIsOwner);
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);
   }
-  return authorizedTools;
+  return policyFiltered;
 }

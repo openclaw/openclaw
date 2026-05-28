@@ -164,11 +164,6 @@ describe("gateway tool", () => {
     });
   });
 
-  it("marks gateway as owner-only", () => {
-    const tool = requireGatewayTool();
-    expect(tool.ownerOnly).toBe(true);
-  });
-
   it("exposes restart and config actions in the gateway tool schema", () => {
     const tool = requireGatewayTool();
     const parameters = tool.parameters as {
@@ -224,7 +219,7 @@ describe("gateway tool", () => {
           };
           expect(parsed.payload?.kind).toBe("restart");
           expect(parsed.payload?.doctorHint).toBe(
-            "Run: openclaw --profile isolated doctor --non-interactive",
+            "Recommended follow-up: run openclaw --profile isolated doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
           );
         },
       );

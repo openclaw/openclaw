@@ -1,11 +1,23 @@
-import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  AgentHarness,
+  ContextEngineHostCapability,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   CodexAppServerListModelsOptions,
   CodexAppServerModel,
   CodexAppServerModelListResult,
 } from "./src/app-server/models.js";
 
-const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex"]);
+const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai-codex", "openai"]);
+const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
+  "bootstrap",
+  "assemble-before-prompt",
+  "after-turn",
+  "maintain",
+  "compact",
+  "runtime-llm-complete",
+  "thread-bootstrap-projection",
+] as const satisfies readonly ContextEngineHostCapability[];
 
 export type { CodexAppServerListModelsOptions, CodexAppServerModel, CodexAppServerModelListResult };
 
@@ -24,6 +36,7 @@ export function createCodexAppServerAgentHarness(options?: {
   return {
     id: options?.id ?? "codex",
     label: options?.label ?? "Codex agent harness",
+    contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     deliveryDefaults: {
       sourceVisibleReplies: "message_tool",
     },

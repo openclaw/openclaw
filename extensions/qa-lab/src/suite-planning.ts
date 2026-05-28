@@ -33,12 +33,16 @@ function scenarioMatchesLiveLane(params: {
   providerMode: QaProviderMode;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
+  const provider = getQaProvider(params.providerMode);
+  if (params.scenario.runtimeParityTier === "live-only" && provider.kind !== "live") {
+    return false;
+  }
   const config = params.scenario.execution.config ?? {};
   const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
     return false;
   }
-  if (getQaProvider(params.providerMode).kind !== "live") {
+  if (provider.kind !== "live") {
     return true;
   }
   const selected = splitModelRef(params.primaryModel);
@@ -150,6 +154,17 @@ function collectQaSuiteGatewayRuntimeOptions(
     }
   }
   return forwardHostHome ? { forwardHostHome: true } : undefined;
+}
+
+function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+  concurrency: number;
+}) {
+  return (
+    params.scenarios.length > 1 &&
+    (params.concurrency > 1 ||
+      params.scenarios.some((scenario) => isQaPlainObject(scenario.gatewayConfigPatch)))
+  );
 }
 
 function scenarioRequiresControlUi(scenario: QaSeedScenario) {
@@ -268,5 +283,6 @@ export {
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   selectQaSuiteScenarios,
+  shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 };

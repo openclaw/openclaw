@@ -11,6 +11,7 @@ import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-regi
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
@@ -205,8 +206,7 @@ async function callSubagentGateway(
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
   // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" → write) keep their least-privilege scope so that the gateway does
-  // not treat the caller as owner (senderIsOwner) and expose owner-only tools.
+  // "agent" -> write) keep their least-privilege scope.
   const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
   return await subagentSpawnDeps.callGateway({
     ...params,
@@ -253,6 +253,9 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   }
   if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
     entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
+  }
+  if (typeof patch.spawnedCwd === "string" && patch.spawnedCwd.trim()) {
+    entry.spawnedCwd = patch.spawnedCwd.trim();
   }
   const inheritedToolDeny = normalizeInheritedToolDenylist(patch.inheritedToolDeny);
   if (inheritedToolDeny.length > 0) {
@@ -816,7 +819,21 @@ export async function spawnSubagentDirect(
     };
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
-  const explicitWorkspaceDir = normalizeOptionalString(params.cwd);
+  const requestedCwd = normalizeOptionalString(params.cwd);
+  const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
+  const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
+    agentGroupId: ctx.agentGroupId,
+    agentGroupChannel: ctx.agentGroupChannel,
+    agentGroupSpace: ctx.agentGroupSpace,
+    workspaceDir: ctx.workspaceDir,
+  });
+  const inheritedWorkspaceDir =
+    targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir;
+  const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
+    config: cfg,
+    targetAgentId,
+    explicitWorkspaceDir: inheritedWorkspaceDir,
+  });
   const requesterOrigin = normalizeDeliveryContext({
     channel: ctx.agentChannel,
     accountId: ctx.agentAccountId,
@@ -872,6 +889,16 @@ export async function spawnSubagentDirect(
       status: "forbidden",
       error:
         'sessions_spawn sandbox="require" needs a sandboxed target runtime. Pick a sandboxed agentId or use sandbox="inherit".',
+    };
+  }
+  const spawnedWorkspaceCwd = spawnedWorkspaceDir
+    ? resolveUserPath(spawnedWorkspaceDir)
+    : undefined;
+  if (childRuntime.sandboxed && spawnedCwd && spawnedCwd !== spawnedWorkspaceCwd) {
+    return {
+      status: "forbidden",
+      error:
+        "cwd override is not supported for sandboxed subagent runs; omit cwd or use the target agent workspace as cwd",
     };
   }
   const childDepth = callerDepth + 1;
@@ -1046,24 +1073,11 @@ export async function spawnSubagentDirect(
     | undefined;
   let attachmentAbsDir: string | undefined;
   let attachmentRootDir: string | undefined;
-  const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
-    agentGroupId: ctx.agentGroupId,
-    agentGroupChannel: ctx.agentGroupChannel,
-    agentGroupSpace: ctx.agentGroupSpace,
-    workspaceDir: ctx.workspaceDir,
-  });
-  const inheritedWorkspaceDir =
-    targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir;
-  const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
-    config: cfg,
-    targetAgentId,
-    explicitWorkspaceDir: explicitWorkspaceDir ?? inheritedWorkspaceDir,
-  });
 
   const materializedAttachments = await materializeSubagentAttachments({
     config: cfg,
     targetAgentId,
-    workspaceDir: spawnedWorkspaceDir,
+    workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
     attachments: params.attachments,
     mountPathHint,
   });
@@ -1104,6 +1118,7 @@ export async function spawnSubagentDirect(
   const spawnLineagePatchError = await patchChildSession({
     spawnedBy: spawnedByKey,
     ...(spawnedMetadata.workspaceDir ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir } : {}),
+    ...(spawnedCwd ? { spawnedCwd } : {}),
   });
   if (spawnLineagePatchError) {
     await cleanupFailedSpawnBeforeAgentStart({
@@ -1168,6 +1183,7 @@ export async function spawnSubagentDirect(
         idempotencyKey: childIdem,
         deliver: deliverInitialChildRunDirectly,
         lane: AGENT_LANE_SUBAGENT,
+        disableMessageTool: true,
         cleanupBundleMcpOnRunEnd: spawnMode !== "session",
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,

@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
+  emitInternalDiagnosticEvent,
   emitTrustedDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
   formatDiagnosticTraceparentForPropagation,
   hasPendingInternalDiagnosticEvent,
+  isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
@@ -170,13 +174,15 @@ describe("diagnostic-events", () => {
     ]);
   });
 
-  it("marks only internal trusted diagnostic emissions as trusted", async () => {
+  it("marks dispatcher provenance separately from trust", async () => {
     const events: Array<{
+      internal: boolean;
       metadataTrusted: boolean;
       type: string;
     }> = [];
     onInternalDiagnosticEvent((event, metadata) => {
       events.push({
+        internal: isInternalDiagnosticEventMetadata(metadata),
         metadataTrusted: metadata.trusted,
         type: event.type,
       });
@@ -185,6 +191,10 @@ describe("diagnostic-events", () => {
     emitDiagnosticEvent({
       type: "message.queued",
       source: "plugin",
+    });
+    emitInternalDiagnosticEvent({
+      type: "webhook.received",
+      channel: "telegram",
     });
     emitTrustedDiagnosticEvent({
       type: "model.call.started",
@@ -196,9 +206,11 @@ describe("diagnostic-events", () => {
 
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(events).toEqual([
-      { metadataTrusted: false, type: "message.queued" },
-      { metadataTrusted: true, type: "model.call.started" },
+      { internal: false, metadataTrusted: false, type: "message.queued" },
+      { internal: true, metadataTrusted: false, type: "webhook.received" },
+      { internal: false, metadataTrusted: true, type: "model.call.started" },
     ]);
+    expect(isInternalDiagnosticEventMetadata({ trusted: false })).toBe(false);
   });
 
   it("formats traceparent for propagation only from dispatcher-trusted metadata", () => {
@@ -636,6 +648,40 @@ describe("diagnostic-events", () => {
     expect(events.filter((event) => event.type === "model.call.started")).toHaveLength(9_998);
   });
 
+  it("emits a bounded summary when async diagnostics are dropped at saturation", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+
+    for (let index = 0; index < 10_001; index += 1) {
+      emitDiagnosticEvent({
+        type: "model.call.started",
+        runId: `drop-run-${index}`,
+        callId: `drop-call-${index}`,
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+    }
+
+    await waitForDiagnosticEventsDrained();
+
+    const dropSummary = events.find(
+      (
+        event,
+      ): event is Extract<DiagnosticEventPayload, { type: "diagnostic.async_queue.dropped" }> =>
+        event.type === "diagnostic.async_queue.dropped",
+    );
+    expect(dropSummary).toMatchObject({
+      type: "diagnostic.async_queue.dropped",
+      droppedEvents: 1,
+      droppedUntrustedEvents: 1,
+      maxQueueLength: 10_000,
+      drainBatchSize: 100,
+    });
+    expect(events.filter((event) => event.type === "model.call.started")).toHaveLength(10_000);
+  });
+
   it("keeps log records off the public diagnostic event stream", async () => {
     const publicEvents: string[] = [];
     const internalEvents: string[] = [];
@@ -655,6 +701,47 @@ describe("diagnostic-events", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(publicEvents).toStrictEqual([]);
     expect(internalEvents).toEqual(["log.record"]);
+  });
+
+  it("keeps trusted private data off shared internal diagnostic listeners", async () => {
+    const internalEvents: DiagnosticEventPayload[] = [];
+    const trustedEvents: Array<{
+      event: DiagnosticEventPayload;
+      privateData: unknown;
+    }> = [];
+    onInternalDiagnosticEvent((event) => {
+      internalEvents.push(event);
+    });
+    onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      trustedEvents.push({ event, privateData });
+    });
+
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.started",
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+      {
+        modelContent: {
+          inputMessages: ["secret prompt"],
+          systemPrompt: "secret system",
+        },
+      },
+    );
+
+    await waitForDiagnosticEventsDrained();
+
+    expect(JSON.stringify(internalEvents)).not.toContain("secret");
+    expect(JSON.stringify(trustedEvents[0]?.event)).not.toContain("secret");
+    expect(trustedEvents[0]?.privateData).toEqual({
+      modelContent: {
+        inputMessages: ["secret prompt"],
+        systemPrompt: "secret system",
+      },
+    });
   });
 
   it("skips event enrichment and subscribers when diagnostics are disabled", () => {

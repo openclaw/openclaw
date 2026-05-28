@@ -199,7 +199,9 @@ describe("telegram live qa runtime", () => {
     });
 
     expect(next.agents?.defaults?.skipBootstrap).toBe(true);
-    expect(next.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({ id: "pi" });
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+      id: "openclaw",
+    });
     expect(next.plugins?.allow).toContain("telegram");
     expect(next.plugins?.entries?.telegram).toEqual({ enabled: true });
     expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
@@ -331,6 +333,23 @@ describe("telegram live qa runtime", () => {
     expect(() => testing.findScenario(["telegram-help-command", "typo-scenario"])).toThrow(
       "unknown Telegram QA scenario id(s): typo-scenario",
     );
+  });
+
+  it("recognizes Telegram observation timeouts with retry details", () => {
+    expect(
+      testing.isTelegramObservedMessageTimeoutError(
+        new Error(
+          "timed out after 8000ms waiting for Telegram message; last polling error: The operation was aborted due to timeout",
+        ),
+        8000,
+      ),
+    ).toBe(true);
+    expect(
+      testing.isTelegramObservedMessageTimeoutError(
+        new Error("timed out after 9000ms waiting for Telegram message"),
+        8000,
+      ),
+    ).toBe(false);
   });
 
   it("includes mention gating in the Telegram live scenario catalog", () => {

@@ -98,6 +98,7 @@ export type ChannelDeliveryCapabilities = {
   durableFinal?: {
     text?: boolean;
     media?: boolean;
+    poll?: boolean;
     payload?: boolean;
     silent?: boolean;
     replyTo?: boolean;
@@ -192,6 +193,7 @@ export type ChannelOutboundAdapter = {
     target: ChannelOutboundTargetRef;
     messageId: string;
     pin: ReplyPayloadDeliveryPin;
+    gatewayClientScopes?: readonly string[];
   }) => Promise<void> | void;
   /**
    * @deprecated Use shouldTreatDeliveredTextAsVisible instead.

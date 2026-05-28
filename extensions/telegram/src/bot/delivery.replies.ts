@@ -1,4 +1,8 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForDelivery,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { fireAndForgetHook } from "openclaw/plugin-sdk/hook-runtime";
@@ -17,10 +21,6 @@ import {
   kindFromMime,
   probeVideoDimensions,
 } from "openclaw/plugin-sdk/media-runtime";
-import {
-  createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForDelivery,
-} from "openclaw/plugin-sdk/outbound-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -331,6 +331,7 @@ async function deliverMediaReply(params: {
   thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
   mediaLocalRoots?: readonly string[];
+  mediaMaxBytes?: number;
   chunkText: ChunkTextFn;
   mediaLoader: typeof loadWebMedia;
   onVoiceRecording?: () => Promise<void> | void;
@@ -353,7 +354,10 @@ async function deliverMediaReply(params: {
     const isFirstMedia = first;
     const media = await params.mediaLoader(
       mediaUrl,
-      buildOutboundMediaLoadOptions({ mediaLocalRoots: params.mediaLocalRoots }),
+      buildOutboundMediaLoadOptions({
+        mediaLocalRoots: params.mediaLocalRoots,
+        maxBytes: params.mediaMaxBytes,
+      }),
     );
     const kind = kindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
@@ -693,6 +697,7 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   bot: Bot;
   mediaLocalRoots?: readonly string[];
+  mediaMaxBytes?: number;
   replyToMode: ReplyToMode;
   textLimit: number;
   thread?: TelegramThreadSpec | null;
@@ -879,6 +884,7 @@ export async function deliverReplies(params: {
           thread: params.thread,
           tableMode: params.tableMode,
           mediaLocalRoots: params.mediaLocalRoots,
+          mediaMaxBytes: params.mediaMaxBytes,
           chunkText,
           mediaLoader,
           onVoiceRecording: params.onVoiceRecording,

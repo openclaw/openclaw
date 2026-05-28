@@ -220,6 +220,22 @@ describe("waitForAgentRun", () => {
     expect(result).toEqual({ status: "pending" });
   });
 
+  it("preserves pending error diagnostics on wait timeouts", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "timeout",
+      error: "429 RESOURCE_EXHAUSTED",
+      pendingError: true,
+    });
+
+    const result = await waitForAgentRun({ runId: "run-pending-error", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "timeout",
+      error: "429 RESOURCE_EXHAUSTED",
+      pendingError: true,
+    });
+  });
+
   it("normalizes wait timeouts before sending agent.wait", async () => {
     callGatewayMock.mockResolvedValue({ status: "ok" });
 
@@ -241,6 +257,8 @@ describe("waitForAgentRun", () => {
       status: "ok",
       startedAt: 100,
       endedAt: 200,
+      timeoutPhase: "provider",
+      providerStarted: true,
     });
 
     const result = await waitForAgentRun({ runId: "run-2", timeoutMs: 500 });
@@ -249,6 +267,47 @@ describe("waitForAgentRun", () => {
       status: "ok",
       startedAt: 100,
       endedAt: 200,
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+  });
+
+  it("normalizes blocked ok waits to errors", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      livenessState: "blocked",
+      error: "Context overflow: prompt too large for the model.",
+    });
+
+    const result = await waitForAgentRun({ runId: "run-blocked", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "Context overflow: prompt too large for the model.",
+      startedAt: 100,
+      endedAt: 200,
+      livenessState: "blocked",
+    });
+  });
+
+  it("normalizes aborted stop reasons to errors even when gateway reports ok", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      stopReason: "aborted",
+    });
+
+    const result = await waitForAgentRun({ runId: "run-aborted", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "agent run aborted",
+      startedAt: 100,
+      endedAt: 200,
+      stopReason: "aborted",
     });
   });
 });

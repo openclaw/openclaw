@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
+  createReadStream,
   createWriteStream,
   existsSync,
   mkdirSync,
@@ -13,15 +14,18 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
+import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
+import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
@@ -39,7 +43,7 @@ export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS",
   600,
 );
-const CROSS_OS_AGENT_TURN_OPTIONAL = parseBooleanEnv("OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL", true);
+const CROSS_OS_AGENT_TURN_OPTIONAL = resolveCrossOsAgentTurnOptional();
 
 const providerConfig = {
   openai: {
@@ -99,7 +103,7 @@ function buildReleaseProviderConfigOverride(providerMeta) {
   }
   return {
     ...(typeof providerMeta.baseUrl === "string" ? { baseUrl: providerMeta.baseUrl } : {}),
-    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "pi" } } : {}),
+    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "openclaw" } } : {}),
     models: [],
     ...(typeof providerMeta.timeoutSeconds === "number"
       ? { timeoutSeconds: providerMeta.timeoutSeconds }
@@ -116,6 +120,7 @@ const OMITTED_QA_EXTENSION_PREFIXES = [
 ];
 export const CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS = 120_000;
 export const CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS = 10_000;
+export const CROSS_OS_FETCH_BODY_MAX_CHARS = 1024 * 1024;
 export const CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS = 30_000;
 export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
@@ -178,8 +183,8 @@ function parsePositiveIntegerEnv(name, fallback) {
   return value;
 }
 
-function parseBooleanEnv(name, fallback) {
-  const raw = process.env[name]?.trim();
+function parseBooleanEnv(name, fallback, env = process.env) {
+  const raw = env[name]?.trim();
   if (!raw) {
     return fallback;
   }
@@ -190,6 +195,10 @@ function parseBooleanEnv(name, fallback) {
     return false;
   }
   throw new Error(`${name} must be a boolean. Got: ${JSON.stringify(raw)}`);
+}
+
+export function resolveCrossOsAgentTurnOptional(env = process.env) {
+  return parseBooleanEnv("OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL", false, env);
 }
 
 export function looksLikeReleaseVersionRef(ref) {
@@ -786,78 +795,90 @@ async function runFreshLane(params) {
   const cleanup = [];
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
-    logLanePhase(lane, "install-candidate");
-    await installTarballPackage({
-      lane,
-      env,
-      tgzPath: params.build.candidateTgz,
-      logPath: join(params.logsDir, "fresh-install.log"),
-      restoreBundledPluginPostinstall: false,
+    await runTimedLanePhase(lane, "install-candidate", async () => {
+      await installTarballPackage({
+        lane,
+        env,
+        tgzPath: params.build.candidateTgz,
+        logPath: join(params.logsDir, "fresh-install.log"),
+        restoreBundledPluginPostinstall: false,
+      });
     });
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
-    logLanePhase(lane, "run-bundled-plugin-postinstall");
-    await runBundledPluginPostinstall({
-      lane,
-      env,
-      logPath: join(params.logsDir, "fresh-install.log"),
+    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", async () => {
+      await runBundledPluginPostinstall({
+        lane,
+        env,
+        logPath: join(params.logsDir, "fresh-install.log"),
+      });
     });
 
     let browserOverrideImportStatus = "skipped";
     if (shouldRunWindowsInstalledBrowserOverrideImportSmoke()) {
-      logLanePhase(lane, "windows-browser-override-import");
-      browserOverrideImportStatus = await runInstalledBrowserOverrideImportSmoke({
+      browserOverrideImportStatus = await runTimedLanePhase(
         lane,
-        env,
-        prefixDir: lane.prefixDir,
-        logPath: join(params.logsDir, "fresh-windows-browser-override-import.log"),
-      });
+        "windows-browser-override-import",
+        async () =>
+          runInstalledBrowserOverrideImportSmoke({
+            lane,
+            env,
+            prefixDir: lane.prefixDir,
+            logPath: join(params.logsDir, "fresh-windows-browser-override-import.log"),
+          }),
+      );
     }
 
-    logLanePhase(lane, "onboard");
-    await runOnboard({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "fresh-onboard.log"),
+    await runTimedLanePhase(lane, "onboard", async () => {
+      await runOnboard({
+        lane,
+        env,
+        providerConfig: params.providerConfig,
+        logPath: join(params.logsDir, "fresh-onboard.log"),
+      });
     });
 
-    logLanePhase(lane, "models-set");
-    await runModelsSet({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "fresh-models-set.log"),
+    await runTimedLanePhase(lane, "models-set", async () => {
+      await runModelsSet({
+        lane,
+        env,
+        providerConfig: params.providerConfig,
+        logPath: join(params.logsDir, "fresh-models-set.log"),
+      });
     });
 
-    logLanePhase(lane, "start-gateway");
-    const gateway = await startGateway({
-      lane,
-      env,
-      logPath: join(params.logsDir, "fresh-gateway.log"),
-    });
+    const gateway = await runTimedLanePhase(lane, "start-gateway", async () =>
+      startGateway({
+        lane,
+        env,
+        logPath: join(params.logsDir, "fresh-gateway.log"),
+      }),
+    );
     cleanup.push(() => stopGateway(gateway));
 
-    logLanePhase(lane, "wait-gateway");
-    await waitForGateway({
-      lane,
-      env,
-      logPath: join(params.logsDir, "fresh-gateway-status.log"),
+    await runTimedLanePhase(lane, "wait-gateway", async () => {
+      await waitForGateway({
+        lane,
+        env,
+        logPath: join(params.logsDir, "fresh-gateway-status.log"),
+      });
     });
 
-    logLanePhase(lane, "dashboard");
-    await runDashboardSmoke({
-      lane,
-      logPath: join(params.logsDir, "fresh-dashboard.log"),
+    await runTimedLanePhase(lane, "dashboard", async () => {
+      await runDashboardSmoke({
+        lane,
+        logPath: join(params.logsDir, "fresh-dashboard.log"),
+      });
     });
 
-    logLanePhase(lane, "agent-turn");
-    const agent = await runAgentTurn({
-      lane,
-      env,
-      label: "fresh",
-      logPath: join(params.logsDir, "fresh-agent.log"),
-    });
+    const agent = await runTimedLanePhase(lane, "agent-turn", async () =>
+      runAgentTurn({
+        lane,
+        env,
+        label: "fresh",
+        logPath: join(params.logsDir, "fresh-agent.log"),
+      }),
+    );
 
     return {
       status: "pass",
@@ -867,6 +888,7 @@ async function runFreshLane(params) {
       gatewayPort: lane.gatewayPort,
       browserOverrideImportStatus,
       agentOutput: trimForSummary(agent.stdout),
+      phaseTimings: lane.phaseTimings,
     };
   } finally {
     await runCleanup(cleanup);
@@ -957,6 +979,7 @@ async function runUpgradeLane(params) {
           env,
           packageSpec: params.candidateUrl,
           logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
+          ignoreScripts: true,
         });
       });
     } else {
@@ -1503,6 +1526,7 @@ export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform
 export function buildRealUpdateEnv(env) {
   const updateEnv = {
     ...env,
+    OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
     NODE_DISABLE_COMPILE_CACHE: "1",
   };
   delete updateEnv.OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL;
@@ -1659,13 +1683,41 @@ function readInstalledMetadataFromCliPath(cliPath, platform = process.platform) 
   );
 }
 
-function resolveInstalledCliInvocation(cliPath, platform = process.platform) {
+export function resolveCommandSpawnInvocation(
+  command,
+  args,
+  options = {
+    platform: process.platform,
+    comSpec: process.env.ComSpec,
+  },
+) {
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32" && /\.(cmd|bat)$/iu.test(command)) {
+    return {
+      command: options.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine(command, args)],
+      shell: false,
+      windowsVerbatimArguments: true,
+    };
+  }
+  return { command, args, shell: false };
+}
+
+export function resolveInstalledCliInvocation(
+  cliPath,
+  args = [],
+  options = {
+    platform: process.platform,
+    comSpec: process.env.ComSpec,
+  },
+) {
+  const platform = options.platform ?? process.platform;
   if (platform !== "win32") {
-    return { command: cliPath, argsPrefix: [], shell: false };
+    return { command: cliPath, args, shell: false };
   }
   const normalizedCliPath = normalizeWindowsInstalledCliPath(cliPath);
   if (!/\.cmd$/iu.test(normalizedCliPath)) {
-    return { command: normalizedCliPath, argsPrefix: [], shell: false };
+    return { command: normalizedCliPath, args, shell: false };
   }
   const entryPath = installedEntryPath(
     resolveInstalledPrefixDirFromCliPath(normalizedCliPath, platform),
@@ -1673,11 +1725,14 @@ function resolveInstalledCliInvocation(cliPath, platform = process.platform) {
   if (existsSync(entryPath)) {
     return {
       command: process.execPath,
-      argsPrefix: [entryPath],
+      args: [entryPath, ...args],
       shell: false,
     };
   }
-  return { command: normalizedCliPath, argsPrefix: [], shell: true };
+  return resolveCommandSpawnInvocation(normalizedCliPath, args, {
+    comSpec: options.comSpec,
+    platform,
+  });
 }
 
 async function runPosixShellScript(script, options) {
@@ -1881,8 +1936,11 @@ async function verifyFreshShellCommand(params) {
 }
 
 async function runInstalledCli(params) {
-  const invocation = resolveInstalledCliInvocation(params.cliPath);
-  return runCommand(invocation.command, [...invocation.argsPrefix, ...params.args], {
+  const invocation = resolveInstalledCliInvocation(params.cliPath, params.args, {
+    comSpec: params.env?.ComSpec ?? params.env?.COMSPEC,
+    platform: process.platform,
+  });
+  return runCommandInvocation(invocation, {
     cwd: params.cwd,
     env: params.env,
     logPath: params.logPath,
@@ -1966,27 +2024,22 @@ export function buildReleaseOnboardArgs(params) {
 async function startManualGatewayFromInstalledCli(params) {
   mkdirSync(dirname(params.logPath), { recursive: true });
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
-  const invocation = resolveInstalledCliInvocation(params.cliPath);
-  const child = spawn(
-    invocation.command,
-    [
-      ...invocation.argsPrefix,
-      "gateway",
-      "run",
-      "--bind",
-      "loopback",
-      "--port",
-      String(params.lane.gatewayPort),
-      "--force",
-    ],
+  const invocation = resolveInstalledCliInvocation(
+    params.cliPath,
+    ["gateway", "run", "--bind", "loopback", "--port", String(params.lane.gatewayPort), "--force"],
     {
-      cwd: params.lane.homeDir,
-      env: params.env,
-      shell: invocation.shell,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
+      comSpec: params.env?.ComSpec ?? params.env?.COMSPEC,
+      platform: process.platform,
     },
   );
+  const child = spawn(invocation.command, invocation.args, {
+    cwd: params.lane.homeDir,
+    env: params.env,
+    shell: invocation.shell,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    windowsHide: true,
+  });
   child.stdout?.on("data", (chunk) => {
     gatewayLog.write(chunk);
   });
@@ -2015,19 +2068,26 @@ async function startManualGatewayFromInstalledCli(params) {
 
 async function resolveInstalledGatewayStatusArgs(params) {
   const requireRpc = params.requireRpc !== false;
-  const help = await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["gateway", "status", "--help"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 15_000,
-    check: false,
-  });
-  if (
-    requireRpc &&
-    (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc"))
-  ) {
+  try {
+    const help = await runInstalledCli({
+      cliPath: params.cliPath,
+      args: ["gateway", "status", "--help"],
+      cwd: params.cwd,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs: 15_000,
+      check: false,
+    });
+    return buildGatewayStatusArgsFromHelpText(`${help.stdout}\n${help.stderr}`, { requireRpc });
+  } catch (error) {
+    appendGatewayStatusHelpProbeFallback(params.logPath, error);
+    return buildGatewayStatusArgsFromHelpText("--require-rpc", { requireRpc });
+  }
+}
+
+export function buildGatewayStatusArgsFromHelpText(helpText, options = {}) {
+  const requireRpc = options.requireRpc !== false;
+  if (requireRpc && helpText.includes("--require-rpc")) {
     return [
       "gateway",
       "status",
@@ -2037,6 +2097,13 @@ async function resolveInstalledGatewayStatusArgs(params) {
     ];
   }
   return ["gateway", "status"];
+}
+
+function appendGatewayStatusHelpProbeFallback(logPath, error) {
+  appendFileSync(
+    logPath,
+    `${new Date().toISOString()} gateway status help probe failed; assuming current --require-rpc support: ${formatError(error)}\n`,
+  );
 }
 
 export async function canConnectToLoopbackPort(port, timeoutMs = 1_000) {
@@ -2202,6 +2269,7 @@ async function runInstalledAgentTurn(params) {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
     try {
+      const logOffset = readLogFileSize(params.logPath);
       const result = await runInstalledCli({
         cliPath: params.cliPath,
         args: buildReleaseAgentTurnArgs(sessionId),
@@ -2210,13 +2278,20 @@ async function runInstalledAgentTurn(params) {
         logPath: params.logPath,
         timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
       });
-      if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
+      const logText = readLogTextSince(params.logPath, logOffset);
+      if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
         throw new Error("Agent output did not contain the expected OK marker.");
+      }
+      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
+        throw new Error("Agent turn used embedded fallback instead of gateway.");
       }
       return result;
     } catch (error) {
       lastError = error;
-      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
+      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath, {
+        attempt,
+        maxAttempts: 2,
+      });
       if (skipped) {
         return skipped;
       }
@@ -2388,6 +2463,45 @@ async function configureDiscordSmoke(params) {
   });
 }
 
+export async function readBoundedCrossOsResponseText(
+  response: Response,
+  maxChars = CROSS_OS_FETCH_BODY_MAX_CHARS,
+): Promise<string> {
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let truncated = false;
+
+  try {
+    while (text.length <= maxChars) {
+      const { done, value } = await reader.read();
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+
+      text += decoder.decode(value, { stream: true });
+      if (text.length > maxChars) {
+        text = text.slice(0, maxChars);
+        truncated = true;
+        break;
+      }
+    }
+  } finally {
+    if (truncated) {
+      await reader.cancel().catch(() => undefined);
+    } else {
+      reader.releaseLock();
+    }
+  }
+
+  return truncated ? `${text}\n[truncated]` : text;
+}
+
 async function waitForDiscordMessage(params) {
   const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() < deadline) {
@@ -2399,7 +2513,7 @@ async function waitForDiscordMessage(params) {
         },
       },
     );
-    const text = await response.text();
+    const text = await readBoundedCrossOsResponseText(response);
     if (!response.ok) {
       await sleep(2_000);
       continue;
@@ -2427,7 +2541,7 @@ async function postDiscordMessage(params) {
       }),
     },
   );
-  const text = await response.text();
+  const text = await readBoundedCrossOsResponseText(response);
   if (!response.ok) {
     throw new Error(`Failed to post Discord smoke message: ${text}`);
   }
@@ -2935,24 +3049,20 @@ function gatewayReadyDeadlineMs() {
 }
 
 async function resolveGatewayStatusArgs(lane, env, logPath) {
-  const help = await runOpenClaw({
-    lane,
-    env,
-    args: ["gateway", "status", "--help"],
-    logPath,
-    timeoutMs: 15_000,
-    check: false,
-  });
-  if (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc")) {
-    return [
-      "gateway",
-      "status",
-      "--require-rpc",
-      "--timeout",
-      String(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS),
-    ];
+  try {
+    const help = await runOpenClaw({
+      lane,
+      env,
+      args: ["gateway", "status", "--help"],
+      logPath,
+      timeoutMs: 15_000,
+      check: false,
+    });
+    return buildGatewayStatusArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
+  } catch (error) {
+    appendGatewayStatusHelpProbeFallback(logPath, error);
+    return buildGatewayStatusArgsFromHelpText("--require-rpc");
   }
-  return ["gateway", "status"];
 }
 
 async function runModelsSet(params) {
@@ -3014,6 +3124,7 @@ async function runAgentTurn(params) {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
     try {
+      const logOffset = readLogFileSize(params.logPath);
       const result = await runOpenClaw({
         lane: params.lane,
         env: params.env,
@@ -3021,13 +3132,20 @@ async function runAgentTurn(params) {
         logPath: params.logPath,
         timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
       });
-      if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
+      const logText = readLogTextSince(params.logPath, logOffset);
+      if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
         throw new Error("Agent output did not contain the expected OK marker.");
+      }
+      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
+        throw new Error("Agent turn used embedded fallback instead of gateway.");
       }
       return result;
     } catch (error) {
       lastError = error;
-      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
+      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath, {
+        attempt,
+        maxAttempts: 2,
+      });
       if (skipped) {
         return skipped;
       }
@@ -3045,8 +3163,15 @@ async function runAgentTurn(params) {
   throw lastError;
 }
 
-function maybeBuildOptionalAgentTurnSkipResult(error, logPath) {
-  if (!CROSS_OS_AGENT_TURN_OPTIONAL || !shouldSkipOptionalCrossOsAgentTurnError(error, logPath)) {
+export function maybeBuildOptionalAgentTurnSkipResult(error, logPath, options = {}) {
+  const attempt = options.attempt ?? 1;
+  const maxAttempts = options.maxAttempts ?? 2;
+  const optional = options.optional ?? CROSS_OS_AGENT_TURN_OPTIONAL;
+  if (
+    attempt < maxAttempts ||
+    !optional ||
+    !shouldSkipOptionalCrossOsAgentTurnError(error, logPath)
+  ) {
     return null;
   }
   const message = error instanceof Error ? error.message : String(error);
@@ -3103,15 +3228,29 @@ function buildReleaseAgentTurnArgs(sessionId) {
 
 export function shouldRetryCrossOsAgentTurnError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /Agent output did not contain the expected OK marker|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
+  return /Agent output did not contain the expected OK marker|Agent turn used embedded fallback instead of gateway|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
     message,
   );
+}
+
+export function agentTurnUsedEmbeddedFallback(result, options = {}) {
+  const logText =
+    typeof options.logText === "string"
+      ? options.logText
+      : typeof options.logPath === "string"
+        ? safeReadTextFile(options.logPath)
+        : "";
+  return /EMBEDDED FALLBACK:/u.test(`${result.stdout ?? ""}\n${result.stderr ?? ""}\n${logText}`);
 }
 
 export function agentOutputHasExpectedOkMarker(stdout, options = {}) {
   const payloadTexts = parseAgentPayloadTexts(stdout);
   if (payloadTexts.some((text) => text.trim() === "OK")) {
     return true;
+  }
+  if (typeof options.logText === "string") {
+    const logTexts = parseAgentPayloadTexts(options.logText);
+    return logTexts.some((text) => text.trim() === "OK");
   }
   if (typeof options.logPath !== "string") {
     return false;
@@ -3121,6 +3260,30 @@ export function agentOutputHasExpectedOkMarker(stdout, options = {}) {
     return logTexts.some((text) => text.trim() === "OK");
   } catch {
     return false;
+  }
+}
+
+function readLogFileSize(logPath) {
+  try {
+    return statSync(logPath).size;
+  } catch {
+    return 0;
+  }
+}
+
+function readLogTextSince(logPath, offsetBytes) {
+  try {
+    return readFileSync(logPath).subarray(offsetBytes).toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+function safeReadTextFile(logPath) {
+  try {
+    return readFileSync(logPath, "utf8");
+  } catch {
+    return "";
   }
 }
 
@@ -3169,7 +3332,7 @@ async function runDashboardSmoke(params) {
         const response = await fetch(dashboardUrl, {
           signal: AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS),
         });
-        const html = await response.text();
+        const html = await readBoundedCrossOsResponseText(response);
         if (
           response.ok &&
           html.includes("<title>OpenClaw Control</title>") &&
@@ -3418,14 +3581,23 @@ function gitCommand() {
   return process.platform === "win32" ? "git.exe" : "git";
 }
 
-async function runCommand(command, args, options) {
+export async function runCommand(command, args, options) {
+  const invocation = resolveCommandSpawnInvocation(command, args, {
+    comSpec: options.env?.ComSpec ?? options.env?.COMSPEC,
+    platform: process.platform,
+  });
+  return runCommandInvocation(invocation, options);
+}
+
+async function runCommandInvocation(invocation, options) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const useWindowsShell = process.platform === "win32" && /\.(cmd|bat)$/iu.test(command);
-    const child = spawn(command, args, {
+    const commandLabel = `${invocation.command} ${invocation.args.join(" ")}`;
+    const child = spawn(invocation.command, invocation.args, {
       cwd: options.cwd,
       env: options.env,
-      shell: useWindowsShell,
+      shell: invocation.shell,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
       windowsHide: true,
     });
     const logStream = createWriteStream(options.logPath, { flags: "a" });
@@ -3483,15 +3655,13 @@ async function runCommand(command, args, options) {
       options.timeoutMs && Number.isFinite(options.timeoutMs)
         ? setTimeout(() => {
             timedOut = true;
-            logStream.write(
-              `${new Date().toISOString()} timeout command=${command} args=${args.join(" ")}\n`,
-            );
+            logStream.write(`${new Date().toISOString()} timeout command=${commandLabel}\n`);
             requestKill();
             killWaitTimer = setTimeout(() => {
               finalize(() => {
                 rejectPromise(
                   new Error(
-                    `Command timed out and could not be terminated cleanly: ${command} ${args.join(" ")}`,
+                    `Command timed out and could not be terminated cleanly: ${commandLabel}`,
                   ),
                 );
               });
@@ -3502,16 +3672,14 @@ async function runCommand(command, args, options) {
       CROSS_OS_COMMAND_HEARTBEAT_SECONDS > 0
         ? setInterval(() => {
             const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
-            const message = `${new Date().toISOString()} still running after ${elapsedSeconds}s: ${command} ${args.join(" ")}\n`;
+            const message = `${new Date().toISOString()} still running after ${elapsedSeconds}s: ${commandLabel}\n`;
             logStream.write(message);
             process.stdout.write(`[release-checks] ${message}`);
           }, CROSS_OS_COMMAND_HEARTBEAT_SECONDS * 1000)
         : null;
     heartbeatTimer?.unref?.();
 
-    logStream.write(
-      `${new Date().toISOString()} start command=${command} args=${args.join(" ")}\n`,
-    );
+    logStream.write(`${new Date().toISOString()} start command=${commandLabel}\n`);
 
     child.stdout?.on("data", (chunk) => {
       const text = chunk.toString();
@@ -3536,13 +3704,13 @@ async function runCommand(command, args, options) {
           stderr,
         };
         if (timedOut) {
-          rejectPromise(new Error(`Command timed out: ${command} ${args.join(" ")}`));
+          rejectPromise(new Error(`Command timed out: ${commandLabel}`));
           return;
         }
         if ((options.check ?? true) && result.exitCode !== 0) {
           rejectPromise(
             new Error(
-              `Command failed (${result.exitCode}): ${command} ${args.join(" ")}\n${trimForSummary(
+              `Command failed (${result.exitCode}): ${commandLabel}\n${trimForSummary(
                 `${stdout}\n${stderr}`,
               )}`,
             ),
@@ -3555,11 +3723,12 @@ async function runCommand(command, args, options) {
   });
 }
 
-async function startStaticFileServer(params) {
+export async function startStaticFileServer(params) {
   mkdirSync(dirname(params.logPath), { recursive: true });
   const logStream = createWriteStream(params.logPath, { flags: "a" });
   const fileName = String(params.filePath.split(/[/\\]/u).at(-1) ?? "artifact");
-  const fileBytes = readFileSync(params.filePath);
+  const fileStat = statSync(params.filePath);
+  const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
     logStream.write(`${new Date().toISOString()} ${request.method} ${request.url}\n`);
     if (request.url !== `/${fileName}`) {
@@ -3569,8 +3738,26 @@ async function startStaticFileServer(params) {
     }
     response.statusCode = 200;
     response.setHeader("content-type", resolveStaticFileContentType(params.filePath));
-    response.setHeader("content-length", String(fileBytes.length));
-    response.end(fileBytes);
+    response.setHeader("content-length", String(fileStat.size));
+    response.setHeader("connection", "close");
+    const fileStream = createReadStream(params.filePath);
+    fileStream.once("error", (error) => {
+      logStream.write(`${new Date().toISOString()} static-file-read-error ${formatError(error)}\n`);
+      if (response.headersSent) {
+        response.destroy(error);
+        return;
+      }
+      response.removeHeader("content-length");
+      response.statusCode = 500;
+      response.end("failed to read file");
+    });
+    fileStream.pipe(response);
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => {
+      sockets.delete(socket);
+    });
   });
   await new Promise((resolvePromise, rejectPromise) => {
     server.once("error", rejectPromise);
@@ -3593,6 +3780,9 @@ async function startStaticFileServer(params) {
           }
           resolvePromise();
         });
+        for (const socket of sockets) {
+          socket.destroy();
+        }
       }),
   };
 }

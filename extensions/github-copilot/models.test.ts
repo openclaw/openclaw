@@ -4,17 +4,6 @@ import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models
 import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
-vi.mock("@earendil-works/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
-    "@earendil-works/pi-ai/oauth",
-  );
-  return {
-    ...actual,
-    getOAuthApiKey: vi.fn(),
-    getOAuthProviders: vi.fn(() => []),
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/provider-model-shared", () => ({
   normalizeModelCompat: (model: Record<string, unknown>) => model,
   resolveProviderEndpoint: (baseUrl: string) => ({
@@ -74,8 +63,12 @@ describe("github-copilot model defaults", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.6");
     });
 
-    it("includes claude-sonnet-4.5", () => {
-      expect(getDefaultCopilotModelIds()).toContain("claude-sonnet-4.5");
+    it("excludes retired and old Claude fallback rows", () => {
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-sonnet-4");
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-sonnet-4.5");
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-opus-4.5");
+      expect(getDefaultCopilotModelIds()).not.toContain("claude-haiku-4.5");
+      expect(getDefaultCopilotModelIds()).not.toContain("grok-code-fast-1");
     });
 
     it("returns a mutable copy", () => {
@@ -144,17 +137,17 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect(resolveCopilotForwardCompatModel(ctx)).toBeUndefined();
   });
 
-  it("clones gpt-5.2-codex template for gpt-5.4", () => {
+  it("clones gpt-5.3-codex template for gpt-5.4", () => {
     const template = {
-      id: "gpt-5.2-codex",
-      name: "gpt-5.2-codex",
+      id: "gpt-5.3-codex",
+      name: "gpt-5.3-codex",
       provider: "github-copilot",
       api: "openai-responses",
       reasoning: true,
       contextWindow: 200_000,
     };
     const ctx = createMockCtx("gpt-5.4", {
-      "github-copilot/gpt-5.2-codex": template,
+      "github-copilot/gpt-5.3-codex": template,
     });
     const result = requireResolvedModel(ctx);
     expect(result.id).toBe("gpt-5.4");
@@ -162,25 +155,15 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
   });
 
-  it("clones gpt-5.3-codex template for gpt-5.3-codex when not in registry", () => {
-    const template = {
-      id: "gpt-5.2-codex",
-      name: "gpt-5.2-codex",
-      provider: "github-copilot",
-      api: "openai-responses",
-      reasoning: true,
-      contextWindow: 200_000,
-    };
-    const ctx = createMockCtx("gpt-5.3-codex", {
-      "github-copilot/gpt-5.2-codex": template,
-    });
+  it("uses static metadata for gpt-5.3-codex when not in registry", () => {
+    const ctx = createMockCtx("gpt-5.3-codex");
     const result = requireResolvedModel(ctx);
     expect(result.id).toBe("gpt-5.3-codex");
     expect(result.name).toBe("gpt-5.3-codex");
     expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
   });
 
-  it("prefers gpt-5.3-codex as template source over gpt-5.2-codex for gpt-5.4", () => {
+  it("uses gpt-5.3-codex as the template source for gpt-5.4", () => {
     const template53 = {
       id: "gpt-5.3-codex",
       name: "gpt-5.3-codex",
@@ -189,17 +172,8 @@ describe("resolveCopilotForwardCompatModel", () => {
       reasoning: true,
       contextWindow: 300_000,
     };
-    const template52 = {
-      id: "gpt-5.2-codex",
-      name: "gpt-5.2-codex",
-      provider: "github-copilot",
-      api: "openai-responses",
-      reasoning: true,
-      contextWindow: 200_000,
-    };
     const ctx = createMockCtx("gpt-5.4", {
       "github-copilot/gpt-5.3-codex": template53,
-      "github-copilot/gpt-5.2-codex": template52,
     });
     const result = requireResolvedModel(ctx);
     expect(result.id).toBe("gpt-5.4");

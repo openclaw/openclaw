@@ -14,6 +14,7 @@ export type ChatAbortControllerEntry = {
   ownerDeviceId?: string;
   providerId?: string;
   authProviderId?: string;
+  abortStopReason?: string;
   /**
    * Which RPC owns this registration. Absent (undefined) is treated as
    * `"chat-send"` so pre-existing callers that constructed entries without
@@ -32,6 +33,15 @@ type RegisteredChatAbortController = {
 
 export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
+}
+
+function createChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
+  if (stopReason !== "timeout") {
+    return undefined;
+  }
+  const reason = new Error("chat run timed out");
+  reason.name = "TimeoutError";
+  return reason;
 }
 
 function resolveChatRunExpiresAtMs(params: {
@@ -186,7 +196,10 @@ export function abortChatRunById(
   const bufferedText = ops.chatRunBuffers.get(runId);
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatAbortedRuns.set(runId, Date.now());
-  active.controller.abort();
+  if (stopReason) {
+    active.abortStopReason = stopReason;
+  }
+  active.controller.abort(createChatAbortSignalReason(stopReason));
   ops.chatAbortControllers.delete(runId);
   ops.chatRunBuffers.delete(runId);
   ops.chatDeltaSentAt.delete(runId);

@@ -17,6 +17,14 @@ export type LoaderModuleResolveParams = {
   pluginSdkResolution?: PluginSdkResolutionPreference;
 };
 
+export type PluginRuntimeModuleResolution = {
+  modulePath?: string;
+  packageRoot: string | null;
+  candidates: string[];
+  resolvedPath: string | null;
+  error?: string;
+};
+
 type PluginSdkPackageJson = {
   exports?: Record<string, unknown>;
   bin?: string | Record<string, unknown>;
@@ -148,6 +156,105 @@ export function resolveLoaderPackageRoot(
   });
 }
 
+function createPluginRuntimeModuleCandidateMap(packageRoot: string) {
+  return {
+    src: path.join(packageRoot, "src", "plugins", "runtime", "index.ts"),
+    dist: path.join(packageRoot, "dist", "plugins", "runtime", "index.js"),
+  } as const;
+}
+
+function appendPluginRuntimeModuleCandidates(
+  candidates: string[],
+  packageRoot: string,
+  orderedKinds: readonly PluginSdkAliasCandidateKind[],
+): void {
+  const candidateMap = createPluginRuntimeModuleCandidateMap(packageRoot);
+  for (const kind of orderedKinds) {
+    candidates.push(candidateMap[kind]);
+  }
+}
+
+function appendSiblingPluginRuntimeModuleCandidates(
+  candidates: string[],
+  runtimeDir: string,
+  orderedKinds: readonly PluginSdkAliasCandidateKind[],
+): void {
+  const candidateMap = {
+    src: path.join(runtimeDir, "index.ts"),
+    dist: path.join(runtimeDir, "index.js"),
+  } as const;
+  for (const kind of orderedKinds) {
+    candidates.push(candidateMap[kind]);
+  }
+}
+
+function dedupeResolvedPaths(paths: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const candidate of paths) {
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    deduped.push(resolved);
+  }
+  return deduped;
+}
+
+function listAncestorPluginRuntimeModuleCandidates(params: {
+  starts: readonly (string | undefined)[];
+  orderedKinds: readonly PluginSdkAliasCandidateKind[];
+  maxDepth?: number;
+}): string[] {
+  const candidates: string[] = [];
+  for (const start of params.starts) {
+    if (!start) {
+      continue;
+    }
+    let cursor = path.resolve(start);
+    const maxDepth = params.maxDepth ?? 12;
+    for (let i = 0; i < maxDepth; i += 1) {
+      appendPluginRuntimeModuleCandidates(candidates, cursor, params.orderedKinds);
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        break;
+      }
+      cursor = parent;
+    }
+  }
+  return dedupeResolvedPaths(candidates);
+}
+
+function listArgvRuntimeFallbackStartDirs(argv1: string | undefined): string[] {
+  if (!argv1) {
+    return [];
+  }
+  const normalized = path.resolve(argv1);
+  const starts: string[] = [];
+  const parts = normalized.split(path.sep);
+  const binIndex = parts.lastIndexOf(".bin");
+  if (binIndex > 0 && parts[binIndex - 1] === "node_modules") {
+    const binName = path.basename(normalized);
+    const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
+    starts.push(path.join(nodeModulesDir, binName));
+  }
+  try {
+    const resolved = fs.realpathSync(normalized);
+    if (resolved !== normalized) {
+      starts.push(path.dirname(resolved));
+    }
+  } catch {
+    // Keep the unresolved argv path; startup shims may not exist in tests.
+  }
+  starts.push(path.dirname(normalized));
+  return dedupeResolvedPaths(starts);
+}
+
+function formatResolutionError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function resolveLoaderPluginSdkPackageRoot(
   params: LoaderModuleResolveParams & { modulePath: string },
 ): string | null {
@@ -264,14 +371,40 @@ const cachedPluginSdkExportedSubpaths = new PluginLruCache<string[]>(
 const cachedPluginSdkScopedAliasMaps = new PluginLruCache<Record<string, string>>(
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
+const cachedBundledPluginPublicSurfaceAliasMaps = new PluginLruCache<Record<string, string>>(
+  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
+);
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
-const OFFICIAL_CODEX_PLUGIN_PACKAGE_NAME = "@openclaw/codex";
 const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
-const BUNDLED_CODEX_PRIVATE_PLUGIN_SDK_SUBPATHS = new Set([
-  CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
-  CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
-]);
+const OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
+type PrivatePluginSdkSubpathOwner = {
+  bundledPluginId: string;
+  officialInstalledPackageName?: string;
+  allowPrivateQaCli: boolean;
+  subpaths: readonly string[];
+};
+const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[] = [
+  {
+    bundledPluginId: "codex",
+    officialInstalledPackageName: "@openclaw/codex",
+    allowPrivateQaCli: true,
+    subpaths: [
+      CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
+      CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
+    ],
+  },
+  {
+    bundledPluginId: "ollama",
+    allowPrivateQaCli: false,
+    subpaths: [OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
+  },
+  {
+    bundledPluginId: "browser",
+    allowPrivateQaCli: false,
+    subpaths: [OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
+  },
+];
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".ts",
   ".mts",
@@ -319,6 +452,7 @@ function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
     ...new Set([
       CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
+      OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
       ...(Array.isArray(parsed)
         ? parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath))
         : []),
@@ -417,19 +551,25 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
   if (!packageRoot) {
     return {};
   }
-  const extensionsRoot = path.join(packageRoot, "extensions");
-  let extensionDirs: fs.Dirent[];
-  try {
-    extensionDirs = fs.readdirSync(extensionsRoot, { withFileTypes: true });
-  } catch {
-    return {};
-  }
   const orderedKinds = resolvePluginSdkAliasCandidateOrder({
     modulePath: params.modulePath,
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
   const includePrivateQa = shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${includePrivateQa ? "1" : "0"}`;
+  const cached = cachedBundledPluginPublicSurfaceAliasMaps.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const extensionsRoot = path.join(packageRoot, "extensions");
+  let extensionDirs: fs.Dirent[];
+  try {
+    extensionDirs = fs.readdirSync(extensionsRoot, { withFileTypes: true });
+  } catch {
+    cachedBundledPluginPublicSurfaceAliasMaps.set(cacheKey, {});
+    return {};
+  }
   const aliasMap: Record<string, string> = {};
   for (const entry of extensionDirs) {
     if (!entry.isDirectory()) {
@@ -458,6 +598,7 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
       aliasMap[`${packageName}/${basename}.js`] = normalizeJitiAliasTargetPath(target);
     }
   }
+  cachedBundledPluginPublicSurfaceAliasMaps.set(cacheKey, aliasMap);
   return aliasMap;
 }
 
@@ -465,12 +606,16 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpaths() {
   return process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1";
 }
 
-function isBundledCodexPluginModulePath(params: { packageRoot: string; modulePath: string }) {
+function isBundledPluginModulePath(params: {
+  packageRoot: string;
+  modulePath: string;
+  pluginId: string;
+}) {
   const normalizedModulePath = path.resolve(params.modulePath);
   const roots = [
-    path.join(params.packageRoot, "extensions", "codex"),
-    path.join(params.packageRoot, "dist", "extensions", "codex"),
-    path.join(params.packageRoot, "dist-runtime", "extensions", "codex"),
+    path.join(params.packageRoot, "extensions", params.pluginId),
+    path.join(params.packageRoot, "dist", "extensions", params.pluginId),
+    path.join(params.packageRoot, "dist-runtime", "extensions", params.pluginId),
   ];
   return roots.some(
     (root) =>
@@ -478,22 +623,32 @@ function isBundledCodexPluginModulePath(params: { packageRoot: string; modulePat
   );
 }
 
-function isOfficialInstalledCodexPluginPackageRoot(packageRoot: string) {
-  const segments = path.resolve(packageRoot).split(path.sep).filter(Boolean);
+function isOfficialInstalledPluginPackageRoot(params: {
+  packageRoot: string;
+  packageName: string;
+}) {
+  const [scope, name] = params.packageName.split("/");
+  if (!scope || !name) {
+    return false;
+  }
+  const segments = path.resolve(params.packageRoot).split(path.sep).filter(Boolean);
   const last = segments.at(-1);
-  const scope = segments.at(-2);
+  const packageScope = segments.at(-2);
   const nodeModules = segments.at(-3);
-  return last === "codex" && scope === "@openclaw" && nodeModules === "node_modules";
+  return last === name && packageScope === scope && nodeModules === "node_modules";
 }
 
-function isOfficialInstalledCodexPluginModulePath(params: { modulePath: string }) {
+function isOfficialInstalledPluginModulePath(params: { modulePath: string; packageName: string }) {
   let cursor = path.dirname(path.resolve(params.modulePath));
   for (let depth = 0; depth < 12; depth += 1) {
     const packageJson = tryReadJsonSync<{ name?: unknown }>(path.join(cursor, "package.json"));
     if (packageJson) {
       return (
-        packageJson.name === OFFICIAL_CODEX_PLUGIN_PACKAGE_NAME &&
-        isOfficialInstalledCodexPluginPackageRoot(cursor)
+        packageJson.name === params.packageName &&
+        isOfficialInstalledPluginPackageRoot({
+          packageRoot: cursor,
+          packageName: params.packageName,
+        })
       );
     }
     const parent = path.dirname(cursor);
@@ -505,11 +660,41 @@ function isOfficialInstalledCodexPluginModulePath(params: { modulePath: string }
   return false;
 }
 
-function isTrustedCodexPluginModulePath(params: { packageRoot: string; modulePath: string }) {
-  return (
-    isBundledCodexPluginModulePath(params) ||
-    isOfficialInstalledCodexPluginModulePath({ modulePath: params.modulePath })
-  );
+function isTrustedPrivatePluginSdkOwnerPath(params: {
+  packageRoot: string;
+  modulePath: string;
+  owner: PrivatePluginSdkSubpathOwner;
+}) {
+  if (
+    isBundledPluginModulePath({
+      packageRoot: params.packageRoot,
+      modulePath: params.modulePath,
+      pluginId: params.owner.bundledPluginId,
+    })
+  ) {
+    return true;
+  }
+  return params.owner.officialInstalledPackageName
+    ? isOfficialInstalledPluginModulePath({
+        modulePath: params.modulePath,
+        packageName: params.owner.officialInstalledPackageName,
+      })
+    : false;
+}
+
+function findPrivatePluginSdkSubpathOwners(
+  subpath: string,
+): readonly PrivatePluginSdkSubpathOwner[] {
+  return PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.filter((owner) => owner.subpaths.includes(subpath));
+}
+
+function listTrustedPrivatePluginSdkOwnerKeys(params: {
+  packageRoot: string;
+  modulePath: string;
+}): string[] {
+  return PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.filter((owner) =>
+    isTrustedPrivatePluginSdkOwnerPath({ ...params, owner }),
+  ).map((owner) => owner.bundledPluginId);
 }
 
 function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
@@ -517,13 +702,14 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   modulePath: string;
   subpath: string;
 }) {
-  return (
-    shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ||
-    (BUNDLED_CODEX_PRIVATE_PLUGIN_SDK_SUBPATHS.has(params.subpath) &&
-      isTrustedCodexPluginModulePath({
-        packageRoot: params.packageRoot,
-        modulePath: params.modulePath,
-      }))
+  const owners = findPrivatePluginSdkSubpathOwners(params.subpath);
+  if (owners.length === 0) {
+    return shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
+  }
+  return owners.some(
+    (owner) =>
+      isTrustedPrivatePluginSdkOwnerPath({ ...params, owner }) ||
+      (owner.allowPrivateQaCli && shouldIncludePrivateLocalOnlyPluginSdkSubpaths()),
   );
 }
 
@@ -580,8 +766,8 @@ export function listPluginSdkExportedSubpaths(
   if (!packageRoot) {
     return [];
   }
-  const includeCodexPrivateRuntime = isTrustedCodexPluginModulePath({ packageRoot, modulePath });
-  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::codexPrivate=${includeCodexPrivateRuntime ? "1" : "0"}`;
+  const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({ packageRoot, modulePath });
+  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
   const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
   if (cached) {
     return cached;
@@ -618,8 +804,8 @@ export function resolvePluginSdkScopedAliasMap(
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
-  const includeCodexPrivateRuntime = isTrustedCodexPluginModulePath({ packageRoot, modulePath });
-  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::codexPrivate=${includeCodexPrivateRuntime ? "1" : "0"}`;
+  const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({ packageRoot, modulePath });
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
   if (cached) {
     return cached;
@@ -703,6 +889,7 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
 
 const JITI_NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
 const JITI_ALIAS_ROOT_SENTINELS = new Set<string | undefined>(["/", "\\", undefined]);
+const JITI_CONCRETE_ALIAS_TARGET_PATTERN = /^(?:[A-Za-z]:[/\\]|[/\\])/;
 
 // Memoize loader alias/config by effective resolution context so repeated
 // loader setup avoids rebuilding the same filesystem-derived map and cache key.
@@ -714,6 +901,8 @@ const aliasMapCache = new PluginLruCache<Record<string, string>>(
 const normalizedJitiAliasMapCache = new PluginLruCache<Record<string, string>>(
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
+const normalizedJitiAliasMapByInput = new WeakMap<Record<string, string>, Record<string, string>>();
+const pluginLoaderModuleCacheKeyByAliasMap = new WeakMap<Record<string, string>, string>();
 const pluginLoaderModuleConfigCache = new PluginLruCache<{
   tryNative: boolean;
   aliasMap: Record<string, string>;
@@ -725,9 +914,49 @@ function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
 }
 
 function createJitiAliasContentCacheKey(aliasMap: Record<string, string>) {
-  return JSON.stringify(
-    Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
-  );
+  return Object.entries(aliasMap)
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}\0${value}`)
+    .join("\0");
+}
+
+function isConcreteJitiAliasTarget(target: string | undefined): boolean {
+  return typeof target === "string" && JITI_CONCRETE_ALIAS_TARGET_PATTERN.test(target);
+}
+
+function resolveJitiAliasTarget(
+  aliasKey: string,
+  aliasKeys: string[],
+  aliasMap: Record<string, string>,
+) {
+  let target = aliasMap[aliasKey];
+  const seenTargets = new Set<string>();
+  const seenAliasKeys = new Set<string>();
+  while (target && !isConcreteJitiAliasTarget(target) && !seenTargets.has(target)) {
+    seenTargets.add(target);
+    let nextTarget: string | undefined;
+    for (const candidateKey of aliasKeys) {
+      if (
+        candidateKey === aliasKey ||
+        aliasKey.startsWith(candidateKey) ||
+        !target.startsWith(candidateKey) ||
+        !JITI_ALIAS_ROOT_SENTINELS.has(target[candidateKey.length])
+      ) {
+        continue;
+      }
+      if (seenAliasKeys.has(candidateKey)) {
+        return target;
+      }
+      seenAliasKeys.add(candidateKey);
+      nextTarget = aliasMap[candidateKey] + target.slice(candidateKey.length);
+      break;
+    }
+    if (!nextTarget || nextTarget === target) {
+      break;
+    }
+    target = nextTarget;
+  }
+  return target;
 }
 
 function normalizePluginLoaderAliasMapForJiti(
@@ -736,28 +965,40 @@ function normalizePluginLoaderAliasMapForJiti(
   if (hasJitiNormalizedAliasMarker(aliasMap)) {
     return aliasMap;
   }
+  const cachedByInput = normalizedJitiAliasMapByInput.get(aliasMap);
+  if (cachedByInput) {
+    return cachedByInput;
+  }
   const cacheKey = createJitiAliasContentCacheKey(aliasMap);
   const cached = normalizedJitiAliasMapCache.get(cacheKey);
   if (cached) {
+    normalizedJitiAliasMapByInput.set(aliasMap, cached);
     return cached;
   }
+  const aliasDepth = new Map<string, number>();
+  const getAliasDepth = (key: string) => {
+    const cachedDepth = aliasDepth.get(key);
+    if (cachedDepth !== undefined) {
+      return cachedDepth;
+    }
+    const depth = key.split("/").length;
+    aliasDepth.set(key, depth);
+    return depth;
+  };
   const normalizedAliasMap = Object.fromEntries(
     Object.entries(aliasMap).toSorted(
-      ([left], [right]) => right.split("/").length - left.split("/").length,
+      ([left], [right]) => getAliasDepth(right) - getAliasDepth(left),
     ),
   );
-  for (const aliasKey in normalizedAliasMap) {
-    for (const candidateKey in normalizedAliasMap) {
-      if (
-        candidateKey === aliasKey ||
-        aliasKey.startsWith(candidateKey) ||
-        !normalizedAliasMap[aliasKey]?.startsWith(candidateKey) ||
-        !JITI_ALIAS_ROOT_SENTINELS.has(normalizedAliasMap[aliasKey]?.[candidateKey.length])
-      ) {
-        continue;
-      }
-      normalizedAliasMap[aliasKey] =
-        normalizedAliasMap[candidateKey] + normalizedAliasMap[aliasKey].slice(candidateKey.length);
+  const aliasKeys = Object.keys(normalizedAliasMap);
+  for (const aliasKey of aliasKeys) {
+    const target = normalizedAliasMap[aliasKey];
+    if (!target || isConcreteJitiAliasTarget(target)) {
+      continue;
+    }
+    const resolvedTarget = resolveJitiAliasTarget(aliasKey, aliasKeys, normalizedAliasMap);
+    if (resolvedTarget) {
+      normalizedAliasMap[aliasKey] = resolvedTarget;
     }
   }
   Object.defineProperty(normalizedAliasMap, JITI_NORMALIZED_ALIAS_SYMBOL, {
@@ -765,6 +1006,7 @@ function normalizePluginLoaderAliasMapForJiti(
     enumerable: false,
   });
   normalizedJitiAliasMapCache.set(cacheKey, normalizedAliasMap);
+  normalizedJitiAliasMapByInput.set(aliasMap, normalizedAliasMap);
   return normalizedAliasMap;
 }
 
@@ -860,33 +1102,65 @@ export function buildPluginLoaderAliasMap(
 export function resolvePluginRuntimeModulePath(
   params: LoaderModuleResolveParams = {},
 ): string | null {
+  return resolvePluginRuntimeModulePathWithDiagnostics(params).resolvedPath;
+}
+
+export function resolvePluginRuntimeModulePathWithDiagnostics(
+  params: LoaderModuleResolveParams = {},
+): PluginRuntimeModuleResolution {
+  let modulePath: string | undefined;
+  let packageRoot: string | null = null;
+  const candidates: string[] = [];
   try {
-    const modulePath = resolveLoaderModulePath(params);
+    modulePath = resolveLoaderModulePath(params);
     const orderedKinds = resolvePluginSdkAliasCandidateOrder({
       modulePath,
       isProduction: process.env.NODE_ENV === "production",
       pluginSdkResolution: params.pluginSdkResolution,
     });
-    const packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
-    const candidates = packageRoot
-      ? orderedKinds.map((kind) =>
-          kind === "src"
-            ? path.join(packageRoot, "src", "plugins", "runtime", "index.ts")
-            : path.join(packageRoot, "dist", "plugins", "runtime", "index.js"),
-        )
-      : [
-          path.join(path.dirname(modulePath), "runtime", "index.ts"),
-          path.join(path.dirname(modulePath), "runtime", "index.js"),
-        ];
-    for (const candidate of candidates) {
+    packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
+    if (packageRoot) {
+      appendPluginRuntimeModuleCandidates(candidates, packageRoot, orderedKinds);
+    } else {
+      const argv1 = params.argv1 ?? process.argv[1];
+      candidates.push(
+        ...listAncestorPluginRuntimeModuleCandidates({
+          starts: listArgvRuntimeFallbackStartDirs(argv1),
+          orderedKinds,
+        }),
+      );
+      appendSiblingPluginRuntimeModuleCandidates(
+        candidates,
+        path.join(path.dirname(modulePath), "runtime"),
+        orderedKinds,
+      );
+    }
+    const dedupedCandidates = dedupeResolvedPaths(candidates);
+    for (const candidate of dedupedCandidates) {
       if (fs.existsSync(candidate)) {
-        return candidate;
+        return {
+          modulePath,
+          packageRoot,
+          candidates: dedupedCandidates,
+          resolvedPath: candidate,
+        };
       }
     }
-  } catch {
-    // ignore
+  } catch (error) {
+    return {
+      modulePath,
+      packageRoot,
+      candidates: dedupeResolvedPaths(candidates),
+      resolvedPath: null,
+      error: formatResolutionError(error),
+    };
   }
-  return null;
+  return {
+    modulePath,
+    packageRoot,
+    candidates: dedupeResolvedPaths(candidates),
+    resolvedPath: null,
+  };
 }
 
 export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
@@ -951,12 +1225,11 @@ export function createPluginLoaderModuleCacheKey(params: {
   tryNative: boolean;
   aliasMap: Record<string, string>;
 }): string {
-  return JSON.stringify({
-    tryNative: params.tryNative,
-    aliasMap: Object.entries(params.aliasMap).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    ),
-  });
+  const aliasMapKey =
+    pluginLoaderModuleCacheKeyByAliasMap.get(params.aliasMap) ??
+    createJitiAliasContentCacheKey(params.aliasMap);
+  pluginLoaderModuleCacheKeyByAliasMap.set(params.aliasMap, aliasMapKey);
+  return `${params.tryNative ? "native" : "transform"}\0${aliasMapKey}`;
 }
 
 export function resolvePluginLoaderModuleConfig(params: {

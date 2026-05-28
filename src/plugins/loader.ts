@@ -55,6 +55,11 @@ import {
   type PluginCandidate,
   type PluginDiscoveryResult,
 } from "./discovery.js";
+import {
+  clearEmbeddingProviders,
+  listRegisteredEmbeddingProviders,
+  restoreRegisteredEmbeddingProviders,
+} from "./embedding-providers.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { toSafeImportPath } from "./import-specifier.js";
@@ -125,6 +130,7 @@ import {
   serializePluginIdScope,
 } from "./plugin-scope.js";
 import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
+import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistryParams } from "./registry-types.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
@@ -143,11 +149,13 @@ import {
   buildPluginLoaderJitiOptions,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
+  type PluginRuntimeModuleResolution,
   type PluginSdkResolutionPreference,
   resolveExtensionApiAlias,
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
   resolvePluginRuntimeModulePath,
+  resolvePluginRuntimeModulePathWithDiagnostics,
   resolvePluginSdkScopedAliasMap,
   shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
@@ -169,6 +177,7 @@ export type PluginLoadOptions = {
   activationSourceConfig?: OpenClawConfig;
   autoEnabledReasons?: Readonly<Record<string, string[]>>;
   workspaceDir?: string;
+  installRecords?: Record<string, PluginInstallRecord>;
   // Allows callers to resolve plugin roots and load paths against an explicit env
   // instead of the process-global environment.
   env?: NodeJS.ProcessEnv;
@@ -267,6 +276,7 @@ type CachedPluginState = {
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
   compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
+  embeddingProviders: ReturnType<typeof listRegisteredEmbeddingProviders>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
 };
@@ -285,6 +295,7 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "subagent",
   "system",
   "media",
+  "mediaUnderstanding",
   "tts",
   "stt",
   "channel",
@@ -292,6 +303,10 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "logging",
   "state",
   "modelAuth",
+  "imageGeneration",
+  "videoGeneration",
+  "musicGeneration",
+  "llm",
 ] as const satisfies readonly (keyof PluginRuntime)[];
 
 function createPluginCandidatesFromManifestRegistry(
@@ -321,6 +336,7 @@ export function clearActivatedPluginRuntimeState(): void {
   clearCompactionProviders();
   clearDetachedTaskLifecycleRuntimeRegistration();
   clearPluginInteractiveHandlers();
+  clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
 }
@@ -351,10 +367,12 @@ type PluginRegistrySnapshot = {
     modelCatalogProviders: PluginRegistry["modelCatalogProviders"];
     cliBackends: NonNullable<PluginRegistry["cliBackends"]>;
     textTransforms: PluginRegistry["textTransforms"];
+    embeddingProviders: PluginRegistry["embeddingProviders"];
     speechProviders: PluginRegistry["speechProviders"];
     realtimeTranscriptionProviders: PluginRegistry["realtimeTranscriptionProviders"];
     realtimeVoiceProviders: PluginRegistry["realtimeVoiceProviders"];
     mediaUnderstandingProviders: PluginRegistry["mediaUnderstandingProviders"];
+    transcriptSourceProviders: PluginRegistry["transcriptSourceProviders"];
     imageGenerationProviders: PluginRegistry["imageGenerationProviders"];
     videoGenerationProviders: PluginRegistry["videoGenerationProviders"];
     musicGenerationProviders: PluginRegistry["musicGenerationProviders"];
@@ -394,10 +412,12 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       modelCatalogProviders: [...registry.modelCatalogProviders],
       cliBackends: [...(registry.cliBackends ?? [])],
       textTransforms: [...registry.textTransforms],
+      embeddingProviders: [...registry.embeddingProviders],
       speechProviders: [...registry.speechProviders],
       realtimeTranscriptionProviders: [...registry.realtimeTranscriptionProviders],
       realtimeVoiceProviders: [...registry.realtimeVoiceProviders],
       mediaUnderstandingProviders: [...registry.mediaUnderstandingProviders],
+      transcriptSourceProviders: [...registry.transcriptSourceProviders],
       imageGenerationProviders: [...registry.imageGenerationProviders],
       videoGenerationProviders: [...registry.videoGenerationProviders],
       musicGenerationProviders: [...registry.musicGenerationProviders],
@@ -436,10 +456,12 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.modelCatalogProviders = snapshot.arrays.modelCatalogProviders;
   registry.cliBackends = snapshot.arrays.cliBackends;
   registry.textTransforms = snapshot.arrays.textTransforms;
+  registry.embeddingProviders = snapshot.arrays.embeddingProviders;
   registry.speechProviders = snapshot.arrays.speechProviders;
   registry.realtimeTranscriptionProviders = snapshot.arrays.realtimeTranscriptionProviders;
   registry.realtimeVoiceProviders = snapshot.arrays.realtimeVoiceProviders;
   registry.mediaUnderstandingProviders = snapshot.arrays.mediaUnderstandingProviders;
+  registry.transcriptSourceProviders = snapshot.arrays.transcriptSourceProviders;
   registry.imageGenerationProviders = snapshot.arrays.imageGenerationProviders;
   registry.videoGenerationProviders = snapshot.arrays.videoGenerationProviders;
   registry.musicGenerationProviders = snapshot.arrays.musicGenerationProviders;
@@ -520,6 +542,12 @@ function runPluginRegisterSync(
 function createPluginModuleLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
   const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
   const createLoaderForModule = (modulePath: string) => {
+    installOpenClawPluginSdkNativeResolver({
+      argv1: process.argv[1],
+      moduleUrl: import.meta.url,
+      pluginModulePath: modulePath,
+      pluginSdkResolution: options.pluginSdkResolution,
+    });
     return getCachedPluginModuleLoader({
       cache: moduleLoaders,
       modulePath,
@@ -592,6 +620,22 @@ function resolvePreferredBuiltBundledRuntimeArtifact(params: {
     }
   }
   return { source, rootDir };
+}
+
+function formatPluginRuntimeModuleResolutionError(params: {
+  resolution: PluginRuntimeModuleResolution;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
+}): string {
+  const { resolution } = params;
+  const candidates = resolution.candidates.length > 0 ? resolution.candidates.join(", ") : "<none>";
+  return [
+    "Unable to resolve plugin runtime module",
+    `loader=${resolution.modulePath ?? "<unresolved>"}`,
+    `packageRoot=${resolution.packageRoot ?? "<none>"}`,
+    `pluginSdkResolution=${params.pluginSdkResolution ?? "auto"}`,
+    `candidates=${candidates}`,
+    ...(resolution.error ? [`resolverError=${resolution.error}`] : []),
+  ].join("; ");
 }
 
 export const testing = {
@@ -1117,7 +1161,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
   const installRecords = {
-    ...loadInstalledPluginIndexInstallRecordsSync({ env }),
+    ...(options.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env })),
     ...cfg.plugins?.installs,
   };
   const cacheKey = buildCacheKey({
@@ -1572,6 +1616,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           cached.state.detachedTaskRuntimeRegistration,
         );
         restorePluginInteractiveHandlers(cached.state.interactiveHandlers ?? []);
+        restoreRegisteredEmbeddingProviders(cached.state.embeddingProviders);
         restoreRegisteredMemoryEmbeddingProviders(cached.state.memoryEmbeddingProviders);
         restoreMemoryPluginState({
           capability: cached.state.memoryCapability,
@@ -1608,11 +1653,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       if (createPluginRuntimeFactory) {
         return createPluginRuntimeFactory;
       }
-      const runtimeModulePath = resolvePluginRuntimeModulePath({
+      const runtimeModuleResolution = resolvePluginRuntimeModulePathWithDiagnostics({
         pluginSdkResolution: options.pluginSdkResolution,
       });
+      const runtimeModulePath = runtimeModuleResolution.resolvedPath;
       if (!runtimeModulePath) {
-        throw new Error("Unable to resolve plugin runtime module");
+        throw new Error(
+          formatPluginRuntimeModuleResolutionError({
+            resolution: runtimeModuleResolution,
+            pluginSdkResolution: options.pluginSdkResolution,
+          }),
+        );
       }
       const runtimeModule = withProfile(
         { source: runtimeModulePath },
@@ -2419,6 +2470,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousAgentHarnesses = listRegisteredAgentHarnesses();
       const previousCompactionProviders = listRegisteredCompactionProviders();
       const previousDetachedTaskRuntimeRegistration = getDetachedTaskLifecycleRuntimeRegistration();
+      const previousEmbeddingProviders = listRegisteredEmbeddingProviders();
       const previousMemoryCapability = getMemoryCapabilityRegistration();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
@@ -2437,6 +2489,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           restoreRegisteredAgentHarnesses(previousAgentHarnesses);
           restoreRegisteredCompactionProviders(previousCompactionProviders);
           restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
+          restoreRegisteredEmbeddingProviders(previousEmbeddingProviders);
           restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
           restoreMemoryPluginState({
             capability: previousMemoryCapability,
@@ -2452,6 +2505,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreRegisteredAgentHarnesses(previousAgentHarnesses);
         restoreRegisteredCompactionProviders(previousCompactionProviders);
         restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
+        restoreRegisteredEmbeddingProviders(previousEmbeddingProviders);
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
         restoreMemoryPluginState({
           capability: previousMemoryCapability,
@@ -2531,6 +2585,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           registry,
           agentHarnesses: listRegisteredAgentHarnesses(),
           compactionProviders: listRegisteredCompactionProviders(),
+          embeddingProviders: listRegisteredEmbeddingProviders(),
           memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
           memoryPromptSupplements: listMemoryPromptSupplements(),
         },

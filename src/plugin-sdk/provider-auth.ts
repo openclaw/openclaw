@@ -2,10 +2,16 @@
 
 import path from "node:path";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { externalCliDiscoveryForProviderAuth } from "../agents/auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+import {
+  ensureAuthProfileStore,
+  loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreWithoutExternalProfiles,
+} from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   COPILOT_INTEGRATION_ID,
   buildCopilotIdeHeaders,
@@ -146,8 +152,9 @@ function parseCopilotTokenResponse(value: unknown): {
   if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
     expiresAtMs = expiresAt < 100_000_000_000 ? expiresAt * 1000 : expiresAt;
   } else if (typeof expiresAt === "string" && expiresAt.trim().length > 0) {
-    const parsed = Number.parseInt(expiresAt, 10);
-    if (!Number.isFinite(parsed)) {
+    const trimmed = expiresAt.trim();
+    const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    if (!Number.isSafeInteger(parsed)) {
       throw new Error("Copilot token response has invalid expires_at");
     }
     expiresAtMs = parsed < 100_000_000_000 ? parsed * 1000 : parsed;
@@ -282,20 +289,12 @@ export function listUsableProviderAuthProfileIds(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): { agentDir: string; profileIds: string[] } {
   try {
-    const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
-    const store = ensureAuthProfileStore(agentDir, {
-      allowKeychainPrompt: false,
-    });
-    return {
-      agentDir,
-      profileIds: resolveAuthProfileOrder({
-        cfg: params.cfg,
-        store,
-        provider: params.provider,
-      }),
-    };
+    const { agentDir, profileIds } = resolveUsableProviderAuthProfiles(params);
+    return { agentDir, profileIds };
   } catch {
     return { agentDir: "", profileIds: [] };
   }
@@ -305,6 +304,8 @@ export function isProviderAuthProfileConfigured(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): boolean {
   return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
 }
@@ -313,14 +314,13 @@ export async function resolveProviderAuthProfileApiKey(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): Promise<string | undefined> {
-  const { agentDir, profileIds } = listUsableProviderAuthProfileIds(params);
+  const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
   if (!agentDir || profileIds.length === 0) {
     return undefined;
   }
-  const store = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
-  });
   for (const profileId of profileIds) {
     const resolved = await resolveApiKeyForProfile({
       cfg: params.cfg,
@@ -333,4 +333,46 @@ export async function resolveProviderAuthProfileApiKey(params: {
     }
   }
   return undefined;
+}
+
+function resolveUsableProviderAuthProfiles(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
+}): { agentDir: string; profileIds: string[]; store: AuthProfileStore } {
+  const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
+  const externalCli = params.includeExternalCliAuth
+    ? externalCliDiscoveryForProviderAuth({
+        cfg: params.cfg,
+        provider: params.provider,
+        allowKeychainPrompt: params.allowKeychainPrompt,
+      })
+    : undefined;
+  const store = externalCli
+    ? loadAuthProfileStoreForSecretsRuntime(agentDir, { externalCli })
+    : loadAuthProfileStoreForSecretsRuntime(agentDir);
+  const profileIds = resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store,
+    provider: params.provider,
+  });
+  if (profileIds.length > 0) {
+    return { agentDir, profileIds, store };
+  }
+
+  const fallbackStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+    allowKeychainPrompt: params.allowKeychainPrompt ?? false,
+    resolveLegacyOAuthSidecars: true,
+  });
+  return {
+    agentDir,
+    profileIds: resolveAuthProfileOrder({
+      cfg: params.cfg,
+      store: fallbackStore,
+      provider: params.provider,
+    }),
+    store: fallbackStore,
+  };
 }

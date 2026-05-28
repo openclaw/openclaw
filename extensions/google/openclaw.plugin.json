@@ -5,6 +5,7 @@
   },
   "enabledByDefault": true,
   "providers": ["google", "google-gemini-cli", "google-vertex"],
+  "providerCatalogEntry": "./provider-discovery.ts",
   "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
   "modelIdNormalization": {
     "providers": {
@@ -14,7 +15,7 @@
           "gemini-3-pro-preview": "gemini-3.1-pro-preview",
           "gemini-3-flash": "gemini-3-flash-preview",
           "gemini-3.1-pro": "gemini-3.1-pro-preview",
-          "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+          "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
           "gemini-3.1-flash": "gemini-3-flash-preview",
           "gemini-3.1-flash-preview": "gemini-3-flash-preview"
         }
@@ -25,7 +26,7 @@
           "gemini-3-pro-preview": "gemini-3.1-pro-preview",
           "gemini-3-flash": "gemini-3-flash-preview",
           "gemini-3.1-pro": "gemini-3.1-pro-preview",
-          "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+          "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
           "gemini-3.1-flash": "gemini-3-flash-preview",
           "gemini-3.1-flash-preview": "gemini-3-flash-preview"
         }
@@ -36,7 +37,7 @@
           "gemini-3-pro-preview": "gemini-3.1-pro-preview",
           "gemini-3-flash": "gemini-3-flash-preview",
           "gemini-3.1-pro": "gemini-3.1-pro-preview",
-          "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+          "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
           "gemini-3.1-flash": "gemini-3-flash-preview",
           "gemini-3.1-flash-preview": "gemini-3-flash-preview"
         }
@@ -133,12 +134,12 @@
       {
         "provider": "google",
         "model": "gemini-2.5-flash-lite-preview-09-25",
-        "reason": "Google shut down this Gemini 2.5 Flash-Lite preview on 2026-03-31. Use google/gemini-3.1-flash-lite-preview."
+        "reason": "Google shut down this Gemini 2.5 Flash-Lite preview on 2026-03-31. Use google/gemini-3.1-flash-lite."
       },
       {
         "provider": "google",
         "model": "gemini-2.5-flash-lite-preview-09-2025",
-        "reason": "Google shut down this Gemini 2.5 Flash-Lite preview on 2026-03-31. Use google/gemini-3.1-flash-lite-preview."
+        "reason": "Google shut down this Gemini 2.5 Flash-Lite preview on 2026-03-31. Use google/gemini-3.1-flash-lite."
       },
       {
         "provider": "google",
@@ -298,12 +299,12 @@
       {
         "provider": "google-gemini-cli",
         "model": "gemini-2.5-flash-lite-preview-09-25",
-        "reason": "Google shut down this Gemini 2.5 Flash-Lite preview on 2026-03-31. Use google-gemini-cli/gemini-3.1-flash-lite-preview."
+        "reason": "Google shut down this Gemini 2.5 Flash-Lite preview on 2026-03-31. Use google-gemini-cli/gemini-3.1-flash-lite."
       },
       {
         "provider": "google-gemini-cli",
         "model": "gemini-2.5-flash-lite-preview-09-2025",
-        "reason": "Google shut down this Gemini 2.5 Flash-Lite preview on 2026-03-31. Use google-gemini-cli/gemini-3.1-flash-lite-preview."
+        "reason": "Google shut down this Gemini 2.5 Flash-Lite preview on 2026-03-31. Use google-gemini-cli/gemini-3.1-flash-lite."
       },
       {
         "provider": "google-gemini-cli",
@@ -463,12 +464,12 @@
       {
         "provider": "google-vertex",
         "model": "gemini-2.5-flash-lite-preview-09-25",
-        "reason": "Google shut down this Gemini 2.5 Flash-Lite preview on 2026-03-31. Use google-vertex/gemini-3.1-flash-lite-preview."
+        "reason": "Google shut down this Gemini 2.5 Flash-Lite preview on 2026-03-31. Use google-vertex/gemini-3.1-flash-lite."
       },
       {
         "provider": "google-vertex",
         "model": "gemini-2.5-flash-lite-preview-09-2025",
-        "reason": "Google shut down this Gemini 2.5 Flash-Lite preview on 2026-03-31. Use google-vertex/gemini-3.1-flash-lite-preview."
+        "reason": "Google shut down this Gemini 2.5 Flash-Lite preview on 2026-03-31. Use google-vertex/gemini-3.1-flash-lite."
       },
       {
         "provider": "google-vertex",
@@ -603,13 +604,14 @@
             "source": "gcloud adc"
           }
         ]
+      },
+      {
+        "id": "google",
+        "envVars": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
       }
     ]
   },
   "cliBackends": ["google-gemini-cli"],
-  "providerAuthEnvVars": {
-    "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
-  },
   "providerAuthChoices": [
     {
       "provider": "google",

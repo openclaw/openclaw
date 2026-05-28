@@ -1,11 +1,11 @@
 import {
   createPreviewMessageReceipt,
   type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   isPotentialTruncatedFinal,
   selectLongerFinalText,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -26,6 +26,7 @@ export type DraftLaneState = {
 
 type LanePreviewFinalizedDelivery = {
   content: string;
+  promptContextContent?: string;
   messageId: number;
   buttonsAttached?: boolean;
   receipt: MessageReceipt;
@@ -367,7 +368,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         }
         await params.sendPayload(followUpPayload(payload, chunk));
       }
-      return result("preview-finalized", { content: text, messageId, buttonsAttached });
+      return result("preview-finalized", {
+        content: text,
+        promptContextContent: firstChunk,
+        messageId,
+        buttonsAttached,
+      });
     }
 
     return result("preview-updated");

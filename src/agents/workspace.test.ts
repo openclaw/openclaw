@@ -77,6 +77,11 @@ async function expectCompletedWithoutBootstrap(dir: string) {
 
 function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   const names = files.map((file) => file.name);
+  expect(names).toStrictEqual(["AGENTS.md", "TOOLS.md"]);
+}
+
+function expectCronAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
+  const names = files.map((file) => file.name);
   expect(names).toStrictEqual(["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md"]);
 }
 
@@ -337,13 +342,13 @@ describe("ensureAgentWorkspace", () => {
     await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
   });
 
-  it("writes the current fenced HEARTBEAT template body into new workspaces", async () => {
+  it("writes the clean HEARTBEAT runtime template into new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     const heartbeat = await fs.readFile(path.join(tempDir, DEFAULT_HEARTBEAT_FILENAME), "utf-8");
-    expect(heartbeat).toContain("```markdown");
+    expect(heartbeat).not.toContain("```");
     expect(heartbeat).toContain(
       "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
     );
@@ -451,6 +456,6 @@ describe("filterBootstrapFilesForSession", () => {
 
   it("filters to allowlist for cron sessions", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:cron:daily-check");
-    expectSubagentAllowedBootstrapNames(result);
+    expectCronAllowedBootstrapNames(result);
   });
 });

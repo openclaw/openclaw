@@ -5,12 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
-import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { persistCliTurnTranscript, runAgentAttempt } from "./attempt-execution.js";
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
-const runEmbeddedPiAgentMock = vi.hoisted(() => vi.fn());
+const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
 const ORIGINAL_HOME = process.env.HOME;
 
 vi.mock("../cli-runner.js", () => ({
@@ -29,11 +29,11 @@ vi.mock("../provider-auth-aliases.js", () => ({
     provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
 }));
 
-vi.mock("../pi-embedded.js", () => ({
-  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
+vi.mock("../embedded-agent.js", () => ({
+  runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 
-function makeCliResult(text: string): EmbeddedPiRunResult {
+function makeCliResult(text: string): EmbeddedAgentRunResult {
   return {
     payloads: [{ text }],
     meta: {
@@ -125,8 +125,8 @@ function firstRunCliAgentArg(callIndex = 0) {
   return requireMockArg(runCliAgentMock, callIndex, "run CLI agent argument");
 }
 
-function firstEmbeddedPiAgentArg(callIndex = 0) {
-  return requireMockArg(runEmbeddedPiAgentMock, callIndex, "embedded PI agent argument");
+function firstEmbeddedAgentArg(callIndex = 0) {
+  return requireMockArg(runEmbeddedAgentMock, callIndex, "embedded OpenClaw agent argument");
 }
 
 describe("CLI attempt execution", () => {
@@ -137,7 +137,7 @@ describe("CLI attempt execution", () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-attempt-"));
     storePath = path.join(tmpDir, "sessions.json");
     runCliAgentMock.mockReset();
-    runEmbeddedPiAgentMock.mockReset();
+    runEmbeddedAgentMock.mockReset();
   });
 
   afterEach(async () => {
@@ -172,7 +172,7 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: params.runId,
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -270,7 +270,7 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-cli-expired",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -489,7 +489,7 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-codex-cli-auth-alias",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -894,7 +894,6 @@ describe("CLI attempt execution", () => {
       timeoutMs: 1_000,
       runId: "run-cli-channel-context",
       opts: {
-        senderIsOwner: false,
         messageProvider: "discord-voice",
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
@@ -945,7 +944,6 @@ describe("CLI attempt execution", () => {
       timeoutMs: 1_000,
       runId: "run-cli-tools-allow",
       opts: {
-        senderIsOwner: true,
         toolsAllow: ["read", "web_search"],
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
@@ -1001,7 +999,7 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-canonical-claude-cli",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: "telegram",
@@ -1015,7 +1013,7 @@ describe("CLI attempt execution", () => {
       sessionHasHistory: false,
     });
 
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expectMockArgFields(runCliAgentMock, {
       provider: "claude-cli",
       model: "claude-opus-4-7",
@@ -1056,7 +1054,7 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-shorthand-claude-cli",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: "telegram",
@@ -1070,7 +1068,7 @@ describe("CLI attempt execution", () => {
       sessionHasHistory: false,
     });
 
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expectMockArgFields(runCliAgentMock, {
       provider: "claude-cli",
       model: "opus-4.7",
@@ -1085,12 +1083,12 @@ describe("CLI attempt execution", () => {
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "canonical codex embedded" }],
       meta: {
         durationMs: 5,
         finalAssistantVisibleText: "canonical codex embedded",
-        executionTrace: { runner: "pi" },
+        executionTrace: { runner: "openclaw" },
       },
     });
 
@@ -1118,7 +1116,7 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-canonical-codex-cli",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: "telegram",
@@ -1133,7 +1131,7 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runCliAgentMock).not.toHaveBeenCalled();
-    expectMockArgFields(runEmbeddedPiAgentMock, {
+    expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
       model: "gpt-5.4",
     });
@@ -1175,9 +1173,9 @@ describe("CLI attempt execution", () => {
       supports: () => ({ supported: true, priority: 100 }),
       runAttempt: vi.fn(),
     });
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
-    } satisfies EmbeddedPiRunResult);
+    } satisfies EmbeddedAgentRunResult);
 
     try {
       await runAgentAttempt({
@@ -1196,7 +1194,7 @@ describe("CLI attempt execution", () => {
         resolvedThinkLevel: "medium",
         timeoutMs: 1_000,
         runId: "run-openai-codex-api-key-backup",
-        opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+        opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
         runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
         spawnedBy: undefined,
         messageChannel: undefined,
@@ -1213,7 +1211,7 @@ describe("CLI attempt execution", () => {
       clearAgentHarnesses();
     }
 
-    expectMockArgFields(runEmbeddedPiAgentMock, {
+    expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
       model: "gpt-5.4",
       authProfileId: "openai:backup",
@@ -1229,9 +1227,9 @@ describe("CLI attempt execution", () => {
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
-    } satisfies EmbeddedPiRunResult);
+    } satisfies EmbeddedAgentRunResult);
 
     await runAgentAttempt({
       providerOverride: "anthropic",
@@ -1256,7 +1254,6 @@ describe("CLI attempt execution", () => {
       timeoutMs: 1_000,
       runId: "run-model-run-raw",
       opts: {
-        senderIsOwner: false,
         modelRun: true,
         promptMode: "none",
         messageProvider: "discord-voice",
@@ -1280,10 +1277,10 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runCliAgentMock).not.toHaveBeenCalled();
-    expectMockArgFields(runEmbeddedPiAgentMock, {
+    expectMockArgFields(runEmbeddedAgentMock, {
       provider: "anthropic",
       model: "claude-opus-4-7",
-      agentHarnessId: "pi",
+      agentHarnessId: "openclaw",
       prompt: "raw prompt",
       messageChannel: "discord",
       messageProvider: "discord-voice",
@@ -1291,7 +1288,7 @@ describe("CLI attempt execution", () => {
       promptMode: "none",
       disableTools: true,
     });
-    expect(firstEmbeddedPiAgentArg().prompt).not.toContain("[Inter-session message]");
+    expect(firstEmbeddedAgentArg().prompt).not.toContain("[Inter-session message]");
   });
 
   it("forwards trusted elevated defaults to embedded agent runs", async () => {
@@ -1307,9 +1304,9 @@ describe("CLI attempt execution", () => {
       defaultLevel: "on" as const,
     };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
-    } satisfies EmbeddedPiRunResult);
+    } satisfies EmbeddedAgentRunResult);
 
     await runAgentAttempt({
       providerOverride: "openai",
@@ -1328,7 +1325,6 @@ describe("CLI attempt execution", () => {
       timeoutMs: 1_000,
       runId: "run-elevated-followup",
       opts: {
-        senderIsOwner: false,
         bashElevated,
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
@@ -1344,7 +1340,7 @@ describe("CLI attempt execution", () => {
       sessionHasHistory: false,
     });
 
-    expectMockArgFields(runEmbeddedPiAgentMock, {
+    expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
       model: "gpt-5.4",
       bashElevated,
@@ -1378,7 +1374,6 @@ describe("CLI attempt execution", () => {
       timeoutMs: 1_000,
       runId: "run-cleanup-claude-cli",
       opts: {
-        senderIsOwner: false,
         cleanupBundleMcpOnRunEnd: true,
         cleanupCliLiveSessionOnRunEnd: true,
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
@@ -1399,7 +1394,7 @@ describe("CLI attempt execution", () => {
       cleanupBundleMcpOnRunEnd: true,
       cleanupCliLiveSessionOnRunEnd: true,
     });
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1409,7 +1404,7 @@ describe("embedded attempt harness pinning", () => {
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-embedded-attempt-"));
     runCliAgentMock.mockReset();
-    runEmbeddedPiAgentMock.mockReset();
+    runEmbeddedAgentMock.mockReset();
   });
 
   afterEach(async () => {
@@ -1421,9 +1416,9 @@ describe("embedded attempt harness pinning", () => {
       sessionId: "legacy-session",
       updatedAt: Date.now(),
     };
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
-    } satisfies EmbeddedPiRunResult);
+    } satisfies EmbeddedAgentRunResult);
 
     await runAgentAttempt({
       providerOverride: "openai",
@@ -1440,8 +1435,8 @@ describe("embedded attempt harness pinning", () => {
       isFallbackRetry: false,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
-      runId: "run-legacy-pi-pin",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runId: "run-legacy-runtime-pin",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -1453,7 +1448,7 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: true,
     });
 
-    expectMockArgFields(runEmbeddedPiAgentMock, { agentHarnessId: undefined });
+    expectMockArgFields(runEmbeddedAgentMock, { agentHarnessId: undefined });
   });
 
   it("ignores stale session Codex harness pins on non-OpenAI model switches", async () => {
@@ -1462,9 +1457,9 @@ describe("embedded attempt harness pinning", () => {
       updatedAt: Date.now(),
       agentHarnessId: "codex",
     };
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
-    } satisfies EmbeddedPiRunResult);
+    } satisfies EmbeddedAgentRunResult);
 
     await runAgentAttempt({
       providerOverride: "minimax",
@@ -1482,7 +1477,7 @@ describe("embedded attempt harness pinning", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-mixed-provider-auto-runtime",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -1494,7 +1489,7 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: true,
     });
 
-    expectMockArgFields(runEmbeddedPiAgentMock, { agentHarnessId: undefined });
+    expectMockArgFields(runEmbeddedAgentMock, { agentHarnessId: undefined });
   });
 
   it("forwards runtime toolsAllow into embedded attempts", async () => {
@@ -1502,9 +1497,9 @@ describe("embedded attempt harness pinning", () => {
       sessionId: "tools-allow-session",
       updatedAt: Date.now(),
     };
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
-    } satisfies EmbeddedPiRunResult);
+    } satisfies EmbeddedAgentRunResult);
 
     await runAgentAttempt({
       providerOverride: "openai",
@@ -1523,7 +1518,6 @@ describe("embedded attempt harness pinning", () => {
       timeoutMs: 1_000,
       runId: "run-tools-allow",
       opts: {
-        senderIsOwner: true,
         toolsAllow: ["read", "web_search"],
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
@@ -1537,7 +1531,7 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: false,
     });
 
-    expectMockArgFields(runEmbeddedPiAgentMock, { toolsAllow: ["read", "web_search"] });
+    expectMockArgFields(runEmbeddedAgentMock, { toolsAllow: ["read", "web_search"] });
   });
 
   it("lets provider/model runtime policy choose Codex without storing a session harness pin", async () => {
@@ -1545,9 +1539,9 @@ describe("embedded attempt harness pinning", () => {
       sessionId: "codex-history-session",
       updatedAt: Date.now(),
     };
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
-    } satisfies EmbeddedPiRunResult);
+    } satisfies EmbeddedAgentRunResult);
 
     await runAgentAttempt({
       providerOverride: "codex",
@@ -1574,8 +1568,8 @@ describe("embedded attempt harness pinning", () => {
       isFallbackRetry: false,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
-      runId: "run-codex-no-pi-pin",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runId: "run-codex-no-runtime-pin",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -1587,7 +1581,7 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: true,
     });
 
-    expectMockArgFields(runEmbeddedPiAgentMock, { agentHarnessId: undefined });
+    expectMockArgFields(runEmbeddedAgentMock, { agentHarnessId: undefined });
   });
 
   it("auto-forwards OpenAI Codex auth profiles to default Codex harness runs", async () => {
@@ -1611,9 +1605,9 @@ describe("embedded attempt harness pinning", () => {
         },
       }),
     );
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
-    } satisfies EmbeddedPiRunResult);
+    } satisfies EmbeddedAgentRunResult);
     clearAgentHarnesses();
     registerAgentHarness({
       id: "codex",
@@ -1639,7 +1633,7 @@ describe("embedded attempt harness pinning", () => {
         resolvedThinkLevel: "medium",
         timeoutMs: 1_000,
         runId: "run-codex-auto-auth-profile",
-        opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+        opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
         runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
         spawnedBy: undefined,
         messageChannel: undefined,
@@ -1654,7 +1648,7 @@ describe("embedded attempt harness pinning", () => {
       clearAgentHarnesses();
     }
 
-    expectMockArgFields(runEmbeddedPiAgentMock, {
+    expectMockArgFields(runEmbeddedAgentMock, {
       agentHarnessId: undefined,
       authProfileId: "openai-codex:work",
       authProfileIdSource: "auto",
@@ -1666,9 +1660,9 @@ describe("embedded attempt harness pinning", () => {
       sessionId: "fresh-session",
       updatedAt: Date.now(),
     };
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
-    } satisfies EmbeddedPiRunResult);
+    } satisfies EmbeddedAgentRunResult);
 
     await runAgentAttempt({
       providerOverride: "openai",
@@ -1686,7 +1680,7 @@ describe("embedded attempt harness pinning", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-fresh-no-pin",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -1698,18 +1692,18 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: false,
     });
 
-    expectMockArgFields(runEmbeddedPiAgentMock, { agentHarnessId: undefined });
+    expectMockArgFields(runEmbeddedAgentMock, { agentHarnessId: undefined });
   });
 
-  it("ignores stale OpenAI sessions pinned to PI and relies on default Codex routing", async () => {
+  it("ignores stale OpenAI sessions pinned to OpenClaw and relies on default Codex routing", async () => {
     const sessionEntry: SessionEntry = {
-      sessionId: "stale-pi-session",
+      sessionId: "stale-agent-session",
       updatedAt: Date.now(),
-      agentHarnessId: "pi",
+      agentHarnessId: "openclaw",
     };
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
-    } satisfies EmbeddedPiRunResult);
+    } satisfies EmbeddedAgentRunResult);
 
     await runAgentAttempt({
       providerOverride: "openai",
@@ -1726,8 +1720,8 @@ describe("embedded attempt harness pinning", () => {
       isFallbackRetry: false,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
-      runId: "run-stale-openai-pi-pin",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runId: "run-stale-openai-runtime-pin",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -1739,22 +1733,22 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: true,
     });
 
-    expectMockArgFields(runEmbeddedPiAgentMock, {
+    expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
       agentHarnessId: undefined,
     });
   });
 
-  it("routes explicit OpenAI PI runs with Codex OAuth through PI and the legacy Codex auth transport", async () => {
+  it("routes explicit OpenAI native runs with Codex OAuth through OpenClaw and the legacy Codex auth transport", async () => {
     const sessionEntry: SessionEntry = {
-      sessionId: "explicit-pi-codex-oauth-session",
+      sessionId: "explicit-agent-codex-oauth-session",
       updatedAt: Date.now(),
       authProfileOverride: "openai-codex:work",
       authProfileOverrideSource: "user",
     };
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
-    } satisfies EmbeddedPiRunResult);
+    } satisfies EmbeddedAgentRunResult);
 
     await runAgentAttempt({
       providerOverride: "openai",
@@ -1765,7 +1759,7 @@ describe("embedded attempt harness pinning", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
+              agentRuntime: { id: "openclaw" },
               models: [],
             },
           },
@@ -1781,8 +1775,8 @@ describe("embedded attempt harness pinning", () => {
       isFallbackRetry: false,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
-      runId: "run-openai-pi-codex-oauth",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runId: "run-openai-agent-codex-oauth",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -1794,11 +1788,11 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: false,
     });
 
-    expectMockArgFields(runEmbeddedPiAgentMock, {
+    expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai-codex",
       model: "gpt-5.4",
-      agentHarnessId: "pi",
-      agentHarnessRuntimeOverride: "pi",
+      agentHarnessId: "openclaw",
+      agentHarnessRuntimeOverride: "openclaw",
       authProfileId: "openai-codex:work",
       authProfileIdSource: "user",
     });
@@ -1809,9 +1803,9 @@ describe("embedded attempt harness pinning", () => {
       sessionId: "fallback-session",
       updatedAt: Date.now(),
     };
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
-    } satisfies EmbeddedPiRunResult);
+    } satisfies EmbeddedAgentRunResult);
 
     await runAgentAttempt({
       providerOverride: "openai",
@@ -1835,7 +1829,7 @@ describe("embedded attempt harness pinning", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-openai-fallback-with-cli-runtime",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -1848,7 +1842,7 @@ describe("embedded attempt harness pinning", () => {
     });
 
     expect(runCliAgentMock).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(firstEmbeddedPiAgentArg()).not.toHaveProperty("agentHarnessId", "claude-cli");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(firstEmbeddedAgentArg()).not.toHaveProperty("agentHarnessId", "claude-cli");
   });
 });

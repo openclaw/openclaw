@@ -18,8 +18,8 @@ describe("buildAgentSystemPrompt", () => {
   it("resolves helper session keys to scoped prompt surfaces", () => {
     expect(resolveAgentPromptSurfaceForSessionKey("agent:main:subagent:child")).toBe("subagent");
     expect(resolveAgentPromptSurfaceForSessionKey("agent:codex:acp:child")).toBe("acp_backend");
-    expect(resolveAgentPromptSurfaceForSessionKey("agent:main")).toBe("pi_main");
-    expect(resolveAgentPromptSurfaceForSessionKey(undefined)).toBe("pi_main");
+    expect(resolveAgentPromptSurfaceForSessionKey("agent:main")).toBe("openclaw_main");
+    expect(resolveAgentPromptSurfaceForSessionKey(undefined)).toBe("openclaw_main");
   });
 
   it("formats owner section for plain, hash, and missing owner lists", () => {
@@ -375,13 +375,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Brave API");
   });
 
-  it("keeps the PI empty-tool fallback on the main prompt surface", () => {
+  it("keeps the OpenClaw empty-tool fallback on the main prompt surface", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: [],
     });
 
-    expect(prompt).toContain("Pi lists the standard tools above");
+    expect(prompt).toContain("OpenClaw lists the standard tools above");
     expect(prompt).toContain("- sessions_spawn: spawn an isolated sub-agent session");
   });
 
@@ -836,7 +836,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(messagingPrompt).not.toContain("Sub-agent orchestration");
     expect(messagingPrompt).not.toContain("sessions_spawn(...)");
-    expect(messagingPrompt).not.toContain("subagents(action=list|steer|kill)");
+    expect(messagingPrompt).not.toContain("subagents(action=list)");
 
     expect(spawnOnlyPrompt).toContain(
       '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; include a clear objective/output/write-scope/verification brief and `taskName` when a stable handle helps; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.',
@@ -844,7 +844,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; include a clear objective/output/write-scope/verification brief and `taskName` when a stable handle helps; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` only for on-demand status, debugging, or intervention.',
+      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; include a clear objective/output/write-scope/verification brief and `taskName` when a stable handle helps; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list)` only for on-demand status/debugging visibility.',
     );
     expect(orchestrationWaitPrompt).toContain("use `sessions_yield` to wait for completion events");
   });
@@ -870,7 +870,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(preferPrompt).toContain("objective, expected output, relevant files/inputs");
     expect(preferPrompt).toContain("Treat child outputs as reports/evidence");
     expect(preferPrompt).toContain(
-      "Use `subagents(action=list|steer|kill)` only when explicitly asked for status",
+      "Use `subagents(action=list)` only when explicitly asked for sub-agent status",
     );
   });
 
@@ -1314,7 +1314,9 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("Avoid polling loops");
     expect(prompt).toContain("spawned by the main agent");
     expect(prompt).toContain("reported to the main agent");
-    expect(prompt).toContain("[... N more characters truncated]");
+    expect(prompt).toContain(
+      "[... N more characters truncated; rerun with narrower args if needed]",
+    );
     expect(prompt).toContain("offset/limit");
     expect(prompt).toContain("instead of full-file `cat`");
   });

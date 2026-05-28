@@ -13,13 +13,21 @@ default. When you enable it, OpenClaw changes what the model sees for one run:
 instead of exposing every enabled tool schema directly, the model sees only
 `exec` and `wait`.
 
-This page documents OpenClaw code mode. It is not Codex Code mode. Codex Code
-mode is part of the Codex coding harness and has its own project workspace,
-runtime, tools, and execution semantics. Codex Code mode and Codex-native
-dynamic tool search are stable Codex harness surfaces. OpenClaw code mode is an
-OpenClaw-owned experimental tool-surface adapter for generic OpenClaw runs. It
-uses `quickjs-wasi`, a hidden OpenClaw tool catalog, and the normal OpenClaw
-tool executor.
+This page documents OpenClaw code mode. It is not Codex Code mode. The two
+features share a name, but they are implemented by different runtimes and expose
+different `exec` contracts:
+
+- Codex Code Mode is enabled for Codex app-server threads unless restricted
+  tool policy disables native code mode. It runs in the Codex coding harness,
+  where the model writes shell commands through an `exec.command` contract.
+- OpenClaw code mode is disabled unless `tools.codeMode.enabled: true` is
+  configured. It runs in the OpenClaw generic agent runtime, where the model
+  writes JavaScript or TypeScript programs through an `exec.code` contract.
+
+Codex Code Mode and Codex-native dynamic tool search are stable Codex harness
+surfaces. OpenClaw code mode is an OpenClaw-owned experimental tool-surface
+adapter for generic OpenClaw runs. It uses `quickjs-wasi`, a hidden OpenClaw
+tool catalog, and the normal OpenClaw tool executor.
 
 ## What is this?
 
@@ -266,14 +274,22 @@ Input:
 
 ```typescript
 type CodeModeExecInput = {
-  code: string;
+  code?: string;
+  command?: string;
   language?: "javascript" | "typescript";
 };
 ```
 
 Input rules:
 
-- `code` is required and must be non-empty.
+- One of `code` or `command` must be non-empty.
+- `code` is the documented model-facing field.
+- `command` is accepted as an exec-compatible alias for hook policies and
+  trusted rewrites; when both are present, the values must match.
+- Outer code-mode `exec` hook events include `toolKind: "code_mode_exec"` and
+  include `toolInputKind: "javascript" | "typescript"` when the input language
+  is known, so policies can distinguish code-mode cells from shell-style `exec`
+  calls that share the same tool name.
 - `language` defaults to `"javascript"`.
 - If `language` is `"typescript"`, OpenClaw transpiles before evaluation.
 - `exec` rejects `import`, `require`, dynamic import, and module-loader patterns
@@ -482,7 +498,7 @@ This prevents recursion and keeps the model-facing contract narrow.
 
 ## Tool Search interaction
 
-Code mode supersedes the PI Tool Search model surface for runs where it is
+Code mode supersedes the OpenClaw Tool Search model surface for runs where it is
 active.
 
 When `tools.codeMode.enabled` is true and code mode activates:
@@ -495,7 +511,7 @@ When `tools.codeMode.enabled` is true and code mode activates:
 - Nested calls dispatch through the same OpenClaw executor path that Tool Search
   uses.
 
-The existing [Tool Search](/tools/tool-search) page describes the PI compact
+The existing [Tool Search](/tools/tool-search) page describes the OpenClaw compact
 catalog bridge. Code mode is the generic OpenClaw alternative for runs that can
 use `exec` and `wait`.
 

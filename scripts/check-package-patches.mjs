@@ -8,10 +8,11 @@ import YAML from "yaml";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
   [
-    "@agentclientprotocol/claude-agent-acp@0.36.1",
-    "patches/@agentclientprotocol__claude-agent-acp@0.36.1.patch",
+    "@agentclientprotocol/claude-agent-acp@0.37.0",
+    "patches/@agentclientprotocol__claude-agent-acp@0.37.0.patch",
   ],
   ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
+  ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
 ]);
 
 const ALLOWED_PATCH_FILES = new Set(["patches/.gitkeep", ...ALLOWED_PATCHED_DEPENDENCIES.values()]);

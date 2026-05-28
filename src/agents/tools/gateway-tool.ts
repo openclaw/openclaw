@@ -15,19 +15,19 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
+import { isRecord as isPlainObject } from "../../shared/record-coerce.js";
 import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
-import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 
 const log = createSubsystemLogger("gateway-tool");
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
-// Security: the agent-facing `gateway` tool is owner-only, but per SECURITY.md the model/agent
-// itself is not a trusted principal. `assertGatewayConfigMutationAllowed` is the explicit
-// model -> operator trust-boundary control on `config.apply`/`config.patch`, so the runtime
-// tool must fail closed and allow only a narrow set of agent-tunable paths.
+// Per SECURITY.md the model/agent itself is not a trusted principal.
+// `assertGatewayConfigMutationAllowed` is the explicit model -> operator
+// trust-boundary control on `config.apply`/`config.patch`, so the runtime tool
+// must fail closed and allow only a narrow set of agent-tunable paths.
 const ALLOWED_GATEWAY_CONFIG_PATHS = [
   // Agent prompt/model tuning.
   "agents.defaults.systemPromptOverride",
@@ -123,10 +123,6 @@ function parseGatewayConfigMutationRaw(
     throw new Error(`${action} raw must be an object.`);
   }
   return parsedRes.parsed;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeGatewayConfigPath(path: string): string {
@@ -370,7 +366,6 @@ export function createGatewayTool(opts?: {
   return {
     label: "Gateway",
     name: "gateway",
-    ownerOnly: isOpenClawOwnerOnlyCoreToolName("gateway"),
     description:
       "Gateway restart/config/update. Before config edits, use config.schema.lookup with targeted dot path. Prefer config.patch for partial merge; config.apply only full replace. Writes hot-reload or restart as needed. Always pass human `note` for post-restart delivery. If still owe the user a reply, pass one-shot `continuationMessage`; do not write restart sentinel files directly.",
     parameters: GatewayToolSchema,
