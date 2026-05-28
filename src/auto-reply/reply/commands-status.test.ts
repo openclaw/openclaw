@@ -169,6 +169,7 @@ describe("buildStatusReply subagent summary", () => {
       resolveRuntimeCliBackends: () => [
         {
           id: "claude-cli",
+          pluginId: "claude-cli",
           modelProvider: "anthropic",
           config: { command: "claude" },
           bundleMcp: false,

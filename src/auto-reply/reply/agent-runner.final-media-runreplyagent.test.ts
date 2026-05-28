@@ -52,8 +52,7 @@ vi.mock("../../infra/diagnostics-timeline.js", async () => {
   );
   return {
     ...actual,
-    measureDiagnosticsTimelineSpan: async (_name: string, run: () => Promise<unknown> | unknown) =>
-      await run(),
+    measureDiagnosticsTimelineSpan: async (_name: string, run: () => unknown) => await run(),
   };
 });
 
@@ -186,7 +185,7 @@ describe("runReplyAgent final MEDIA replies", () => {
         didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
-        replyToMode: "default",
+        replyToMode: "all",
         replyToChannel: "telegram",
         currentMessageId: "msg-1",
         messageProvider: "telegram",
@@ -259,7 +258,7 @@ describe("runReplyAgent final MEDIA replies", () => {
         didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
-        replyToMode: "default" as const,
+        replyToMode: "all" as const,
         replyToChannel: "telegram" as const,
         currentMessageId: "msg-1",
         messageProvider: "telegram",

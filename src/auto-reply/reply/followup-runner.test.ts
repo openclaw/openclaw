@@ -469,6 +469,7 @@ function setFastFollowupCliBackendDeps(): void {
     resolveRuntimeCliBackends: () => [
       {
         id: "claude-cli",
+        pluginId: "claude-cli",
         modelProvider: "anthropic",
         config: { command: "claude" },
         bundleMcp: false,

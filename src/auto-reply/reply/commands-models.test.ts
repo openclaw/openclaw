@@ -44,12 +44,14 @@ function setFastModelsCliBackendDeps(): void {
     resolveRuntimeCliBackends: () => [
       {
         id: "claude-cli",
+        pluginId: "claude-cli",
         modelProvider: "anthropic",
         config: { command: "claude" },
         bundleMcp: false,
       },
       {
         id: "google-gemini-cli",
+        pluginId: "google-gemini-cli",
         modelProvider: "google",
         config: { command: "gemini" },
         bundleMcp: false,
