@@ -1,4 +1,10 @@
 import { formatCliCommand } from "../../cli/command-format.js";
+import {
+  commitConfigWriteWithPendingPluginInstalls,
+  hasPendingPluginInstallRecords,
+  stripPendingPluginInstallRecords,
+  unchangedPendingPluginInstallRecordIds,
+} from "../../cli/plugins-install-record-commit.js";
 import { replaceConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -44,10 +50,35 @@ export async function runNonInteractiveRemoteSetup(params: {
   // Ordinary remote onboard reruns must preserve existing agents.list /
   // bindings the same way the local writer does — see openclaw#84692.
   const allowConfigSizeDrop = opts.reset === true;
-  await replaceConfigFile({
+  let writeBaseHash = baseHash;
+  if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(baseConfig)) {
+    const migrated = await commitConfigWriteWithPendingPluginInstalls({
+      nextConfig: baseConfig,
+      writeOptions: { allowConfigSizeDrop: true },
+      commit: async (config, writeOptions) => {
+        return await replaceConfigFile({
+          nextConfig: config,
+          ...(writeBaseHash !== undefined ? { baseHash: writeBaseHash } : {}),
+          ...(writeOptions ? { writeOptions } : {}),
+        });
+      },
+    });
+    writeBaseHash = migrated.persistedHash ?? undefined;
+    nextConfig = stripPendingPluginInstallRecords(
+      nextConfig,
+      unchangedPendingPluginInstallRecordIds(nextConfig, baseConfig),
+    );
+  }
+  await commitConfigWriteWithPendingPluginInstalls({
     nextConfig,
-    ...(baseHash !== undefined ? { baseHash } : {}),
     writeOptions: { allowConfigSizeDrop },
+    commit: async (config, writeOptions) => {
+      return await replaceConfigFile({
+        nextConfig: config,
+        ...(writeBaseHash !== undefined ? { baseHash: writeBaseHash } : {}),
+        ...(writeOptions ? { writeOptions } : {}),
+      });
+    },
   });
   logConfigUpdated(runtime);
 

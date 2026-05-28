@@ -314,6 +314,14 @@ describe("qa mock openai server", () => {
     expect(telegramThreeChunkLongBody).toContain("TELEGRAM-LONG-FINAL-3CHUNK-END");
     expect(telegramThreeChunkLongBody.length).toBeGreaterThan(8_000);
 
+    const blockPrompt = [
+      "Block streaming QA check: complete this whole sequence in one turn.",
+      "Step 1: send an assistant text block containing only this exact marker: `BLOCK_ONE_OK`.",
+      "That first marker block must be emitted before any tool call.",
+      "Step 2: after the first marker block, use the read tool exactly once on `QA_KICKOFF_TASK.md`.",
+      "Step 3: after that read completes, send a final assistant text block containing only this exact marker: `BLOCK_TWO_OK`.",
+      "Never put both markers in the same assistant text block.",
+    ].join("\n");
     const blockResponse = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
@@ -321,19 +329,39 @@ describe("qa mock openai server", () => {
       },
       body: JSON.stringify({
         stream: true,
-        input: [
-          makeUserInput(
-            "Block streaming QA check: emit exactly two assistant message blocks in order. First exact marker: `BLOCK_ONE_OK`. Second exact marker: `BLOCK_TWO_OK`.",
-          ),
-        ],
+        input: [makeUserInput(blockPrompt)],
       }),
     });
     expect(blockResponse.status).toBe(200);
     const blockBody = await blockResponse.text();
     expect(blockBody).toContain('"item_id":"msg_mock_block_1"');
-    expect(blockBody).toContain('"item_id":"msg_mock_block_2"');
+    expect(blockBody).toContain('"name":"read"');
+    expect(blockBody).toContain("QA_KICKOFF_TASK.md");
     expect(blockBody).toContain("BLOCK_ONE_OK");
-    expect(blockBody).toContain("BLOCK_TWO_OK");
+    expect(blockBody).not.toContain('"item_id":"msg_mock_block_2"');
+
+    const blockContinuation = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput(blockPrompt),
+          {
+            type: "function_call_output",
+            call_id: "call_mock_read_fixture",
+            output: "QA kickoff task read",
+          },
+        ],
+      }),
+    });
+    expect(blockContinuation.status).toBe(200);
+    const blockContinuationBody = await blockContinuation.text();
+    expect(blockContinuationBody).toContain('"item_id":"msg_mock_block_2"');
+    expect(blockContinuationBody).toContain("BLOCK_TWO_OK");
+    expect(blockContinuationBody).not.toContain('"item_id":"msg_mock_block_1"');
   });
 
   it("plans deterministic tool-progress reads from prompt paths", async () => {

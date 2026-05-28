@@ -55,8 +55,12 @@ const ERROR_LOG_ALLOW_PATTERNS = [
 
 let callGatewayModulePromise;
 
-function readPositiveInt(raw, fallback) {
-  const parsed = Number.parseInt(String(raw || ""), 10);
+export function readPositiveInt(raw, fallback) {
+  const text = String(raw || "").trim();
+  if (!/^\d+$/u.test(text)) {
+    return fallback;
+  }
+  const parsed = Number(text);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
@@ -645,7 +649,7 @@ export function createGatewayReadyLogScanner(logPath, marker = "[gateway] ready"
 
     const fd = fs.openSync(logPath, "r");
     try {
-      const buffer = Buffer.allocUnsafe(Math.min(LOG_SCAN_CHUNK_BYTES, stat.size - offset));
+      const buffer = Buffer.alloc(Math.min(LOG_SCAN_CHUNK_BYTES, stat.size - offset));
       while (offset < stat.size) {
         const bytesToRead = Math.min(buffer.length, stat.size - offset);
         const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
@@ -1204,7 +1208,7 @@ export function findErrorLogFindings(logPath) {
 
   const fd = fs.openSync(logPath, "r");
   try {
-    const buffer = Buffer.allocUnsafe(LOG_SCAN_CHUNK_BYTES);
+    const buffer = Buffer.alloc(LOG_SCAN_CHUNK_BYTES);
     let offset = 0;
     while (offset < scanBytes) {
       const bytesToRead = Math.min(buffer.length, scanBytes - offset);
@@ -1250,9 +1254,9 @@ export function tailFile(file, maxBytes = LOG_TAIL_BYTES) {
   const length = stat.size - start;
   const fd = fs.openSync(file, "r");
   try {
-    const buffer = Buffer.allocUnsafe(length);
-    fs.readSync(fd, buffer, 0, length, start);
-    return tailText(buffer.toString("utf8"));
+    const buffer = Buffer.alloc(length);
+    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
+    return tailText(buffer.subarray(0, bytesRead).toString("utf8"));
   } finally {
     fs.closeSync(fd);
   }

@@ -21,11 +21,11 @@ vi.mock("../agents/model-selection.js", async (importOriginal) => ({
   resolveDefaultModelForAgent: mocks.resolveDefaultModelForAgent,
 }));
 
-vi.mock("../agents/pi-bundle-mcp-tools.js", () => ({
+vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: mocks.createBundleMcpToolRuntime,
 }));
 
-vi.mock("../agents/pi-tools.js", () => ({
+vi.mock("../agents/agent-tools.js", () => ({
   createOpenClawCodingTools: mocks.createOpenClawCodingTools,
 }));
 
@@ -91,7 +91,7 @@ describe("doctor runtime tool schema checks", () => {
       checkId: "core/doctor/runtime-tool-schemas",
       severity: "error",
       message:
-        "Tool dofbot__dofbot_move_angles from plugin bundle-mcp has an unsupported input schema for runtime projection.",
+        "Agent main tool dofbot__dofbot_move_angles from plugin bundle-mcp has an unsupported input schema for runtime projection.",
       path: "mcp.servers",
       target: "dofbot__dofbot_move_angles",
       requirement: 'dofbot__dofbot_move_angles.parameters.type must be "object"',
@@ -99,6 +99,128 @@ describe("doctor runtime tool schema checks", () => {
         "Disable or update the offending MCP server/tool so its parameters are a JSON object schema, then rerun doctor.",
     });
     expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports unsupported schemas exposed only to a non-default configured agent", async () => {
+    mocks.createOpenClawCodingTools.mockImplementation((options) =>
+      options?.agentId === "worker"
+        ? [tool("dofbot_move_angles", { type: "array", items: { type: "number" } })]
+        : [tool("healthy", { type: "object", properties: {} })],
+    );
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/tmp/shared-workspace" },
+            { id: "worker", workspace: "/tmp/shared-workspace" },
+          ],
+        },
+      }),
+    ).resolves.toContainEqual({
+      checkId: "core/doctor/runtime-tool-schemas",
+      severity: "error",
+      message:
+        "Agent worker tool dofbot_move_angles has an unsupported input schema for runtime projection.",
+      path: "tools.dofbot_move_angles",
+      target: "dofbot_move_angles",
+      requirement: 'dofbot_move_angles.parameters.type must be "object"',
+      fixHint:
+        "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.",
+    });
+    expect(mocks.createOpenClawCodingTools).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
+    expect(mocks.createOpenClawCodingTools).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "worker" }),
+    );
+    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledTimes(1);
+    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips ACP-only agents because they do not use embedded tool projection", async () => {
+    mocks.createOpenClawCodingTools.mockImplementation((options) =>
+      options?.agentId === "acp-worker"
+        ? [tool("dofbot_move_angles", { type: "array", items: { type: "number" } })]
+        : [tool("healthy", { type: "object", properties: {} })],
+    );
+    mocks.createBundleMcpToolRuntime.mockImplementation(
+      async (options: { workspaceDir: string }) => ({
+        tools: options.workspaceDir.includes("acp")
+          ? [bundleMcpTool("dofbot__bad", { type: "array", items: { type: "number" } })]
+          : [],
+        dispose: mocks.disposeBundleRuntime,
+      }),
+    );
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/tmp/main-workspace" },
+            {
+              id: "acp-worker",
+              workspace: "/tmp/acp-workspace",
+              runtime: { type: "acp" },
+            },
+          ],
+        },
+      }),
+    ).resolves.toEqual([]);
+    expect(mocks.createOpenClawCodingTools).toHaveBeenCalledTimes(1);
+    expect(mocks.createOpenClawCodingTools).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
+    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledTimes(1);
+    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: expect.stringContaining("main-workspace") }),
+    );
+  });
+
+  it("loads bundled MCP runtime once per distinct agent workspace", async () => {
+    mocks.createOpenClawCodingTools.mockReturnValue([]);
+    mocks.createBundleMcpToolRuntime.mockImplementation(
+      async (options: { workspaceDir: string }) => ({
+        tools: options.workspaceDir.includes("worker")
+          ? [
+              bundleMcpTool("dofbot__dofbot_move_angles", {
+                type: "array",
+                items: { type: "number" },
+              }),
+            ]
+          : [bundleMcpTool("healthy", { type: "object", properties: {} })],
+        dispose: mocks.disposeBundleRuntime,
+      }),
+    );
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/tmp/main-workspace" },
+            { id: "worker", workspace: "/tmp/worker-workspace" },
+          ],
+        },
+      }),
+    ).resolves.toContainEqual({
+      checkId: "core/doctor/runtime-tool-schemas",
+      severity: "error",
+      message:
+        "Agent worker tool dofbot__dofbot_move_angles from plugin bundle-mcp has an unsupported input schema for runtime projection.",
+      path: "mcp.servers",
+      target: "dofbot__dofbot_move_angles",
+      requirement: 'dofbot__dofbot_move_angles.parameters.type must be "object"',
+      fixHint:
+        "Disable or update the offending MCP server/tool so its parameters are a JSON object schema, then rerun doctor.",
+    });
+    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledTimes(2);
+    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: expect.stringContaining("main-workspace") }),
+    );
+    expect(mocks.createBundleMcpToolRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: expect.stringContaining("worker-workspace") }),
+    );
+    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(2);
   });
 
   it("does not report bundle MCP schemas filtered out by the final runtime tool policy", async () => {

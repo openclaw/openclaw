@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
@@ -82,6 +82,10 @@ const mockBuildActiveImageGenerationTaskPromptContextForSession = vi.mocked(
 const mockBuildActiveMusicGenerationTaskPromptContextForSession = vi.mocked(
   buildActiveMusicGenerationTaskPromptContextForSession,
 );
+
+function wrappedPluginSystemContext(text: string): string {
+  return `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
+}
 
 function createTestMcpLoopbackServerConfig(port: number) {
   return {
@@ -327,7 +331,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.params.prompt).toBe("history:2\n\nlatest ask");
       expect(context.contextEngineTurnPrompt).toBe("latest ask");
       expect(context.systemPrompt).toBe(
-        "prepend system\n\nhook system\n\nappend system\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+        `${wrappedPluginSystemContext("prepend system")}\n\nhook system\n\n${wrappedPluginSystemContext("append system")}\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
       );
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
       const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
@@ -562,7 +566,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(context.params.prompt).toBe("prompt prepend\n\nlegacy prepend\n\nlatest ask");
       expect(context.systemPrompt).toBe(
-        "prompt prepend system\n\nlegacy prepend system\n\nprompt system\n\nprompt append system\n\nlegacy append system\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+        `${wrappedPluginSystemContext("prompt prepend system")}\n\n${wrappedPluginSystemContext("legacy prepend system")}\n\nprompt system\n\n${wrappedPluginSystemContext("prompt append system")}\n\n${wrappedPluginSystemContext("legacy append system")}\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
       );
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
       expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledOnce();
@@ -718,7 +722,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           hostRequirements: {
             "agent-run": {
               requiredCapabilities: ["assemble-before-prompt"],
-              unsupportedMessage: "Use the native Codex or Pi embedded runtime.",
+              unsupportedMessage: "Use the native Codex or OpenClaw embedded runtime.",
             },
           },
         },
@@ -835,6 +839,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         extraSystemPromptStatic: "",
         cliSessionBinding: {
           sessionId: "cli-session",
+          cwdHash: hashCliSessionText(dir),
         },
         config: createCliBackendConfig({ systemPromptOverride: null }),
       });
@@ -843,6 +848,32 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.extraSystemPromptHash).toBeUndefined();
       expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses cwd for CLI system prompt workspace guidance", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-task-"));
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        cwd: taskDir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-cwd-prompt",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(context.cwd).toBe(taskDir);
+      expect(context.systemPrompt).toContain(`Your working directory is: ${taskDir}`);
+      expect(context.systemPrompt).not.toContain(`Your working directory is: ${dir}`);
+    } finally {
+      fs.rmSync(taskDir, { recursive: true, force: true });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -865,6 +896,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         cliSessionBinding: {
           sessionId: "cli-session",
           extraSystemPromptHash: hashCliSessionText(staticPrompt),
+          cwdHash: hashCliSessionText(dir),
         },
         config: createCliBackendConfig(),
       });
@@ -944,6 +976,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         runId: "run-test-session-expired-reseed-opt-in",
         cliSessionBinding: {
           sessionId: "cli-session",
+          cwdHash: hashCliSessionText(dir),
         },
         config: createCliBackendConfig({
           systemPromptOverride: null,
@@ -995,7 +1028,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.systemPrompt).toBe(
-        "hook prepend system\n\nhook system" +
+        `${wrappedPluginSystemContext("hook prepend system")}\n\nhook system` +
           SYSTEM_PROMPT_CACHE_BOUNDARY +
           "active image task\n\nactive video task\n\nhook dynamic prepend\n\nhook dynamic append\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
       );
@@ -1453,7 +1486,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "opus",
         timeoutMs: 1_000,
         runId: "run-77011-present",
-        cliSessionBinding: { sessionId: "live-claude-sid" },
+        cliSessionBinding: { sessionId: "live-claude-sid", cwdHash: hashCliSessionText(dir) },
         cliSessionId: "live-claude-sid",
         config: createCliBackendConfig({ systemPromptOverride: null }),
       });
@@ -1746,7 +1779,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-77011-other-provider",
-        cliSessionBinding: { sessionId: "test-cli-sid" },
+        cliSessionBinding: { sessionId: "test-cli-sid", cwdHash: hashCliSessionText(dir) },
         config: createCliBackendConfig({ systemPromptOverride: null }),
       });
 
@@ -1961,7 +1994,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "claude-haiku-3-5",
         timeoutMs: 1_000,
         runId: "run-raw-reseed-cap-override",
-        cliSessionBinding: { sessionId: "cli-session" },
+        cliSessionBinding: { sessionId: "cli-session", cwdHash: hashCliSessionText(dir) },
         config: createCliBackendConfig({ systemPromptOverride: null }),
       });
 

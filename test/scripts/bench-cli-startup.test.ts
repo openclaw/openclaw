@@ -65,9 +65,29 @@ describe("bench-cli-startup", () => {
     ]);
   });
 
-  it("does not accept zero measured runs", () => {
-    expect(testing.parsePositiveInt("0", 5)).toBe(5);
+  it("rejects invalid measured run counts", () => {
+    expect(() => testing.parsePositiveInt("0", 5, "--runs")).toThrow(
+      "--runs must be an integer >= 1",
+    );
+    expect(() => testing.parsePositiveInt("2abc", 5, "--runs")).toThrow(
+      "--runs must be an integer >= 1",
+    );
+    expect(() => testing.parsePositiveInt("1.5", 5, "--runs")).toThrow(
+      "--runs must be an integer >= 1",
+    );
+    expect(() => testing.parsePositiveInt("1e3", 5, "--runs")).toThrow(
+      "--runs must be an integer >= 1",
+    );
+    expect(() => testing.parsePositiveInt("0x10", 5, "--runs")).toThrow(
+      "--runs must be an integer >= 1",
+    );
     expect(testing.parsePositiveInt("1", 5)).toBe(1);
     expect(testing.parseNonNegativeInt("0", 1)).toBe(0);
+    expect(() => testing.parseNonNegativeInt("-1", 1, "--warmup")).toThrow(
+      "--warmup must be an integer >= 0",
+    );
+    expect(() => testing.parseNonNegativeInt("0b10", 1, "--warmup")).toThrow(
+      "--warmup must be an integer >= 0",
+    );
   });
 });

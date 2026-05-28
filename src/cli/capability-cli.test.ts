@@ -724,7 +724,7 @@ describe("capability cli", () => {
     const preparedParams = firstPreparedModelParams();
     expect(preparedParams?.agentId).toBe("main");
     expect(preparedParams?.allowMissingApiKeyModes).toEqual(["aws-sdk"]);
-    expect(preparedParams?.skipPiDiscovery).toBe(true);
+    expect(preparedParams?.skipAgentDiscovery).toBe(true);
     const call = firstCompletionCall();
     expect(call?.context?.messages?.[0]?.role).toBe("user");
     expect(call?.context?.messages?.[0]?.content).toBe("hello");
@@ -737,7 +737,7 @@ describe("capability cli", () => {
     const params = firstPreparedModelParams();
     expect(params?.modelRef).toBe("mistral/mistral-medium-3-5");
     expect(params?.allowBundledStaticCatalogFallback).toBe(true);
-    expect(params?.skipPiDiscovery).toBe(true);
+    expect(params?.skipAgentDiscovery).toBe(true);
   });
 
   it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {
@@ -1926,8 +1926,54 @@ describe("capability cli", () => {
         argv: ["capability", "image", "generate", "--prompt", "portrait", "--timeout-ms", "1000ms"],
       }),
     ).rejects.toThrow("exit 1");
-    expectRuntimeErrorContains("--timeout-ms must be a finite number");
+    expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
     expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "image generate",
+      ["capability", "image", "generate", "--prompt", "portrait", "--timeout-ms", "1000ms"],
+    ],
+    [
+      "image edit",
+      [
+        "capability",
+        "image",
+        "edit",
+        "--file",
+        "photo.png",
+        "--prompt",
+        "crop it",
+        "--timeout-ms",
+        "1000ms",
+      ],
+    ],
+    [
+      "image describe",
+      ["capability", "image", "describe", "--file", "photo.png", "--timeout-ms", "1000ms"],
+    ],
+    [
+      "image describe-many",
+      ["capability", "image", "describe-many", "--file", "photo.png", "--timeout-ms", "1000ms"],
+    ],
+    [
+      "video generate",
+      ["capability", "video", "generate", "--prompt", "clip", "--timeout-ms", "1000ms"],
+    ],
+  ])("rejects malformed %s timeout before provider dispatch", async (_name, argv) => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv,
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.generateVideo).not.toHaveBeenCalled();
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
+    expect(mocks.describeImageFileWithModel).not.toHaveBeenCalled();
   });
 
   it("routes audio transcribe through transcription, not realtime", async () => {

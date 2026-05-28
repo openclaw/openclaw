@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
 type CommandCase = {
   id: string;
@@ -377,7 +378,11 @@ function parseFlagValue(flag: string): string | undefined {
   if (idx === -1) {
     return undefined;
   }
-  return process.argv[idx + 1];
+  const value = process.argv[idx + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
 }
 
 function hasFlag(flag: string): boolean {
@@ -394,26 +399,12 @@ function parseRepeatableFlag(flag: string): string[] {
   return values;
 }
 
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return fallback;
-  }
-  return parsed;
+function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
+  return parseStrictIntegerOption({ fallback, label, min: 1, raw });
 }
 
-function parseNonNegativeInt(raw: string | undefined, fallback: number): number {
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return fallback;
-  }
-  return parsed;
+function parseNonNegativeInt(raw: string | undefined, fallback: number, label = "value"): number {
+  return parseStrictIntegerOption({ fallback, label, min: 0, raw });
 }
 
 function parsePresets(raw: string | undefined): string[] {
@@ -826,9 +817,13 @@ function parseOptions(): CliOptions {
     cases,
     entryPrimary: parseFlagValue("--entry-primary") ?? parseFlagValue("--entry") ?? DEFAULT_ENTRY,
     entrySecondary: parseFlagValue("--entry-secondary"),
-    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS),
-    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP),
-    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS),
+    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
+    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
+    timeoutMs: parsePositiveInt(
+      parseFlagValue("--timeout-ms"),
+      DEFAULT_TIMEOUT_MS,
+      "--timeout-ms",
+    ),
     json: hasFlag("--json"),
     output: parseFlagValue("--output"),
     cpuProfDir: parseFlagValue("--cpu-prof-dir"),

@@ -7,7 +7,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaReportCheck } from "../../report.js";
 import { renderQaMarkdownReport } from "../../report.js";
-import { type QaProviderModeInput } from "../../run-config.js";
+import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
 import {
   appendLiveLaneIssue,
   buildLiveLaneArtifactsError,
@@ -23,7 +23,7 @@ import {
 } from "../../substrate/config.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { startMatrixQaHarness } from "../../substrate/harness.runtime.js";
-import { resolveMatrixQaModels } from "./model-selection.js";
+import { resolveMatrixQaModels, type ResolvedMatrixQaModels } from "./model-selection.js";
 import type { MatrixQaSyncStreams } from "./scenario-runtime-shared.js";
 import {
   MATRIX_QA_SCENARIOS,
@@ -59,8 +59,22 @@ type MatrixQaLiveLaneGatewayHarness = {
   stop(opts?: { keepTemp?: boolean; preserveToDir?: string }): Promise<void>;
 };
 
-function buildMatrixQaGatewayConfigKey(overrides?: MatrixQaConfigOverrides) {
-  return JSON.stringify(overrides ?? null);
+function buildMatrixQaGatewayConfigKey(params: {
+  models?: ResolvedMatrixQaModels;
+  overrides?: MatrixQaConfigOverrides;
+  providerModeKey?: string;
+}) {
+  return JSON.stringify({
+    models: params.models
+      ? {
+          alternateModel: params.models.alternateModel,
+          primaryModel: params.models.primaryModel,
+          providerMode: params.models.providerMode,
+        }
+      : undefined,
+    overrides: params.overrides ?? null,
+    providerModeKey: params.providerModeKey,
+  });
 }
 
 const MATRIX_QA_EXECUTION_TAIL_SCENARIO_IDS = new Set(["matrix-e2ee-wrong-account-recovery-key"]);
@@ -76,6 +90,11 @@ type MatrixQaScenarioResult = {
 type MatrixQaScheduledScenario = {
   originalIndex: number;
   scenario: (typeof MATRIX_QA_SCENARIOS)[number];
+};
+
+type MatrixQaGatewaySelection = {
+  overrides?: MatrixQaConfigOverrides;
+  providerMode?: QaProviderModeInput;
 };
 
 type MatrixQaScenarioConfigEntry = MatrixQaSummary["config"]["scenarios"][number];
@@ -297,16 +316,20 @@ function buildMatrixQaScenarioConfigEntry(params: {
     ...params.gatewayConfigParams,
     overrides: params.scenario.configOverrides,
   });
+  const providerSummary = params.scenario.providerMode
+    ? `providerMode=${params.scenario.providerMode}`
+    : undefined;
+  const configSummary =
+    params.scenario.configOverrides === undefined
+      ? undefined
+      : summarizeMatrixQaConfigSnapshot(snapshot);
   return {
     entry: {
       config: snapshot,
       id: params.scenario.id,
       title: params.scenario.title,
     },
-    summary:
-      params.scenario.configOverrides === undefined
-        ? undefined
-        : summarizeMatrixQaConfigSnapshot(snapshot),
+    summary: [providerSummary, configSummary].filter(Boolean).join(", ") || undefined,
   };
 }
 
@@ -345,7 +368,10 @@ function scheduleMatrixQaScenariosInCatalogOrder(
       tailEntries.push(entry);
       continue;
     }
-    const key = buildMatrixQaGatewayConfigKey(entry.scenario.configOverrides);
+    const key = buildMatrixQaGatewayConfigKey({
+      overrides: entry.scenario.configOverrides,
+      providerModeKey: entry.scenario.providerMode ?? "suite",
+    });
     const existingIndex = groupIndexes.get(key);
     if (existingIndex !== undefined) {
       groupedEntries[existingIndex]?.push(entry);
@@ -356,6 +382,38 @@ function scheduleMatrixQaScenariosInCatalogOrder(
   }
 
   return [...groupedEntries.flat(), ...tailEntries];
+}
+
+function selectMatrixQaCanaryProviderMode(
+  scheduledScenarios: readonly MatrixQaScheduledScenario[],
+): QaProviderModeInput | undefined {
+  let selectedProviderMode: QaProviderModeInput | undefined;
+  for (const { scenario } of scheduledScenarios) {
+    if (!scenario.providerMode) {
+      return undefined;
+    }
+    if (!selectedProviderMode) {
+      selectedProviderMode = scenario.providerMode;
+      continue;
+    }
+    if (scenario.providerMode !== selectedProviderMode) {
+      return undefined;
+    }
+  }
+  return selectedProviderMode;
+}
+
+function resolveMatrixQaGatewayModels(params: {
+  defaultModels: ResolvedMatrixQaModels;
+  providerMode?: QaProviderModeInput;
+}): ResolvedMatrixQaModels {
+  if (!params.providerMode) {
+    return params.defaultModels;
+  }
+  const providerMode = normalizeQaProviderMode(params.providerMode);
+  return providerMode === params.defaultModels.providerMode
+    ? params.defaultModels
+    : resolveMatrixQaModels({ providerMode });
 }
 
 function getMatrixQaScenarioRestartReadyTimeoutMs(scenario: { timeoutMs: number }): number {
@@ -559,11 +617,12 @@ export async function runMatrixQaLive(params: {
     path.join(repoRoot, ".artifacts", "qa-e2e", `matrix-${Date.now().toString(36)}`);
   await fs.mkdir(outputDir, { recursive: true });
 
-  const { providerMode, primaryModel, alternateModel } = resolveMatrixQaModels({
+  const defaultModels = resolveMatrixQaModels({
     providerMode: params.providerMode,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
   });
+  const { providerMode } = defaultModels;
   const sutAccountId = params.sutAccountId?.trim() || "sut";
   const scenarios = findMatrixQaScenarios(params.scenarioIds, params.profile);
   const runSuffix = randomUUID().slice(0, 8);
@@ -668,8 +727,16 @@ export async function runMatrixQaLive(params: {
   const scheduledScenarios = scheduleMatrixQaScenariosInCatalogOrder(scenarios);
 
   try {
-    const ensureGatewayHarness = async (overrides?: MatrixQaConfigOverrides) => {
-      const nextKey = buildMatrixQaGatewayConfigKey(overrides);
+    const ensureGatewayHarness = async (selection: MatrixQaGatewaySelection = {}) => {
+      const models = resolveMatrixQaGatewayModels({
+        defaultModels,
+        providerMode: selection.providerMode,
+      });
+      const overrides = selection.overrides;
+      const nextKey = buildMatrixQaGatewayConfigKey({
+        models,
+        overrides,
+      });
       if (gatewayHarness && gatewayHarnessKey === nextKey) {
         return {
           durationMs: 0,
@@ -694,9 +761,9 @@ export async function runMatrixQaLive(params: {
               createGatewayConfig: () => ({}),
             },
             transportBaseUrl: "http://127.0.0.1:43123",
-            providerMode,
-            primaryModel,
-            alternateModel,
+            providerMode: models.providerMode,
+            primaryModel: models.primaryModel,
+            alternateModel: models.alternateModel,
             fastMode: params.fastMode,
             controlUiEnabled: false,
             mutateConfig: (cfg) =>
@@ -719,7 +786,9 @@ export async function runMatrixQaLive(params: {
     };
 
     {
-      const ensured = await ensureGatewayHarness();
+      const ensured = await ensureGatewayHarness({
+        providerMode: selectMatrixQaCanaryProviderMode(scheduledScenarios),
+      });
       gatewayHarness = ensured.harness;
       initialGatewayBootMs = ensured.durationMs;
     }
@@ -781,7 +850,10 @@ export async function runMatrixQaLive(params: {
         let transportInterruptMs = 0;
         try {
           writeMatrixQaProgress(`scenario start ${scenario.id}`);
-          const scenarioGateway = await ensureGatewayHarness(scenario.configOverrides);
+          const scenarioGateway = await ensureGatewayHarness({
+            overrides: scenario.configOverrides,
+            providerMode: scenario.providerMode,
+          });
           gatewayBootMs = scenarioGateway.durationMs;
           scenarioGatewayBootMs += gatewayBootMs;
           const measuredScenario = await measureMatrixQaStep(() =>
@@ -1142,6 +1214,8 @@ export const testing = {
   buildMatrixQaSummary,
   getMatrixQaScenarioRestartReadyTimeoutMs,
   scheduleMatrixQaScenariosInCatalogOrder,
+  selectMatrixQaCanaryProviderMode,
+  resolveMatrixQaGatewayModels,
   MATRIX_QA_SCENARIOS,
   buildMatrixQaConfig,
   buildMatrixQaConfigSnapshot,

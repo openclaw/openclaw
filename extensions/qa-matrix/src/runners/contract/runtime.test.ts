@@ -156,6 +156,43 @@ describe("matrix live qa runtime", () => {
     }
   });
 
+  it("uses a scenario provider override for the canary only when the whole run is pinned", () => {
+    const blockStreamingScenario = liveTesting.MATRIX_QA_SCENARIOS.find(
+      (scenario) => scenario.id === "matrix-room-block-streaming",
+    );
+    const threadScenario = liveTesting.MATRIX_QA_SCENARIOS.find(
+      (scenario) => scenario.id === "matrix-thread-follow-up",
+    );
+    expect(blockStreamingScenario).toBeDefined();
+    expect(threadScenario).toBeDefined();
+
+    const pinnedSchedule = liveTesting.scheduleMatrixQaScenariosInCatalogOrder([
+      blockStreamingScenario!,
+    ]);
+    expect(liveTesting.selectMatrixQaCanaryProviderMode(pinnedSchedule)).toBe("mock-openai");
+
+    const mixedSchedule = liveTesting.scheduleMatrixQaScenariosInCatalogOrder([
+      threadScenario!,
+      blockStreamingScenario!,
+    ]);
+    expect(liveTesting.selectMatrixQaCanaryProviderMode(mixedSchedule)).toBeUndefined();
+  });
+
+  it("preserves explicit model pins when a scenario keeps the suite provider", () => {
+    const defaultModels = {
+      alternateModel: "mock-openai/custom-alt",
+      primaryModel: "mock-openai/custom",
+      providerMode: "mock-openai" as const,
+    };
+
+    expect(
+      liveTesting.resolveMatrixQaGatewayModels({
+        defaultModels,
+        providerMode: "mock-openai",
+      }),
+    ).toEqual(defaultModels);
+  });
+
   it("injects a temporary Matrix account into the QA gateway config", () => {
     const baseCfg: OpenClawConfig = {
       plugins: {

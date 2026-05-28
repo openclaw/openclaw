@@ -1,5 +1,12 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -15,6 +22,7 @@ import {
   findErrorLogFindings,
   findDistCallGatewayModuleFiles,
   makeEnv,
+  readPositiveInt,
   runCommand,
   sampleProcess,
   sampleWindowsProcessByPort,
@@ -27,10 +35,20 @@ import {
 const posixIt = process.platform === "win32" ? it.skip : it;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
 describe("kitchen-sink RPC isolated state", () => {
+  it("keeps loose numeric env values from corrupting runtime guardrails", () => {
+    expect(readPositiveInt(undefined, 60_000)).toBe(60_000);
+    expect(readPositiveInt("1000", 60_000)).toBe(1000);
+    expect(readPositiveInt(" 1000 ", 60_000)).toBe(1000);
+    expect(readPositiveInt("1e3", 60_000)).toBe(60_000);
+    expect(readPositiveInt("1000ms", 60_000)).toBe(60_000);
+    expect(readPositiveInt("0", 60_000)).toBe(60_000);
+  });
+
   it("cleans up the generated temporary home tree", async () => {
     const { root, env } = makeEnv();
 
@@ -128,6 +146,25 @@ describe("kitchen-sink RPC gateway readiness logs", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("honors short reads when a gateway log shrinks during tailing", () => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    vi.spyOn(fs, "statSync").mockReturnValue({
+      isFile: () => true,
+      size: 64,
+    } as fs.Stats);
+    vi.spyOn(fs, "openSync").mockReturnValue(123 as never);
+    vi.spyOn(fs, "closeSync").mockImplementation(() => undefined);
+    vi.spyOn(fs, "readSync").mockImplementation((_fd, buffer) => {
+      if (!Buffer.isBuffer(buffer)) {
+        throw new Error("expected buffer read");
+      }
+      buffer.write("recent ready");
+      return 12;
+    });
+
+    expect(tailFile("/tmp/truncated-kitchen-rpc.log", 64)).toBe("recent ready");
   });
 
   it("scans gateway error logs incrementally and keeps the latest findings", () => {

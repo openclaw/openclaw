@@ -7408,14 +7408,16 @@ module.exports = {
       body: `module.exports = { id: "runtime-introspection", register(api) {
   const runtime = api.runtime ?? {};
   const keys = Object.keys(runtime);
-  if (!keys.includes("channel")) {
-    throw new Error("runtime channel key missing");
-  }
-  if (!("channel" in runtime)) {
-    throw new Error("runtime channel missing from has check");
-  }
-  if (!Object.getOwnPropertyDescriptor(runtime, "channel")) {
-    throw new Error("runtime channel descriptor missing");
+  for (const key of ["channel", "mediaUnderstanding", "llm"]) {
+    if (!keys.includes(key)) {
+      throw new Error("runtime " + key + " key missing");
+    }
+    if (!(key in runtime)) {
+      throw new Error("runtime " + key + " missing from has check");
+    }
+    if (!Object.getOwnPropertyDescriptor(runtime, key)) {
+      throw new Error("runtime " + key + " descriptor missing");
+    }
   }
 } };`,
     });

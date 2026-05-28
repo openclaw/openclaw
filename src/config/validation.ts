@@ -2,7 +2,6 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
-import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import {
   normalizePluginsConfig,
   normalizePluginId,
@@ -1154,17 +1153,8 @@ function validateConfigObjectWithPluginsBase(
       return compatConfig ?? config;
     }
 
-    const allow = config.plugins?.allow;
-    if (!Array.isArray(allow) || allow.length === 0) {
-      compatConfig = config;
-      return config;
-    }
-
-    compatConfig = withBundledPluginAllowlistCompat({
-      config,
-      pluginIds: [...ensureCompatPluginIds()],
-    });
-    return compatConfig ?? config;
+    compatConfig = config;
+    return config;
   };
 
   const ensureRegistry = (): RegistryInfo => {

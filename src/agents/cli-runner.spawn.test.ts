@@ -622,6 +622,7 @@ describe("runCliAgent spawn path", () => {
       sessionId: "openclaw-session",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
+      cwd: "/tmp/task-repo",
       prompt: "hi",
       timeoutMs: 1_000,
       runId: "run-claude-channel-wrapper",
@@ -631,6 +632,7 @@ describe("runCliAgent spawn path", () => {
 
     expect(params.messageChannel).toBe("telegram");
     expect(params.messageProvider).toBe("acp");
+    expect(params.cwd).toBe("/tmp/task-repo");
   });
 
   it("forwards static extra system prompt through the compat wrapper", () => {

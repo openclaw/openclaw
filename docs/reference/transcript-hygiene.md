@@ -33,7 +33,7 @@ If you need transcript storage details, see:
 
 Runtime/system context can be added to the model prompt for a turn, but it is
 not end-user-authored content. OpenClaw keeps a separate transcript-facing
-prompt body for Gateway replies, queued followups, ACP, CLI, and embedded Pi
+prompt body for Gateway replies, queued followups, ACP, CLI, and embedded OpenClaw
 runs. Stored visible user turns use that transcript body instead of the
 runtime-enriched prompt.
 
@@ -48,7 +48,7 @@ TUI, REST, or SSE clients.
 All transcript hygiene is centralized in the embedded runner:
 
 - Policy selection: `src/agents/transcript-policy.ts`
-- Sanitization/repair application: `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/replay-history.ts`
+- Sanitization/repair application: `sanitizeSessionHistory` in `src/agents/embedded-agent-runner/replay-history.ts`
 
 The policy uses `provider`, `modelApi`, and `modelId` to decide what to apply.
 
@@ -69,7 +69,7 @@ Lower max dimensions generally reduce token usage; higher dimensions preserve de
 
 Implementation:
 
-- `sanitizeSessionMessagesImages` in `src/agents/pi-embedded-helpers/images.ts`
+- `sanitizeSessionMessagesImages` in `src/agents/embedded-agent-helpers/images.ts`
 - `sanitizeContentBlocksImages` in `src/agents/tool-images.ts`
 - Max image side is configurable via `agents.defaults.imageMaxDimensionPx` (default: `1200`).
 - Blank text blocks are removed while this pass walks replay content. Assistant
@@ -87,7 +87,7 @@ persisted tool calls (for example, after a rate limit failure).
 Implementation:
 
 - `sanitizeToolCallInputs` in `src/agents/session-transcript-repair.ts`
-- Applied in `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/replay-history.ts`
+- Applied in `sanitizeSessionHistory` in `src/agents/embedded-agent-runner/replay-history.ts`
 
 ---
 

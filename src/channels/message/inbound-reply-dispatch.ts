@@ -277,7 +277,7 @@ export async function recordChannelMessageReplyDispatch(
     delivery: {
       preparePayload: (payload) =>
         payload && typeof payload === "object"
-          ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
+          ? normalizeOutboundReplyPayload(payload)
           : {},
       deliver: async (payload, info) => {
         if (params.durable) {
