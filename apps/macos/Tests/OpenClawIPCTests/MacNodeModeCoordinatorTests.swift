@@ -14,6 +14,7 @@ struct MacNodeModeCoordinatorTests {
 
         #expect(!caps.contains(OpenClawCapability.browser.rawValue))
         #expect(!commands.contains(OpenClawBrowserCommand.proxy.rawValue))
+        #expect(caps.contains("system.run.request-policy.v1"))
         #expect(commands.contains(OpenClawCanvasCommand.present.rawValue))
         #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
     }

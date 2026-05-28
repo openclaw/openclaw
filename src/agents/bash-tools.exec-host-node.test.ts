@@ -292,6 +292,7 @@ describe("executeNodeHostCommand", () => {
     listNodesMock.mockResolvedValue([
       {
         nodeId: "node-1",
+        caps: ["system.run.request-policy.v1"],
         commands: ["system.run", "system.run.prepare"],
         platform: process.platform,
       },
@@ -1695,6 +1696,7 @@ describe("executeNodeHostCommand", () => {
     listNodesMock.mockResolvedValueOnce([
       {
         nodeId: "node-1",
+        caps: ["system.run.request-policy.v1"],
         commands: ["system.run", "system.which", "system.notify"],
         platform: "darwin",
       },
@@ -1795,6 +1797,94 @@ describe("executeNodeHostCommand", () => {
       "exec host=node requires a connected node (node-1 is currently disconnected)",
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when non-default exec policy targets an older node", async () => {
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run", "system.run.prepare"],
+        connected: true,
+        platform: process.platform,
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "curl https://example.test",
+        workdir: "/tmp/work",
+        env: {},
+        security: "denylist",
+        ask: "off",
+        requestedNode: "node-1",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+      }),
+    ).rejects.toThrow("supports requested exec policy enforcement");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when host approvals tighten default node policy on an older node", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValueOnce({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "denylist",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run", "system.run.prepare"],
+        connected: true,
+        platform: process.platform,
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "curl https://example.test",
+        workdir: "/tmp/work",
+        env: {},
+        security: "full",
+        ask: "off",
+        requestedNode: "node-1",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+      }),
+    ).rejects.toThrow("supports requested exec policy enforcement");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards host-tightened policy to node system run", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValueOnce({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "denylist",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    await executeNodeHostCommand({
+      command: "curl https://example.test",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      requestedNode: "node-1",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    const runParams = requireRunParams(requireGatewayCommand("system.run"));
+    expect(runParams).toMatchObject({ requestedSecurity: "denylist", requestedAsk: "off" });
   });
 
   it("returns a non-empty placeholder for silent node exec results", async () => {

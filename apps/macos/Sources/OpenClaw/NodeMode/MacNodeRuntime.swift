@@ -567,6 +567,18 @@ actor MacNodeRuntime {
         guard !command.isEmpty else {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
         }
+        guard let requestedSecurity = Self.decodeRequestedSecurity(params.requestedSecurity) else {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: requestedSecurity must be one of deny, denylist, allowlist, full")
+        }
+        guard let requestedAsk = Self.decodeRequestedAsk(params.requestedAsk) else {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: requestedAsk must be one of off, on-miss, always")
+        }
         let sessionKey = (params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.mainSessionKey
@@ -594,7 +606,9 @@ actor MacNodeRuntime {
             rawCommand: params.rawCommand,
             cwd: params.cwd,
             envOverrides: params.env,
-            agentId: params.agentId)
+            agentId: params.agentId,
+            requestedSecurity: requestedSecurity,
+            requestedAsk: requestedAsk)
 
         if evaluation.security == .deny {
             await self.emitExecEvent(
@@ -1075,6 +1089,18 @@ extension MacNodeRuntime {
             ])
         }
         return try JSONDecoder().decode(type, from: data)
+    }
+
+    private static func decodeRequestedSecurity(_ rawValue: String?) -> ExecSecurity?? {
+        guard let value = rawValue else { return .some(nil) }
+        guard let security = ExecSecurity(rawValue: value) else { return nil }
+        return .some(security)
+    }
+
+    private static func decodeRequestedAsk(_ rawValue: String?) -> ExecAsk?? {
+        guard let value = rawValue else { return .some(nil) }
+        guard let ask = ExecAsk(rawValue: value) else { return nil }
+        return .some(ask)
     }
 
     private static func encodePayload(_ obj: some Encodable) throws -> String {

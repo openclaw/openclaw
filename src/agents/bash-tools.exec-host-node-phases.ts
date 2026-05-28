@@ -15,6 +15,7 @@ import {
   hasDurableExecApproval,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
+import { NODE_SYSTEM_RUN_REQUEST_POLICY_CAP } from "../infra/node-commands.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
   parsePreparedSystemRunPayload,
@@ -42,6 +43,7 @@ type NodeExecutionTarget = {
   invokeTimeoutMs: number;
   runTimeoutSec: number;
   supportsSystemRunPrepare: boolean;
+  supportsSystemRunRequestPolicy: boolean;
 };
 
 type PreparedNodeRun = {
@@ -206,6 +208,7 @@ export async function resolveNodeExecutionTarget(
     );
   }
   const declaredCommands = Array.isArray(nodeInfo?.commands) ? nodeInfo.commands : [];
+  const declaredCaps = Array.isArray(nodeInfo?.caps) ? nodeInfo.caps : [];
   const supportsSystemRun = declaredCommands.includes("system.run");
   if (!supportsSystemRun) {
     throw new Error(
@@ -222,6 +225,7 @@ export async function resolveNodeExecutionTarget(
     invokeTimeoutMs: resolveNodeInvokeTimeoutMs(runTimeoutSec, params.defaultTimeoutSec),
     runTimeoutSec,
     supportsSystemRunPrepare: declaredCommands.includes("system.run.prepare"),
+    supportsSystemRunRequestPolicy: declaredCaps.includes(NODE_SYSTEM_RUN_REQUEST_POLICY_CAP),
   };
 }
 
@@ -278,6 +282,8 @@ export function buildNodeSystemRunInvoke(params: {
 export async function invokeNodeSystemRunDirect(params: {
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
+  requestedSecurity: ExecSecurity;
+  requestedAsk: ExecAsk;
 }): Promise<AgentToolResult<ExecToolDetails>> {
   const startedAt = Date.now();
   const raw = await callGatewayTool(
@@ -291,6 +297,8 @@ export async function invokeNodeSystemRunDirect(params: {
       agentId: params.request.agentId,
       sessionKey: params.request.sessionKey,
       notifyOnExit: params.request.notifyOnExit,
+      requestedSecurity: params.requestedSecurity,
+      requestedAsk: params.requestedAsk,
     }),
   );
   return formatNodeRunToolResult({ raw, startedAt, cwd: params.request.workdir });

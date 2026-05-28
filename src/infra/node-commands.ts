@@ -4,6 +4,8 @@ export const NODE_SYSTEM_RUN_COMMANDS = [
   "system.which",
 ] as const;
 
+export const NODE_SYSTEM_RUN_REQUEST_POLICY_CAP = "system.run.request-policy.v1";
+
 export const NODE_SYSTEM_NOTIFY_COMMAND = "system.notify";
 export const NODE_BROWSER_PROXY_COMMAND = "browser.proxy";
 

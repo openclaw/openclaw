@@ -6,6 +6,8 @@ import OSLog
 final class MacNodeModeCoordinator {
     static let shared = MacNodeModeCoordinator()
 
+    private static let systemRunRequestPolicyCapability = "system.run.request-policy.v1"
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "mac-node")
     private var task: Task<Void, Never>?
     private let runtime: MacNodeRuntime
@@ -139,7 +141,11 @@ final class MacNodeModeCoordinator {
         locationMode: OpenClawLocationMode,
         connectionMode: AppState.ConnectionMode) -> [String]
     {
-        var caps: [String] = [OpenClawCapability.canvas.rawValue, OpenClawCapability.screen.rawValue]
+        var caps: [String] = [
+            OpenClawCapability.canvas.rawValue,
+            OpenClawCapability.screen.rawValue,
+            Self.systemRunRequestPolicyCapability,
+        ]
         if browserControlEnabled, connectionMode == .local {
             caps.append(OpenClawCapability.browser.rawValue)
         }

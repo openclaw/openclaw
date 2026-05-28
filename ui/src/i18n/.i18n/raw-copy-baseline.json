@@ -3891,14 +3891,14 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/nodes-exec-approvals.ts",
-      "text": "Allowlist"
+      "text": "Add rule"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/nodes-exec-approvals.ts",
-      "text": "Allowlist and approval policy for"
+      "text": "Allowlist"
     },
     {
       "count": 1,
@@ -3940,6 +3940,27 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/nodes-exec-approvals.ts",
+      "text": "Denylist"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/nodes-exec-approvals.ts",
+      "text": "Denylist rules need a pattern and only i, m, or u flags before saving. Remove blank rules you do not want."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/nodes-exec-approvals.ts",
+      "text": "Denylist, allowlist, and approval policy for"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/nodes-exec-approvals.ts",
       "text": "Enabled"
     },
     {
@@ -3962,6 +3983,13 @@
       "name": "text",
       "path": "ui/src/ui/views/nodes-exec-approvals.ts",
       "text": "Fallback"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/nodes-exec-approvals.ts",
+      "text": "Flags"
     },
     {
       "count": 1,
@@ -4010,6 +4038,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/nodes-exec-approvals.ts",
+      "text": "No denylist rules yet."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/nodes-exec-approvals.ts",
       "text": "No nodes advertise exec approvals yet."
     },
     {
@@ -4020,7 +4055,7 @@
       "text": "Node"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/nodes-exec-approvals.ts",
@@ -4028,6 +4063,13 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/nodes-exec-approvals.ts",
+      "text": "Regex rules. Matches are denied before approvals or allowlist trust."
+    },
+    {
+      "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/nodes-exec-approvals.ts",
@@ -4088,6 +4130,13 @@
       "name": "label",
       "path": "ui/src/ui/views/nodes-exec-approvals.ts",
       "text": "Deny"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/ui/views/nodes-exec-approvals.ts",
+      "text": "Denylist"
     },
     {
       "count": 1,

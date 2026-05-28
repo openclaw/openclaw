@@ -18,10 +18,35 @@ struct ExecApprovalEvaluation {
 }
 
 enum ExecDenylistEvaluator {
+    private enum CandidateKind: Hashable {
+        case shell
+        case argument
+        case executable
+        case payload
+        case env
+    }
+
+    private struct Candidate: Hashable {
+        var value: String
+        var kind: CandidateKind
+    }
+
     private static let maxRules = 256
     private static let maxPatternLength = 8 * 1024
     private static let maxInspectedCharacters = 256 * 1024
     private static let allowedFlags = Set(["i", "m", "u"])
+    private static let defaultShellNetworkFetchId = "default-shell-network-fetch"
+    private static let defaultShellNetworkFetchInvocationRegex = try? NSRegularExpression(
+        pattern: #"(?:^|[;&|()<>])\s*(?:[^\s;&|()<>]*[\\/])?(?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>$])"#,
+        options: [.caseInsensitive])
+    private static let defaultShellNetworkFetchLeadingExpansionRegex = try? NSRegularExpression(
+        pattern: #"""
+            (?:^|[;&|()<>])\s*
+            (?:(?:\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)|%[A-Za-z_][A-Za-z0-9_]*%|![A-Za-z_][A-Za-z0-9_]*!)\s*)+
+            (?:[^\s;&|()<>]*[\\/])?(?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>$])
+            """#,
+        options: [.caseInsensitive, .allowCommentsAndWhitespace])
+    private static let shellCommandSeparators = Set<Character>([";", "&", "|", "(", ")", "<", ">"])
 
     static func denied(
         command: [String],
@@ -33,7 +58,7 @@ enum ExecDenylistEvaluator {
         guard denylist.count <= self.maxRules else { return true }
         let candidates = self.candidates(command: command, displayCommand: displayCommand, env: env)
         let inspectedCharacters = candidates.reduce(0) { total, candidate in
-            min(self.maxInspectedCharacters + 1, total + candidate.count)
+            min(self.maxInspectedCharacters + 1, total + candidate.value.count)
         }
         guard inspectedCharacters <= self.maxInspectedCharacters else { return true }
 
@@ -45,13 +70,28 @@ enum ExecDenylistEvaluator {
             guard !self.hasUnsafeRepetition(pattern) else { return true }
             guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return true }
             for candidate in candidates {
-                let range = NSRange(candidate.startIndex..<candidate.endIndex, in: candidate)
-                if regex.firstMatch(in: candidate, options: [], range: range) != nil {
+                if self.isDefaultShellNetworkFetchEntry(entry),
+                   self.isShellNetworkFetchInvocation(candidate)
+                {
+                    return true
+                }
+                guard !self.isDefaultShellNetworkFetchEntry(entry) else { continue }
+                let range = NSRange(candidate.value.startIndex..<candidate.value.endIndex, in: candidate.value)
+                if regex.firstMatch(in: candidate.value, options: [], range: range) != nil {
                     return true
                 }
             }
         }
         return false
+    }
+
+    private static func isDefaultShellNetworkFetchEntry(_ entry: ExecDenylistEntry) -> Bool {
+        entry.id == self.defaultShellNetworkFetchId &&
+            entry.pattern == [
+                #"(?:^|[\s;&|()<>])(?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>$])"#,
+                #"[\\/](?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>$])"#,
+            ].joined(separator: "|") &&
+            entry.flags?.trimmingCharacters(in: .whitespacesAndNewlines) == "i"
     }
 
     private static func regexOptions(flags: String?) -> NSRegularExpression.Options? {
@@ -211,40 +251,44 @@ enum ExecDenylistEvaluator {
     private static func candidates(
         command: [String],
         displayCommand: String,
-        env: [String: String]) -> [String]
+        env: [String: String]) -> [Candidate]
     {
-        var values: [String] = []
+        var values: [Candidate] = []
         var expansionEnv = env
-        self.push(&values, displayCommand)
-        self.push(&values, command.joined(separator: " "))
+        self.push(&values, displayCommand, kind: .shell)
+        self.push(&values, command.joined(separator: " "), kind: .shell)
+        self.push(&values, command.first, kind: .executable)
         for arg in command {
-            self.push(&values, arg)
-            self.push(&values, self.inlineEnvAssignmentValue(arg))
+            self.push(&values, arg, kind: .argument)
+            self.push(&values, self.inlineEnvAssignmentValue(arg), kind: .argument)
             if let assignment = self.inlineEnvAssignment(arg) {
                 expansionEnv[assignment.name] = assignment.value
             }
         }
         for candidate in self.shellPayloadCandidates(command: command) {
-            self.push(&values, candidate)
+            self.push(&values, candidate.value, kind: candidate.kind)
         }
         for line in displayCommand.components(separatedBy: .newlines) {
-            self.push(&values, line)
+            self.push(&values, line, kind: .shell)
         }
         for reference in self.envReferences(in: displayCommand) {
             if let value = self.resolveEnv(env, reference: reference) {
-                self.push(&values, value)
+                self.push(&values, value, kind: .env)
             }
         }
-        for value in values {
-            self.push(&values, self.expandEnvReferences(in: value, env: expansionEnv))
+        for candidate in values {
+            self.push(
+                &values,
+                self.expandEnvReferences(in: candidate.value, env: expansionEnv),
+                kind: candidate.kind)
         }
         return Array(Set(values))
     }
 
-    private static func push(_ values: inout [String], _ value: String?) {
+    private static func push(_ values: inout [Candidate], _ value: String?, kind: CandidateKind) {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmed.isEmpty {
-            values.append(trimmed)
+            values.append(Candidate(value: trimmed, kind: kind))
         }
     }
 
@@ -274,11 +318,12 @@ enum ExecDenylistEvaluator {
         return self.isPortableEnvHead(scalar) || (48...57).contains(value)
     }
 
-    private static func shellPayloadCandidates(command: [String]) -> [String] {
+    private static func shellPayloadCandidates(command: [String]) -> [Candidate] {
         let shell = ExecShellWrapperParser.extract(command: command, rawCommand: nil)
         guard shell.isWrapper, let payload = shell.command else { return [] }
         let words = self.splitShellWords(payload)
-        return words + [words.joined(separator: " ")]
+        return words.map { Candidate(value: $0, kind: .argument) } +
+            [Candidate(value: words.joined(separator: " "), kind: .payload)]
     }
 
     static func splitShellWords(_ value: String) -> [String] {
@@ -307,7 +352,7 @@ enum ExecDenylistEvaluator {
                 continue
             }
             if char.isWhitespace, !inSingle, !inDouble {
-                self.push(&words, current)
+                self.pushWord(&words, current)
                 current = ""
                 continue
             }
@@ -316,8 +361,380 @@ enum ExecDenylistEvaluator {
         if escaped {
             current.append("\\")
         }
-        self.push(&words, current)
+        self.pushWord(&words, current)
         return words
+    }
+
+    private static func pushWord(_ values: inout [String], _ value: String?) {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmed.isEmpty {
+            values.append(trimmed)
+        }
+    }
+
+    private static func normalizedExecutableName(_ value: String?) -> String {
+        guard let value else { return "" }
+        let last = value.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? value
+        let lowered = last.lowercased()
+        return lowered.hasSuffix(".exe") ? String(lowered.dropLast(4)) : lowered
+    }
+
+    private static func isShellNetworkFetchExecutable(_ value: String?) -> Bool {
+        let command = self.normalizedExecutableName(value)
+        return command == "curl" || command == "wget"
+    }
+
+    private static func isShellNetworkFetchArgv(_ argv: [String], depth: Int = 0) -> Bool {
+        guard depth <= 8, !argv.isEmpty else { return false }
+        if self.isShellNetworkFetchExecutable(argv.first) {
+            return true
+        }
+        guard let carried = self.carriedCommandArgv(argv) else { return false }
+        return self.isShellNetworkFetchArgv(carried, depth: depth + 1)
+    }
+
+    private static func carriedCommandArgv(_ argv: [String]) -> [String]? {
+        let executable = self.normalizedExecutableName(argv.first)
+        switch executable {
+        case "env":
+            return self.envCarriedCommandArgv(argv)
+        case "sudo", "doas":
+            return self.sudoLikeCarriedCommandArgv(argv, executable: executable)
+        case "command", "builtin", "exec":
+            return self.commandBuiltinCarriedCommandArgv(argv)
+        default:
+            return nil
+        }
+    }
+
+    private static func envCarriedCommandArgv(_ argv: [String]) -> [String]? {
+        var index = 1
+        while index < argv.count {
+            let token = argv[index]
+            if self.inlineEnvAssignment(token) != nil {
+                index += 1
+                continue
+            }
+            if token == "--" || token == "-" {
+                index += 1
+                break
+            }
+            if token.hasPrefix("-") {
+                let option = token.components(separatedBy: "=").first ?? token
+                if let clusteredSplit = self.envClusteredSplitPayload(token) {
+                    let payload = clusteredSplit.payload ??
+                        (index + 1 < argv.count ? argv[index + 1] : "")
+                    let trailingIndex = clusteredSplit.consumesNext ? index + 2 : index + 1
+                    let split = self.splitShellWords(payload)
+                    return split.isEmpty ? nil : split + Array(argv.suffix(from: min(trailingIndex, argv.count)))
+                }
+                if ["-S", "-s", "--split-string"].contains(option) || option.hasPrefix("--split-string=") {
+                    let payload = token.contains("=")
+                        ? token.components(separatedBy: "=").dropFirst().joined(separator: "=")
+                        : (index + 1 < argv.count ? argv[index + 1] : "")
+                    let trailingIndex = token.contains("=") ? index + 1 : index + 2
+                    let split = self.splitShellWords(payload)
+                    return split.isEmpty ? nil : split + Array(argv.suffix(from: min(trailingIndex, argv.count)))
+                }
+                if (token.hasPrefix("-S") || token.hasPrefix("-s")), token.count > 2 {
+                    let payload = String(token.dropFirst(2))
+                    let split = self.splitShellWords(payload)
+                    return split.isEmpty ? nil : split + Array(argv.suffix(from: min(index + 1, argv.count)))
+                }
+                if ["-i", "-0", "--ignore-environment", "--null"].contains(option) {
+                    index += 1
+                    continue
+                }
+                if [
+                    "-C",
+                    "-P",
+                    "-u",
+                    "--argv0",
+                    "--block-signal",
+                    "--chdir",
+                    "--default-signal",
+                    "--ignore-signal",
+                    "--unset",
+                ].contains(option) {
+                    index += token.contains("=") ? 1 : 2
+                    continue
+                }
+                return nil
+            }
+            break
+        }
+        return index < argv.count ? Array(argv[index...]) : nil
+    }
+
+    private static func envClusteredSplitPayload(_ token: String) -> (payload: String?, consumesNext: Bool)? {
+        guard token.hasPrefix("-"), !token.hasPrefix("--") else { return nil }
+        let chars = Array(token)
+        guard chars.count > 2 else { return nil }
+        for index in 1..<chars.count where chars[index] == "S" || chars[index] == "s" {
+            guard chars[1..<index].allSatisfy({ $0 == "i" || $0 == "0" }) else { return nil }
+            let suffixStart = index + 1
+            let payload = suffixStart < chars.count ? String(chars[suffixStart...]) : nil
+            return (payload, payload == nil)
+        }
+        return nil
+    }
+
+    private static func sudoLikeCarriedCommandArgv(_ argv: [String], executable: String) -> [String]? {
+        var index = 1
+        while index < argv.count {
+            let token = argv[index]
+            if token == "--" {
+                index += 1
+                break
+            }
+            if !token.hasPrefix("-") {
+                break
+            }
+            let option = token.components(separatedBy: "=").first ?? token
+            if executable == "sudo", ["-K", "-l", "-V", "-v", "-e", "--edit", "--help", "--list",
+                                      "--remove-timestamp", "--validate", "--version"].contains(option)
+            {
+                return nil
+            }
+            let consumesValue = executable == "sudo"
+                ? ["-C", "-D", "-g", "-h", "-p", "-R", "-T", "-U", "-u", "--chdir", "--chroot",
+                   "--close-from", "--command-timeout", "--group", "--host", "--other-user",
+                   "--prompt", "--role", "--type", "--user"].contains(option)
+                : ["-a", "-C", "-u"].contains(option)
+            index += consumesValue && !token.contains("=") ? 2 : 1
+        }
+        while executable == "sudo", index < argv.count, self.inlineEnvAssignment(argv[index]) != nil {
+            index += 1
+        }
+        return index < argv.count ? Array(argv[index...]) : nil
+    }
+
+    private static func commandBuiltinCarriedCommandArgv(_ argv: [String]) -> [String]? {
+        var index = 1
+        while index < argv.count {
+            let token = argv[index]
+            if token == "--" {
+                index += 1
+                break
+            }
+            if !token.hasPrefix("-") {
+                break
+            }
+            let option = token.components(separatedBy: "=").first ?? token
+            if ["-v", "-V"].contains(option) {
+                return nil
+            }
+            if option == "-a" {
+                index += token.contains("=") ? 1 : 2
+                continue
+            }
+            if ["-p", "-c", "-l"].contains(option) {
+                index += 1
+                continue
+            }
+            return nil
+        }
+        return index < argv.count ? Array(argv[index...]) : nil
+    }
+
+    private static func isShellNetworkFetchInvocation(_ candidate: Candidate) -> Bool {
+        switch candidate.kind {
+        case .argument, .env:
+            return false
+        case .executable:
+            return self.isShellNetworkFetchExecutable(candidate.value)
+        case .shell, .payload:
+            if let regex = self.defaultShellNetworkFetchInvocationRegex {
+                let range = NSRange(candidate.value.startIndex..<candidate.value.endIndex, in: candidate.value)
+                if regex.firstMatch(in: candidate.value, options: [], range: range) != nil {
+                    return true
+                }
+            }
+            if let regex = self.defaultShellNetworkFetchLeadingExpansionRegex {
+                let range = NSRange(candidate.value.startIndex..<candidate.value.endIndex, in: candidate.value)
+                if regex.firstMatch(in: candidate.value, options: [], range: range) != nil {
+                    return true
+                }
+            }
+            if self.hasNetworkFetchCommandSubstitution(candidate.value) {
+                return true
+            }
+            return self.isShellNetworkFetchArgv(self.splitShellWords(candidate.value))
+        }
+    }
+
+    private static func shellCommandWords(_ value: String) -> [String] {
+        let chars = Array(value)
+        var words: [String] = []
+        var index = 0
+        var expectCommand = true
+        while index < chars.count {
+            if expectCommand {
+                while index < chars.count, chars[index].isWhitespace {
+                    index += 1
+                }
+                while index < chars.count, self.shellCommandSeparators.contains(chars[index]) {
+                    index += 1
+                    while index < chars.count, chars[index].isWhitespace {
+                        index += 1
+                    }
+                }
+                guard index < chars.count else { break }
+                let result = self.readShellCommandWord(chars, start: index)
+                if !result.word.isEmpty {
+                    words.append(result.word)
+                }
+                index = result.end
+                expectCommand = false
+            } else {
+                if self.shellCommandSeparators.contains(chars[index]) {
+                    expectCommand = true
+                }
+                index += 1
+            }
+        }
+        return words
+    }
+
+    private static func readShellCommandWord(
+        _ chars: [Character],
+        start: Int) -> (word: String, end: Int)
+    {
+        var word = ""
+        var index = start
+        var inSingle = false
+        var inDouble = false
+        while index < chars.count {
+            let char = chars[index]
+            if !inSingle, !inDouble, char.isWhitespace || self.shellCommandSeparators.contains(char) {
+                break
+            }
+            if char == "\\", index + 1 < chars.count {
+                word.append(char)
+                word.append(chars[index + 1])
+                index += 2
+                continue
+            }
+            if char == "'", !inDouble {
+                inSingle.toggle()
+                word.append(char)
+                index += 1
+                continue
+            }
+            if char == "\"", !inSingle {
+                inDouble.toggle()
+                word.append(char)
+                index += 1
+                continue
+            }
+            if !inSingle, char == "$", index + 1 < chars.count, chars[index + 1] == "(" {
+                var depth = 1
+                word.append("$(")
+                index += 2
+                while index < chars.count, depth > 0 {
+                    if chars[index] == "$", index + 1 < chars.count, chars[index + 1] == "(" {
+                        depth += 1
+                        word.append("$(")
+                        index += 2
+                        continue
+                    }
+                    if chars[index] == ")" {
+                        depth -= 1
+                    }
+                    word.append(chars[index])
+                    index += 1
+                }
+                continue
+            }
+            if !inSingle, char == "`" {
+                word.append(char)
+                index += 1
+                while index < chars.count {
+                    let nested = chars[index]
+                    word.append(nested)
+                    index += nested == "\\" && index + 1 < chars.count ? 2 : 1
+                    if nested == "`" {
+                        break
+                    }
+                }
+                continue
+            }
+            word.append(char)
+            index += 1
+        }
+        return (word, index)
+    }
+
+    private static func stripShellCommandSubstitutions(_ word: String) -> (substituted: Bool, literal: String) {
+        let chars = Array(word)
+        var literal = ""
+        var index = 0
+        var substituted = false
+        while index < chars.count {
+            let char = chars[index]
+            if char == "$", index + 1 < chars.count, chars[index + 1] == "(" {
+                substituted = true
+                var depth = 1
+                index += 2
+                while index < chars.count, depth > 0 {
+                    if chars[index] == "$", index + 1 < chars.count, chars[index + 1] == "(" {
+                        depth += 1
+                        index += 2
+                        continue
+                    }
+                    if chars[index] == ")" {
+                        depth -= 1
+                    }
+                    index += 1
+                }
+                continue
+            }
+            if char == "`" {
+                substituted = true
+                index += 1
+                while index < chars.count {
+                    let nested = chars[index]
+                    index += nested == "\\" && index + 1 < chars.count ? 2 : 1
+                    if nested == "`" {
+                        break
+                    }
+                }
+                continue
+            }
+            if char == "\\", index + 1 < chars.count {
+                literal.append(chars[index + 1])
+                index += 2
+                continue
+            }
+            literal.append(char)
+            index += 1
+        }
+        return (substituted, literal)
+    }
+
+    private static func isSubsequence(_ value: String, of target: String) -> Bool {
+        var cursor = target.startIndex
+        for char in value {
+            guard let match = target[cursor...].firstIndex(of: char) else {
+                return false
+            }
+            cursor = target.index(after: match)
+        }
+        return true
+    }
+
+    private static func hasNetworkFetchCommandSubstitution(_ value: String) -> Bool {
+        for word in self.shellCommandWords(value) {
+            let stripped = self.stripShellCommandSubstitutions(word)
+            guard stripped.substituted else { continue }
+            let command = self.normalizedExecutableName(stripped.literal)
+            if command.count >= 2,
+               self.isSubsequence(command, of: "curl") || self.isSubsequence(command, of: "wget")
+            {
+                return true
+            }
+        }
+        return false
     }
 
     private struct EnvReference: Hashable {
@@ -437,13 +854,16 @@ enum ExecApprovalEvaluator {
         rawCommand: String?,
         cwd: String?,
         envOverrides: [String: String]?,
-        agentId: String?) async -> ExecApprovalEvaluation
+        agentId: String?,
+        requestedSecurity: ExecSecurity? = nil,
+        requestedAsk: ExecAsk? = nil) async -> ExecApprovalEvaluation
     {
         let trimmedAgent = agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedAgentId = (trimmedAgent?.isEmpty == false) ? trimmedAgent : nil
         let approvals = ExecApprovalsStore.resolve(agentId: normalizedAgentId)
-        let security = approvals.agent.security
-        let ask = approvals.agent.ask
+        let security = requestedSecurity.map { self.minSecurity(approvals.agent.security, $0) }
+            ?? approvals.agent.security
+        let ask = requestedAsk.map { self.maxAsk(approvals.agent.ask, $0) } ?? approvals.agent.ask
         let shellWrapper = ExecShellWrapperParser.extract(command: command, rawCommand: rawCommand).isWrapper
         let env = HostEnvSanitizer.sanitize(overrides: envOverrides, shellWrapper: shellWrapper)
         let displayCommand = ExecCommandFormatter.displayString(for: command, rawCommand: rawCommand)
@@ -498,6 +918,31 @@ enum ExecApprovalEvaluator {
             allowlistMatch: allowlistSatisfied ? allowlistMatches.first : nil,
             denylistDenied: denylistDenied,
             skillAllow: skillAllow)
+    }
+
+    private static func minSecurity(_ left: ExecSecurity, _ right: ExecSecurity) -> ExecSecurity {
+        self.securityRank(left) <= self.securityRank(right) ? left : right
+    }
+
+    private static func maxAsk(_ left: ExecAsk, _ right: ExecAsk) -> ExecAsk {
+        self.askRank(left) >= self.askRank(right) ? left : right
+    }
+
+    private static func securityRank(_ security: ExecSecurity) -> Int {
+        switch security {
+        case .deny: 0
+        case .allowlist: 1
+        case .denylist: 2
+        case .full: 3
+        }
+    }
+
+    private static func askRank(_ ask: ExecAsk) -> Int {
+        switch ask {
+        case .off: 0
+        case .onMiss: 1
+        case .always: 2
+        }
     }
 
     static func isSkillAutoAllowed(

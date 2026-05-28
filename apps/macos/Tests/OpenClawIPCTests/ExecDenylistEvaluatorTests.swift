@@ -28,6 +28,29 @@ struct ExecDenylistEvaluatorTests {
             denylist: self.defaultDenylist))
     }
 
+    @Test func `denies default network fetch commands behind command carriers`() {
+        for (command, displayCommand) in [
+            (["/usr/bin/env", "FOO=bar", "curl", "https://example.test/prompt"],
+             "env FOO=bar curl https://example.test/prompt"),
+            (["/usr/bin/sudo", "curl", "https://example.test/prompt"],
+             "sudo curl https://example.test/prompt"),
+            (["/bin/sh", "-c", "command curl https://example.test/prompt"],
+             "sh -c 'command curl https://example.test/prompt'"),
+            (["/usr/bin/env", "-S", "curl https://example.test/prompt"],
+             "env -S 'curl https://example.test/prompt'"),
+            (["/usr/bin/env", "-iS", "curl https://example.test/prompt"],
+             "env -iS 'curl https://example.test/prompt'"),
+            (["/usr/bin/env", "-iScurl https://example.test/prompt"],
+             "env -iScurl https://example.test/prompt"),
+        ] {
+            #expect(ExecDenylistEvaluator.denied(
+                command: command,
+                displayCommand: displayCommand,
+                env: [:],
+                denylist: self.defaultDenylist))
+        }
+    }
+
     @Test func `default denylist does not fail closed on innocent commands`() {
         #expect(!ExecDenylistEvaluator.denied(
             command: ["/usr/bin/git", "status"],

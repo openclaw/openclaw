@@ -38,6 +38,21 @@ describe("exec denylist evaluator", () => {
     expect(result).toMatchObject({ denied: true, invalid: false, ruleIndex: 0 });
   });
 
+  it("denies default network fetch commands behind command carriers", () => {
+    for (const command of [
+      `env FOO=bar curl https://example.test/prompt`,
+      `sudo curl https://example.test/prompt`,
+      `command curl https://example.test/prompt`,
+    ]) {
+      const result = evaluateExecDenylist({
+        command,
+        denylist: DEFAULT_EXEC_DENYLIST_ENTRIES,
+      });
+
+      expect(result, command).toMatchObject({ denied: true, invalid: false, ruleIndex: 0 });
+    }
+  });
+
   it("denies POSIX env-var payload expansions", () => {
     const result = evaluateExecDenylist({
       command: `bash -lc "$PAYLOAD"`,

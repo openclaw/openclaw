@@ -32,6 +32,8 @@ public struct OpenClawSystemRunParams: Codable, Sendable, Equatable {
     public var runId: String?
     public var approved: Bool?
     public var approvalDecision: String?
+    public var requestedSecurity: String?
+    public var requestedAsk: String?
 
     public init(
         command: [String],
@@ -44,7 +46,9 @@ public struct OpenClawSystemRunParams: Codable, Sendable, Equatable {
         sessionKey: String? = nil,
         runId: String? = nil,
         approved: Bool? = nil,
-        approvalDecision: String? = nil)
+        approvalDecision: String? = nil,
+        requestedSecurity: String? = nil,
+        requestedAsk: String? = nil)
     {
         self.command = command
         self.rawCommand = rawCommand
@@ -57,6 +61,8 @@ public struct OpenClawSystemRunParams: Codable, Sendable, Equatable {
         self.runId = runId
         self.approved = approved
         self.approvalDecision = approvalDecision
+        self.requestedSecurity = requestedSecurity
+        self.requestedAsk = requestedAsk
     }
 }
 

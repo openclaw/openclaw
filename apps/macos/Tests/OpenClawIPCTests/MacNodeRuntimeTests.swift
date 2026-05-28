@@ -176,6 +176,18 @@ struct MacNodeRuntimeTests {
         #expect(response.error?.message.contains("CLASSPATH") == true)
     }
 
+    @Test func `handle invoke rejects invalid requested system run policy`() async throws {
+        let runtime = MacNodeRuntime()
+        let params = OpenClawSystemRunParams(
+            command: ["/bin/sh", "-lc", "echo ok"],
+            requestedSecurity: "unsafe")
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(id: "req-2cc", command: OpenClawSystemCommand.run.rawValue, paramsJSON: json))
+        #expect(response.ok == false)
+        #expect(response.error?.message.contains("requestedSecurity") == true)
+    }
+
     @Test func `handle invoke rejects invalid system run env override key before execution`() async throws {
         let runtime = MacNodeRuntime()
         let params = OpenClawSystemRunParams(

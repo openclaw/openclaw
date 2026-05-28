@@ -17,6 +17,7 @@ vi.mock("./tools/nodes-utils.js", () => ({
   listNodes: vi.fn(async () => [
     {
       nodeId: "node-1",
+      caps: ["system.run.request-policy.v1"],
       commands: ["system.run", "system.run.prepare"],
       platform: "darwin",
     },
