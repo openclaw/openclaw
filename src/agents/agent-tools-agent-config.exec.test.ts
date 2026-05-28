@@ -179,6 +179,32 @@ describe("Agent-specific exec tool defaults", () => {
     ).rejects.toThrow(/allowlist miss/);
   });
 
+  it("lets session legacy exec overrides clear inherited mode", async () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          exec: {
+            mode: "auto",
+            safeBins: [],
+          },
+        },
+      },
+      exec: {
+        security: "deny",
+      },
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main-session-legacy-override",
+      agentDir: "/tmp/agent-main-session-legacy-override",
+    });
+    const execTool = requireExecTool(tools);
+
+    await expect(
+      execTool.execute("call-session-legacy-override", {
+        command: "echo denied",
+      }),
+    ).rejects.toThrow("security=deny");
+  });
+
   it("fails closed when exec host=sandbox is requested without sandbox runtime", async () => {
     const tools = createOpenClawCodingTools({
       config: {},
