@@ -237,8 +237,8 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
       deliver: (payload: unknown, info: { kind: "block" | "final" }) => Promise<void> | void;
       onError?: (err: unknown, info: { kind: "block" | "final" }) => void;
       transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
-      onSettled?: () => Promise<unknown> | unknown;
-      onFreshSettledDelivery?: () => Promise<unknown> | unknown;
+      onSettled?: () => unknown;
+      onFreshSettledDelivery?: () => unknown;
     };
     ctx?: unknown;
     replyOptions?: DispatchInboundParams["replyOptions"];

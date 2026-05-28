@@ -373,7 +373,9 @@ describe("TwilioProvider", () => {
 
     const event = provider.parseWebhookEvent(ctx).events[0];
     const parsed = requireEvent(event, "expected speech event from Twilio webhook");
-    expect(parsed.type).toBe("call.speech");
+    if (parsed.type !== "call.speech") {
+      throw new Error("expected speech event from Twilio webhook");
+    }
     expect(parsed.confidence).toBe(0.9);
   });
 

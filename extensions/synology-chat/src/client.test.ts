@@ -177,7 +177,10 @@ describe("sendMessage", () => {
     await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", "42abc"));
 
     const request = vi.mocked(https.request).mock.results[0]?.value as ClientRequest | undefined;
-    const body = vi.mocked(request?.write).mock.calls[0]?.[0];
+    if (!request) {
+      throw new Error("expected Synology Chat webhook request");
+    }
+    const body = vi.mocked(request.write).mock.calls[0]?.[0];
     if (typeof body !== "string") {
       throw new Error("expected Synology Chat webhook body");
     }
