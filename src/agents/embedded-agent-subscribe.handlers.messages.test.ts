@@ -500,6 +500,40 @@ describe("handleMessageUpdate text signatures", () => {
     });
   });
 
+  it("accumulates lightweight thinking deltas before emitting reasoning streams", () => {
+    const emitReasoningStream = vi.fn((text: string) => {
+      context.state.lastStreamedReasoning = text;
+    });
+    const context = createMessageUpdateContext({
+      state: { streamReasoning: true },
+    });
+    context.emitReasoningStream = emitReasoningStream;
+
+    for (const delta of ["first", " second"]) {
+      handleMessageUpdate(context, {
+        type: "message_update",
+        message: { role: "assistant", content: [] },
+        assistantMessageEvent: {
+          type: "thinking_delta",
+          contentIndex: 0,
+          delta,
+          partial: {
+            role: "assistant",
+            content: [],
+            stopReason: "stop",
+            api: "ollama",
+            provider: "ollama",
+            model: "qwen3:32b",
+            usage: {},
+            timestamp: 0,
+          },
+        },
+      } as never);
+    }
+
+    expect(emitReasoningStream.mock.calls.map(([text]) => text)).toEqual(["first", "first second"]);
+  });
+
   it("treats phased textSignature item changes as assistant-message boundaries", () => {
     const flushBlockReplyBuffer = vi.fn();
     const resetAssistantMessageState = vi.fn();

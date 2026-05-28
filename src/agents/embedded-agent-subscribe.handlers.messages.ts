@@ -528,7 +528,11 @@ export function handleMessageUpdate(
     if (ctx.state.streamReasoning) {
       // Prefer full partial-message thinking when available; fall back to event payloads.
       const partialThinking = extractAssistantThinking(msg);
-      ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
+      const fallbackThinking =
+        evtType === "thinking_delta" && thinkingDelta
+          ? `${ctx.state.lastStreamedReasoning ?? ""}${thinkingDelta}`
+          : thinkingDelta;
+      ctx.emitReasoningStream(partialThinking || thinkingContent || fallbackThinking);
     }
     if (evtType === "thinking_end") {
       if (!ctx.state.reasoningStreamOpen) {
