@@ -103,6 +103,7 @@ function directoryChildPackageJsonFingerprint(directoryPath: string): unknown {
     directoryPath,
     ...entries
       .filter((entry) => entry.isDirectory())
+      .sort((a, b) => a.name.localeCompare(b.name))
       .map((entry) => fileFingerprint(path.join(directoryPath, entry.name, "package.json"))),
   ];
 }
