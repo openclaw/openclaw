@@ -450,7 +450,7 @@ describe("detectChangedScope", () => {
       runChangedSmoke: true,
       runControlUiI18n: false,
     });
-    expect(detectChangedScope(["src/gateway/protocol/messages.ts"])).toEqual({
+    expect(detectChangedScope(["packages/gateway-protocol/src/schema/messages.ts"])).toEqual({
       runNode: true,
       runMacos: false,
       runAndroid: false,

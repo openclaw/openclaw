@@ -6,13 +6,16 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function normalizeArrayBackedTrimmedStringList(value: unknown): string[] {
+function normalizeArrayBackedTrimmedStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
-    return [];
+    return undefined;
   }
-  return value
+  const values = value
     .map((entry) => normalizeOptionalString(entry))
     .filter((entry): entry is string => Boolean(entry));
+  // Pairing details omit absent lists. Emitting empty arrays makes clients think
+  // the gateway intentionally supplied scope/role context when it did not.
+  return values.length > 0 ? values : undefined;
 }
 
 export const ConnectErrorDetailCodes = {

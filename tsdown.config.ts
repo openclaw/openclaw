@@ -307,7 +307,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "config/config": "src/config/config.ts",
     "crestodian/crestodian": "src/crestodian/crestodian.ts",
     "crestodian/rescue-message": "src/crestodian/rescue-message.ts",
-    "gateway/protocol/index": "src/gateway/protocol/index.ts",
+    "gateway/protocol/index": "packages/gateway-protocol/src/index.ts",
     "infra/errors": "src/infra/errors.ts",
     "infra/ws": "src/infra/ws.ts",
     "plugin-sdk/provider-onboard": "src/plugin-sdk/provider-onboard.ts",
@@ -350,6 +350,8 @@ function buildAgentCoreDistEntries(): Record<string, string> {
 
 function buildGatewayProtocolDistEntries(): Record<string, string> {
   return {
+    // Package exports resolve from packages/gateway-protocol/dist, while the
+    // root build still emits dist/gateway/protocol/index for Docker harnesses.
     index: "packages/gateway-protocol/src/index.ts",
     "client-info": "packages/gateway-protocol/src/client-info.ts",
     "connect-error-details": "packages/gateway-protocol/src/connect-error-details.ts",
@@ -361,6 +363,8 @@ function buildGatewayProtocolDistEntries(): Record<string, string> {
 
 function buildGatewayClientDistEntries(): Record<string, string> {
   return {
+    // Keep package entrypoints explicit so package.json exports and root build
+    // config cannot drift when client internals are split again.
     index: "packages/gateway-client/src/index.ts",
     readiness: "packages/gateway-client/src/readiness.ts",
     timeouts: "packages/gateway-client/src/timeouts.ts",

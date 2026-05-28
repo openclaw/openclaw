@@ -6,7 +6,7 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   ProtocolSchemas,
-} from "../src/gateway/protocol/schema.js";
+} from "../packages/gateway-protocol/src/schema.js";
 
 type JsonSchema = {
   type?: string | string[];

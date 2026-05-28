@@ -6,6 +6,11 @@ import {
   isGatewayConnectAssemblyError as baseIsGatewayConnectAssemblyError,
   resolveGatewayClientConnectChallengeTimeoutMs as baseResolveGatewayClientConnectChallengeTimeoutMs,
 } from "../../packages/gateway-client/src/index.js";
+import type {
+  GatewayClientMode,
+  GatewayClientName,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import type { EventFrame, HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
@@ -25,8 +30,6 @@ import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { logDebug, logError } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { VERSION } from "../version.js";
-import type { GatewayClientMode, GatewayClientName } from "./protocol/client-info.js";
-import type { EventFrame, HelloOk } from "./protocol/index.js";
 
 export type DeviceAuthTokenRecord = {
   token?: string;
@@ -158,6 +161,8 @@ function createOpenClawGatewayClientHostDeps(
   overrides?: GatewayClientHostDeps,
 ): GatewayClientHostDeps {
   return {
+    // This wrapper is the only place the package reaches into OpenClaw runtime
+    // state. Keep device identity, token storage, proxy, and redaction here.
     loadOrCreateDeviceIdentity,
     signDevicePayload,
     publicKeyRawBase64UrlFromPem,
@@ -196,6 +201,9 @@ export class GatewayClient {
   }
 
   private installInternalTestAccessors(): void {
+    // Existing gateway tests inspect a few internals to drive watchdog and
+    // frame-handling edge cases. Forward those slots without making the package
+    // class inherit from this wrapper or leaking package-private types in d.ts.
     const target = this as unknown as GatewayClientInternalAccess;
     const base = this.#client as unknown as GatewayClientInternalAccess;
     Object.defineProperties(target, {

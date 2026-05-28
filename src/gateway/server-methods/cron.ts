@@ -1,3 +1,17 @@
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateCronAddParams,
+  validateCronGetParams,
+  validateCronListParams,
+  validateCronRemoveParams,
+  validateCronRunParams,
+  validateCronRunsParams,
+  validateCronStatusParams,
+  validateCronUpdateParams,
+  validateWakeParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
@@ -18,20 +32,6 @@ import {
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateCronAddParams,
-  validateCronGetParams,
-  validateCronListParams,
-  validateCronRemoveParams,
-  validateCronRunParams,
-  validateCronRunsParams,
-  validateCronStatusParams,
-  validateCronUpdateParams,
-  validateWakeParams,
-} from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {

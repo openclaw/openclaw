@@ -1268,6 +1268,8 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)];
 }
 
+// The protocol package cannot import core session types. This local structural
+// result mirrors the wire contract and keeps the package independent of src/.
 type SessionsPatchResult = {
   ok: true;
   path: string;

@@ -1,4 +1,10 @@
 import fs from "node:fs";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateSessionsUsageParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveSessionFilePath,
@@ -39,12 +45,6 @@ import type {
   SessionsUsageResult,
 } from "../../shared/usage-types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateSessionsUsageParams,
-} from "../protocol/index.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,

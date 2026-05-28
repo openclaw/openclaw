@@ -50,6 +50,8 @@ export function resolveConnectChallengeTimeoutMs(
     env: params?.env,
     configuredTimeoutMs: params?.configuredTimeoutMs,
   });
+  // The client watchdog must never fire before the server-side preauth timeout.
+  // Tests may raise the env override above that server default, so widen the cap.
   const maxTimeoutMs = Math.max(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS, configuredPreauthTimeoutMs);
   if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
     return clampConnectChallengeTimeoutMs(timeoutMs, maxTimeoutMs);

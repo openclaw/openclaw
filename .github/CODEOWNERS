@@ -29,7 +29,7 @@
 /src/gateway/**/*secret*.ts @openclaw/openclaw-secops
 /src/gateway/security-path*.ts @openclaw/openclaw-secops
 /src/gateway/resolve-configured-secret-input-string*.ts @openclaw/openclaw-secops
-/src/gateway/protocol/**/*secret*.ts @openclaw/openclaw-secops
+/packages/gateway-protocol/src/**/*secret*.ts @openclaw/openclaw-secops
 /src/gateway/server-methods/secrets*.ts @openclaw/openclaw-secops
 /src/agents/*auth*.ts @openclaw/openclaw-secops
 /src/agents/**/*auth*.ts @openclaw/openclaw-secops

@@ -41,6 +41,8 @@ export type DeviceAuthTokenRecord = {
   scopes?: string[];
 };
 
+// The package stays reusable by depending on host callbacks for OpenClaw-owned
+// state: device keys, token storage, proxy routing, logging, and TLS formatting.
 export type GatewayClientHostDeps = {
   loadOrCreateDeviceIdentity?: () => DeviceIdentity | undefined;
   signDevicePayload?: (privateKeyPem: string, payload: string) => string;
@@ -123,6 +125,8 @@ function parseHostForAddressChecks(
   }
   return {
     isLocalhost: false,
+    // URL.hostname canonicalizes IPv6 with brackets in some call sites. Strip
+    // them before net.isIP so address checks do not fall back to hostname rules.
     unbracketedHost:
       normalizedHost.startsWith("[") && normalizedHost.endsWith("]")
         ? normalizedHost.slice(1, -1)
@@ -173,6 +177,8 @@ function decodeIpv4MappedIpv6Octets(host: string): [number, number, number, numb
     return null;
   }
   const suffix = normalized.slice("::ffff:".length);
+  // WHATWG URL canonicalization can turn ::ffff:127.0.0.1 into ::ffff:7f00:1.
+  // Decode both forms so loopback/private policy is stable after parsing.
   if (suffix.includes(".")) {
     return parseIpv4Octets(suffix);
   }
@@ -246,6 +252,8 @@ function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
     return true;
   }
   const normalized = hostname.toLowerCase().trim().replace(/\.+$/, "");
+  // Plain ws:// is still useful for local discovery and Tailnet names. Public
+  // hostnames must use wss:// unless the caller opts into the private break-glass.
   return normalized.endsWith(".local") || normalized.endsWith(".ts.net");
 }
 
@@ -513,6 +521,8 @@ export class GatewayClient {
 
   constructor(opts: GatewayClientOptions) {
     this.deps = {
+      // Defaults keep the package inert outside OpenClaw; device signing throws
+      // only when a caller actually supplies a device identity without host deps.
       loadOrCreateDeviceIdentity: opts.hostDeps?.loadOrCreateDeviceIdentity ?? (() => undefined),
       signDevicePayload:
         opts.hostDeps?.signDevicePayload ??
@@ -564,9 +574,8 @@ export class GatewayClient {
 
     const allowPrivateWs =
       (this.opts.env ?? process.env).OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
-    // Security check: block ALL plaintext ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
-    // This protects both credentials AND chat/conversation data from MITM attacks.
-    // Device tokens may be loaded later in sendConnect(), so we block regardless of hasCredentials.
+    // Block plaintext before device-token lookup. Credentials may be loaded from
+    // host storage later in sendConnect(), and chat payloads are sensitive too.
     if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
       // Safe hostname extraction - avoid throwing on malformed URLs in error path
       let displayHost = url;
@@ -617,6 +626,8 @@ export class GatewayClient {
       };
     }
     let ws: WebSocket;
+    // Managed proxies can intercept local traffic; the host owns the bypass
+    // lifecycle and must remove it immediately after the socket is created.
     const unregisterGatewayLoopbackBypass = this.deps.registerGatewayLoopbackBypass(url);
     try {
       ws = new WebSocket(url, wsOptions as ClientOptions);
@@ -818,6 +829,8 @@ export class GatewayClient {
     const role = this.opts.role ?? "operator";
     let assembled: AssembledConnect;
     try {
+      // Build the full connect frame before marking connectSent so synchronous
+      // signing/storage failures surface as connect-assembly errors, not RPCs.
       assembled = this.assembleConnectParams({ role, nonce });
     } catch (err) {
       this.handleConnectFailure(err);
@@ -919,6 +932,8 @@ export class GatewayClient {
 
   private assembleConnectParams(params: { role: string; nonce: string }): AssembledConnect {
     const { role, nonce } = params;
+    // Auth selection is intentionally centralized: retry decisions depend on
+    // whether a token was explicit, cached, or compatibility-derived.
     const selectedAuth = this.selectConnectAuth(role);
     const {
       authToken,
@@ -1009,6 +1024,8 @@ export class GatewayClient {
       return undefined;
     }
     const { nonce, role, scopes, signatureToken, signedAtMs, platform } = params;
+    // The signed payload mirrors server verification exactly; keep metadata
+    // normalized here so different hosts sign the same logical device facts.
     const payload = buildDeviceAuthPayloadV3({
       deviceId: this.opts.deviceIdentity.deviceId,
       clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
