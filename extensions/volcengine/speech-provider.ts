@@ -38,6 +38,8 @@ type VolcengineTtsProviderConfig = {
   baseUrl?: string;
   speedRatio?: number;
   emotion?: string;
+  /** When true, allow private-network (RFC 1918) connections for the TTS HTTP call. */
+  allowPrivateNetwork?: boolean;
 };
 
 type VolcengineTtsProviderOverrides = {
@@ -84,6 +86,7 @@ function normalizeVolcengineProviderConfig(
     baseUrl: trimToUndefined(raw?.baseUrl) ?? trimToUndefined(process.env.VOLCENGINE_TTS_BASE_URL),
     speedRatio: normalizeSpeedRatio(raw?.speedRatio),
     emotion: trimToUndefined(raw?.emotion),
+    allowPrivateNetwork: raw?.allowPrivateNetwork === true,
   };
 }
 
@@ -112,6 +115,8 @@ function readProviderConfig(config: SpeechProviderConfig): VolcengineTtsProvider
     baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
     speedRatio: normalizeSpeedRatio(config.speedRatio) ?? normalized.speedRatio,
     emotion: trimToUndefined(config.emotion) ?? normalized.emotion,
+    allowPrivateNetwork:
+      config.allowPrivateNetwork === true || normalized.allowPrivateNetwork === true,
   };
 }
 
@@ -221,6 +226,7 @@ export function buildVolcengineSpeechProvider(): SpeechProviderPlugin {
         emotion: overrides.emotion ?? cfg.emotion,
         encoding,
         timeoutMs: req.timeoutMs,
+        allowPrivateNetwork: cfg.allowPrivateNetwork === true,
       });
 
       return {

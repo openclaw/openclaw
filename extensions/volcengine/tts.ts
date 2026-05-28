@@ -19,6 +19,10 @@ type VolcengineTTSParams = {
   emotion?: string;
   encoding?: VolcengineTtsEncoding;
   timeoutMs?: number;
+  /** When true, allow private-network (RFC 1918) connections. Required when
+   * running behind a TUN proxy that intercepts 198.18.x.x addresses for
+   * fast DNS resolution. Defaults to false for security. */
+  allowPrivateNetwork?: boolean;
 };
 
 const DEFAULT_SEED_VOICE = "en_female_anna_mars_bigtts";
@@ -121,6 +125,7 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
     emotion,
     encoding = "ogg_opus",
     timeoutMs = 30_000,
+    allowPrivateNetwork = false,
   } = params;
   const audioFormat = seedAudioFormat(encoding);
 
@@ -152,7 +157,10 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
       body: payload,
     },
     timeoutMs,
-    policy: { hostnameAllowlist: hostnameAllowlist(baseUrl) },
+    policy: {
+      hostnameAllowlist: hostnameAllowlist(baseUrl),
+      ...(allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+    },
     auditContext: "volcengine.tts",
   });
 
@@ -202,6 +210,7 @@ async function legacyVolcengineTTS(
     emotion,
     encoding = "ogg_opus",
     timeoutMs = 30_000,
+    allowPrivateNetwork = false,
   } = params;
 
   const payload = JSON.stringify({
@@ -234,7 +243,10 @@ async function legacyVolcengineTTS(
       body: payload,
     },
     timeoutMs,
-    policy: { hostnameAllowlist: hostnameAllowlist(baseUrl) },
+    policy: {
+      hostnameAllowlist: hostnameAllowlist(baseUrl),
+      ...(allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+    },
     auditContext: "volcengine.tts",
   });
 
