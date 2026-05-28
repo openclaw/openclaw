@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
 const authProfilesStoreMock = vi.hoisted(() => ({
   profiles: {} as Record<
     string,
@@ -10,6 +15,25 @@ const authProfilesStoreMock = vi.hoisted(() => ({
     | { type: "oauth"; provider: string; access: string; refresh: string; expires: number }
   >,
 }));
+const modelsCommandMock = vi.hoisted(() => ({
+  resolveModelsCommandReply: vi.fn(),
+}));
+
+function defaultModelsCommandReply() {
+  return {
+    text: [
+      "Providers:",
+      "- anthropic (1)",
+      "",
+      "Use: /models <provider>",
+      "Switch: /model <provider/model>",
+    ].join("\n"),
+  };
+}
+
+function normalizeProviderForAuthTest(provider: string) {
+  return provider.trim().toLowerCase();
+}
 
 vi.mock("../../agents/auth-profiles.js", () => {
   const store = () => ({
@@ -43,6 +67,56 @@ vi.mock("../../agents/auth-profiles.js", () => {
     resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
   };
 });
+
+vi.mock("./commands-models.js", () => ({
+  resolveModelsCommandReply: (...args: unknown[]) =>
+    modelsCommandMock.resolveModelsCommandReply(...args),
+}));
+
+vi.mock("./directive-handling.auth.js", () => ({
+  formatAuthLabel: (auth: { label: string; source: string }) => {
+    if (!auth.source || auth.source === auth.label || auth.source === "missing") {
+      return auth.label;
+    }
+    return `${auth.label} (${auth.source})`;
+  },
+  resolveAuthLabel: async (
+    provider: string,
+    _cfg: unknown,
+    _modelsPath: string,
+    _agentDir?: string,
+    _mode?: unknown,
+    workspaceDir?: string,
+  ) => {
+    const providerKey = normalizeProviderForAuthTest(provider);
+    const matchingProfiles = Object.entries(authProfilesStoreMock.profiles).filter(
+      ([, profile]) => normalizeProviderForAuthTest(profile.provider) === providerKey,
+    );
+    if (matchingProfiles.length > 0) {
+      return {
+        label: matchingProfiles
+          .map(([profileId, profile]) =>
+            profile.type === "oauth" ? `${profileId}=OAuth` : `${profileId}=${profile.key}`,
+          )
+          .join(", "),
+        source: `auth-profiles.json: /tmp/auth-profiles.json`,
+      };
+    }
+    if (
+      providerKey === "anthropic" &&
+      workspaceDir &&
+      (process.env.WORKSPACE_MODEL_CREDENTIALS || process.env.WORKSPACE_MODEL_LIST_CREDENTIALS)
+    ) {
+      return {
+        label: process.env.WORKSPACE_MODEL_CREDENTIALS
+          ? "workspace model credentials"
+          : "workspace model list credentials",
+        source: "",
+      };
+    }
+    return { label: "missing", source: "missing" };
+  },
+}));
 
 vi.mock("../../agents/auth-profiles/store.js", () => {
   const store = () => ({
@@ -264,6 +338,9 @@ beforeEach(() => {
     resolveRuntimeCliBackends: () => [],
   });
   setDirectiveTestProviders([]);
+  modelsCommandMock.resolveModelsCommandReply
+    .mockReset()
+    .mockResolvedValue(defaultModelsCommandReply());
   clearRuntimeAuthProfileStoreSnapshots();
   replaceRuntimeAuthProfileStoreSnapshots([
     {
@@ -459,7 +536,7 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Switch: /model <provider/model>");
   });
 
-  it("uses workspace-scoped auth evidence in /model list provider visibility", async () => {
+  it("passes workspace scope through the /model list browser alias", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-list-auth-label-"));
     const workspaceDir = path.join(tempRoot, "workspace");
     const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-model-list");
@@ -513,6 +590,15 @@ describe("/model chat UX", () => {
           });
 
           expect(reply?.text).toContain("- anthropic");
+          expect(modelsCommandMock.resolveModelsCommandReply).toHaveBeenCalledWith(
+            expect.objectContaining({
+              commandBodyNormalized: "/models",
+              workspaceDir,
+              cfg: expect.objectContaining({
+                plugins: { allow: ["workspace-model-list"] },
+              }),
+            }),
+          );
         },
       );
     } finally {
