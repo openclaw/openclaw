@@ -1133,8 +1133,12 @@ export const NATIVE_TOOLS_FULL_SET = [
   "WebSearch",
   // Subagent / task
   "Task",
+  "TaskCreate",
+  "TaskGet",
+  "TaskList",
   "TaskOutput",
   "TaskStop",
+  "TaskUpdate",
   "Agent",
   // Planning / UX
   "EnterPlanMode",
