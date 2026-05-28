@@ -4,6 +4,7 @@
     "onStartup": false
   },
   "enabledByDefault": true,
+  "nonSecretAuthMarkers": ["gcp-vertex-credentials"],
   "providers": ["google", "google-gemini-cli", "google-vertex"],
   "providerCatalogEntry": "./provider-discovery.ts",
   "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
