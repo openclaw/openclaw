@@ -217,7 +217,7 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("resolves direct-handle media-only payloads before using send-attachment", async () => {
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, ..._args: unknown[]) => {
       if (method === "chats.list") {
         return { chats: [{ identifier: "+15551234567", guid: "iMessage;-;+15551234567" }] };
       }
@@ -255,7 +255,7 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("sends direct-handle media captions as attachment then text", async () => {
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, ..._args: unknown[]) => {
       if (method === "chats.list") {
         return { chats: [{ identifier: "+15551234567", guid: "iMessage;-;+15551234567" }] };
       }
@@ -409,7 +409,7 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("falls back to the existing rpc send path when a DM chat cannot be resolved", async () => {
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, ..._args: unknown[]) => {
       if (method === "chats.list") {
         return { chats: [] };
       }
