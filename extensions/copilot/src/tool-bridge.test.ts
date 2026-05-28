@@ -942,13 +942,7 @@ describe("createCopilotToolBridge", () => {
       ]);
     });
 
-    it("does not invent matches for tools outside the alias map", async () => {
-      // 'group:fs' has no alias mapping; bridge falls back to plain
-      // name-equality (codex precedent at
-      // extensions/codex/src/app-server/run-attempt.ts:4220-4234). Tools
-      // are therefore suppressed; group expansion lives inside PI's
-      // applyEmbeddedAttemptToolsAllow and is intentionally not
-      // mirrored at the SDK boundary in either extension.
+    it("honors core group allowlists through the shared embedded-runner filter", async () => {
       const createOpenClawCodingTools = vi.fn(async () => [
         makeTool({ name: "read" }),
         makeTool({ name: "edit" }),
@@ -961,7 +955,63 @@ describe("createCopilotToolBridge", () => {
         modelProvider: "github-copilot",
         sessionId: "session-1",
       });
-      expect(result.sourceTools).toEqual([]);
+      expect(result.sourceTools.map((tool) => tool.name).toSorted()).toEqual(["edit", "read"]);
+    });
+
+    it("keeps plugin tools for plugin group allowlists", async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "memory_search", pluginId: "active-memory" } as never),
+        makeTool({ name: "read" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { toolsAllow: ["group:plugins"] } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["memory_search"]);
+    });
+
+    it("keeps core tools available for glob allowlists", async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "web_fetch" }),
+        makeTool({ name: "read" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { toolsAllow: ["web_*"] } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["web_fetch"]);
+      const options = (createOpenClawCodingTools.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        toolConstructionPlan?: { includeOpenClawTools?: boolean };
+      };
+      expect(options?.toolConstructionPlan?.includeOpenClawTools).toBe(true);
+    });
+
+    it("does not keep apply_patch for a write-only allowlist", async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "write" }),
+        makeTool({ name: "apply_patch" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { toolsAllow: ["write"] } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["write"]);
+      const options = (createOpenClawCodingTools.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        toolConstructionPlan?: { includeShellTools?: boolean };
+      };
+      expect(options?.toolConstructionPlan?.includeShellTools).toBe(false);
     });
   });
 });

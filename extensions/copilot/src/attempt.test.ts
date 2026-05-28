@@ -1812,7 +1812,7 @@ describe("runCopilotAttempt", () => {
       }
     });
 
-    it("treats sandbox-resolve errors as soft failures (falls back to no sandbox)", async () => {
+    it("fails closed when sandbox resolution fails", async () => {
       const sdk = makeFakeSdk({
         onCreateSession: (session) => {
           session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
@@ -1824,24 +1824,18 @@ describe("runCopilotAttempt", () => {
         throw new Error("sandbox provisioning boom");
       });
 
-      await runCopilotAttempt(makeParams(), {
+      const result = await runCopilotAttempt(makeParams(), {
         createToolBridge,
         pool,
         resolveSandboxContextOverride,
       });
 
-      const bridgeArgs = (createToolBridge.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        sandbox?: unknown;
-        workspaceDir?: unknown;
-      };
-      expect(bridgeArgs?.sandbox).toBeNull();
-      expect(bridgeArgs?.workspaceDir).toBe("C:\\workspace");
-      const sessionConfig = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        workingDirectory?: unknown;
-      };
-      // Fallback path must keep the SDK session on the original workspace
-      // when sandbox provisioning fails; never leak a half-resolved sandbox path.
-      expect(sessionConfig?.workingDirectory).toBe("C:\\workspace");
+      expect(getPromptErrorCode(result)).toBe("sandbox_resolution_failure");
+      expect((result.promptError as Error | undefined)?.message).toContain(
+        "sandbox provisioning boom",
+      );
+      expect(createToolBridge).not.toHaveBeenCalled();
+      expect(sdk.createSession).not.toHaveBeenCalled();
     });
   });
 

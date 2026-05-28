@@ -194,11 +194,31 @@ export async function runCopilotAttempt(
         sessionKey: sandboxSessionKey,
         workspaceDir: resolvedWorkspaceForSandbox,
       });
-    } catch {
-      // Sandbox resolution failures should never crash the attempt; fall back
-      // to the unsandboxed workspace. Matches PI behavior at attempt.ts:1234
-      // where an unresolved sandbox simply yields `null`.
-      sandbox = null;
+    } catch (error: unknown) {
+      settled = true;
+      params.abortSignal?.removeEventListener("abort", onAbort);
+      if (abortRequested || params.abortSignal?.aborted) {
+        return createResult(input, {
+          aborted: true,
+          externalAbort: true,
+          messagesSnapshot: messages,
+          now,
+          promptError: undefined,
+          sdkSessionId: undefined,
+          sessionIdUsed: input.sessionId,
+        });
+      }
+      return createResult(input, {
+        messagesSnapshot: messages,
+        now,
+        promptError: createPromptError(
+          "sandbox_resolution_failure",
+          `[copilot-attempt] sandbox resolution failed: ${toError(error).message}`,
+          error,
+        ),
+        sdkSessionId: undefined,
+        sessionIdUsed: input.sessionId,
+      });
     }
     effectiveWorkspaceDir = sandbox?.enabled
       ? sandbox.workspaceAccess === "rw"
