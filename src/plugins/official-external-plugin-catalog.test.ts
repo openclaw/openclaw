@@ -20,6 +20,7 @@ describe("official external plugin catalog", () => {
     const wecomByChannel = expectCatalogEntry("wecom");
     const wecomByPlugin = expectCatalogEntry("wecom-openclaw-plugin");
     const yuanbaoByChannel = expectCatalogEntry("yuanbao");
+    const zulipByChannel = expectCatalogEntry("zulip");
 
     expect(resolveOfficialExternalPluginId(wecomByChannel)).toBe("wecom-openclaw-plugin");
     expect(resolveOfficialExternalPluginId(wecomByPlugin)).toBe("wecom-openclaw-plugin");
@@ -29,6 +30,10 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginId(yuanbaoByChannel)).toBe("openclaw-plugin-yuanbao");
     expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel)?.npmSpec).toBe(
       "openclaw-plugin-yuanbao@2.13.1",
+    );
+    expect(resolveOfficialExternalPluginId(zulipByChannel)).toBe("zulip");
+    expect(resolveOfficialExternalPluginInstall(zulipByChannel)?.npmSpec).toBe(
+      "openclaw-channel-zulip@2026.5.26",
     );
   });
 

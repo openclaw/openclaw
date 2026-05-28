@@ -178,6 +178,36 @@ describe("buildOfficialChannelCatalog", () => {
     });
     expect(
       summarizeCatalogEntry(
+        findCatalogEntry(entries, (entry) => entry.name === "openclaw-channel-zulip"),
+      ),
+    ).toEqual({
+      name: "openclaw-channel-zulip",
+      description: "OpenClaw Zulip channel plugin.",
+      source: "external",
+      plugin: {
+        id: "zulip",
+        label: "Zulip",
+      },
+      channel: {
+        id: "zulip",
+        label: "Zulip",
+        selectionLabel: "Zulip",
+        detailLabel: "Zulip",
+        docsLabel: "zulip",
+        docsPath: "/channels/zulip",
+        blurb: "Zulip direct messages, streams, and topics for OpenClaw agents.",
+        aliases: ["zulipchat"],
+      },
+      install: {
+        npmSpec: "openclaw-channel-zulip@2026.5.26",
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.5.26",
+        expectedIntegrity:
+          "sha512-VtQSQ6oxyrM4e4BCSrbhjDqPxtOZbabgTLJHqGpqYwq6gWN6rL+C107AZbOHbDSu2qhE7AcaOVm5CHZhmh3dIg==",
+      },
+    });
+    expect(
+      summarizeCatalogEntry(
         findCatalogEntry(entries, (entry) => entry.name === "@openclaw/whatsapp"),
       ),
     ).toEqual({

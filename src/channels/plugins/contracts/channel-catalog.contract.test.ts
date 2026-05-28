@@ -48,3 +48,9 @@ describeChannelCatalogEntryContract({
   npmSpec: "openclaw-plugin-yuanbao@2.13.1",
   alias: "yb",
 });
+
+describeChannelCatalogEntryContract({
+  channelId: "zulip",
+  npmSpec: "openclaw-channel-zulip@2026.5.26",
+  alias: "zulipchat",
+});

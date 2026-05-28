@@ -53,6 +53,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Yuanbao](/channels/yuanbao) - Tencent Yuanbao bot (external plugin).
 - [Zalo](/channels/zalo) - Zalo Bot API; Vietnam's popular messenger (bundled plugin).
 - [Zalo Personal](/channels/zalouser) - Zalo personal account via QR login (bundled plugin).
+- [Zulip](/channels/zulip) - Open-source team chat with streams and topics (external plugin).
 
 ## Notes
 

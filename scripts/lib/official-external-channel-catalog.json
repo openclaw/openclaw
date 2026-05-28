@@ -122,6 +122,44 @@
       }
     },
     {
+      "name": "openclaw-channel-zulip",
+      "description": "OpenClaw Zulip channel plugin.",
+      "source": "external",
+      "kind": "channel",
+      "openclaw": {
+        "plugin": {
+          "id": "zulip",
+          "label": "Zulip"
+        },
+        "channel": {
+          "id": "zulip",
+          "label": "Zulip",
+          "selectionLabel": "Zulip",
+          "detailLabel": "Zulip",
+          "docsPath": "/channels/zulip",
+          "docsLabel": "zulip",
+          "blurb": "Zulip direct messages, streams, and topics for OpenClaw agents.",
+          "aliases": ["zulipchat"]
+        },
+        "channelConfigs": {
+          "zulip": {
+            "label": "Zulip",
+            "description": "Zulip direct messages, streams, and topics.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "install": {
+          "npmSpec": "openclaw-channel-zulip@2026.5.26",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.26",
+          "expectedIntegrity": "sha512-VtQSQ6oxyrM4e4BCSrbhjDqPxtOZbabgTLJHqGpqYwq6gWN6rL+C107AZbOHbDSu2qhE7AcaOVm5CHZhmh3dIg=="
+        }
+      }
+    },
+    {
       "name": "@openclaw/discord",
       "description": "OpenClaw Discord channel plugin",
       "source": "official",
