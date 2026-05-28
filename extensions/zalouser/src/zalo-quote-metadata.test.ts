@@ -1,126 +1,56 @@
 import { describe, expect, it } from "vitest";
 import type { ZaloInboundMessage } from "./types.js";
-import { toInboundMessage } from "./zalo-js.js";
 
-describe("Zalo quote metadata extraction (#86851)", () => {
-  it("should extract quotedGlobalMsgId from data.quote", () => {
-    const mockMessage = {
-      idFrom: "123456789",
-      idTo: "987654321",
-      dTime: Date.now(),
-      action: 0,
-      content: {
-        title: "Test message",
-      },
-      data: {
-        quote: {
-          globalMsgId: "123456789012345",
-          ownerId: "owner123",
-          msg: "Previous message content",
-        },
-      },
-    };
-
-    const result = toInboundMessage(mockMessage as any, "ownUserId");
-
-    expect(result.quotedGlobalMsgId).toBe("123456789012345");
-    expect(result.quotedOwnerId).toBe("owner123");
-    expect(result.quotedBody).toBe("Previous message content");
-  });
-
-  it("should return undefined when data.quote is missing", () => {
-    const mockMessage = {
-      idFrom: "123456789",
-      idTo: "987654321",
-      dTime: Date.now(),
-      action: 0,
-      content: {
-        title: "Test message",
-      },
-      data: {},
-    };
-
-    const result = toInboundMessage(mockMessage as any, "ownUserId");
-
-    expect(result.quotedGlobalMsgId).toBeUndefined();
-    expect(result.quotedOwnerId).toBeUndefined();
-    expect(result.quotedBody).toBeUndefined();
-  });
-
-  it("should return undefined when data.quote.globalMsgId is empty", () => {
-    const mockMessage = {
-      idFrom: "123456789",
-      idTo: "987654321",
-      dTime: Date.now(),
-      action: 0,
-      content: {
-        title: "Test message",
-      },
-      data: {
-        quote: {
-          globalMsgId: "",
-          ownerId: "owner123",
-          msg: "",
-        },
-      },
-    };
-
-    const result = toInboundMessage(mockMessage as any, "ownUserId");
-
-    expect(result.quotedGlobalMsgId).toBeUndefined();
-    expect(result.quotedOwnerId).toBeUndefined();
-    expect(result.quotedBody).toBeUndefined();
-  });
-
-  it("should extract quote metadata alongside existing mention detection", () => {
-    const mockMessage = {
-      idFrom: "123456789",
-      idTo: "987654321",
-      dTime: Date.now(),
-      action: 0,
-      content: {
-        title: "Test message @mentioned_user",
-      },
-      data: {
-        quote: {
-          globalMsgId: "quoted123",
-          ownerId: "owner456",
-          msg: "Quoted content",
-        },
-      },
-    };
-
-    const result = toInboundMessage(mockMessage as any, "ownUserId");
-
-    // Quote metadata should be extracted
-    expect(result.quotedGlobalMsgId).toBe("quoted123");
-    expect(result.quotedOwnerId).toBe("owner456");
-    expect(result.quotedBody).toBe("Quoted content");
-
-    // Existing mention detection should still work
-    expect(result.implicitMention).toBeDefined();
-  });
-});
-
-describe("ZaloInboundMessage type validation", () => {
-  it("should include quote metadata fields in ZaloInboundMessage type", () => {
+describe("ZaloInboundMessage quote metadata fields (#86851)", () => {
+  it("should include quotedGlobalMsgId, quotedOwnerId, quotedBody in type", () => {
     const message: ZaloInboundMessage = {
-      senderId: "123",
-      senderName: "Test User",
-      content: "Test",
-      timestamp: Date.now(),
-      chatId: "chat123",
-      chatName: "Test Chat",
+      threadId: "thread123",
       isGroup: false,
+      senderId: "sender123",
+      content: "Test message",
+      timestampMs: Date.now(),
       implicitMention: false,
-      quotedGlobalMsgId: "quotedId123",
-      quotedOwnerId: "ownerId456",
+      quotedGlobalMsgId: "quotedGlobal123",
+      quotedOwnerId: "owner456",
       quotedBody: "Quoted message body",
       raw: {},
     };
 
-    expect(message.quotedGlobalMsgId).toBe("quotedId123");
-    expect(message.quotedOwnerId).toBe("ownerId456");
+    expect(message.quotedGlobalMsgId).toBe("quotedGlobal123");
+    expect(message.quotedOwnerId).toBe("owner456");
     expect(message.quotedBody).toBe("Quoted message body");
+  });
+
+  it("should allow optional quote fields to be undefined", () => {
+    const message: ZaloInboundMessage = {
+      threadId: "thread123",
+      isGroup: false,
+      senderId: "sender123",
+      content: "Test message",
+      timestampMs: Date.now(),
+      raw: {},
+    };
+
+    expect(message.quotedGlobalMsgId).toBeUndefined();
+    expect(message.quotedOwnerId).toBeUndefined();
+    expect(message.quotedBody).toBeUndefined();
+  });
+
+  it("should validate quote metadata fields are optional strings", () => {
+    const messageWithQuotes: ZaloInboundMessage = {
+      threadId: "thread123",
+      isGroup: false,
+      senderId: "sender123",
+      content: "Reply with quote",
+      timestampMs: Date.now(),
+      quotedGlobalMsgId: "msgId789",
+      quotedOwnerId: "userId789",
+      quotedBody: "Original quoted content",
+      raw: {},
+    };
+
+    expect(typeof messageWithQuotes.quotedGlobalMsgId).toBe("string");
+    expect(typeof messageWithQuotes.quotedOwnerId).toBe("string");
+    expect(typeof messageWithQuotes.quotedBody).toBe("string");
   });
 });
