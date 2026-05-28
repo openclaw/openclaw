@@ -334,6 +334,7 @@ describe("createSessionAndRefresh", () => {
       parentSessionKey: "agent:main:main",
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -397,6 +398,7 @@ describe("deleteSessionsAndRefresh", () => {
       deleteTranscript: true,
     });
     expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -524,6 +526,7 @@ describe("deleteSessionsAndRefresh", () => {
     expect(deleted).toEqual(["key-a"]);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -800,6 +803,7 @@ describe("loadSessions", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
       limit: 50,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -830,6 +834,7 @@ describe("loadSessions", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       activeMinutes: 120,
       limit: 50,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -911,12 +916,14 @@ describe("loadSessions", () => {
     await loadSessions(state, {
       activeMinutes: 0,
       limit: 0,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       agentId: "ops",
     });
 
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -949,6 +956,7 @@ describe("loadSessions", () => {
       limit: 1,
       offset: 2,
       search: "telegram",
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
     });
@@ -957,6 +965,7 @@ describe("loadSessions", () => {
       limit: 1,
       offset: 2,
       search: "telegram",
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -1057,11 +1066,13 @@ describe("loadSessions", () => {
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
       activeMinutes: 30,
       limit: 10,
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -1145,6 +1156,7 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
+      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
