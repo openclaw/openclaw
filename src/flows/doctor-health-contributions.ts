@@ -729,11 +729,18 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   const credentialPlan = createGatewayCredentialPlan({ config: ctx.cfg, env: process.env });
   const ambiguousLocalAuthRefs = credentialPlan.authMode === undefined;
   const remoteHealthCredentialsActive = credentialPlan.configuredMode === "remote";
+  const remoteLocalTokenFallbackActive = remoteHealthCredentialsActive && !credentialPlan.envToken;
+  const remoteLocalPasswordFallbackActive =
+    remoteHealthCredentialsActive && !credentialPlan.envPassword;
   const activeSecretRefPaths = [
-    credentialPlan.localTokenSurfaceActive || ambiguousLocalAuthRefs
+    credentialPlan.localTokenSurfaceActive ||
+    remoteLocalTokenFallbackActive ||
+    ambiguousLocalAuthRefs
       ? credentialPlan.localToken.refPath
       : undefined,
-    credentialPlan.localPasswordCanWin || ambiguousLocalAuthRefs
+    credentialPlan.localPasswordCanWin ||
+    remoteLocalPasswordFallbackActive ||
+    ambiguousLocalAuthRefs
       ? credentialPlan.localPassword.refPath
       : undefined,
     remoteHealthCredentialsActive && credentialPlan.remoteTokenActive
