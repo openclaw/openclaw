@@ -25,6 +25,7 @@ function createMessageUpdateContext(
     onAgentEvent?: ReturnType<typeof vi.fn>;
     onPartialReply?: ReturnType<typeof vi.fn>;
     flushBlockReplyBuffer?: ReturnType<typeof vi.fn>;
+    resetAssistantTextStreamState?: ReturnType<typeof vi.fn>;
     resetAssistantMessageState?: ReturnType<typeof vi.fn>;
     debug?: ReturnType<typeof vi.fn>;
     shouldEmitPartialReplies?: boolean;
@@ -33,7 +34,7 @@ function createMessageUpdateContext(
     state?: Record<string, unknown>;
   } = {},
 ) {
-  return {
+  const context = {
     params: {
       runId: "run-1",
       session: { id: "session-1" },
@@ -47,6 +48,11 @@ function createMessageUpdateContext(
       streamReasoning: false,
       deltaBuffer: "",
       blockBuffer: "",
+      blockState: {
+        thinking: false,
+        final: false,
+        inlineCode: createInlineCodeState(),
+      },
       partialBlockState: {
         thinking: false,
         final: false,
@@ -73,6 +79,22 @@ function createMessageUpdateContext(
     recordAssistantUsage: vi.fn(),
     commitAssistantUsage: vi.fn(),
   } as unknown as EmbeddedAgentSubscribeContext;
+  context.resetAssistantTextStreamState =
+    params.resetAssistantTextStreamState ??
+    vi.fn(() => {
+      context.state.deltaBuffer = "";
+      context.state.blockBuffer = "";
+      context.blockChunker?.reset();
+      context.state.blockState.thinking = false;
+      context.state.blockState.final = false;
+      context.state.blockState.inlineCode = createInlineCodeState();
+      context.state.blockState.pendingTagFragment = undefined;
+      context.state.partialBlockState.thinking = false;
+      context.state.partialBlockState.final = false;
+      context.state.partialBlockState.inlineCode = createInlineCodeState();
+      context.state.partialBlockState.pendingTagFragment = undefined;
+    });
+  return context;
 }
 
 function createMessageEndContext(

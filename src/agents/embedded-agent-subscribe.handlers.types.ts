@@ -171,6 +171,7 @@ export type EmbeddedAgentSubscribeContext = {
     text: string,
     options?: { final?: boolean },
   ) => ReplyDirectiveParseResult | null;
+  resetAssistantTextStreamState: () => void;
   resetAssistantMessageState: (nextAssistantTextBaseline: number) => void;
   resetForCompactionRetry: () => void;
   finalizeAssistantTexts: (args: {
