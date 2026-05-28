@@ -16,7 +16,6 @@
     "@openclaw/plugin-sdk": "workspace:*",
     "@openclaw/slack": "workspace:*",
     "@openclaw/whatsapp": "workspace:*",
-    "@slack/web-api": "7.16.0",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/api.js";
-import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -30,6 +29,8 @@ import {
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
 } from "../shared/live-transport-scenarios.js";
+
+type SlackWebClient = ReturnType<typeof createSlackWebClient>;
 
 type SlackQaRuntimeEnv = {
   channelId: string;
@@ -110,12 +111,12 @@ type SlackQaConfigOverrides = {
 
 type SlackQaScenarioContext = {
   channelId: string;
-  driverClient: WebClient;
+  driverClient: SlackWebClient;
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
   postSlackMessage: (params: { text: string; threadTs?: string }) => Promise<{ ts: string }>;
   sentTs: string;
   sutIdentity: SlackAuthIdentity;
-  sutReadClient: WebClient;
+  sutReadClient: SlackWebClient;
   waitForReady: () => Promise<void>;
 };
 
@@ -696,7 +697,7 @@ async function getSlackIdentity(token: string): Promise<SlackAuthIdentity> {
 
 async function sendSlackChannelMessage(params: {
   channelId: string;
-  client: WebClient;
+  client: SlackWebClient;
   text: string;
   threadTs?: string;
 }) {
@@ -718,7 +719,7 @@ async function sendSlackChannelMessage(params: {
 
 async function listSlackMessages(params: {
   channelId: string;
-  client: WebClient;
+  client: SlackWebClient;
   oldestTs: string;
 }) {
   const history = slackHistorySchema.parse(
@@ -734,7 +735,7 @@ async function listSlackMessages(params: {
 
 async function listSlackThreadMessages(params: {
   channelId: string;
-  client: WebClient;
+  client: SlackWebClient;
   threadTs: string;
 }) {
   const replies = slackRepliesSchema.parse(
@@ -877,7 +878,7 @@ function isSutSlackMessage(message: SlackMessage, sutIdentity: SlackAuthIdentity
 
 async function waitForSlackScenarioReply(params: {
   channelId: string;
-  client: WebClient;
+  client: SlackWebClient;
   matchText: string;
   observedMessages: SlackObservedMessage[];
   observationScenarioId: string;
@@ -956,7 +957,7 @@ async function waitForSlackScenarioReply(params: {
 
 async function waitForSlackNoReply(params: {
   channelId: string;
-  client: WebClient;
+  client: SlackWebClient;
   matchText: string;
   observedMessages: SlackObservedMessage[];
   observationScenarioId: string;
@@ -1057,7 +1058,7 @@ async function waitForSlackApprovalPrompt(params: {
   approvalId: string;
   approvalKind: SlackQaApprovalKind;
   channelId: string;
-  client: WebClient;
+  client: SlackWebClient;
   decision: SlackQaApprovalDecision;
   observedMessages: SlackObservedMessage[];
   oldestTs: string;
@@ -1134,7 +1135,7 @@ async function waitForSlackApprovalPrompt(params: {
 async function waitForSlackApprovalResolvedUpdate(params: {
   approvalKind: SlackQaApprovalKind;
   channelId: string;
-  client: WebClient;
+  client: SlackWebClient;
   decision: SlackQaApprovalDecision;
   messageTs: string;
   observedMessages: SlackObservedMessage[];
