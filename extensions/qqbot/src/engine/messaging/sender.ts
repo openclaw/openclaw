@@ -27,7 +27,7 @@
 import os from "node:os";
 import { ApiClient } from "../api/api-client.js";
 import { ChunkedMediaApi as ChunkedMediaApiClass } from "../api/media-chunked.js";
-import { MediaApi as MediaApiClass } from "../api/media.js";
+import { downloadDirectUploadUrl, MediaApi as MediaApiClass } from "../api/media.js";
 import type { Credentials } from "../api/messages.js";
 import { MessageApi as MessageApiClass } from "../api/messages.js";
 import { getNextMsgSeq } from "../api/routes.js";
@@ -653,11 +653,23 @@ async function dispatchUpload(
   fileName?: string,
 ): Promise<UploadMediaResponse> {
   switch (source.kind) {
-    case "url":
+    case "url": {
+      const buffer = await downloadDirectUploadUrl(source.url);
+      if (buffer.length >= LARGE_FILE_THRESHOLD) {
+        return ctx.chunkedMediaApi.uploadChunked({
+          scope,
+          targetId,
+          fileType,
+          source: { kind: "buffer", buffer, fileName },
+          creds,
+          fileName,
+        });
+      }
       return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
-        url: source.url,
+        buffer,
         fileName,
       });
+    }
     case "base64":
       return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
         fileData: source.data,

@@ -159,6 +159,42 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("does not reuse cached FILE uploads when the requested filename differs", async () => {
+    const cache = {
+      computeHash: vi.fn(() => "hash-1"),
+      get: vi.fn(() => "cached-file-info"),
+      set: vi.fn(),
+    };
+    const client = mockApiClient();
+    const tokenManager = mockTokenManager();
+    const api = new MediaApi(client, tokenManager, {
+      uploadCache: cache,
+      sanitizeFileName: (name) => `safe-${name}`,
+    });
+
+    await api.uploadMedia(
+      "c2c",
+      "user-openid",
+      MediaFileType.FILE,
+      { appId: "app-id", clientSecret: "client-secret" },
+      { url: "https://cdn.example.com/report.pdf", fileName: "report.pdf" },
+    );
+
+    expect(cache.computeHash).not.toHaveBeenCalled();
+    expect(cache.get).not.toHaveBeenCalled();
+    expect(cache.set).not.toHaveBeenCalled();
+    expect(client.request).toHaveBeenCalledWith(
+      "token-1",
+      "POST",
+      expect.any(String),
+      expect.objectContaining({
+        file_data: MEDIA_BASE64,
+        file_name: "safe-report.pdf",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("rejects invalid direct-upload URLs before downloading media or calling the QQ API", async () => {
     const client = mockApiClient();
     const tokenManager = mockTokenManager();

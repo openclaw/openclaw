@@ -62,7 +62,7 @@ function assertDirectUploadDownloadHostAllowed(hostname: string): void {
   }
 }
 
-async function downloadDirectUploadUrl(url: string): Promise<Buffer> {
+export async function downloadDirectUploadUrl(url: string): Promise<Buffer> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -177,9 +177,13 @@ export class MediaApi {
     }
 
     // Check cache for base64 uploads.
-    if (fileData && this.cache) {
-      const hash = this.cache.computeHash(fileData);
-      const cached = this.cache.get(hash, scope, targetId, fileType);
+    const uploadCache =
+      fileData !== undefined && !(fileType === MediaFileType.FILE && opts.fileName)
+        ? this.cache
+        : undefined;
+    if (fileData !== undefined && uploadCache) {
+      const hash = uploadCache.computeHash(fileData);
+      const cached = uploadCache.get(hash, scope, targetId, fileType);
       if (cached) {
         return { file_uuid: "", file_info: cached, ttl: 0 };
       }
@@ -211,9 +215,9 @@ export class MediaApi {
     );
 
     // Cache the result for future dedup.
-    if (fileData && result.file_info && result.ttl > 0 && this.cache) {
-      const hash = this.cache.computeHash(fileData);
-      this.cache.set(
+    if (fileData !== undefined && uploadCache && result.file_info && result.ttl > 0) {
+      const hash = uploadCache.computeHash(fileData);
+      uploadCache.set(
         hash,
         scope,
         targetId,
