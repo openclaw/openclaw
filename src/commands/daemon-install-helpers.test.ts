@@ -504,6 +504,121 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
 
+  it("includes passEnv values for auth-profile exec SecretRef providers", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OP_CONNECT_TOKEN: "op-connect-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              args: ["read", "op://Private/OpenAI/api-key"],
+              passEnv: ["OP_CONNECT_TOKEN"],
+              allowInsecurePath: true,
+            },
+          },
+        },
+      },
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: {
+              source: "exec",
+              provider: "onepassword",
+              id: "providers/openai/apiKey",
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OP_CONNECT_TOKEN).toBe("op-connect-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
+  it("includes passEnv values for auth-profile plugin-managed exec SecretRef providers", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+    const pluginRoot = path.join(isolatedHome, "acme-secrets");
+    fs.mkdirSync(pluginRoot);
+    fs.writeFileSync(path.join(pluginRoot, "secret-ref-resolver.js"), "");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "acme-secrets",
+          origin: "global",
+          rootDir: pluginRoot,
+          secretProviderIntegrations: {
+            "secret-store": {
+              source: "exec",
+              command: "${node}",
+              args: ["./secret-ref-resolver.js"],
+              passEnv: ["ACME_SECRETS_ADDR", "ACME_SECRETS_TOKEN"],
+            },
+          },
+        },
+      ],
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        ACME_SECRETS_ADDR: "http://secrets.example.test",
+        ACME_SECRETS_TOKEN: "secret-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        secrets: {
+          providers: {
+            "team-secrets": {
+              source: "exec",
+              pluginIntegration: {
+                pluginId: "acme-secrets",
+                integrationId: "secret-store",
+              },
+            },
+          },
+        },
+      },
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: {
+              source: "exec",
+              provider: "team-secrets",
+              id: "providers/openai/apiKey",
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.ACME_SECRETS_ADDR).toBe("http://secrets.example.test");
+    expect(plan.environment.ACME_SECRETS_TOKEN).toBe("secret-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
   it("allows safe inherited passEnv names while blocking dangerous exec SecretRef env", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
@@ -579,6 +694,62 @@ describe("buildGatewayInstallPlan", () => {
       expect(warningOutput).toContain(blockedName);
     }
     expect(warn.mock.calls.every(([, title]) => title === "Config SecretRef")).toBe(true);
+  });
+
+  it("blocks dangerous passEnv values for auth-profile exec SecretRef providers", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const warn = vi.fn();
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        NODE_OPTIONS: "--require /tmp/evil.js",
+      }),
+      port: 3000,
+      runtime: "node",
+      warn,
+      config: {
+        secrets: {
+          providers: {
+            onepassword: {
+              source: "exec",
+              command: "/usr/bin/op",
+              args: ["read", "op://Private/OpenAI/api-key"],
+              passEnv: ["HOME", "NODE_OPTIONS"],
+              allowInsecurePath: true,
+            },
+          },
+        },
+      },
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: {
+              source: "exec",
+              provider: "onepassword",
+              id: "providers/openai/apiKey",
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.HOME).toBe(isolatedHome);
+    expect(plan.environment.NODE_OPTIONS).toBeUndefined();
+    expect(warn).not.toHaveBeenCalledWith(
+      'Exec SecretRef passEnv ref "HOME" blocked by host-env security policy',
+      "Auth profile",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      'Exec SecretRef passEnv ref "NODE_OPTIONS" blocked by host-env security policy',
+      "Auth profile",
+    );
   });
 
   it("does not include passEnv values for unused exec SecretRef providers", async () => {

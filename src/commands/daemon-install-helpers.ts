@@ -5,7 +5,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { collectDurableServiceEnvVarSources } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayStateDir, resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import {
@@ -92,27 +92,27 @@ function loadDaemonInstallAuthProfileStoreRuntime() {
   return daemonInstallAuthProfileStoreRuntimePromise;
 }
 
-async function collectAuthProfileServiceEnvVars(params: {
-  env: Record<string, string | undefined>;
-  authStore?: AuthProfileStore;
-  warn?: DaemonInstallWarnFn;
-}): Promise<Record<string, string>> {
-  let authStore = params.authStore;
-  if (!authStore) {
-    // Keep the daemon install cold path cheap when there is no auth store to read.
-    const { hasAnyAuthProfileStoreSource } = await loadDaemonInstallAuthProfileSourceRuntime();
-    if (!hasAnyAuthProfileStoreSource()) {
-      return {};
-    }
-    const { loadAuthProfileStoreForSecretsRuntime } =
-      await loadDaemonInstallAuthProfileStoreRuntime();
-    authStore = loadAuthProfileStoreForSecretsRuntime();
+async function resolveAuthProfileStoreForServiceEnv(
+  authStore: AuthProfileStore | undefined,
+): Promise<AuthProfileStore | undefined> {
+  if (authStore) {
+    return authStore;
   }
-  if (!authStore) {
-    return {};
+  // Keep the daemon install cold path cheap when there is no auth store to read.
+  const { hasAnyAuthProfileStoreSource } = await loadDaemonInstallAuthProfileSourceRuntime();
+  if (!hasAnyAuthProfileStoreSource()) {
+    return undefined;
   }
-  const entries: Record<string, string> = {};
+  const { loadAuthProfileStoreForSecretsRuntime } =
+    await loadDaemonInstallAuthProfileStoreRuntime();
+  return loadAuthProfileStoreForSecretsRuntime();
+}
 
+function collectAuthProfileSecretRefs(authStore: AuthProfileStore | undefined): SecretRef[] {
+  if (!authStore) {
+    return [];
+  }
+  const refs: SecretRef[] = [];
   for (const credential of Object.values(authStore.profiles)) {
     const ref =
       credential.type === "api_key"
@@ -120,6 +120,21 @@ async function collectAuthProfileServiceEnvVars(params: {
         : credential.type === "token"
           ? credential.tokenRef
           : undefined;
+    if (ref) {
+      refs.push(ref);
+    }
+  }
+  return refs;
+}
+
+function collectAuthProfileServiceEnvVars(params: {
+  env: Record<string, string | undefined>;
+  authStore?: AuthProfileStore;
+  warn?: DaemonInstallWarnFn;
+}): Record<string, string> {
+  const entries: Record<string, string> = {};
+
+  for (const ref of collectAuthProfileSecretRefs(params.authStore)) {
     if (!ref || ref.source !== "env") {
       continue;
     }
@@ -143,6 +158,11 @@ async function collectAuthProfileServiceEnvVars(params: {
 
   return entries;
 }
+
+type ExecSecretRefPassEnvSource = {
+  ref: SecretRef;
+  warningTitle: "Config SecretRef" | "Auth profile";
+};
 
 function collectConfigSecretRefServiceEnvVars(params: {
   env: Record<string, string | undefined>;
@@ -199,6 +219,7 @@ function collectConfigSecretRefServiceEnvVars(params: {
 function collectExecSecretRefPassEnvServiceEnvVars(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
+  authStore?: AuthProfileStore;
   durableEnvironment: Record<string, string | undefined>;
   warn?: DaemonInstallWarnFn;
 }): Record<string, string> {
@@ -207,6 +228,7 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
   }
   const entries: Record<string, string> = {};
   let manifestRegistry: Pick<PluginManifestRegistry, "plugins"> | undefined;
+  const sources: ExecSecretRefPassEnvSource[] = [];
   for (const target of discoverConfigSecretTargets(params.config)) {
     if (!target.entry.includeInPlan) {
       continue;
@@ -219,6 +241,14 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
     if (!ref || ref.source !== "exec") {
       continue;
     }
+    sources.push({ ref, warningTitle: "Config SecretRef" });
+  }
+  for (const ref of collectAuthProfileSecretRefs(params.authStore)) {
+    if (ref.source === "exec") {
+      sources.push({ ref, warningTitle: "Auth profile" });
+    }
+  }
+  for (const { ref, warningTitle } of sources) {
     const provider = params.config.secrets?.providers?.[ref.provider];
     if (!provider || provider.source !== "exec") {
       continue;
@@ -239,7 +269,7 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
           if (!resolved.ok) {
             params.warn?.(
               `Exec SecretRef plugin provider "${ref.provider}" could not be resolved for service environment planning: ${resolved.reason}`,
-              "Config SecretRef",
+              warningTitle,
             );
             return undefined;
           }
@@ -254,14 +284,14 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
       if (!key) {
         params.warn?.(
           `Exec SecretRef passEnv id "${rawKey}" is not portable and was not added to the service environment`,
-          "Config SecretRef",
+          warningTitle,
         );
         continue;
       }
       if (isBlockedExecSecretRefPassEnvKey(key)) {
         params.warn?.(
           `Exec SecretRef passEnv ref "${key}" blocked by host-env security policy`,
-          "Config SecretRef",
+          warningTitle,
         );
         continue;
       }
@@ -470,15 +500,17 @@ async function buildGatewayInstallEnvironment(params: {
     durableEnvironment,
     warn: params.warn,
   });
+  const authStore = await resolveAuthProfileStoreForServiceEnv(params.authStore);
   const execSecretRefPassEnvEnvironment = collectExecSecretRefPassEnvServiceEnvVars({
     env: params.env,
     config: params.config,
+    authStore,
     durableEnvironment,
     warn: params.warn,
   });
-  const authProfileEnvironment = await collectAuthProfileServiceEnvVars({
+  const authProfileEnvironment = collectAuthProfileServiceEnvVars({
     env: params.env,
-    authStore: params.authStore,
+    authStore,
     warn: params.warn,
   });
   const preservedExistingEnvironment = collectPreservedExistingServiceEnvVars(
@@ -612,7 +644,7 @@ export async function buildGatewayInstallPlan(params: {
     platform,
   });
 
-  // Lowest to highest: preserved custom vars, durable config, auth env refs, generated service env.
+  // Lowest to highest: preserved custom vars, durable config, SecretRef env, generated service env.
   return {
     programArguments,
     workingDirectory: resolveGatewayInstallWorkingDirectory({
