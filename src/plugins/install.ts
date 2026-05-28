@@ -84,6 +84,7 @@ type PackageManifest = PluginPackageManifest & {
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
 };
+type PluginInstallRuntime = Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
 
 function formatUnresolvedOpenClawPeerLinkError(packageName: string): string {
   return `Installed plugin ${packageName} declares openclaw as a peer dependency, but OpenClaw could not create a plugin-local node_modules/openclaw link. Run from a packaged OpenClaw install or reinstall OpenClaw, then retry.`;
@@ -153,6 +154,64 @@ function validateOpenClawPackageCompatibility(params: {
   }
 
   return null;
+}
+
+function validateOpenClawPackageInstallCompatibility(params: {
+  runtime: PluginInstallRuntime;
+  pluginId: string;
+  packageMetadata?: OpenClawPackageManifest;
+}): PluginInstallFailureResult | null {
+  const currentHostVersion = params.runtime.resolveCompatibilityHostVersion();
+  const minHostVersionCheck = params.runtime.checkMinHostVersion({
+    currentVersion: currentHostVersion,
+    minHostVersion: params.packageMetadata?.install?.minHostVersion,
+  });
+  if (!minHostVersionCheck.ok) {
+    if (minHostVersionCheck.kind === "invalid") {
+      return {
+        ok: false,
+        error: `invalid package.json openclaw.install.minHostVersion: ${minHostVersionCheck.error}`,
+        code: PLUGIN_INSTALL_ERROR_CODE.INVALID_MIN_HOST_VERSION,
+      };
+    }
+    if (minHostVersionCheck.kind === "unknown_host_version") {
+      return {
+        ok: false,
+        error: `plugin "${params.pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined. Re-run from a released build or set OPENCLAW_VERSION and retry.`,
+        code: PLUGIN_INSTALL_ERROR_CODE.UNKNOWN_HOST_VERSION,
+      };
+    }
+    return {
+      ok: false,
+      error: `plugin "${params.pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}. Upgrade OpenClaw and retry.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION,
+    };
+  }
+
+  return validateOpenClawPackageCompatibility({
+    pluginId: params.pluginId,
+    currentHostVersion,
+    packageMetadata: params.packageMetadata,
+  });
+}
+
+async function readOptionalPackageManifest(params: {
+  runtime: PluginInstallRuntime;
+  packageDir: string;
+}): Promise<{ ok: true; manifest?: PackageManifest } | PluginInstallFailureResult> {
+  const manifestPath = path.join(params.packageDir, "package.json");
+  if (!(await params.runtime.fileExists(manifestPath))) {
+    return { ok: true };
+  }
+
+  try {
+    return {
+      ok: true,
+      manifest: await params.runtime.readJsonFile<PackageManifest>(manifestPath),
+    };
+  } catch (err) {
+    return { ok: false, error: `invalid package.json: ${String(err)}` };
+  }
 }
 
 export type PluginNpmIntegrityDriftParams = {
@@ -1237,6 +1296,24 @@ async function installBundleFromSourceDir(
       code: PLUGIN_INSTALL_ERROR_CODE.PLUGIN_ID_MISMATCH,
     };
   }
+  const packageManifestResult = await readOptionalPackageManifest({
+    runtime,
+    packageDir: params.sourceDir,
+  });
+  if (!packageManifestResult.ok) {
+    return packageManifestResult;
+  }
+  const packageMetadata = packageManifestResult.manifest
+    ? runtime.getPackageManifestMetadata(packageManifestResult.manifest)
+    : undefined;
+  const compatibilityError = validateOpenClawPackageInstallCompatibility({
+    runtime,
+    pluginId,
+    packageMetadata,
+  });
+  if (compatibilityError) {
+    return compatibilityError;
+  }
 
   const targetResult = await resolvePreparedDirectoryInstallTarget({
     runtime,
@@ -1407,35 +1484,9 @@ async function validatePackagePluginInstallSource(params: {
   }
 
   const packageMetadata = params.runtime.getPackageManifestMetadata(manifest);
-  const currentHostVersion = params.runtime.resolveCompatibilityHostVersion();
-  const minHostVersionCheck = params.runtime.checkMinHostVersion({
-    currentVersion: currentHostVersion,
-    minHostVersion: packageMetadata?.install?.minHostVersion,
-  });
-  if (!minHostVersionCheck.ok) {
-    if (minHostVersionCheck.kind === "invalid") {
-      return {
-        ok: false,
-        error: `invalid package.json openclaw.install.minHostVersion: ${minHostVersionCheck.error}`,
-        code: PLUGIN_INSTALL_ERROR_CODE.INVALID_MIN_HOST_VERSION,
-      };
-    }
-    if (minHostVersionCheck.kind === "unknown_host_version") {
-      return {
-        ok: false,
-        error: `plugin "${pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined. Re-run from a released build or set OPENCLAW_VERSION and retry.`,
-        code: PLUGIN_INSTALL_ERROR_CODE.UNKNOWN_HOST_VERSION,
-      };
-    }
-    return {
-      ok: false,
-      error: `plugin "${pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}. Upgrade OpenClaw and retry.`,
-      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION,
-    };
-  }
-  const compatibilityError = validateOpenClawPackageCompatibility({
+  const compatibilityError = validateOpenClawPackageInstallCompatibility({
+    runtime: params.runtime,
     pluginId,
-    currentHostVersion,
     packageMetadata,
   });
   if (compatibilityError) {

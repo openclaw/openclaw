@@ -3674,6 +3674,36 @@ describe("installPluginFromDir", () => {
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
+  it("rejects bundle package installs whose package plugin API range is newer than the current host", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.10-beta.1");
+    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
+      bundleFormat: "codex",
+      name: "Future Bundle",
+    });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/future-bundle",
+        version: "2026.5.27",
+        openclaw: { compat: { pluginApi: ">=2026.5.27" } },
+      }),
+      "utf-8",
+    );
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectFailedInstallResult({
+      result,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+      messageIncludes: ["requires plugin API >=2026.5.27", "runtime exposes 2026.5.10-beta.1"],
+    });
+    expect(fs.existsSync(path.join(extensionsDir, "future-bundle"))).toBe(false);
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
   it("allows plugins when a beta host is on the package plugin API floor", async () => {
     resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.27-beta.1");
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
