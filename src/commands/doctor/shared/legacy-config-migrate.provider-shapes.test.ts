@@ -271,34 +271,42 @@ describe("legacy migrate provider-shaped config", () => {
         },
       },
     });
-    expect(res.config?.agents?.defaults?.tts).toEqual({
+    const migratedConfig = res.config as
+      | {
+          agents?: { defaults?: { tts?: Record<string, unknown> } };
+          channels?: {
+            discord?: {
+              tts?: Record<string, unknown>;
+              accounts?: { primary?: { tts?: Record<string, unknown> } };
+            };
+          };
+          plugins?: {
+            entries?: Record<string, { config?: { tts?: Record<string, unknown> } }>;
+          };
+        }
+      | undefined;
+    expect(migratedConfig?.agents?.defaults?.tts).toEqual({
       providers: {
         openai: {
           speakerVoice: "marin",
         },
       },
     });
-    expect(res.config?.channels?.discord?.tts).toEqual({
+    expect(migratedConfig?.channels?.discord?.tts).toEqual({
       providers: {
         microsoft: {
           speakerVoice: "en-US-AvaNeural",
         },
       },
     });
-    expect(res.config?.channels?.discord?.accounts?.primary?.tts).toEqual({
+    expect(migratedConfig?.channels?.discord?.accounts?.primary?.tts).toEqual({
       providers: {
         gradium: {
           speakerVoiceId: "voice-current",
         },
       },
     });
-    expect(
-      (
-        res.config?.plugins?.entries as
-          | Record<string, { config?: { tts?: Record<string, unknown> } }>
-          | undefined
-      )?.["voice-call"]?.config?.tts,
-    ).toEqual({
+    expect(migratedConfig?.plugins?.entries?.["voice-call"]?.config?.tts).toEqual({
       providers: {
         xai: {
           speakerVoiceId: "eve",
