@@ -1,6 +1,6 @@
 {
   "name": "chart-generator",
-  "version": "2026.5.27",
+  "version": "2026.5.28",
   "private": false,
   "description": "OpenClaw Chart plugin \u2014 generate bar, line, pie, scatter, and area charts as SVG images",
   "type": "module",
@@ -26,13 +26,13 @@
     "install": {
       "npmSpec": "chart-generator",
       "defaultChoice": "clawhub",
-      "minHostVersion": ">=2026.5.27"
+      "minHostVersion": ">=2026.5.28"
     },
     "compat": {
-      "pluginApi": ">=2026.5.27"
+      "pluginApi": ">=2026.5.28"
     },
     "build": {
-      "openclawVersion": "2026.5.27"
+      "openclawVersion": "2026.5.28"
     }
   }
 }
