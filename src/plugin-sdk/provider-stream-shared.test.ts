@@ -1,6 +1,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
+  createAssistantStreamAccumulator,
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createAnthropicThinkingPrefillPayloadWrapper,
   createPayloadPatchStreamWrapper,
@@ -61,6 +62,27 @@ describe("isOpenAICompatibleThinkingEnabled", () => {
         options: { reasoning: { effort: "off" } } as never,
       }),
     ).toBe(true);
+  });
+});
+
+describe("createAssistantStreamAccumulator", () => {
+  it("is available from the provider stream shared SDK subpath", () => {
+    const accumulator = createAssistantStreamAccumulator({
+      model: {
+        api: "openai-compatible",
+        provider: "example-provider",
+        model: "example-model",
+      },
+      timestamp: 123,
+    });
+
+    accumulator.start();
+    accumulator.startText(0);
+    const delta = accumulator.appendTextDelta(0, "hi");
+    const end = accumulator.endText(0);
+
+    expect(delta.partial.content).toEqual([]);
+    expect(end.partial.content).toEqual([{ type: "text", text: "hi" }]);
   });
 });
 
