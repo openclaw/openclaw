@@ -512,16 +512,150 @@ export async function invokeNativeHookRelayBridge(
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+const READONLY_SHELL_COMMANDS = new Set([
+  "basename",
+  "cat",
+  "cmp",
+  "cut",
+  "date",
+  "diff",
+  "dirname",
+  "du",
+  "echo",
+  "file",
+  "grep",
+  "head",
+  "hostname",
+  "id",
+  "ls",
+  "md5",
+  "md5sum",
+  "nl",
+  "printenv",
+  "printf",
+  "ps",
+  "pwd",
+  "readlink",
+  "realpath",
+  "rg",
+  "sed",
+  "sha1sum",
+  "sha224sum",
+  "sha256sum",
+  "sha384sum",
+  "sha512sum",
+  "shasum",
+  "sort",
+  "stat",
+  "strings",
+  "tail",
+  "uname",
+  "uniq",
+  "wc",
+  "which",
+  "who",
+  "whoami",
+  "xzcat",
+  "zcat",
+]);
+
+const READONLY_TOOL_NAMES = new Set(["ls", "list", "read", "grep", "search", "view", "glob"]);
+
+const READONLY_SHELL_METACHARACTER_PATTERN = /[\n\r;&|`$<>(){}[\]!#~*?\\"']/;
+
+function isPreToolUseSafeForRelayFailOpen(
+  provider: NativeHookRelayProvider,
+  rawPayload: unknown,
+): boolean {
+  if (provider !== "codex") return false;
+  if (!rawPayload || typeof rawPayload !== "object" || Array.isArray(rawPayload)) return false;
+  const payload = rawPayload as Record<string, unknown>;
+  const toolName =
+    typeof payload.tool_name === "string" ? payload.tool_name.trim().toLowerCase() : "";
+  const normalized = NATIVE_HOOK_TOOL_NAME_ALIASES[toolName] ?? toolName;
+  if (READONLY_TOOL_NAMES.has(normalized)) return true;
+  if (normalized !== "exec" && normalized !== "bash") return false;
+  const toolInput =
+    payload.tool_input &&
+    typeof payload.tool_input === "object" &&
+    !Array.isArray(payload.tool_input)
+      ? (payload.tool_input as Record<string, unknown>)
+      : undefined;
+  if (!toolInput) return false;
+  const command = readRelayFailOpenCommand(toolInput);
+  if (!command || command.length > 800) return false;
+  return isReadOnlyShellCommand(command);
+}
+
+function readRelayFailOpenCommand(toolInput: Record<string, unknown>): string | undefined {
+  const direct = (toolInput.command ?? toolInput.cmd) as string | string[] | undefined;
+  if (typeof direct === "string") return direct;
+  if (Array.isArray(direct) && direct.every((part): part is string => typeof part === "string"))
+    return direct.join(" ");
+  return undefined;
+}
+
+function isReadOnlyShellCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (!trimmed) return false;
+  if (READONLY_SHELL_METACHARACTER_PATTERN.test(trimmed)) return false;
+  const parts = trimmed.split(/\s+/u);
+  const name = parts[0]?.split("/").pop() ?? "";
+  if (name === "git") return isReadOnlyGitCommand(parts.slice(1));
+  if (
+    name === "sed" &&
+    parts.some((part) => part === "-i" || part.startsWith("-i") || part === "--in-place")
+  )
+    return false;
+  return READONLY_SHELL_COMMANDS.has(name);
+}
+
+const READONLY_GIT_SUBCOMMANDS = new Set([
+  "branch",
+  "describe",
+  "diff",
+  "grep",
+  "log",
+  "ls-files",
+  "remote",
+  "rev-list",
+  "rev-parse",
+  "show",
+  "status",
+  "tag",
+]);
+
+function isReadOnlyGitCommand(args: string[]): boolean {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg) continue;
+    if (arg === "-C" || arg === "-c") {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    return READONLY_GIT_SUBCOMMANDS.has(arg);
+  }
+  return false;
+}
+
 export function renderNativeHookRelayUnavailableResponse(params: {
   provider: unknown;
   event: unknown;
   message?: string;
+  rawPayload?: unknown;
 }): NativeHookRelayProcessResponse {
   const provider = readNativeHookRelayProvider(params.provider);
   const event = readNativeHookRelayEvent(params.event);
   const adapter = getNativeHookRelayProviderAdapter(provider);
   const message = params.message?.trim() || "Native hook relay unavailable";
   if (event === "pre_tool_use") {
+    if (
+      params.rawPayload !== undefined &&
+      isPreToolUseSafeForRelayFailOpen(provider, params.rawPayload)
+    ) {
+      return adapter.renderNoopResponse(event);
+    }
     return adapter.renderPreToolUseBlockResponse(message);
   }
   if (event === "permission_request") {

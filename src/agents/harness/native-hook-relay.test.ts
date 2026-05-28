@@ -20,6 +20,7 @@ import {
   invokeNativeHookRelay,
   invokeNativeHookRelayBridge,
   registerNativeHookRelay,
+  renderNativeHookRelayUnavailableResponse,
 } from "./native-hook-relay.js";
 
 afterEach(() => {
@@ -2225,6 +2226,193 @@ describe("native hook relay registry", () => {
         ),
       }),
     ).toContain("(1 omitted)");
+  });
+});
+
+describe("native hook relay unavailable response", () => {
+  it("fails closed for codex pre_tool_use with a destructive command", () => {
+    const response = renderNativeHookRelayUnavailableResponse({
+      provider: "codex",
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "rm -rf /tmp/data" },
+      },
+    });
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Native hook relay unavailable",
+      },
+    });
+  });
+
+  it("fails open for codex pre_tool_use with a read-only command", () => {
+    const response = renderNativeHookRelayUnavailableResponse({
+      provider: "codex",
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "ls -la /tmp" },
+      },
+    });
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+  });
+
+  it("fails closed for codex pre_tool_use with shell metacharacters in a read-only command", () => {
+    const response = renderNativeHookRelayUnavailableResponse({
+      provider: "codex",
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "cat /etc/passwd | grep root" },
+      },
+    });
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Native hook relay unavailable",
+      },
+    });
+  });
+
+  it("fails open for codex pre_tool_use with read-only tool name", () => {
+    for (const toolName of ["read", "grep", "ls"]) {
+      const response = renderNativeHookRelayUnavailableResponse({
+        provider: "codex",
+        event: "pre_tool_use",
+        rawPayload: { hook_event_name: "PreToolUse", tool_name: toolName },
+      });
+      expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    }
+  });
+
+  it("fails closed for codex pre_tool_use with an unknown tool", () => {
+    const response = renderNativeHookRelayUnavailableResponse({
+      provider: "codex",
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "gh pr list" },
+      },
+    });
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Native hook relay unavailable",
+      },
+    });
+  });
+
+  it("fails closed for shell wrappers and read-like commands that can mutate", () => {
+    for (const command of [
+      "env rm -rf /tmp/data",
+      "time rm -rf /tmp/data",
+      "nohup rm -rf /tmp/data",
+      "find /tmp/data -delete",
+      "sed -i s/a/b/ /tmp/file",
+      "git checkout main",
+    ]) {
+      const response = renderNativeHookRelayUnavailableResponse({
+        provider: "codex",
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+        },
+      });
+      expect(JSON.parse(response.stdout)).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: "Native hook relay unavailable",
+        },
+      });
+    }
+  });
+
+  it("fails open for git inspection commands", () => {
+    for (const command of [
+      "git status --short",
+      "git -C /tmp/repo diff --stat",
+      "git -C /tmp/repo remote -v",
+      "git tag --list",
+    ]) {
+      const response = renderNativeHookRelayUnavailableResponse({
+        provider: "codex",
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+        },
+      });
+      expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    }
+  });
+
+  it("fails closed for codex pre_tool_use without rawPayload", () => {
+    const response = renderNativeHookRelayUnavailableResponse({
+      provider: "codex",
+      event: "pre_tool_use",
+    });
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Native hook relay unavailable",
+      },
+    });
+  });
+
+  it("fails open for codex pre_tool_use with exec_command and read-only cmd", () => {
+    const response = renderNativeHookRelayUnavailableResponse({
+      provider: "codex",
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "exec_command",
+        tool_input: { cmd: ["cat", "/tmp/status.txt"] },
+      },
+    });
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+  });
+
+  it("fails closed for codex permission_request regardless of command", () => {
+    const response = renderNativeHookRelayUnavailableResponse({
+      provider: "codex",
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        tool_name: "Bash",
+        tool_input: { command: "ls" },
+      },
+    });
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "deny", message: "Native hook relay unavailable" },
+      },
+    });
+  });
+
+  it("keeps post_tool_use and before_agent_finalize observational when unavailable", () => {
+    for (const event of ["post_tool_use", "before_agent_finalize"] as const) {
+      const response = renderNativeHookRelayUnavailableResponse({
+        provider: "codex",
+        event,
+        rawPayload: {},
+      });
+      expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    }
   });
 });
 

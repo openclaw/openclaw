@@ -77,6 +77,7 @@ export async function runNativeHookRelayCli(
       provider,
       event,
       message: "Native hook relay unavailable",
+      rawPayload,
     });
     writeText(stdout, response.stdout);
     writeText(stderr, response.stderr);
