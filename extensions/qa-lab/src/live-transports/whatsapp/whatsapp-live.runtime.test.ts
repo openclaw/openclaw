@@ -164,6 +164,17 @@ describe("WhatsApp QA live runtime", () => {
     ]);
   });
 
+  it("keeps native approval scenarios out of default WhatsApp selection", () => {
+    const expectedDefaultIds = [
+      "whatsapp-canary",
+      "whatsapp-pairing-block",
+      "whatsapp-mention-gating",
+    ];
+
+    expect(testing.findScenarios().map(({ id }) => id)).toEqual(expectedDefaultIds);
+    expect(testing.findScenarios([]).map(({ id }) => id)).toEqual(expectedDefaultIds);
+  });
+
   it("selects native approval scenarios by id without changing standard coverage", () => {
     const scenarios = testing.findScenarios([
       "whatsapp-approval-exec-native",
@@ -224,6 +235,9 @@ describe("WhatsApp QA live runtime", () => {
   it("uses automatic visible replies for WhatsApp group mention gating", () => {
     const [scenario] = testing.findScenarios(["whatsapp-mention-gating"]);
     const scenarioRun = scenario.buildRun();
+    if (scenarioRun.kind === "approval") {
+      throw new Error("whatsapp-mention-gating unexpectedly built an approval scenario run");
+    }
     expect(scenarioRun.input).toContain("openclawqa reply with only this exact marker");
     expect(scenarioRun.input).not.toContain("visible reply tool check");
 

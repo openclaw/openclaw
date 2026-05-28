@@ -371,11 +371,16 @@ function parseWhatsAppQaCredentialPayload(payload: unknown): WhatsAppQaRuntimeEn
   return validateWhatsAppQaRuntimeEnv(parsed, "WhatsApp credential payload");
 }
 
+function defaultWhatsAppQaScenarios() {
+  return WHATSAPP_QA_SCENARIOS.filter((scenario) => scenario.standardId);
+}
+
 function findScenarios(ids?: string[]) {
+  const scenarios = ids && ids.length > 0 ? WHATSAPP_QA_SCENARIOS : defaultWhatsAppQaScenarios();
   return selectLiveTransportScenarios({
     ids,
     laneLabel: "WhatsApp",
-    scenarios: WHATSAPP_QA_SCENARIOS,
+    scenarios,
   });
 }
 
