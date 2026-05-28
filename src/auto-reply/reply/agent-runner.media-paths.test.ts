@@ -6,6 +6,7 @@ import type { EmbeddedAgentQueueMessageOutcome } from "../../agents/embedded-age
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedAgentMock = vi.fn();
@@ -65,9 +66,32 @@ vi.mock("../../agents/model-selection.js", async () => {
   };
 });
 
+vi.mock("../../agents/model-runtime-aliases.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/model-runtime-aliases.js")>(
+    "../../agents/model-runtime-aliases.js",
+  );
+  const normalize = (value: string) => value.trim().toLowerCase();
+  return {
+    ...actual,
+    areRuntimeModelRefsEquivalent: (left: string, right: string) =>
+      normalize(left) === normalize(right),
+  };
+});
+
 vi.mock("../../agents/context.js", () => ({
   resolveContextTokensForModel: () => 200_000,
 }));
+
+vi.mock("../../infra/agent-events.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+    "../../infra/agent-events.js",
+  );
+  return {
+    ...actual,
+    emitAgentEvent: vi.fn(),
+    registerAgentRunContext: vi.fn(),
+  };
+});
 
 vi.mock("../../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: abortEmbeddedAgentRunMock,
@@ -199,6 +223,12 @@ vi.mock("./session-run-accounting.js", () => ({
   persistRunSessionUsage: async () => undefined,
 }));
 
+vi.mock("./agent-runner-memory.js", () => ({
+  runMemoryFlushIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) => sessionEntry,
+  runPreflightCompactionIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) =>
+    sessionEntry,
+}));
+
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: enqueueFollowupRunMock,
   refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock,
@@ -224,6 +254,16 @@ vi.mock("./reply-media-paths.runtime.js", async (importOriginal) => {
 });
 
 const { runReplyAgent } = await import("./agent-runner.js");
+
+function createReplyOperation(): ReplyOperation {
+  return {
+    result: undefined,
+    setPhase: vi.fn(),
+    fail: vi.fn(),
+    complete: vi.fn(),
+    completeThen: vi.fn(),
+  } as unknown as ReplyOperation;
+}
 
 function makeRunReplyAgentParams(
   overrides: Partial<Parameters<typeof runReplyAgent>[0]> & {
@@ -269,6 +309,7 @@ function makeRunReplyAgentParams(
     resolvedBlockStreamingBreak: "message_end",
     shouldInjectGroupIntro: false,
     typingMode: "instant",
+    replyOperation: createReplyOperation(),
     ...overrides,
   };
 }
@@ -334,34 +375,35 @@ describe("runReplyAgent media path normalization", () => {
   });
 
   it("normalizes final MEDIA replies against the run workspace", async () => {
-    const { createReplyMediaContext } =
-      await vi.importActual<typeof import("./reply-media-paths.js")>("./reply-media-paths.js");
-    const mediaContext = createReplyMediaContext({
-      cfg: {},
-      sessionKey: "main",
-      workspaceDir: "/tmp/workspace",
-      messageProvider: "telegram",
-      accountId: "default",
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "here is the chart\nMEDIA:./out/generated.png" }],
+      meta: {
+        agentMeta: {
+          sessionId: "session",
+          provider: "anthropic",
+          model: "claude",
+        },
+      },
     });
 
-    const result = await mediaContext.normalizePayload({
-      text: "here is the chart",
-      mediaUrl: "./out/generated.png",
-      mediaUrls: ["./out/generated.png"],
-    });
+    const result = await runReplyAgent(makeRunReplyAgentParams());
 
-    expect(result).toEqual({
+    expect(Array.isArray(result)).toBe(false);
+    if (!result || Array.isArray(result)) {
+      throw new Error("Expected a single reply payload");
+    }
+    expect(result).toMatchObject({
       text: "here is the chart",
       mediaUrl: "/tmp/outbound-media/generated.png",
       mediaUrls: ["/tmp/outbound-media/generated.png"],
     });
-    const outboundAttachmentCall = resolveOutboundAttachmentFromUrlMock.mock.calls.at(0);
-    expect(outboundAttachmentCall?.[0]).toBe(path.join("/tmp/workspace", "out", "generated.png"));
-    expect(outboundAttachmentCall?.[1]).toBe(5 * 1024 * 1024);
-    const outboundAttachmentOptions = outboundAttachmentCall?.[2] as
-      | { mediaAccess?: { workspaceDir?: unknown } }
-      | undefined;
-    expect(outboundAttachmentOptions?.mediaAccess?.workspaceDir).toBe("/tmp/workspace");
+    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
+      path.join("/tmp/workspace", "out", "generated.png"),
+      5 * 1024 * 1024,
+      { mediaAccess: expect.objectContaining({ workspaceDir: "/tmp/workspace" }) },
+    );
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(createReplyMediaContextRuntimeMock).not.toHaveBeenCalled();
   });
 
   it("steers active prompts in steer queue mode", async () => {
