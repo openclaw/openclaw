@@ -158,10 +158,10 @@ function parseQaPositiveIntegerOption(label: string, value: number | undefined) 
   if (value === undefined) {
     return undefined;
   }
-  if (!Number.isFinite(value) || value < 1) {
+  if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${label} must be a positive integer`);
   }
-  return Math.floor(value);
+  return value;
 }
 
 function normalizeQaOptionalModelRef(input: string | undefined) {

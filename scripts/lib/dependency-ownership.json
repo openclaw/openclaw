@@ -77,11 +77,6 @@
       "class": "core-runtime",
       "risk": ["network", "proxy"]
     },
-    "https-proxy-agent": {
-      "owner": "core:proxy",
-      "class": "core-runtime",
-      "risk": ["network", "proxy"]
-    },
     "ipaddr.js": {
       "owner": "core:ssrf-guard",
       "class": "core-runtime",

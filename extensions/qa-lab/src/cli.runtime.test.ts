@@ -456,6 +456,17 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("rejects fractional suite concurrency from programmatic callers", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        scenarioIds: ["channel-chat-baseline"],
+        concurrency: 1.5,
+      }),
+    ).rejects.toThrow("--concurrency must be a positive integer");
+    expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
+  });
+
   it("sets a failing exit code when host suite scenarios fail", async () => {
     const priorExitCode = process.exitCode;
     process.exitCode = undefined;

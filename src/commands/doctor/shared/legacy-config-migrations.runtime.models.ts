@@ -635,6 +635,13 @@ function upgradeOldClaudeToken(
   ) {
     return null;
   }
+  // claude-haiku-4-5 is a current production model and must not be migrated.
+  if (
+    normalized.startsWith("claude-haiku-4-5") ||
+    normalized.startsWith("claude-haiku-4.5")
+  ) {
+    return null;
+  }
   if (
     normalized === "claude-opus-4" ||
     hasAnyRetiredVersionPrefix(normalized, [
@@ -658,8 +665,6 @@ function upgradeOldClaudeToken(
       "claude-sonnet-4.1",
       "claude-sonnet-4-0",
       "claude-sonnet-4.0",
-      "claude-haiku-4-5",
-      "claude-haiku-4.5",
     ]) ||
     /^claude-sonnet-4-20\d{6}/.test(normalized)
   ) {
@@ -714,7 +719,6 @@ function upgradeOldClaudeToken(
     normalized === "sonnet-3.7" ||
     normalized === "sonnet-3.5" ||
     normalized === "sonnet-3" ||
-    normalized === "haiku-4.5" ||
     normalized === "haiku-3.5" ||
     normalized === "haiku-3"
   ) {

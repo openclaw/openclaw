@@ -12,6 +12,10 @@ export {
   resolveActiveManagedProxyTlsOptions,
 } from "../infra/net/proxy/managed-proxy-undici.js";
 export {
+  createNodeProxyAgent,
+  type CreateNodeProxyAgentOptions,
+} from "../infra/net/node-proxy-agent.js";
+export {
   hasEnvHttpProxyConfigured,
   hasEnvHttpProxyAgentConfigured,
   resolveEnvHttpProxyAgentOptions,
