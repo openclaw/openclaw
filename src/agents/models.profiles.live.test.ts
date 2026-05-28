@@ -3,6 +3,7 @@ import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
@@ -17,10 +18,15 @@ import { collectAnthropicApiKeys } from "./live-auth-keys.js";
 import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
+  DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isPrioritizedHighSignalLiveModelRef,
+  isPrioritizedSmallLiveModelRef,
+  isSmallLiveModelRef,
+  listPrioritizedSmallLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
+  selectSmallLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "./live-model-filter.js";
 import {
@@ -54,6 +60,7 @@ import {
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
@@ -76,6 +83,7 @@ const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs(
 );
 const LIVE_FILE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_FILE_PROBE_ENV);
 const LIVE_IMAGE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_IMAGE_PROBE_ENV);
+let activeLiveCompletionConfig: OpenClawConfig | undefined;
 
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -430,9 +438,13 @@ async function completeSimpleWithTimeout<TApi extends Api>(
     hardTimer.unref?.();
   });
   try {
+    const completionModel = prepareModelForSimpleCompletion({
+      model,
+      cfg: activeLiveCompletionConfig,
+    });
     return await withLiveHeartbeat(
       Promise.race([
-        completeSimple(model, context, {
+        completeSimple(completionModel, context, {
           ...options,
           signal: controller.signal,
         }),
@@ -716,6 +728,7 @@ describeLive("live models (profile keys)", () => {
         Promise.resolve().then(() => getRuntimeConfig()),
         "[live-models] load config",
       );
+      activeLiveCompletionConfig = cfg;
       logProgress("[live-models] preparing models.json");
       await withLiveStageTimeout(
         ensureOpenClawModelsJson(cfg),
@@ -724,7 +737,7 @@ describeLive("live models (profile keys)", () => {
       );
       if (!DIRECT_ENABLED) {
         logProgress(
-          "[live-models] skipping (set OPENCLAW_LIVE_MODELS=modern|all|<list>; all=modern)",
+          "[live-models] skipping (set OPENCLAW_LIVE_MODELS=modern|small|all|<list>; all=modern)",
         );
         return;
       }
@@ -740,13 +753,18 @@ describeLive("live models (profile keys)", () => {
       const agentDir = resolveDefaultAgentDir(cfg);
       const rawModels = process.env.OPENCLAW_LIVE_MODELS?.trim();
       const useModern = rawModels === "modern" || rawModels === "all";
-      const useExplicit = Boolean(rawModels) && !useModern;
+      const useSmall = rawModels === "small";
+      const useExplicit = Boolean(rawModels) && !useModern && !useSmall;
       const filter = useExplicit ? parseModelFilter(rawModels) : null;
       const useDefaultPriorityOnly = !filter && useModern && !providers;
-      const allowNotFoundSkip = useModern;
+      const useSmallPriorityOnly = !filter && useSmall && !providers;
+      const allowNotFoundSkip = useModern || useSmall;
       const models = await (async () => {
         if (useDefaultPriorityOnly) {
           logProgress("[live-models] loading configured prioritized model refs");
+        }
+        if (useSmallPriorityOnly) {
+          logProgress("[live-models] loading configured small model refs");
         }
         logProgress("[live-models] loading auth storage");
         const authStorage = await withLiveStageTimeout(
@@ -779,6 +797,7 @@ describeLive("live models (profile keys)", () => {
           agentDir,
           env: process.env,
           modelRegistry,
+          ...(useSmall ? { refs: listPrioritizedSmallLiveModelRefs() } : {}),
         });
         if (augmented.added.length > 0) {
           logProgress(
@@ -791,6 +810,7 @@ describeLive("live models (profile keys)", () => {
       const maxModels = resolveHighSignalLiveModelLimit({
         rawMaxModels: process.env.OPENCLAW_LIVE_MAX_MODELS,
         useExplicitModels: useExplicit,
+        ...(useSmall ? { defaultLimit: DEFAULT_SMALL_LIVE_MODEL_LIMIT } : {}),
       });
       const targetMatcher = createLiveTargetMatcher({
         providerFilter: providers,
@@ -817,7 +837,17 @@ describeLive("live models (profile keys)", () => {
         if (!targetMatcher.matchesModel(model.provider, model.id)) {
           continue;
         }
-        if (!filter && useModern) {
+        if (!filter && useSmall) {
+          if (
+            useSmallPriorityOnly &&
+            !isPrioritizedSmallLiveModelRef({ provider: model.provider, id: model.id })
+          ) {
+            continue;
+          }
+          if (!isSmallLiveModelRef({ provider: model.provider, id: model.id })) {
+            continue;
+          }
+        } else if (!filter && useModern) {
           if (
             useDefaultPriorityOnly &&
             !isPrioritizedHighSignalLiveModelRef({ provider: model.provider, id: model.id })
@@ -879,13 +909,15 @@ describeLive("live models (profile keys)", () => {
         return;
       }
 
-      const selectedCandidates = selectHighSignalLiveItems(
+      const selectCandidates = useSmall ? selectSmallLiveItems : selectHighSignalLiveItems;
+      const selectedCandidates = selectCandidates(
         candidates,
         maxModels > 0 ? maxModels : candidates.length,
         (entry) => ({ provider: entry.model.provider, id: entry.model.id }),
         (entry) => entry.model.provider,
       );
-      logProgress(`[live-models] selection=${useExplicit ? "explicit" : "high-signal"}`);
+      const selectionLabel = useExplicit ? "explicit" : useSmall ? "small" : "high-signal";
+      logProgress(`[live-models] selection=${selectionLabel}`);
       if (selectedCandidates.length < candidates.length) {
         logProgress(
           `[live-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_MAX_MODELS=${maxModels}`,
