@@ -126,7 +126,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(qmd.update.embedIntervalMs).toBe(3_600_000);
     expect(qmd.update.commandTimeoutMs).toBe(30_000);
     expect(qmd.update.updateTimeoutMs).toBe(120_000);
-    expect(qmd.update.embedTimeoutMs).toBe(120_000);
+    expect(qmd.update.embedTimeoutMs).toBe(600_000);
     expect(collectionNames(resolved)).toStrictEqual(["memory-dir-main", "memory-root-main"]);
     expect(requireQmdCollection(resolved, "memory-root-main").pattern).toBe("MEMORY.md");
   });

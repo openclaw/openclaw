@@ -1869,7 +1869,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     );
     this.embedBackoffUntil = resolveExpiresAtMsFromDurationMs(delayMs) ?? null;
     log.warn(
-      `qmd embed failed (${reason}): ${String(err)}; backing off for ${Math.ceil(delayMs / 1000)}s`,
+      `qmd embed failed (${reason}): ${String(err)} — consider increasing memory.qmd.update.embedTimeoutMs (default: 600000); backing off for ${Math.ceil(delayMs / 1000)}s`,
     );
   }
 
