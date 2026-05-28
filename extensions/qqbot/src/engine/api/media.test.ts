@@ -60,6 +60,19 @@ function mockTokenManager(): TokenManager {
   return tokenManager;
 }
 
+function expectGuardedDownload(url: string): void {
+  expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+    url,
+    maxRedirects: 0,
+    signal: expect.any(AbortSignal),
+  });
+  expect(fetchWithSsrFGuardMock).not.toHaveBeenCalledWith(
+    expect.objectContaining({ timeoutMs: expect.any(Number) }),
+  );
+  const signal = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0]?.signal;
+  expect(signal).toBeInstanceOf(AbortSignal);
+}
+
 describe("MediaApi.uploadMedia direct URL uploads", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -88,11 +101,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       );
 
       expect(result).toBe(UPLOAD_RESPONSE);
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-        url,
-        maxRedirects: 0,
-        timeoutMs: 30_000,
-      });
+      expectGuardedDownload(url);
       expect(readResponseWithLimitMock).toHaveBeenCalledWith(
         expect.any(Response),
         MAX_UPLOAD_SIZE,
@@ -316,11 +325,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       { url: "http://93.184.216.34/assets/photo.png" },
     );
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-      url: "http://93.184.216.34/assets/photo.png",
-      maxRedirects: 0,
-      timeoutMs: 30_000,
-    });
+    expectGuardedDownload("http://93.184.216.34/assets/photo.png");
   });
 
   it("does not pass URL or fake-IP DNS policy to the QQ upload body", async () => {
@@ -336,11 +341,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       { url: "https://cdn.example.com/assets/photo.png" },
     );
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-      url: "https://cdn.example.com/assets/photo.png",
-      maxRedirects: 0,
-      timeoutMs: 30_000,
-    });
+    expectGuardedDownload("https://cdn.example.com/assets/photo.png");
     expect(client.request).toHaveBeenCalledWith(
       "token-1",
       "POST",
