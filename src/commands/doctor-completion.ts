@@ -22,11 +22,12 @@ type CompletionShell = "zsh" | "bash" | "fish" | "powershell";
 
 const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
 
+// Route through the shared candidate resolver so the displayed reload command
+// targets the actual install profile when ZDOTDIR or XDG_CONFIG_HOME redirects
+// the canonical path (#63069). Without this, doctor advises sourcing
+// `~/.zshrc` even though the install wrote to `$ZDOTDIR/.zshrc`.
 function resolveCompletionReloadPath(shell: CompletionShell): string {
-  if (shell === "powershell") {
-    return resolveCompletionProfilePath("powershell");
-  }
-  return `~/.${shell === "zsh" ? "zshrc" : shell === "bash" ? "bashrc" : "config/fish/config.fish"}`;
+  return resolveCompletionProfilePath(shell);
 }
 
 function formatCompletionReloadNote(

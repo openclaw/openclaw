@@ -102,6 +102,37 @@ describe("setupWizardShellCompletion", () => {
     );
   });
 
+  it("routes zsh reload hint through ZDOTDIR redirect outside HOME (#63069)", async () => {
+    const previousHome = process.env.HOME;
+    const previousZdotdir = process.env.ZDOTDIR;
+    process.env.HOME = "/Users/ada";
+    // ZDOTDIR pointing outside HOME — verifies the hint targets the actual
+    // install profile instead of the hardcoded `~/.zshrc` the shell never reads.
+    process.env.ZDOTDIR = "/etc/zsh-shared";
+    try {
+      const prompter = createPrompter();
+      const deps = createDeps("zsh");
+
+      await setupWizardShellCompletion({ flow: "quickstart", prompter, deps });
+
+      expect(prompter.note).toHaveBeenCalledWith(
+        "Shell completion installed. Restart your shell or run: source /etc/zsh-shared/.zshrc",
+        "Shell completion",
+      );
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousZdotdir === undefined) {
+        delete process.env.ZDOTDIR;
+      } else {
+        process.env.ZDOTDIR = previousZdotdir;
+      }
+    }
+  });
+
   it("shows a concrete PowerShell profile reload command after setup", async () => {
     const previousHome = process.env.HOME;
     process.env.HOME = "/Users/ada";
