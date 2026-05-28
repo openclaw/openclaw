@@ -341,6 +341,10 @@ export interface ContextEngine {
     tokenBudget?: number;
     /** Force compaction even below the default trigger threshold. */
     force?: boolean;
+    /** Structured reason for forced compaction, useful for engines that distinguish preflight from manual compaction. */
+    forceReason?: "manual" | "preflight_required";
+    /** Diagnostic trigger that made preflight compaction mandatory. */
+    preflightCompactionTrigger?: "tokens" | "transcript_bytes";
     /** Optional live token estimate from the caller's active context. */
     currentTokenCount?: number;
     /** Controls convergence target; defaults to budget. */

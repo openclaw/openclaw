@@ -363,7 +363,18 @@ export async function compactEmbeddedAgentSession(
               currentTokenCount: params.currentTokenCount,
               compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
               customInstructions: params.customInstructions,
-              force: params.trigger === "manual",
+              force:
+                params.force === true ||
+                params.forcePreflight === true ||
+                params.preflightRequired === true ||
+                params.trigger === "manual",
+              forceReason:
+                params.forcePreflight === true || params.preflightRequired === true
+                  ? "preflight_required"
+                  : params.trigger === "manual"
+                    ? "manual"
+                    : undefined,
+              preflightCompactionTrigger: params.preflightCompactionTrigger,
               runtimeContext,
             },
             resolveCompactionTimeoutMs(params.config),

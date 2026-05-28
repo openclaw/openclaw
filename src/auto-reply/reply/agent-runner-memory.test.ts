@@ -106,6 +106,10 @@ type CompactEmbeddedAgentSessionParams = {
   sandboxSessionKey?: string;
   currentTokenCount?: number;
   cwd?: string;
+  force?: boolean;
+  forcePreflight?: boolean;
+  preflightRequired?: boolean;
+  preflightCompactionTrigger?: string;
   sessionFile?: string;
   sessionId?: string;
   trigger?: string;
@@ -999,6 +1003,10 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
       trigger: "budget",
+      force: true,
+      forcePreflight: true,
+      preflightRequired: true,
+      preflightCompactionTrigger: "tokens",
       deferOwningContextEngineCompaction: false,
       contextTokenBudget: 100,
     });
