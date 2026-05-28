@@ -4,7 +4,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 
 const noopAuth = async () => ({ profiles: [] });
 
-const VERTEX_DEFAULT_MODEL = "google-vertex/gemini-2.5-flash";
+const VERTEX_DEFAULT_MODEL = "google-vertex/gemini-flash-latest";
 const VERTEX_DEFAULT_LOCATION = "global";
 
 export function createGoogleProvider(): ProviderPlugin {
