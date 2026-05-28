@@ -733,6 +733,14 @@
       "groupLabel": "Google",
       "groupHint": "Gemini API key + OAuth",
       "onboardingFeatured": true
+    },
+    {
+      "provider": "google-vertex",
+      "method": "adc",
+      "choiceId": "google-vertex-adc",
+      "choiceLabel": "Google Vertex AI",
+      "groupId": "google-vertex",
+      "groupLabel": "Google Vertex AI"
     }
   ],
   "uiHints": {
