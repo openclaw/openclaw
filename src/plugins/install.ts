@@ -1939,6 +1939,14 @@ export async function installPluginFromNpmSpec(
   if (driftResult.error) {
     return { ok: false, error: driftResult.error };
   }
+  const compatibilityError = validateOpenClawPackageCompatibility({
+    pluginId: expectedPluginId ?? npmResolution.name ?? parsedSpec.name,
+    currentHostVersion: runtime.resolveCompatibilityHostVersion(),
+    packageMetadata: npmResolution.packageOpenClaw as OpenClawPackageManifest | undefined,
+  });
+  if (compatibilityError) {
+    return compatibilityError;
+  }
 
   return await installPluginFromManagedNpmRoot({
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
