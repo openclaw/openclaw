@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { stableStringify } from "../agents/stable-stringify.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getSkillsSnapshotVersion } from "./refresh-state.js";
 import { buildSkillIndex, skillIndexEntries, type SkillIndex } from "./registry.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "./types.js";
@@ -31,15 +33,24 @@ export type SkillSnapshotBuildOptions = {
 
 export class SkillsService {
   private readonly cache = new Map<string, SkillIndex>();
+  private readonly cacheScopes = new Map<string, string>();
 
   getIndex(request: SkillIndexRequest): SkillIndex {
-    const cacheKey = buildSkillIndexCacheKey(request);
+    const snapshotVersion =
+      request.snapshotVersion ?? getSkillsSnapshotVersion(request.workspaceDir);
+    if (!shouldCacheSkillIndex(snapshotVersion)) {
+      return this.loadIndex(request, buildUncachedSkillIndexCacheKey(request, snapshotVersion));
+    }
+    const cacheKeyParts = buildSkillIndexCacheKeyParts(request, snapshotVersion);
+    const cacheKey = stringifyCacheKeyParts(cacheKeyParts);
     const cached = this.cache.get(cacheKey);
     if (cached) {
       return cached;
     }
     const index = this.loadIndex(request, cacheKey);
+    this.pruneScope(cacheKeyParts.scope, cacheKey);
     this.cache.set(cacheKey, index);
+    this.cacheScopes.set(cacheKey, cacheKeyParts.scope);
     return index;
   }
 
@@ -62,15 +73,26 @@ export class SkillsService {
       pluginSkillsDir: opts?.pluginSkillsDir,
       snapshotVersion: opts?.snapshotVersion,
     };
-    const index =
-      opts?.snapshotVersion === undefined
-        ? this.loadIndex(request, buildSkillIndexCacheKey(request))
-        : this.getIndex(request);
+    const snapshotVersion = request.snapshotVersion ?? getSkillsSnapshotVersion(workspaceDir);
+    const index = shouldCacheSkillIndex(snapshotVersion)
+      ? this.getIndex(request)
+      : this.loadIndex(request, buildUncachedSkillIndexCacheKey(request, snapshotVersion));
     return buildSkillSnapshotFromIndex(workspaceDir, index, opts);
   }
 
   invalidate(): void {
     this.cache.clear();
+    this.cacheScopes.clear();
+  }
+
+  private pruneScope(scope: string, keepKey: string): void {
+    for (const [key, cachedScope] of this.cacheScopes) {
+      if (key === keepKey || cachedScope !== scope) {
+        continue;
+      }
+      this.cache.delete(key);
+      this.cacheScopes.delete(key);
+    }
   }
 }
 
@@ -98,13 +120,8 @@ export function buildWorkspaceSkillSnapshot(
   return skillsService.buildSnapshot(workspaceDir, opts);
 }
 
-function stableConfigHash(config?: OpenClawConfig): string {
-  const skillsConfig = config?.skills ?? {};
-  return crypto
-    .createHash("sha256")
-    .update(JSON.stringify(skillsConfig))
-    .digest("hex")
-    .slice(0, 16);
+function stableHash(value: unknown): string {
+  return crypto.createHash("sha256").update(stableStringify(value)).digest("hex").slice(0, 16);
 }
 
 function normalizedOptionalPath(value?: string): string {
@@ -113,12 +130,82 @@ function normalizedOptionalPath(value?: string): string {
 
 export function buildSkillIndexCacheKey(request: SkillIndexRequest): string {
   const snapshotVersion = request.snapshotVersion ?? getSkillsSnapshotVersion(request.workspaceDir);
-  return JSON.stringify({
+  return stringifyCacheKeyParts(buildSkillIndexCacheKeyParts(request, snapshotVersion));
+}
+
+type SkillIndexCacheKeyParts = {
+  scope: string;
+  snapshotVersion: number;
+};
+
+function shouldCacheSkillIndex(snapshotVersion: number | undefined): boolean {
+  return typeof snapshotVersion === "number" && snapshotVersion > 0;
+}
+
+function buildUncachedSkillIndexCacheKey(
+  request: SkillIndexRequest,
+  snapshotVersion: number,
+): string {
+  return stableStringify({
+    uncached: true,
+    workspaceDir: path.resolve(request.workspaceDir),
+    snapshotVersion,
+  });
+}
+
+function buildSkillIndexCacheKeyParts(
+  request: SkillIndexRequest,
+  snapshotVersion: number,
+): SkillIndexCacheKeyParts {
+  const scope = stableStringify({
     workspaceDir: path.resolve(request.workspaceDir),
     managedSkillsDir: normalizedOptionalPath(request.managedSkillsDir),
     bundledSkillsDir: normalizedOptionalPath(request.bundledSkillsDir),
     pluginSkillsDir: normalizedOptionalPath(request.pluginSkillsDir),
-    skillsConfig: stableConfigHash(request.config),
-    snapshotVersion,
+    config: stableHash(request.config ?? {}),
+    pluginDiscovery: resolvePluginSkillDiscoveryFingerprint(request),
+  });
+  return { scope, snapshotVersion };
+}
+
+function stringifyCacheKeyParts(parts: SkillIndexCacheKeyParts): string {
+  return stableStringify(parts);
+}
+
+function resolvePluginSkillDiscoveryFingerprint(request: SkillIndexRequest): string {
+  const snapshot = resolvePluginMetadataSnapshot({
+    workspaceDir: request.workspaceDir,
+    config: request.config ?? {},
+    env: process.env,
+    allowWorkspaceScopedCurrent: true,
+  });
+  return stableHash({
+    policyHash: snapshot.policyHash,
+    configFingerprint: snapshot.configFingerprint ?? null,
+    registrySource: snapshot.registrySource ?? null,
+    index: {
+      hostContractVersion: snapshot.index.hostContractVersion,
+      compatRegistryVersion: snapshot.index.compatRegistryVersion,
+      migrationVersion: snapshot.index.migrationVersion,
+      policyHash: snapshot.index.policyHash,
+      installRecords: snapshot.index.installRecords,
+      plugins: snapshot.index.plugins.map((plugin) => ({
+        pluginId: plugin.pluginId,
+        enabled: plugin.enabled,
+        enabledByDefault: plugin.enabledByDefault ?? null,
+        manifestHash: plugin.manifestHash,
+        manifestPath: plugin.manifestPath,
+        origin: plugin.origin,
+        rootDir: plugin.rootDir,
+      })),
+    },
+    manifestPlugins: snapshot.manifestRegistry.plugins.map((plugin) => ({
+      id: plugin.id,
+      enabledByDefault: plugin.enabledByDefault ?? null,
+      kind: plugin.kind ?? null,
+      origin: plugin.origin,
+      rootDir: plugin.rootDir,
+      skills: plugin.skills,
+    })),
   });
 }

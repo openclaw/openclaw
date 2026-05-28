@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeWorkspaceSkills } from "./e2e-test-helpers.js";
-import { SkillsService } from "./service.js";
+import { buildSkillIndexCacheKey, SkillsService } from "./service.js";
 import { buildWorkspaceSkillSnapshot as buildLegacyWorkspaceSkillSnapshot } from "./workspace.js";
 
 const tempDirs: string[] = [];
@@ -62,9 +63,11 @@ describe("SkillsService", () => {
     const first = service.getIndex({ workspaceDir, ...roots, snapshotVersion: 1 });
     const second = service.getIndex({ workspaceDir, ...roots, snapshotVersion: 1 });
     const third = service.getIndex({ workspaceDir, ...roots, snapshotVersion: 2 });
+    const firstAgain = service.getIndex({ workspaceDir, ...roots, snapshotVersion: 1 });
 
     expect(second).toBe(first);
     expect(third).not.toBe(first);
+    expect(firstAgain).not.toBe(first);
     expect(first.entries.find((entry) => entry.name === "service-cache-alpha")).toMatchObject({
       name: "service-cache-alpha",
       sourceKind: "workspace",
@@ -72,6 +75,51 @@ describe("SkillsService", () => {
       writable: true,
       writableReason: "workspace-owned-skill",
     });
+  });
+
+  it("does not cache generation zero because it means no invalidation has happened yet", async () => {
+    const workspaceDir = await makeTempWorkspace();
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "service-zero-alpha", description: "Alpha workflow" },
+    ]);
+    const service = new SkillsService();
+    const roots = isolatedSkillRoots(workspaceDir);
+
+    const before = service.getIndex({ workspaceDir, ...roots, snapshotVersion: 0 });
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "service-zero-beta", description: "Beta workflow" },
+    ]);
+    const after = service.getIndex({ workspaceDir, ...roots, snapshotVersion: 0 });
+
+    expect(after).not.toBe(before);
+    expect(before.entries.map((entry) => entry.name)).not.toContain("service-zero-beta");
+    expect(after.entries.map((entry) => entry.name)).toContain("service-zero-beta");
+  });
+
+  it("includes plugin config in the versioned cache key", async () => {
+    const workspaceDir = await makeTempWorkspace();
+    const roots = isolatedSkillRoots(workspaceDir);
+    const enabledConfig = {
+      plugins: { entries: { demo: { enabled: true } } },
+    } satisfies OpenClawConfig;
+    const disabledConfig = {
+      plugins: { entries: { demo: { enabled: false } } },
+    } satisfies OpenClawConfig;
+
+    const enabledKey = buildSkillIndexCacheKey({
+      workspaceDir,
+      ...roots,
+      config: enabledConfig,
+      snapshotVersion: 1,
+    });
+    const disabledKey = buildSkillIndexCacheKey({
+      workspaceDir,
+      ...roots,
+      config: disabledConfig,
+      snapshotVersion: 1,
+    });
+
+    expect(enabledKey).not.toBe(disabledKey);
   });
 
   it("keeps legacy snapshot calls uncached unless a version is supplied", async () => {
