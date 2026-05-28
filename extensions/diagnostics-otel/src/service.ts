@@ -844,6 +844,22 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Age of sessions selected for recovery",
         },
       );
+      const sessionLockWaitHistogram = meter.createHistogram("openclaw.session_lock.wait_ms", {
+        unit: "ms",
+        description: "Session write lock acquire wait time",
+      });
+      const sessionLockTimeoutCounter = meter.createCounter("openclaw.session_lock.timeout", {
+        unit: "1",
+        description: "Session write lock acquire timeouts",
+      });
+      const sessionLockReclaimedCounter = meter.createCounter("openclaw.session_lock.reclaimed", {
+        unit: "1",
+        description: "Stale session write locks reclaimed",
+      });
+      const sessionLockHeldHistogram = meter.createHistogram("openclaw.session_lock.held_ms", {
+        unit: "ms",
+        description: "Session write lock held time before watchdog release",
+      });
       const runAttemptCounter = meter.createCounter("openclaw.run.attempt", {
         unit: "1",
         description: "Run attempts",
@@ -1524,6 +1540,51 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         sessionRecoveryCompletedCounter.add(1, attrs);
         sessionRecoveryAgeHistogram.record(evt.ageMs, attrs);
+      };
+
+      const sessionLockBackendAttrs = (evt: { backend: string }) => ({
+        "openclaw.backend": lowCardinalityAttr(evt.backend, "unknown"),
+      });
+
+      const recordSessionLockAcquireCompleted = (
+        evt: Extract<DiagnosticEventPayload, { type: "session_lock.acquire.completed" }>,
+      ) => {
+        sessionLockWaitHistogram.record(evt.waitMs, {
+          ...sessionLockBackendAttrs(evt),
+          "openclaw.outcome": lowCardinalityAttr(evt.outcome, "unknown"),
+        });
+      };
+
+      const recordSessionLockAcquireTimeout = (
+        evt: Extract<DiagnosticEventPayload, { type: "session_lock.acquire.timeout" }>,
+      ) => {
+        const attrs = {
+          ...sessionLockBackendAttrs(evt),
+          "openclaw.reason": lowCardinalityAttr(evt.reason, "unknown"),
+        };
+        sessionLockWaitHistogram.record(evt.waitMs, {
+          ...sessionLockBackendAttrs(evt),
+          "openclaw.outcome": "timeout",
+        });
+        sessionLockTimeoutCounter.add(1, attrs);
+      };
+
+      const recordSessionLockReclaimed = (
+        evt: Extract<DiagnosticEventPayload, { type: "session_lock.reclaimed" }>,
+      ) => {
+        sessionLockReclaimedCounter.add(1, {
+          ...sessionLockBackendAttrs(evt),
+          "openclaw.reason": lowCardinalityAttr(evt.reason, "unknown"),
+        });
+      };
+
+      const recordSessionLockWatchdogReleased = (
+        evt: Extract<DiagnosticEventPayload, { type: "session_lock.watchdog.released" }>,
+      ) => {
+        sessionLockHeldHistogram.record(evt.heldMs, {
+          ...sessionLockBackendAttrs(evt),
+          "openclaw.outcome": "released",
+        });
       };
 
       const recordRunAttempt = (evt: Extract<DiagnosticEventPayload, { type: "run.attempt" }>) => {
@@ -2303,6 +2364,20 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "session.recovery.completed":
               recordSessionRecoveryCompleted(evt);
+              return;
+            case "session_lock.acquire.started":
+              return;
+            case "session_lock.acquire.completed":
+              recordSessionLockAcquireCompleted(evt);
+              return;
+            case "session_lock.acquire.timeout":
+              recordSessionLockAcquireTimeout(evt);
+              return;
+            case "session_lock.reclaimed":
+              recordSessionLockReclaimed(evt);
+              return;
+            case "session_lock.watchdog.released":
+              recordSessionLockWatchdogReleased(evt);
               return;
             case "run.attempt":
               recordRunAttempt(evt);

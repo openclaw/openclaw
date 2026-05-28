@@ -22,6 +22,7 @@
  * 任何錯誤都靜默退出，不中斷主流程
  */
 
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
@@ -53,6 +54,16 @@ async function main() {
     data = JSON.parse(raw);
   } catch {
     process.exit(0);
+  }
+
+  /** 新鮮度檢查：超過 maxAgeHours 的資料視為過期，返回 true */
+  function isStale(filePath, maxAgeHours = 24) {
+    try {
+      const stat = fs.statSync(filePath);
+      return Date.now() - stat.mtimeMs > maxAgeHours * 3_600_000;
+    } catch {
+      return true;
+    }
   }
 
   const stateDir =
@@ -175,6 +186,137 @@ async function main() {
           `- ${e.from_slug} →[${e.relation}]→ ${e.to_slug} (weight=${e.weight.toFixed(2)})`,
         );
       }
+    }
+
+    // ── 5. Hermes 最新閉環狀態（12h TTL：cron 每 30 分執行，12h 內資料視為新鮮）
+    try {
+      const hermesLatest = path.join(
+        process.cwd(),
+        "reports",
+        "hermes-agent",
+        "state",
+        "openclaw-controlled-task-runner-latest.json", // 使用現行 controlled-task-runner 格式
+      );
+      if (fs.existsSync(hermesLatest) && !isStale(hermesLatest, 12)) {
+        const hs = JSON.parse(fs.readFileSync(hermesLatest, "utf8"));
+        lines.push("\n## Hermes 閉環最新狀態");
+        lines.push(
+          `- 任務: ${hs.task?.id ?? "?"} (${hs.task?.label ?? ""}) | 結果: ${hs.core_result ?? "?"}`,
+        );
+        lines.push(
+          `- 執行時間: ${hs.task?.durationMs ?? "?"}ms | 退出碼: ${hs.task?.exitCode ?? "?"}`,
+        );
+        // 新格式：從 validation_result 讀取資金服務阻塞狀態
+        const capStatus = hs.validation_result?.capital_service_status;
+        if (capStatus && !capStatus.ready) {
+          lines.push(
+            `- 資金服務: ${capStatus.status ?? "blocked"} | 報價=${capStatus.quoteStatus ?? "?"}`,
+          );
+        }
+        const wfFinal = hs.validation_result?.report_workflow?.finalStatus;
+        if (wfFinal && wfFinal !== "pass") {
+          lines.push(`- 工作流狀態: ${wfFinal}`);
+        }
+        lines.push(`- 產出時間: ${hs.generatedAt ?? "?"}`);
+      }
+    } catch {
+      // Hermes state 不存在或解析失敗，靜默跳過
+    }
+
+    // ── 6. DMAD 三方辯論最新結論（8h TTL：smoke test 每 6h 執行，8h 內視為新鮮）
+    try {
+      const dmadLatest = path.join(process.cwd(), "reports", "dmad-run-test-latest.json");
+      const dmadSmoke = path.join(process.cwd(), "reports", "dmad-smoke-test-latest.json");
+      // 優先取 run-test，次取 smoke-test；均需通過 TTL 檢查
+      const dmadPath =
+        fs.existsSync(dmadLatest) && !isStale(dmadLatest, 8)
+          ? dmadLatest
+          : fs.existsSync(dmadSmoke) && !isStale(dmadSmoke, 8)
+            ? dmadSmoke
+            : null;
+      if (dmadPath) {
+        const dr = JSON.parse(fs.readFileSync(dmadPath, "utf8"));
+        lines.push("\n## DMAD 三方辯論最新結論");
+        lines.push(`- 執行時間: ${dr.completedAt ?? dr.timestamp ?? "?"}`);
+        lines.push(
+          `- 收斂分: ${typeof dr.convergenceScore === "number" ? dr.convergenceScore.toFixed(3) : "?"} | 輪數: ${dr.totalRounds ?? dr.rounds ?? "?"} | 停止原因: ${dr.stoppedBy ?? "?"}`,
+        );
+        lines.push(`- 使用 patterns: ${(dr.patternSlugsUsed ?? dr.patternsUsed ?? []).join(", ")}`);
+        if (dr.finalAnswer) {
+          lines.push(`- MoA 結論摘要: ${String(dr.finalAnswer).slice(0, 200)}`);
+        }
+      }
+    } catch {
+      // DMAD report 不存在或解析失敗，靜默跳過
+    }
+
+    // ── 6b. DMAD 元學習校準狀態（48h TTL：每日 03:00 更新）
+    try {
+      const calibPath = path.join(process.cwd(), "reports", "dmad-calibration.json");
+      const metaPath = path.join(process.cwd(), "reports", "dmad-meta-learn-latest.json");
+      if (fs.existsSync(calibPath) && !isStale(calibPath, 48)) {
+        const calib = JSON.parse(fs.readFileSync(calibPath, "utf8"));
+        lines.push("\n## DMAD 元學習校準狀態");
+        lines.push(
+          `- 建議收斂閾值: ${calib.suggestedConvergenceThreshold ?? "?"} | 建議最大輪數: ${calib.suggestedMaxRounds ?? "?"}`,
+        );
+        lines.push(`- 校準時間: ${calib.note ?? "?"}`);
+      }
+      if (fs.existsSync(metaPath)) {
+        const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+        const recs = (meta.recommendations ?? []).slice(0, 2).join("；");
+        if (recs) {
+          lines.push(`- 系統建議: ${recs}`);
+        }
+        const drift = meta.calibrationDrift?.drift;
+        if (drift && drift !== "stable") {
+          lines.push(`- ⚠️ 收斂趨勢: ${drift}`);
+        }
+      }
+    } catch {
+      // 元學習報告不存在，靜默跳過
+    }
+
+    // ── 7. Hermes 受控任務學習記錄（48h TTL：hermes-nuwa-bridge 每日 03:30 更新）
+    try {
+      const hermesLearningPath = path.join(
+        process.cwd(),
+        "reports",
+        "hermes-agent",
+        "state",
+        "learning-state.json",
+      );
+      if (fs.existsSync(hermesLearningPath) && !isStale(hermesLearningPath, 48)) {
+        const ls = JSON.parse(fs.readFileSync(hermesLearningPath, "utf8"));
+        const successes = (ls.success_patterns ?? []).slice(-3);
+        const failures = (ls.failure_patterns ?? []).slice(-3);
+        if (successes.length > 0 || failures.length > 0) {
+          lines.push("\n## Hermes 受控任務學習記錄");
+          if (successes.length > 0) {
+            lines.push("**近期成功模式：**");
+            for (const s of successes) {
+              const date = s.created_at ? s.created_at.slice(0, 10) : "?";
+              lines.push(
+                `- [${date}][${(s.tags ?? []).join(",")}] ${String(s.summary ?? "").slice(0, 120)}`,
+              );
+            }
+          }
+          if (failures.length > 0) {
+            lines.push("**近期失敗模式：**");
+            for (const f of failures) {
+              const date = f.created_at ? f.created_at.slice(0, 10) : "?";
+              lines.push(
+                `- [${date}][${(f.tags ?? []).join(",")}] ${String(f.summary ?? "").slice(0, 120)}`,
+              );
+            }
+          }
+          lines.push(
+            `- 成功/失敗 總計: ${ls.success_patterns?.length ?? 0}/${ls.failure_patterns?.length ?? 0} | 更新: ${ls.updated_at?.slice(0, 10) ?? "?"}`,
+          );
+        }
+      }
+    } catch {
+      // Hermes 學習狀態不存在或解析失敗，靜默跳過
     }
 
     lines.push("\n<!-- /nuwa 記憶注入 -->");

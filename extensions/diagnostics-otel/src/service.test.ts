@@ -392,6 +392,81 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("records session lock metrics with low-cardinality attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "session_lock.acquire.completed",
+      runId: "run-should-not-export",
+      backend: "file",
+      ownerIdHash: "owner-should-not-export",
+      outcome: "acquired",
+      waitMs: 42,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "session_lock.acquire.timeout",
+      runId: "run-should-not-export",
+      backend: "file",
+      reason: "busy",
+      timeoutMs: 5_000,
+      waitMs: 5_000,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "session_lock.reclaimed",
+      runId: "run-should-not-export",
+      backend: "file",
+      reason: "dead-pid",
+      lockAgeMs: 60_000,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "session_lock.watchdog.released",
+      runId: "run-should-not-export",
+      backend: "file",
+      reason: "max-hold-exceeded",
+      heldMs: 300_000,
+    });
+
+    await flushDiagnosticEvents();
+
+    const waitHistogram = telemetryState.histograms.get("openclaw.session_lock.wait_ms");
+    const heldHistogram = telemetryState.histograms.get("openclaw.session_lock.held_ms");
+    const timeoutCounter = telemetryState.counters.get("openclaw.session_lock.timeout");
+    const reclaimedCounter = telemetryState.counters.get("openclaw.session_lock.reclaimed");
+    expect(waitHistogram?.record).toHaveBeenCalledWith(42, {
+      "openclaw.backend": "file",
+      "openclaw.outcome": "acquired",
+    });
+    expect(waitHistogram?.record).toHaveBeenCalledWith(5_000, {
+      "openclaw.backend": "file",
+      "openclaw.outcome": "timeout",
+    });
+    expect(timeoutCounter?.add).toHaveBeenCalledWith(1, {
+      "openclaw.backend": "file",
+      "openclaw.reason": "busy",
+    });
+    expect(reclaimedCounter?.add).toHaveBeenCalledWith(1, {
+      "openclaw.backend": "file",
+      "openclaw.reason": "dead-pid",
+    });
+    expect(heldHistogram?.record).toHaveBeenCalledWith(300_000, {
+      "openclaw.backend": "file",
+      "openclaw.outcome": "released",
+    });
+    for (const call of [
+      ...(waitHistogram?.record.mock.calls ?? []),
+      ...(heldHistogram?.record.mock.calls ?? []),
+      ...(timeoutCounter?.add.mock.calls ?? []),
+      ...(reclaimedCounter?.add.mock.calls ?? []),
+    ]) {
+      expect(JSON.stringify(call)).not.toContain("run-should-not-export");
+      expect(JSON.stringify(call)).not.toContain("owner-should-not-export");
+    }
+
+    await service.stop?.(ctx);
+  });
+
   test("restarts without retaining prior listeners or log transports", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true, logs: true });

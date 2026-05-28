@@ -246,8 +246,11 @@ export class CostGuard {
     const byOp: Record<string, { count: number; estimatedUsd: number }> = {};
 
     for (const e of inPeriod) {
-      if (!byOp[e.operation]) byOp[e.operation] = { count: 0, estimatedUsd: 0 };
-      byOp[e.operation]!.count++;
+      if (!byOp[e.operation]) {
+        byOp[e.operation] = { count: 0, estimatedUsd: 0 };
+      }
+      const opSummary = byOp[e.operation];
+      opSummary.count++;
       if (!e.allowed) {
         blocked++;
         continue;
@@ -258,7 +261,7 @@ export class CostGuard {
       }
       paidOps++;
       totalUsd += Math.max(0, e.estimatedUsd);
-      byOp[e.operation]!.estimatedUsd += Math.max(0, e.estimatedUsd);
+      opSummary.estimatedUsd += Math.max(0, e.estimatedUsd);
     }
 
     return {
@@ -299,12 +302,14 @@ export class CostGuard {
     const parts: string[] = [];
     for (const p of paidPlans) {
       const sub = file.subscriptions.find((s) => s.id === p.id);
-      if (!sub) continue;
+      if (!sub) {
+        continue;
+      }
       const cycle = this.registry.getBillingCycle(sub);
       parts.push(`${p.displayName}（每月 ${cycle.cycleDay} 日重置，剩 ${cycle.daysRemaining} 天）`);
     }
     for (const p of apiPlans) {
-      if (!paidPlans.find((x) => x.id === p.id)) {
+      if (!paidPlans.some((x) => x.id === p.id)) {
         parts.push(`${p.displayName}（per-token）`);
       }
     }

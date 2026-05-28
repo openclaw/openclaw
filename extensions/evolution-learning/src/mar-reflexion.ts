@@ -57,6 +57,14 @@ export interface MAROptions {
 
 interface LearningStateRecord {
   traceId: string;
+  decisionId: string;
+  decisionVersion: number;
+  source: string;
+  adoptedBy: string | null;
+  rollbackPointer: {
+    kind: "learning-state-record";
+    traceId: string;
+  };
   status: "success" | "failure";
   summary: string;
   tags: string[];
@@ -308,8 +316,17 @@ export function recordCriticEffectiveness(
   const state = readLearningState(learningStatePath);
 
   for (const c of critiques) {
+    const traceId = randomUUID();
     const record: LearningStateRecord = {
-      traceId: randomUUID(),
+      traceId,
+      decisionId: `mar:${traceId}`,
+      decisionVersion: 1,
+      source: "mar-reflexion",
+      adoptedBy: c.wasAdopted ? "mar-judge" : null,
+      rollbackPointer: {
+        kind: "learning-state-record",
+        traceId,
+      },
       status: c.wasAdopted ? "success" : "failure",
       summary: `[MAR] ${c.personaSlug} 批評原則：${c.principleUsed}`,
       tags: [taskType, c.personaSlug, "mar_critic"],

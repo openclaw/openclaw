@@ -25,6 +25,7 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import type Database from "better-sqlite3";
+import { resolveLearningStatePath } from "./learning-state-path.js";
 
 // ── 公開型別 ──────────────────────────────────────────────────────────────────
 
@@ -105,10 +106,10 @@ interface LearningState {
 }
 
 function appendLearningRecord(
-  stateDir: string,
+  _stateDir: string,
   record: Omit<HermesRecord, "id" | "timestamp">,
 ): void {
-  const filePath = path.join(stateDir, "learning-state.json");
+  const filePath = resolveLearningStatePath();
   let state: LearningState = {};
   try {
     state = JSON.parse(fs.readFileSync(filePath, "utf8")) as LearningState;

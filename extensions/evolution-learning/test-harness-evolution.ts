@@ -62,21 +62,27 @@ class MockApi {
   async fire(event: string, payload: Record<string, unknown>): Promise<unknown> {
     for (const h of this.hooks
       .filter((h) => h.event === event)
-      .sort((a, b) => b.priority - a.priority)) {
+      .toSorted((a, b) => b.priority - a.priority)) {
       const r = await Promise.race([
         h.handler(payload, {}).catch(() => undefined),
         new Promise<undefined>((res) => setTimeout(() => res(undefined), h.timeoutMs)),
       ]);
-      if (r !== undefined) return r;
+      if (r !== undefined) {
+        return r;
+      }
     }
     return undefined;
   }
 
   async start(stateDir: string) {
-    for (const s of this.services) await s.start({ workspaceDir: stateDir, stateDir });
+    for (const s of this.services) {
+      await s.start({ workspaceDir: stateDir, stateDir });
+    }
   }
   async stop(stateDir: string) {
-    for (const s of this.services) await s.stop?.({ workspaceDir: stateDir, stateDir });
+    for (const s of this.services) {
+      await s.stop?.({ workspaceDir: stateDir, stateDir });
+    }
   }
 
   tool(name: string) {
@@ -167,16 +173,21 @@ async function readPatterns(baseDir: string) {
     const lines = (await fs.readFile(path.join(evoDir(baseDir), "patterns.jsonl"), "utf8"))
       .split("\n")
       .filter((l) => l.trim());
-    return lines.map(
-      (l) =>
-        JSON.parse(l) as {
-          id: string;
-          slug: string;
-          confidence: number;
-          successRate: number;
-          sampleCount: number;
-        },
-    );
+    return lines.map((l) => {
+      const raw = JSON.parse(l) as {
+        id: string;
+        slug: string;
+        confidence: number;
+        successRate: number;
+        sampleCount: number;
+        mentalModels?: unknown;
+      };
+      return Object.assign(raw, {
+        mentalModels: Array.isArray(raw.mentalModels)
+          ? raw.mentalModels.filter((m): m is string => typeof m === "string")
+          : [],
+      });
+    });
   } catch {
     return [];
   }
@@ -248,7 +259,9 @@ async function scenarioA(api: MockApi, dir: string): Promise<Result> {
     const txt = r.content[0]?.text ?? "";
     const ok = !txt.includes("尚未有") && txt.includes("charlie-munger");
     notes.push(`patterns 工具：${ok ? "✅ 讀到" : "❌ 未讀到"} distilled patterns`);
-    if (!ok) passed = false;
+    if (!ok) {
+      passed = false;
+    }
   }
 
   let injected = 0;
@@ -261,14 +274,18 @@ async function scenarioA(api: MockApi, dir: string): Promise<Result> {
   ];
   for (const prompt of prompts) {
     const r = await api.fire("before_prompt_build", { prompt });
-    if (r && typeof r === "object" && "prependContext" in r) injected++;
+    if (r && typeof r === "object" && "prependContext" in r) {
+      injected++;
+    }
   }
 
   notes.push(`category bug 修復後注入：${injected}/${prompts.length}（修復前全部是 0）`);
   if (injected === 0) {
     passed = false;
     notes.push("❌ category='distilled' 仍未被識別");
-  } else notes.push("✅ category='distilled' 正確被讀取和注入");
+  } else {
+    notes.push("✅ category='distilled' 正確被讀取和注入");
+  }
 
   return {
     name: "A：Category Bug 修復驗證",
@@ -306,7 +323,9 @@ async function scenarioB(api: MockApi, dir: string): Promise<Result> {
     const r = await api.fire("before_prompt_build", {
       prompt: pgQuestions[i % pgQuestions.length],
     });
-    if (r === undefined || r === null) unmatchedRecorded++;
+    if (r === undefined || r === null) {
+      unmatchedRecorded++;
+    }
   }
 
   notes.push(`未匹配（觸發記錄）：${unmatchedRecorded}/30`);
@@ -314,8 +333,9 @@ async function scenarioB(api: MockApi, dir: string): Promise<Result> {
   notes.push(`unmatched-queries.jsonl 記錄數：${unmatchedCount}`);
 
   const cmd = api.command("evolution");
-  if (cmd?.handler) await cmd.handler({ args: "rem" });
-  else {
+  if (cmd?.handler) {
+    await cmd.handler({ args: "rem" });
+  } else {
     await api.stop(dir);
     await api.start(dir);
   }
@@ -488,8 +508,11 @@ async function scenarioD(api: MockApi, dir: string): Promise<Result> {
 
     // Gate 2：品質回饋
     const isPositiveTurn = i % 4 !== 0; // 75% 正向，25% 負向
-    if (isPositiveTurn) positiveRounds++;
-    else negativeRounds++;
+    if (isPositiveTurn) {
+      positiveRounds++;
+    } else {
+      negativeRounds++;
+    }
 
     await api.fire("agent_end", {
       _evolutionRequestKey: requestId, // 傳遞 Gate 1 的 key
@@ -971,7 +994,9 @@ async function scenarioI(api: MockApi, dir: string): Promise<Result> {
 
   // 觸發 REM（內含 runMetabolism）
   const cmd = api.command("evolution");
-  if (cmd?.handler) await cmd.handler({ args: "rem" });
+  if (cmd?.handler) {
+    await cmd.handler({ args: "rem" });
+  }
   await new Promise((r) => setTimeout(r, 100));
 
   const after = await readPatterns(dir);
@@ -1066,7 +1091,9 @@ async function scenarioJ(api: MockApi, dir: string): Promise<Result> {
 
   // 觸發 REM → analyzeUnmatchedAndCreateEmbryos → DNA 遺傳
   const cmd = api.command("evolution");
-  if (cmd?.handler) await cmd.handler({ args: "rem" });
+  if (cmd?.handler) {
+    await cmd.handler({ args: "rem" });
+  }
   await new Promise((r) => setTimeout(r, 100));
 
   // 檢查是否建立了 Munger 的 embryo，且是否繼承了巴菲特的心智模型
@@ -1152,7 +1179,9 @@ async function scenarioK(api: MockApi, dir: string): Promise<Result> {
 
   // 觸發 REM → growL2FromCausalChain
   const cmd = api.command("evolution");
-  if (cmd?.handler) await cmd.handler({ args: "rem" });
+  if (cmd?.handler) {
+    await cmd.handler({ args: "rem" });
+  }
   await new Promise((r) => setTimeout(r, 100));
 
   const finalPatterns = await readPatterns(dir);
@@ -1528,7 +1557,9 @@ async function main() {
     console.log(
       `${r.passed ? "✅" : "❌"} ${r.name} (${r.turns} 輪, ${(r.ms / 1000).toFixed(2)}s)`,
     );
-    for (const n of r.notes) console.log(`      ${n}`);
+    for (const n of r.notes) {
+      console.log(`      ${n}`);
+    }
   }
 
   try {
@@ -1566,7 +1597,9 @@ async function main() {
   console.log("  ✅ 循環回流        → runCirculatoryFeedback（L4→L2 反饋）");
   console.log("  ✅ L3 動態注入     → installed pattern 讀取 skillPath 文件注入 context");
   console.log("");
-  for (const r of results) console.log(`    ${r.passed ? "✅" : "❌"} ${r.name}`);
+  for (const r of results) {
+    console.log(`    ${r.passed ? "✅" : "❌"} ${r.name}`);
+  }
   console.log("");
   console.log(
     passed === results.length

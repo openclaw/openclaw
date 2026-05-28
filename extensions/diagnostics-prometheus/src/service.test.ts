@@ -130,6 +130,82 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("progress draft");
   });
 
+  it("records session lock metrics without exporting raw lock identifiers", () => {
+    const store = __test__.createPrometheusMetricStore();
+
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "session_lock.acquire.completed",
+        runId: "run-should-not-export",
+        backend: "file",
+        ownerIdHash: "owner-should-not-export",
+        outcome: "acquired",
+        waitMs: 42,
+      },
+      trusted,
+    );
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "session_lock.acquire.timeout",
+        runId: "run-should-not-export",
+        backend: "file",
+        reason: "busy",
+        timeoutMs: 5_000,
+        waitMs: 5_000,
+      },
+      trusted,
+    );
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "session_lock.reclaimed",
+        runId: "run-should-not-export",
+        backend: "file",
+        reason: "dead-pid",
+        lockAgeMs: 60_000,
+      },
+      trusted,
+    );
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "session_lock.watchdog.released",
+        runId: "run-should-not-export",
+        backend: "file",
+        reason: "max-hold-exceeded",
+        heldMs: 300_000,
+      },
+      trusted,
+    );
+
+    const rendered = __test__.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain("# TYPE openclaw_session_lock_wait_ms histogram");
+    expect(rendered).toContain(
+      'openclaw_session_lock_wait_ms_sum{backend="file",outcome="acquired"} 42',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_lock_wait_ms_sum{backend="file",outcome="timeout"} 5000',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_lock_timeout_total{backend="file",reason="busy"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_lock_reclaimed_total{backend="file",reason="dead-pid"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_lock_held_ms_sum{backend="file",outcome="released"} 300000',
+    );
+    expect(rendered).not.toContain("run-should-not-export");
+    expect(rendered).not.toContain("owner-should-not-export");
+  });
+
   it("caps metric series growth and reports dropped series", () => {
     const store = __test__.createPrometheusMetricStore();
 

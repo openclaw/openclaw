@@ -20,7 +20,7 @@ import path from "node:path";
 
 // ─── 型別 ────────────────────────────────────────────────────────────
 
-export type ModelProvider =
+export type KnownModelProvider =
   | "anthropic"
   | "openai"
   | "google"
@@ -35,8 +35,9 @@ export type ModelProvider =
   | "fireworks_ai"
   | "aws_bedrock"
   | "azure"
-  | "vertex_ai"
-  | string; // 其他廠商
+  | "vertex_ai";
+
+export type ModelProvider = KnownModelProvider | (string & {}); // 其他廠商
 
 export type ModelPricing = {
   /** 每 1K input tokens（USD）*/
@@ -346,26 +347,32 @@ export class ModelPricingDb {
 
   async getPriceWithFallback(modelId: string): Promise<ModelPricing> {
     const found = await this.getPrice(modelId);
-    if (found) return found;
+    if (found) {
+      return found;
+    }
 
     // 靜態備用
     const staticMatch =
       STATIC_FALLBACK_PRICES[modelId] ?? STATIC_FALLBACK_PRICES[this.normalize(modelId)];
-    if (staticMatch) return staticMatch;
+    if (staticMatch) {
+      return staticMatch;
+    }
 
     // 模糊匹配：取名稱最接近的
     const db = await this.loadOrFetch();
     const allKeys = Object.keys(db);
     const normalizedSearch = this.normalize(modelId);
     const fuzzy = allKeys.find((k) => k.includes(normalizedSearch) || normalizedSearch.includes(k));
-    if (fuzzy && db[fuzzy]) return db[fuzzy]!;
+    if (fuzzy && db[fuzzy]) {
+      return db[fuzzy];
+    }
 
     // 最終備用：使用 gpt-4o 定價作為基準
     return {
       inputCostPer1k: 0.002,
       outputCostPer1k: 0.008,
       source: "static",
-      updatedAt: new Date().toISOString().split("T")[0]!,
+      updatedAt: new Date().toISOString().slice(0, 10),
     };
   }
 
@@ -421,14 +428,16 @@ export class ModelPricingDb {
     return Object.entries(db)
       .filter(([k]) => k.toLowerCase().includes(q))
       .map(([model, pricing]) => ({ model, pricing }))
-      .sort((a, b) => a.model.localeCompare(b.model))
+      .toSorted((a, b) => a.model.localeCompare(b.model))
       .slice(0, 20);
   }
 
   // ── 快取載入或從網路拉取 ──────────────────────────────────────────
 
   private async loadOrFetch(): Promise<ModelPriceMap> {
-    if (this.memCache) return this.memCache;
+    if (this.memCache) {
+      return this.memCache;
+    }
 
     // 嘗試讀快取
     try {
@@ -470,7 +479,9 @@ export class ModelPricingDb {
         const data = (await resp.json()) as Record<string, LiteLLMEntry>;
         let count = 0;
         for (const [model, entry] of Object.entries(data)) {
-          if (!entry.input_cost_per_token) continue;
+          if (!entry.input_cost_per_token) {
+            continue;
+          }
           prices[model] = {
             inputCostPer1k: entry.input_cost_per_token * 1000,
             outputCostPer1k: (entry.output_cost_per_token ?? 0) * 1000,
@@ -483,7 +494,7 @@ export class ModelPricingDb {
             maxTokens: entry.max_tokens,
             maxOutputTokens: entry.max_output_tokens,
             source: "litellm",
-            updatedAt: new Date().toISOString().split("T")[0]!,
+            updatedAt: new Date().toISOString().slice(0, 10),
           };
           count++;
         }
@@ -502,16 +513,20 @@ export class ModelPricingDb {
         const data = (await resp.json()) as { data?: OpenRouterModel[] };
         let count = 0;
         for (const model of data.data ?? []) {
-          if (!model.pricing?.prompt || prices[model.id]) continue; // 不覆蓋 LiteLLM 資料
-          const inputPer1k = parseFloat(model.pricing.prompt) * 1000;
-          const outputPer1k = parseFloat(model.pricing.completion ?? "0") * 1000;
-          if (isNaN(inputPer1k) || inputPer1k <= 0) continue;
+          if (!model.pricing?.prompt || prices[model.id]) {
+            continue; // 不覆蓋 LiteLLM 資料
+          }
+          const inputPer1k = Number.parseFloat(model.pricing.prompt) * 1000;
+          const outputPer1k = Number.parseFloat(model.pricing.completion ?? "0") * 1000;
+          if (Number.isNaN(inputPer1k) || inputPer1k <= 0) {
+            continue;
+          }
           prices[`openrouter/${model.id}`] = {
             inputCostPer1k: inputPer1k,
             outputCostPer1k: outputPer1k,
             maxTokens: model.context_length,
             source: "openrouter",
-            updatedAt: new Date().toISOString().split("T")[0]!,
+            updatedAt: new Date().toISOString().slice(0, 10),
           };
           count++;
         }

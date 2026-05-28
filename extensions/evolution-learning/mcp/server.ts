@@ -1389,8 +1389,7 @@ function createNuwaMcpServer(stateDir: string, db: Database.Database): McpServer
         let meta = "";
 
         if (agentType === "claude") {
-          const { callClaudeCli } =
-            await import("../../../tools/openclaw_runtime/adapters/claude_code_cli_adapter.js");
+          const { callClaudeCli } = await import("openclaw/openclaw-runtime");
           const claudeModel =
             model === "sonnet" || model === "haiku" || model === "opus" ? model : undefined;
           const r = await callClaudeCli(executionTask, {
@@ -1402,14 +1401,12 @@ function createNuwaMcpServer(stateDir: string, db: Database.Database): McpServer
           resultText = r.result;
           meta = `cost=$${r.costUsd} duration=${r.durationMs}ms`;
         } else if (agentType === "codex") {
-          const { callCodexCli } =
-            await import("../../../tools/openclaw_runtime/adapters/codex_cli_adapter.js");
+          const { callCodexCli } = await import("openclaw/openclaw-runtime");
           const r = await callCodexCli(executionTask, { model, timeoutMs });
           resultText = r.result || r.rawOutput.slice(0, 1500);
           meta = `duration=${r.durationMs}ms events=${r.events.length}`;
         } else {
-          const { callLocalModel } =
-            await import("../../../tools/openclaw_runtime/adapters/local_model_adapter.js");
+          const { callLocalModel } = await import("openclaw/openclaw-runtime");
           const r = await callLocalModel(executionTask, {
             model,
             systemPrompt: rolePrompt,

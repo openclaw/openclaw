@@ -25,7 +25,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { SubscriptionId } from "./subscription-registry.js";
+import type { SubscriptionId } from "./subscription-types.js";
 
 const exec = promisify(execFile);
 
@@ -703,10 +703,12 @@ export class AutoDetector {
     const results = await Promise.allSettled(strategies.map((fn) => fn()));
     const all: DetectedProvider[] = [];
     for (const r of results) {
-      if (r.status === "fulfilled") all.push(...r.value);
+      if (r.status === "fulfilled") {
+        all.push(...r.value);
+      }
     }
 
-    const providers = dedup(all).sort((a, b) => {
+    const providers = dedup(all).toSorted((a, b) => {
       const order = { confirmed: 0, likely: 1, possible: 2 };
       return order[a.confidence] - order[b.confidence];
     });
@@ -763,7 +765,9 @@ export class AutoDetector {
       const raw = await fs.readFile(this.cachePath, "utf8");
       const cache = JSON.parse(raw) as DetectionCache;
       const age = Date.now() - new Date(cache.detectedAt).getTime();
-      if (age > CACHE_TTL_MS) return null;
+      if (age > CACHE_TTL_MS) {
+        return null;
+      }
       return cache;
     } catch {
       return null;

@@ -29,13 +29,12 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createAutoDetector, type DetectedProvider } from "./auto-detect.js";
+import { createAutoDetector } from "./auto-detect.js";
 import {
   createSubscriptionRegistry,
   fmtDate,
   SUBSCRIPTION_PLANS,
   type SubscriptionId,
-  type ActiveSubscription,
 } from "./subscription-registry.js";
 
 // ─── 常數 ────────────────────────────────────────────────────────────
@@ -98,7 +97,7 @@ async function probeAnthropic(apiKey?: string): Promise<ProbeResult> {
       signal: AbortSignal.timeout(5000),
     });
     const latencyMs = Date.now() - t0;
-    if (res.status === 200)
+    if (res.status === 200) {
       return {
         subscriptionId: id,
         status: "valid",
@@ -106,7 +105,8 @@ async function probeAnthropic(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: `Anthropic API Key 有效（${latencyMs}ms）`,
       };
-    if (res.status === 401)
+    }
+    if (res.status === 401) {
       return {
         subscriptionId: id,
         status: "invalid",
@@ -114,7 +114,8 @@ async function probeAnthropic(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: "Anthropic API Key 無效或已撤銷",
       };
-    if (res.status === 429)
+    }
+    if (res.status === 429) {
       return {
         subscriptionId: id,
         status: "rate_limited",
@@ -122,6 +123,7 @@ async function probeAnthropic(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: "Anthropic API 速率限制（Key 有效）",
       };
+    }
     return {
       subscriptionId: id,
       status: "unknown",
@@ -147,7 +149,7 @@ async function probeOpenAI(apiKey?: string): Promise<ProbeResult> {
       signal: AbortSignal.timeout(5000),
     });
     const latencyMs = Date.now() - t0;
-    if (res.status === 200)
+    if (res.status === 200) {
       return {
         subscriptionId: id,
         status: "valid",
@@ -155,7 +157,8 @@ async function probeOpenAI(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: `OpenAI API Key 有效（${latencyMs}ms）`,
       };
-    if (res.status === 401)
+    }
+    if (res.status === 401) {
       return {
         subscriptionId: id,
         status: "invalid",
@@ -163,7 +166,8 @@ async function probeOpenAI(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: "OpenAI API Key 無效或已撤銷",
       };
-    if (res.status === 429)
+    }
+    if (res.status === 429) {
       return {
         subscriptionId: id,
         status: "rate_limited",
@@ -171,6 +175,7 @@ async function probeOpenAI(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: "OpenAI API 速率限制（Key 有效）",
       };
+    }
     return {
       subscriptionId: id,
       status: "unknown",
@@ -186,14 +191,16 @@ async function probeOpenAI(apiKey?: string): Promise<ProbeResult> {
 async function probeGoogle(apiKey?: string): Promise<ProbeResult> {
   const id: SubscriptionId = "gemini-api-key";
   const key = apiKey ?? process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY;
-  if (!key) return { subscriptionId: id, status: "skipped", detail: "無 API Key，跳過探針" };
+  if (!key) {
+    return { subscriptionId: id, status: "skipped", detail: "無 API Key，跳過探針" };
+  }
   const t0 = Date.now();
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`, {
       signal: AbortSignal.timeout(5000),
     });
     const latencyMs = Date.now() - t0;
-    if (res.status === 200)
+    if (res.status === 200) {
       return {
         subscriptionId: id,
         status: "valid",
@@ -201,7 +208,8 @@ async function probeGoogle(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: `Gemini API Key 有效（${latencyMs}ms）`,
       };
-    if (res.status === 400 || res.status === 403)
+    }
+    if (res.status === 400 || res.status === 403) {
       return {
         subscriptionId: id,
         status: "invalid",
@@ -209,6 +217,7 @@ async function probeGoogle(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: "Gemini API Key 無效",
       };
+    }
     return {
       subscriptionId: id,
       status: "unknown",
@@ -224,7 +233,9 @@ async function probeGoogle(apiKey?: string): Promise<ProbeResult> {
 async function probeMistral(apiKey?: string): Promise<ProbeResult> {
   const id: SubscriptionId = "mistral-api-key";
   const key = apiKey ?? process.env.MISTRAL_API_KEY;
-  if (!key) return { subscriptionId: id, status: "skipped", detail: "無 API Key，跳過探針" };
+  if (!key) {
+    return { subscriptionId: id, status: "skipped", detail: "無 API Key，跳過探針" };
+  }
   const t0 = Date.now();
   try {
     const res = await fetch("https://api.mistral.ai/v1/models", {
@@ -232,7 +243,7 @@ async function probeMistral(apiKey?: string): Promise<ProbeResult> {
       signal: AbortSignal.timeout(5000),
     });
     const latencyMs = Date.now() - t0;
-    if (res.status === 200)
+    if (res.status === 200) {
       return {
         subscriptionId: id,
         status: "valid",
@@ -240,7 +251,8 @@ async function probeMistral(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: `Mistral API Key 有效（${latencyMs}ms）`,
       };
-    if (res.status === 401)
+    }
+    if (res.status === 401) {
       return {
         subscriptionId: id,
         status: "invalid",
@@ -248,6 +260,7 @@ async function probeMistral(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: "Mistral API Key 無效",
       };
+    }
     return {
       subscriptionId: id,
       status: "unknown",
@@ -263,8 +276,9 @@ async function probeMistral(apiKey?: string): Promise<ProbeResult> {
 async function probeGroq(apiKey?: string): Promise<ProbeResult> {
   const id: SubscriptionId = "groq-api-key";
   const key = apiKey ?? process.env.GROQ_API_KEY;
-  if (!key)
+  if (!key) {
     return { subscriptionId: id, status: "skipped", detail: "無 API Key（免費層無需驗證）" };
+  }
   const t0 = Date.now();
   try {
     const res = await fetch("https://api.groq.com/openai/v1/models", {
@@ -272,7 +286,7 @@ async function probeGroq(apiKey?: string): Promise<ProbeResult> {
       signal: AbortSignal.timeout(5000),
     });
     const latencyMs = Date.now() - t0;
-    if (res.status === 200)
+    if (res.status === 200) {
       return {
         subscriptionId: id,
         status: "valid",
@@ -280,7 +294,8 @@ async function probeGroq(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: `Groq API Key 有效（${latencyMs}ms）`,
       };
-    if (res.status === 401)
+    }
+    if (res.status === 401) {
       return {
         subscriptionId: id,
         status: "invalid",
@@ -288,6 +303,7 @@ async function probeGroq(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: "Groq API Key 無效",
       };
+    }
     return {
       subscriptionId: id,
       status: "unknown",
@@ -303,7 +319,9 @@ async function probeGroq(apiKey?: string): Promise<ProbeResult> {
 async function probeXAI(apiKey?: string): Promise<ProbeResult> {
   const id: SubscriptionId = "xai-api-key";
   const key = apiKey ?? process.env.XAI_API_KEY;
-  if (!key) return { subscriptionId: id, status: "skipped", detail: "無 API Key" };
+  if (!key) {
+    return { subscriptionId: id, status: "skipped", detail: "無 API Key" };
+  }
   const t0 = Date.now();
   try {
     const res = await fetch("https://api.x.ai/v1/models", {
@@ -311,7 +329,7 @@ async function probeXAI(apiKey?: string): Promise<ProbeResult> {
       signal: AbortSignal.timeout(5000),
     });
     const latencyMs = Date.now() - t0;
-    if (res.status === 200)
+    if (res.status === 200) {
       return {
         subscriptionId: id,
         status: "valid",
@@ -319,7 +337,8 @@ async function probeXAI(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: `xAI API Key 有效（${latencyMs}ms）`,
       };
-    if (res.status === 401)
+    }
+    if (res.status === 401) {
       return {
         subscriptionId: id,
         status: "invalid",
@@ -327,6 +346,7 @@ async function probeXAI(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: "xAI API Key 無效",
       };
+    }
     return {
       subscriptionId: id,
       status: "unknown",
@@ -342,7 +362,9 @@ async function probeXAI(apiKey?: string): Promise<ProbeResult> {
 async function probeDeepSeek(apiKey?: string): Promise<ProbeResult> {
   const id: SubscriptionId = "deepseek-api-key";
   const key = apiKey ?? process.env.DEEPSEEK_API_KEY;
-  if (!key) return { subscriptionId: id, status: "skipped", detail: "無 API Key" };
+  if (!key) {
+    return { subscriptionId: id, status: "skipped", detail: "無 API Key" };
+  }
   const t0 = Date.now();
   try {
     const res = await fetch("https://api.deepseek.com/v1/models", {
@@ -350,7 +372,7 @@ async function probeDeepSeek(apiKey?: string): Promise<ProbeResult> {
       signal: AbortSignal.timeout(5000),
     });
     const latencyMs = Date.now() - t0;
-    if (res.status === 200)
+    if (res.status === 200) {
       return {
         subscriptionId: id,
         status: "valid",
@@ -358,7 +380,8 @@ async function probeDeepSeek(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: `DeepSeek API Key 有效（${latencyMs}ms）`,
       };
-    if (res.status === 401)
+    }
+    if (res.status === 401) {
       return {
         subscriptionId: id,
         status: "invalid",
@@ -366,6 +389,7 @@ async function probeDeepSeek(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: "DeepSeek API Key 無效",
       };
+    }
     return {
       subscriptionId: id,
       status: "unknown",
@@ -381,7 +405,9 @@ async function probeDeepSeek(apiKey?: string): Promise<ProbeResult> {
 async function probeTogether(apiKey?: string): Promise<ProbeResult> {
   const id: SubscriptionId = "together-api-key";
   const key = apiKey ?? process.env.TOGETHER_API_KEY ?? process.env.TOGETHERAI_API_KEY;
-  if (!key) return { subscriptionId: id, status: "skipped", detail: "無 API Key" };
+  if (!key) {
+    return { subscriptionId: id, status: "skipped", detail: "無 API Key" };
+  }
   const t0 = Date.now();
   try {
     const res = await fetch("https://api.together.xyz/v1/models", {
@@ -389,7 +415,7 @@ async function probeTogether(apiKey?: string): Promise<ProbeResult> {
       signal: AbortSignal.timeout(5000),
     });
     const latencyMs = Date.now() - t0;
-    if (res.status === 200)
+    if (res.status === 200) {
       return {
         subscriptionId: id,
         status: "valid",
@@ -397,7 +423,8 @@ async function probeTogether(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: `Together AI Key 有效（${latencyMs}ms）`,
       };
-    if (res.status === 401)
+    }
+    if (res.status === 401) {
       return {
         subscriptionId: id,
         status: "invalid",
@@ -405,6 +432,7 @@ async function probeTogether(apiKey?: string): Promise<ProbeResult> {
         latencyMs,
         detail: "Together AI Key 無效",
       };
+    }
     return {
       subscriptionId: id,
       status: "unknown",
@@ -424,7 +452,9 @@ function probeByKeyFormat(
   prefix: string,
   detail: string,
 ): ProbeResult {
-  if (!key) return { subscriptionId: id, status: "skipped", detail: `無 API Key，跳過` };
+  if (!key) {
+    return { subscriptionId: id, status: "skipped", detail: `無 API Key，跳過` };
+  }
   const valid = key.startsWith(prefix) && key.length > 20;
   return {
     subscriptionId: id,
@@ -468,7 +498,9 @@ export class SubscriptionVerifier {
     opts: { silent?: boolean } = {},
   ): Promise<VerifyRecord> {
     const t0 = Date.now();
-    if (!opts.silent) process.stderr.write(`🔍 [nuwa] 執行 15 天定期訂閱查驗...\n`);
+    if (!opts.silent) {
+      process.stderr.write(`🔍 [nuwa] 執行 15 天定期訂閱查驗...\n`);
+    }
 
     // 1. 重新掃描（強制，不用快取）
     const detector = createAutoDetector(this.stateDir);
@@ -482,10 +514,12 @@ export class SubscriptionVerifier {
 
     // 3. 與上次比對
     const state = await this.loadState();
+    const previousProbeStatuses: Record<SubscriptionId, ProbeStatus> =
+      state?.lastProbeStatuses ?? ({} as Record<SubscriptionId, ProbeStatus>);
     const diff = this.computeDiff(
       state?.lastDetectedIds ?? [],
       detectedIds,
-      state?.lastProbeStatuses ?? {},
+      previousProbeStatuses,
       probeResults,
     );
 
@@ -562,7 +596,9 @@ export class SubscriptionVerifier {
 
     for (const id of ids) {
       const plan = SUBSCRIPTION_PLANS[id];
-      if (!plan?.isApiKeyMode) continue; // 只探針 API Key 類型
+      if (!plan?.isApiKeyMode) {
+        continue; // 只探針 API Key 類型
+      }
 
       switch (id) {
         case "claude-api-key":
@@ -623,6 +659,8 @@ export class SubscriptionVerifier {
               probeByKeyFormat(id, getKey(id) ?? process.env.TAVILY_API_KEY, "tvly-", "Tavily"),
             ),
           );
+          break;
+        default:
           break;
       }
     }
@@ -768,7 +806,7 @@ export class SubscriptionVerifier {
       return lines
         .slice(-limit)
         .map((l) => JSON.parse(l) as VerifyRecord)
-        .reverse();
+        .toReversed();
     } catch {
       return [];
     }
@@ -822,7 +860,9 @@ export class SubscriptionVerifier {
 
     if (record.alerts.length > 0) {
       lines.push(`⚠️  警報（${record.alerts.length} 個）：`);
-      for (const a of record.alerts) lines.push(`   ${a}`);
+      for (const a of record.alerts) {
+        lines.push(`   ${a}`);
+      }
     } else {
       lines.push(`✅ 無異常，所有訂閱狀態正常`);
     }

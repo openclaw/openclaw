@@ -557,49 +557,79 @@ export function detectSubscriptionsFromEnv(): SubscriptionId[] {
   const detected: SubscriptionId[] = [];
 
   // Anthropic
-  if (process.env.ANTHROPIC_API_KEY) detected.push("claude-api-key");
-  if (process.env.NUWA_CLAUDE_TIER === "max-20") detected.push("claude-max-20");
-  else if (process.env.NUWA_CLAUDE_TIER === "max-5") detected.push("claude-max-5");
-  else if (process.env.NUWA_CLAUDE_TIER === "pro") detected.push("claude-pro");
+  if (process.env.ANTHROPIC_API_KEY) {
+    detected.push("claude-api-key");
+  }
+  if (process.env.NUWA_CLAUDE_TIER === "max-20") {
+    detected.push("claude-max-20");
+  } else if (process.env.NUWA_CLAUDE_TIER === "max-5") {
+    detected.push("claude-max-5");
+  } else if (process.env.NUWA_CLAUDE_TIER === "pro") {
+    detected.push("claude-pro");
+  }
 
   // OpenAI
   if (process.env.OPENAI_API_KEY) {
     detected.push("openai-api-key");
     detected.push("codex-cli-key"); // API key 同時支援 Codex CLI
   }
-  if (process.env.NUWA_OPENAI_TIER === "pro") detected.push("openai-pro");
-  else if (process.env.NUWA_OPENAI_TIER === "plus") detected.push("openai-plus");
+  if (process.env.NUWA_OPENAI_TIER === "pro") {
+    detected.push("openai-pro");
+  } else if (process.env.NUWA_OPENAI_TIER === "plus") {
+    detected.push("openai-plus");
+  }
 
   // Google
-  if (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY) detected.push("gemini-api-key");
-  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) detected.push("vertex-ai-key");
+  if (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY) {
+    detected.push("gemini-api-key");
+  }
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    detected.push("vertex-ai-key");
+  }
 
   // Mistral
-  if (process.env.MISTRAL_API_KEY) detected.push("mistral-api-key");
+  if (process.env.MISTRAL_API_KEY) {
+    detected.push("mistral-api-key");
+  }
 
   // Groq
-  if (process.env.GROQ_API_KEY) detected.push("groq-api-key");
-  else detected.push("groq-free"); // Groq 有免費層，預設加入
+  if (process.env.GROQ_API_KEY) {
+    detected.push("groq-api-key");
+  } else {
+    detected.push("groq-free"); // Groq 有免費層，預設加入
+  }
 
   // xAI
-  if (process.env.XAI_API_KEY) detected.push("xai-api-key");
+  if (process.env.XAI_API_KEY) {
+    detected.push("xai-api-key");
+  }
 
   // DeepSeek
-  if (process.env.DEEPSEEK_API_KEY) detected.push("deepseek-api-key");
+  if (process.env.DEEPSEEK_API_KEY) {
+    detected.push("deepseek-api-key");
+  }
 
   // Perplexity
-  if (process.env.PERPLEXITY_API_KEY) detected.push("perplexity-api-key");
+  if (process.env.PERPLEXITY_API_KEY) {
+    detected.push("perplexity-api-key");
+  }
 
   // Together AI
-  if (process.env.TOGETHER_API_KEY || process.env.TOGETHERAI_API_KEY)
+  if (process.env.TOGETHER_API_KEY || process.env.TOGETHERAI_API_KEY) {
     detected.push("together-api-key");
+  }
 
   // Cohere
-  if (process.env.COHERE_API_KEY) detected.push("cohere-api-key");
+  if (process.env.COHERE_API_KEY) {
+    detected.push("cohere-api-key");
+  }
 
   // Tavily
-  if (process.env.TAVILY_API_KEY) detected.push("tavily-api-key");
-  else detected.push("tavily-free"); // 沒有 key 預設免費層
+  if (process.env.TAVILY_API_KEY) {
+    detected.push("tavily-api-key");
+  } else {
+    detected.push("tavily-free"); // 沒有 key 預設免費層
+  }
 
   return [...new Set(detected)]; // 去重
 }
@@ -621,7 +651,9 @@ export class SubscriptionRegistry {
   // ── 讀取訂閱表（自動偵測，零設定）──────────────────────────────
 
   async load(): Promise<SubscriptionFile> {
-    if (this.cache) return this.cache;
+    if (this.cache) {
+      return this.cache;
+    }
 
     // 嘗試讀已存在的手動設定（如果用戶曾手動 add，優先用）
     for (const p of [this.globalPath, this.localPath]) {
@@ -663,7 +695,7 @@ export class SubscriptionRegistry {
       const detected = await detector.getSubscriptionIds();
       let changed = false;
       for (const id of detected) {
-        if (!file.subscriptions.find((s) => s.id === id)) {
+        if (!file.subscriptions.some((s) => s.id === id)) {
           file.subscriptions.push({ id, addedAt: new Date().toISOString(), note: "自動偵測補充" });
           changed = true;
         }
@@ -736,7 +768,9 @@ export class SubscriptionRegistry {
     return file.subscriptions
       .map((sub) => {
         const plan = SUBSCRIPTION_PLANS[sub.id];
-        if (!plan || plan.monthlyUsd === 0) return null; // 只追蹤付費訂閱
+        if (!plan || plan.monthlyUsd === 0) {
+          return null; // 只追蹤付費訂閱
+        }
         return { sub, plan, cycle: this.getBillingCycle(sub) };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
@@ -758,7 +792,7 @@ export class SubscriptionRegistry {
     coveringPlan?: SubscriptionPlan;
     reason: string;
   }> {
-    if ((ALWAYS_FREE as NuwaOperation[]).includes(operation)) {
+    if (ALWAYS_FREE.includes(operation)) {
       return { covered: true, reason: "零成本操作（nuwa 內部）" };
     }
     const plans = await this.getActivePlans();
@@ -831,7 +865,9 @@ export class SubscriptionRegistry {
     id: SubscriptionId,
     opts: { note?: string; apiKey?: string; monthlyBudgetUsd?: number; customModel?: string } = {},
   ): Promise<void> {
-    if (!SUBSCRIPTION_PLANS[id]) throw new Error(`未知的訂閱方案：${id}`);
+    if (!SUBSCRIPTION_PLANS[id]) {
+      throw new Error(`未知的訂閱方案：${id}`);
+    }
     const file = await this.load();
     const idx = file.subscriptions.findIndex((s) => s.id === id);
     const entry: ActiveSubscription = {
@@ -844,7 +880,7 @@ export class SubscriptionRegistry {
     };
     if (idx >= 0) {
       // 保留原有 addedAt（計費週期錨點），只更新其他欄位
-      const existing = file.subscriptions[idx]!;
+      const existing = file.subscriptions[idx];
       file.subscriptions[idx] = { ...entry, addedAt: existing.addedAt };
     } else {
       file.subscriptions.push(entry);
@@ -858,7 +894,9 @@ export class SubscriptionRegistry {
     const file = await this.load();
     const before = file.subscriptions.length;
     file.subscriptions = file.subscriptions.filter((s) => s.id !== id);
-    if (file.subscriptions.length === before) return false;
+    if (file.subscriptions.length === before) {
+      return false;
+    }
     file.updatedAt = new Date().toISOString();
     this.cache = file;
     await this.save();
@@ -875,7 +913,9 @@ export class SubscriptionRegistry {
   }
 
   async save(): Promise<void> {
-    if (!this.cache) return;
+    if (!this.cache) {
+      return;
+    }
     const data = JSON.stringify(this.cache, null, 2) + "\n";
     // 全域路徑（~/.nuwa/subscriptions.json）永遠寫入
     await fs.mkdir(path.dirname(this.globalPath), { recursive: true });
@@ -905,8 +945,10 @@ export class SubscriptionRegistry {
       // 按廠商分組
       const byProvider: Record<string, SubscriptionPlan[]> = {};
       for (const p of plans) {
-        if (!byProvider[p.provider]) byProvider[p.provider] = [];
-        byProvider[p.provider]!.push(p);
+        if (!byProvider[p.provider]) {
+          byProvider[p.provider] = [];
+        }
+        byProvider[p.provider].push(p);
       }
 
       for (const [prov, provPlans] of Object.entries(byProvider)) {
@@ -994,8 +1036,10 @@ export class SubscriptionRegistry {
   static listAllPlans(): string {
     const groups: Record<string, SubscriptionPlan[]> = {};
     for (const plan of Object.values(SUBSCRIPTION_PLANS)) {
-      if (!groups[plan.provider]) groups[plan.provider] = [];
-      groups[plan.provider]!.push(plan);
+      if (!groups[plan.provider]) {
+        groups[plan.provider] = [];
+      }
+      groups[plan.provider].push(plan);
     }
 
     const lines = ["📦 所有可登記的訂閱方案：", "（格式：nuwa sub add <id>）", ""];

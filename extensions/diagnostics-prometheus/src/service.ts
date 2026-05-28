@@ -41,6 +41,7 @@ type PrometheusMetricStore = ReturnType<typeof createPrometheusMetricStore>;
 const DURATION_BUCKETS_SECONDS = [
   0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600,
 ];
+const DURATION_BUCKETS_MS = DURATION_BUCKETS_SECONDS.map((value) => value * 1000);
 const TOKEN_BUCKETS = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576];
 const BYTE_BUCKETS = [
   1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864, 268435456, 1073741824,
@@ -351,6 +352,14 @@ function harnessLabels(evt: {
   };
 }
 
+function sessionLockBackendLabel(evt: { backend: string }): string {
+  return lowCardinalityLabel(evt.backend, "unknown");
+}
+
+function sessionLockReasonLabel(evt: { reason?: string }): string {
+  return lowCardinalityLabel(evt.reason, "unknown");
+}
+
 function recordModelUsage(
   store: PrometheusMetricStore,
   evt: Extract<DiagnosticEventPayload, { type: "model.usage" }>,
@@ -561,6 +570,58 @@ function recordDiagnosticEvent(
           numericValue(evt.queueDepth),
         );
       }
+      return;
+    case "session_lock.acquire.completed":
+      store.histogram(
+        "openclaw_session_lock_wait_ms",
+        "Session write lock acquire wait time in milliseconds.",
+        {
+          backend: sessionLockBackendLabel(evt),
+          outcome: lowCardinalityLabel(evt.outcome, "unknown"),
+        },
+        numericValue(evt.waitMs),
+        DURATION_BUCKETS_MS,
+      );
+      return;
+    case "session_lock.acquire.timeout":
+      store.histogram(
+        "openclaw_session_lock_wait_ms",
+        "Session write lock acquire wait time in milliseconds.",
+        {
+          backend: sessionLockBackendLabel(evt),
+          outcome: "timeout",
+        },
+        numericValue(evt.waitMs),
+        DURATION_BUCKETS_MS,
+      );
+      store.counter("openclaw_session_lock_timeout_total", "Session write lock acquire timeouts.", {
+        backend: sessionLockBackendLabel(evt),
+        reason: sessionLockReasonLabel(evt),
+      });
+      return;
+    case "session_lock.reclaimed":
+      store.counter(
+        "openclaw_session_lock_reclaimed_total",
+        "Stale session write locks reclaimed.",
+        {
+          backend: sessionLockBackendLabel(evt),
+          reason: sessionLockReasonLabel(evt),
+        },
+      );
+      return;
+    case "session_lock.watchdog.released":
+      store.histogram(
+        "openclaw_session_lock_held_ms",
+        "Session write lock held time before watchdog release.",
+        {
+          backend: sessionLockBackendLabel(evt),
+          outcome: "released",
+        },
+        numericValue(evt.heldMs),
+        DURATION_BUCKETS_MS,
+      );
+      return;
+    case "session_lock.acquire.started":
       return;
     case "diagnostic.memory.sample":
       store.gauge(

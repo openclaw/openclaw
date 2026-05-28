@@ -1,8 +1,12 @@
+import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
-import { runCommandWithTimeout } from "../../../src/process/exec.js";
 
 export type HermesPromotionStage = "staging" | "promoted" | "rolled_back";
+export type HermesPromotionCommandRunner = (
+  argv: string[],
+  options: { cwd: string; timeoutMs: number },
+) => Promise<{ code: number }>;
 
 export type HermesPromotionResult = {
   trace_id: string;
@@ -18,6 +22,7 @@ export async function runHermesPromotionGate(params: {
   repoRoot: string;
   traceId: string;
   validationCommands: string[];
+  commandRunner?: HermesPromotionCommandRunner;
   timeoutMs?: number;
   outputDir?: string;
 }): Promise<{ path: string; result: HermesPromotionResult }> {
@@ -28,8 +33,9 @@ export async function runHermesPromotionGate(params: {
   }
 
   let validationPassed = true;
+  const commandRunner = params.commandRunner ?? runHermesCommandWithTimeout;
   for (const command of validationCommands) {
-    const exec = await runCommandWithTimeout(["powershell", "-NoProfile", "-Command", command], {
+    const exec = await commandRunner(["powershell", "-NoProfile", "-Command", command], {
       cwd: params.repoRoot,
       timeoutMs,
     });
@@ -50,11 +56,51 @@ export async function runHermesPromotionGate(params: {
     created_at: now.toISOString(),
   };
 
-  const outputDir = ensureInsideWorkspace(params.repoRoot, params.outputDir ?? "reports/hermes-agent/state");
+  const outputDir = ensureInsideWorkspace(
+    params.repoRoot,
+    params.outputDir ?? "reports/hermes-agent/state",
+  );
   await mkdir(outputDir, { recursive: true });
   const filePath = resolve(outputDir, `${params.traceId}-promotion.json`);
   await writeFile(filePath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
   return { path: filePath, result };
+}
+
+function runHermesCommandWithTimeout(
+  argv: string[],
+  options: { cwd: string; timeoutMs: number },
+): Promise<{ code: number }> {
+  return new Promise((resolveResult) => {
+    const child = spawn(argv[0] ?? "", argv.slice(1), {
+      cwd: options.cwd,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      child.kill("SIGKILL");
+    }, options.timeoutMs);
+
+    child.on("error", () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolveResult({ code: 1 });
+    });
+    child.on("close", (code, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolveResult({ code: code ?? (signal ? 1 : 0) });
+    });
+  });
 }
 
 function ensureInsideWorkspace(repoRoot: string, outputDir: string): string {

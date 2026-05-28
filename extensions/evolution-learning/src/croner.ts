@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { syncHermesToCausal } from "../../../tools/openclaw_runtime/task_bus/writeback.js";
+import { syncHermesToCausal } from "openclaw/openclaw-runtime";
 import { runEvolutionCycle } from "./role-evolution.js";
 
 // ── 公開型別 ────────────────────────────────────────────────────────────────
