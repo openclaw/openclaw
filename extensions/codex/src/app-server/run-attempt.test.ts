@@ -1136,8 +1136,15 @@ describe("runCodexAppServerAttempt", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "Delivery: to send a message, use the `message` tool.\n\nhello";
+    // Delivery-hint splitting is performed by `prependCodexOpenClawPromptContext`
+    // and only runs when the openClawPromptContext is non-empty. Provide a
+    // reference-lane skill fragment so the workspace wrapper is emitted; that
+    // is the production shape after the lane split (legacy `prompt`-only
+    // snapshots are force-refreshed via `isSkillsSnapshotSchemaOutdated`
+    // before reaching this code path).
     params.skillsSnapshot = {
       prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      untrustedReferencePrompt: "## OpenClaw skill: demo\n\n<skill><name>demo</name></skill>",
       skills: [],
     };
 
