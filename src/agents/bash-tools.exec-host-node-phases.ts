@@ -48,6 +48,7 @@ type NodeApprovalAnalysis = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   durableApprovalSatisfied: boolean;
+  nodeApprovalPolicyKnown: boolean;
   nodeSecurity?: ExecSecurity;
   nodeAsk?: ExecAsk;
   inlineEvalHit: InterpreterInlineEvalHit | null;
@@ -316,6 +317,7 @@ export async function analyzeNodeApprovalRequirement(params: {
   let analysisOk = baseAllowlistEval.analysisOk;
   let allowlistSatisfied = false;
   let durableApprovalSatisfied = false;
+  let nodeApprovalPolicyKnown = false;
   let nodeSecurity: ExecSecurity | undefined;
   let nodeAsk: ExecAsk | undefined;
   const inlineEvalHit =
@@ -336,7 +338,12 @@ export async function analyzeNodeApprovalRequirement(params: {
       env: params.request.env,
       segments: baseAllowlistEval.segments,
     }) && !(params.hostSecurity === "full" && params.hostAsk === "off");
-  if ((params.hostAsk === "always" || params.hostSecurity === "allowlist") && analysisOk) {
+  if (
+    (params.hostAsk === "always" ||
+      params.hostSecurity === "allowlist" ||
+      params.request.autoReview === true) &&
+    analysisOk
+  ) {
     try {
       const approvalsSnapshot = await callGatewayTool<{ file: string }>(
         "exec.approvals.node.get",
@@ -348,6 +355,7 @@ export async function analyzeNodeApprovalRequirement(params: {
           ? approvalsSnapshot.file
           : undefined;
       if (approvalsFile && typeof approvalsFile === "object") {
+        nodeApprovalPolicyKnown = true;
         const resolved = resolveExecApprovalsFromFile({
           file: approvalsFile as ExecApprovalsFile,
           agentId: params.request.agentId,
@@ -382,6 +390,7 @@ export async function analyzeNodeApprovalRequirement(params: {
     analysisOk,
     allowlistSatisfied,
     durableApprovalSatisfied,
+    nodeApprovalPolicyKnown,
     nodeSecurity,
     nodeAsk,
     inlineEvalHit,

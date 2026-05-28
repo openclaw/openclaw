@@ -69,10 +69,12 @@ function execSecurityFloorRank(security: ExecSecurity): number {
 
 function nodePolicyBlocksAutoReview(params: {
   hostSecurity: ExecSecurity;
+  nodeApprovalPolicyKnown: boolean;
   nodeSecurity?: ExecSecurity;
   nodeAsk?: "off" | "on-miss" | "always";
 }): boolean {
   return (
+    !params.nodeApprovalPolicyKnown ||
     params.nodeAsk === "always" ||
     (params.nodeSecurity !== undefined &&
       execSecurityFloorRank(params.nodeSecurity) > execSecurityFloorRank(params.hostSecurity))
@@ -111,6 +113,7 @@ export async function executeNodeHostCommand(
     analysisOk,
     allowlistSatisfied,
     durableApprovalSatisfied,
+    nodeApprovalPolicyKnown,
     nodeSecurity,
     nodeAsk,
     inlineEvalHit,
@@ -163,11 +166,21 @@ export async function executeNodeHostCommand(
   let inlineApprovalDecision: "allow-once" | "allow-always" | null = null;
   let inlineApprovalId: string | undefined;
   if (requiresAsk) {
-    let autoReviewRequiresHumanApproval = false;
+    const autoReviewBlockedByNodePolicy =
+      params.autoReview === true &&
+      hostAsk !== "always" &&
+      nodePolicyBlocksAutoReview({
+        hostSecurity,
+        nodeApprovalPolicyKnown,
+        nodeSecurity,
+        nodeAsk,
+      });
+    let autoReviewRequiresHumanApproval =
+      autoReviewBlockedByNodePolicy || requiresSecurityAuditSuppressionApproval;
     if (
       params.autoReview === true &&
       hostAsk !== "always" &&
-      !nodePolicyBlocksAutoReview({ hostSecurity, nodeSecurity, nodeAsk }) &&
+      !autoReviewBlockedByNodePolicy &&
       !requiresSecurityAuditSuppressionApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
