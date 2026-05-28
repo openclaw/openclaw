@@ -102,4 +102,16 @@ describe("cron listPage sort guards", () => {
 
     expect(page.jobs.map((job) => job.id)).toEqual(["job-main", "job-ops"]);
   });
+
+  it("matches job ids in listPage text search", async () => {
+    const jobs = [
+      createBaseJob({ id: "daily-report", name: "Morning report" }),
+      createBaseJob({ id: "tax-digest", name: "Finance digest" }),
+    ];
+    const state = createMockCronStateForJobs({ jobs });
+
+    const page = await listPage(state, { query: "tax" });
+
+    expect(page.jobs.map((job) => job.id)).toEqual(["tax-digest"]);
+  });
 });

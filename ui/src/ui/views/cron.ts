@@ -542,6 +542,7 @@ export function renderCron(props: CronProps) {
                   <option value="ok">${t("cron.runs.runStatusOk")}</option>
                   <option value="error">${t("cron.runs.runStatusError")}</option>
                   <option value="skipped">${t("cron.runs.runStatusSkipped")}</option>
+                  <option value="unknown">${t("cron.runs.runStatusUnknown")}</option>
                 </select>
               </label>
               <label class="field">
@@ -1750,7 +1751,7 @@ function formatRunNextLabel(nextRunAtMs: number, nowMs = Date.now()) {
 }
 
 function renderJobState(job: CronJob) {
-  const rawStatus = job.state?.lastStatus;
+  const rawStatus = job.state?.lastRunStatus ?? job.state?.lastStatus;
   const statusClass =
     rawStatus === "ok"
       ? "cron-job-status-ok"
@@ -1766,7 +1767,7 @@ function renderJobState(job: CronJob) {
         ? t("cron.runs.runStatusError")
         : rawStatus === "skipped"
           ? t("cron.runs.runStatusSkipped")
-          : t("common.na");
+          : t("cron.runs.runStatusUnknown");
   const nextRunAtMs = job.state?.nextRunAtMs;
   const lastRunAtMs = job.state?.lastRunAtMs;
 

@@ -10,6 +10,7 @@ import type {
   CronJobsEnabledFilter,
   CronJobsListResult,
   CronJobsSortBy,
+  CronRunStatus,
   CronRunScope,
   CronRunLogEntry,
   CronRunsResult,
@@ -42,7 +43,7 @@ export type CronFieldKey =
 export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
 export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron";
-export type CronJobsLastStatusFilter = "all" | "ok" | "error" | "skipped";
+export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
 export type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
 export type CronState = {
@@ -357,6 +358,10 @@ export function updateCronJobsFilter(
   state.cronJobsSortDir = patch.cronJobsSortDir ?? state.cronJobsSortDir;
 }
 
+function resolveCronJobLastStatus(job: CronJob): CronRunStatus | "unknown" {
+  return job.state?.lastRunStatus ?? job.state?.lastStatus ?? "unknown";
+}
+
 export function getVisibleCronJobs(
   state: Pick<CronState, "cronJobs" | "cronJobsScheduleKindFilter" | "cronJobsLastStatusFilter">,
 ): CronJob[] {
@@ -369,7 +374,7 @@ export function getVisibleCronJobs(
     }
     if (
       state.cronJobsLastStatusFilter !== "all" &&
-      job.state?.lastStatus !== state.cronJobsLastStatusFilter
+      resolveCronJobLastStatus(job) !== state.cronJobsLastStatusFilter
     ) {
       return false;
     }

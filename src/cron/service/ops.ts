@@ -341,7 +341,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
         return true;
       }
       const haystack = normalizeLowercaseStringOrEmpty(
-        [job.name, job.description ?? "", job.agentId ?? ""].join(" "),
+        [job.id, job.name, job.description ?? "", job.agentId ?? ""].join(" "),
       );
       return haystack.includes(query);
     });
