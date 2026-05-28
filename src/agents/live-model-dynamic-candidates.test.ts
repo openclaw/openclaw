@@ -3,6 +3,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 
+vi.mock("./agent-model-discovery.js", () => ({
+  normalizeDiscoveredAgentModel: <T>(value: T) => value,
+}));
+
 const REGISTRY = { find: () => undefined } as never;
 type DynamicModelResolver = NonNullable<
   Parameters<typeof appendPrioritizedDynamicLiveModels>[0]["resolveDynamicModel"]
