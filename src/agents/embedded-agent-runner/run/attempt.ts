@@ -1211,6 +1211,7 @@ export async function runEmbeddedAttempt(
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
+            currentInboundAudio: params.currentInboundAudio,
             includeCoreTools: toolConstructionPlan.includeCoreTools,
             includeToolSearchControls: toolSearchControlsEnabledForRun,
             toolSearchCatalogExecutor: (toolParams) => {

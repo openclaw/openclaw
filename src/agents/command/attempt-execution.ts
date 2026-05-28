@@ -657,6 +657,7 @@ export function runAgentAttempt(params: {
     spawnedBy: params.spawnedBy,
     currentChannelId: params.runContext.currentChannelId,
     currentThreadTs: params.runContext.currentThreadTs,
+    currentInboundAudio: params.runContext.currentInboundAudio,
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
     senderIsOwner: params.opts.senderIsOwner,
