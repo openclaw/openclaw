@@ -650,15 +650,14 @@ function resolveConversationExecPolicy(params: {
   agentId?: string;
   sessionKey?: string;
 }) {
-  if (!params.config) {
-    return undefined;
-  }
   const agentId =
     params.agentId ??
-    resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: params.config,
-    }).sessionAgentId;
+    (params.config
+      ? resolveSessionAgentIds({
+          sessionKey: params.sessionKey,
+          config: params.config,
+        }).sessionAgentId
+      : undefined);
   return resolveOpenClawExecPolicyForCodexAppServer({
     config: params.config,
     agentId,

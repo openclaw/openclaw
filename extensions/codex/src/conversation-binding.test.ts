@@ -7,6 +7,10 @@ const sharedClientMocks = vi.hoisted(() => ({
   getSharedCodexAppServerClient: vi.fn(),
 }));
 
+const execApprovalsRuntimeMocks = vi.hoisted(() => ({
+  loadExecApprovals: vi.fn(() => ({ version: 1 as const, agents: {} })),
+}));
+
 const agentRuntimeMocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
@@ -53,6 +57,14 @@ vi.mock("./app-server/shared-client.js", () => ({
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
 }));
+vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/exec-approvals-runtime")>();
+  return {
+    ...actual,
+    loadExecApprovals: execApprovalsRuntimeMocks.loadExecApprovals,
+  };
+});
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
 
 import {
@@ -78,6 +90,8 @@ describe("codex conversation binding", () => {
 
   afterEach(async () => {
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
+    execApprovalsRuntimeMocks.loadExecApprovals.mockReset();
+    execApprovalsRuntimeMocks.loadExecApprovals.mockReturnValue({ version: 1, agents: {} });
     agentRuntimeMocks.ensureAuthProfileStore.mockReset();
     agentRuntimeMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
     agentRuntimeMocks.resolveApiKeyForProfile.mockReset();
@@ -309,6 +323,38 @@ describe("codex conversation binding", () => {
     ).rejects.toThrow(
       "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
     );
+    expect(requests).toEqual([]);
+  });
+
+  it("applies host exec approval floors to configless native bind threads", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    execApprovalsRuntimeMocks.loadExecApprovals.mockReturnValue({
+      version: 1,
+      defaults: {
+        security: "deny",
+        ask: "off",
+      },
+      agents: {},
+    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        return {
+          thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
+          model: "gpt-5.4-mini",
+        };
+      }),
+    });
+
+    await expect(
+      startCodexConversationThread({
+        sessionFile,
+        workspaceDir: tempDir,
+        model: "gpt-5.4-mini",
+      }),
+    ).rejects.toThrow("tools.exec.mode=deny");
+    expect(execApprovalsRuntimeMocks.loadExecApprovals).toHaveBeenCalled();
     expect(requests).toEqual([]);
   });
 
