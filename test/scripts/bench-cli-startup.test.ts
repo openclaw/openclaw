@@ -65,6 +65,78 @@ describe("bench-cli-startup", () => {
     ]);
   });
 
+  it("allows declared nonzero exit codes for clean-state probes", () => {
+    const sample = {
+      ms: 10,
+      firstOutputMs: 5,
+      maxRssMb: 50,
+      exitCode: 1,
+      signal: null,
+      stderrTail: "Health check failed: gateway closed\n  Gateway target: ws://127.0.0.1:18789",
+    };
+
+    expect(
+      testing.collectFailedSamples({
+        entry: "openclaw.mjs",
+        cases: [
+          {
+            id: "health",
+            name: "health",
+            args: ["health"],
+            expectedExitCodes: [0, 1],
+            expectedNonzeroOutputIncludes: ["Gateway target:"],
+            contract: null,
+            samples: [sample],
+            summary: {
+              sampleCount: 1,
+              durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+              firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
+              maxRssMb: { avg: 50, p50: 50, p95: 50, min: 50, max: 50 },
+              exitSummary: "code:1x1",
+            },
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("rejects allowed nonzero exits without their expected clean-state output", () => {
+    const sample = {
+      ms: 10,
+      firstOutputMs: 5,
+      maxRssMb: 50,
+      exitCode: 1,
+      signal: null,
+      stderrTail: "TypeError: crashed before output",
+    };
+
+    expect(
+      testing.collectFailedSamples({
+        entry: "openclaw.mjs",
+        cases: [
+          {
+            id: "health",
+            name: "health",
+            args: ["health"],
+            expectedExitCodes: [0, 1],
+            expectedNonzeroOutputIncludes: ["Gateway target:"],
+            contract: null,
+            samples: [sample],
+            summary: {
+              sampleCount: 1,
+              durationMs: { avg: 10, p50: 10, p95: 10, min: 10, max: 10 },
+              firstOutputMs: { avg: 5, p50: 5, p95: 5, min: 5, max: 5 },
+              maxRssMb: { avg: 50, p50: 50, p95: 50, min: 50, max: 50 },
+              exitSummary: "code:1x1",
+            },
+          },
+        ],
+      }),
+    ).toEqual([
+      "openclaw.mjs health sample 1: exited with expected code 1 but output did not match expected clean-state markers (Gateway target:)",
+    ]);
+  });
+
   it("rejects invalid measured run counts", () => {
     expect(() => testing.parsePositiveInt("0", 5, "--runs")).toThrow(
       "--runs must be an integer >= 1",
