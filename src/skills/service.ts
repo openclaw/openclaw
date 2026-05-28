@@ -152,10 +152,14 @@ function normalizedOptionalPath(value?: string): string {
 }
 
 function hasEmptyEffectiveSkillFilter(opts?: SkillSnapshotBuildOptions): boolean {
-  const filter =
-    opts?.skillFilter !== undefined
-      ? normalizeSkillFilter(opts.skillFilter)
-      : resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId);
+  if (opts?.skillFilter !== undefined) {
+    const filter = normalizeSkillFilter(opts.skillFilter);
+    return filter !== undefined && filter.length === 0;
+  }
+  if (!opts?.config || !opts.agentId) {
+    return false;
+  }
+  const filter = resolveEffectiveAgentSkillFilter(opts.config, opts.agentId);
   return filter !== undefined && filter.length === 0;
 }
 

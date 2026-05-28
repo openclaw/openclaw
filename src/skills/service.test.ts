@@ -57,6 +57,33 @@ describe("SkillsService", () => {
     expect(fromConfig).toMatchObject({ prompt: "", skills: [], resolvedSkills: [], version: 12 });
   });
 
+  it("does not apply default skill filters without an agent id", async () => {
+    const workspaceDir = await makeTempWorkspace();
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "service-default-filter", description: "Default filter workflow" },
+    ]);
+    const roots = isolatedSkillRoots(workspaceDir);
+    const config = {
+      agents: { defaults: { skills: [] } },
+    } satisfies OpenClawConfig;
+
+    const actual = buildWorkspaceSkillSnapshot(workspaceDir, {
+      ...roots,
+      config,
+      snapshotVersion: 13,
+    });
+    const expected = buildLegacyWorkspaceSkillSnapshot(workspaceDir, {
+      ...roots,
+      config,
+      snapshotVersion: 13,
+    });
+
+    expect(actual.prompt).toBe(expected.prompt);
+    expect(actual.skills).toEqual(expected.skills);
+    expect(actual.resolvedSkills).toEqual(expected.resolvedSkills);
+    expect(actual.skills.map((skill) => skill.name)).toContain("service-default-filter");
+  });
+
   it("builds snapshots from the index without changing prompt output", async () => {
     const workspaceDir = await makeTempWorkspace();
     await writeWorkspaceSkills(workspaceDir, [
