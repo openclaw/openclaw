@@ -14,12 +14,12 @@ the finished turn to OpenClaw.
 Runtimes are easy to confuse with providers because both show up near model
 configuration. They are different layers:
 
-| Layer         | Examples                                    | What it means                                                       |
-| ------------- | ------------------------------------------- | ------------------------------------------------------------------- |
-| Provider      | `openai`, `anthropic`, `openai-codex`       | How OpenClaw authenticates, discovers models, and names model refs. |
-| Model         | `gpt-5.5`, `claude-opus-4-6`                | The model selected for the agent turn.                              |
+| Layer         | Examples                                     | What it means                                                       |
+| ------------- | -------------------------------------------- | ------------------------------------------------------------------- |
+| Provider      | `openai`, `anthropic`, `openai-codex`        | How OpenClaw authenticates, discovers models, and names model refs. |
+| Model         | `gpt-5.5`, `claude-opus-4-6`                 | The model selected for the agent turn.                              |
 | Agent runtime | `openclaw`, `codex`, `copilot`, `claude-cli` | The low level loop or backend that executes the prepared turn.      |
-| Channel       | Telegram, Discord, Slack, WhatsApp          | Where messages enter and leave OpenClaw.                            |
+| Channel       | Telegram, Discord, Slack, WhatsApp           | Where messages enter and leave OpenClaw.                            |
 
 You will also see the word **harness** in code. A harness is the implementation
 that provides an agent runtime. For example, the bundled Codex harness

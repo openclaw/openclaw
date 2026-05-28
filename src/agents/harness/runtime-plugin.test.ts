@@ -100,7 +100,11 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       config: {
         models: {
           providers: {
-            "github-copilot": { agentRuntime: { id: "copilot" } },
+            "github-copilot": {
+              agentRuntime: { id: "copilot" },
+              baseUrl: "https://api.githubcopilot.com",
+              models: [],
+            },
           },
         },
       } as OpenClawConfig,
@@ -138,7 +142,11 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
         },
         models: {
           providers: {
-            "github-copilot": { agentRuntime: { id: "copilot" } },
+            "github-copilot": {
+              agentRuntime: { id: "copilot" },
+              baseUrl: "https://api.githubcopilot.com",
+              models: [],
+            },
           },
         },
       } as OpenClawConfig,
@@ -318,7 +326,11 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       config: {
         models: {
           providers: {
-            anthropic: { agentRuntime: { id: "claude-cli" } },
+            anthropic: {
+              agentRuntime: { id: "claude-cli" },
+              baseUrl: "https://api.anthropic.com",
+              models: [],
+            },
           },
         },
       } as OpenClawConfig,

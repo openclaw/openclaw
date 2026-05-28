@@ -735,7 +735,11 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         config: {
           models: {
             providers: {
-              "github-copilot": { agentRuntime: { id: "copilot" } },
+              "github-copilot": {
+                agentRuntime: { id: "copilot" },
+                baseUrl: "https://api.githubcopilot.com",
+                models: [],
+              },
             },
           },
         },

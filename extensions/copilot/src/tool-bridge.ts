@@ -613,7 +613,8 @@ function filterCopilotToolsForAllowlist<T extends { name: string }>(
   toolsAllow?: string[],
 ): T[] {
   return applyEmbeddedAttemptToolsAllow(tools, toolsAllow, {
-    toolMeta: (tool) => getPluginToolMeta(tool as AnyAgentTool) ?? readInlinePluginToolMeta(tool),
+    toolMeta: (tool) =>
+      getPluginToolMeta(tool as unknown as AnyAgentTool) ?? readInlinePluginToolMeta(tool),
   });
 }
 
