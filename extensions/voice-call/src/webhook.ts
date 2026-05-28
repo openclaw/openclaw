@@ -716,6 +716,8 @@ export class VoiceCallWebhookServer {
         return { statusCode: 401, body: "Unauthorized" };
       }
 
+      // Verified replays still parse normally, but they must not enter TwiML
+      // shortcuts that can mint fresh realtime stream capabilities.
       if (!verification.isReplay) {
         const initialTwiML = this.provider.consumeInitialTwiML?.(ctx);
         if (initialTwiML !== undefined && initialTwiML !== null) {

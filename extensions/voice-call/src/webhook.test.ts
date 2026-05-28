@@ -831,7 +831,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
     },
   );
 
-  it.each(["outbound-api", "outbound-dial"])(
+  it.each(["outbound-api", "outbound-dial"] as const)(
     "does not return realtime TwiML for replayed %s twilio TwiML fetches",
     async (direction) => {
       const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
