@@ -570,9 +570,17 @@ function parseStoreTimestampMs(value: string | undefined): number {
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
 }
 
+function compareStoreTimestampDesc(left: string | undefined, right: string | undefined): number {
+  const leftMs = parseStoreTimestampMs(left);
+  const rightMs = parseStoreTimestampMs(right);
+  if (leftMs === rightMs) {
+    return 0;
+  }
+  return rightMs > leftMs ? 1 : -1;
+}
+
 function compareShortTermRecallRetention(a: ShortTermRecallEntry, b: ShortTermRecallEntry): number {
-  const lastDiff =
-    parseStoreTimestampMs(b.lastRecalledAt) - parseStoreTimestampMs(a.lastRecalledAt);
+  const lastDiff = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
   if (lastDiff !== 0) {
     return lastDiff;
   }
@@ -588,7 +596,7 @@ function compareShortTermRecallRetention(a: ShortTermRecallEntry, b: ShortTermRe
   if (maxScoreDiff !== 0) {
     return maxScoreDiff;
   }
-  const promotedDiff = parseStoreTimestampMs(b.promotedAt) - parseStoreTimestampMs(a.promotedAt);
+  const promotedDiff = compareStoreTimestampDesc(a.promotedAt, b.promotedAt);
   if (promotedDiff !== 0) {
     return promotedDiff;
   }

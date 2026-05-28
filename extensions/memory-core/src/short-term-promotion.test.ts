@@ -2053,6 +2053,56 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("uses score tie-breakers when capping stores with invalid timestamps", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const maxEntries = testing.SHORT_TERM_RECALL_MAX_ENTRIES;
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: Object.fromEntries(
+              Array.from({ length: maxEntries + 3 }, (_, index) => [
+                `entry-${index}`,
+                {
+                  key: `entry-${index}`,
+                  path: "memory/2026-04-01.md",
+                  startLine: index + 1,
+                  endLine: index + 1,
+                  source: "memory",
+                  snippet: `Invalid timestamp recall ${index}`,
+                  recallCount: 1,
+                  dailyCount: 0,
+                  groundedCount: 0,
+                  totalScore: index,
+                  maxScore: 0.75,
+                  firstRecalledAt: "not-a-date",
+                  lastRecalledAt: "not-a-date",
+                  queryHashes: [`q-${index}`],
+                  recallDays: ["2026-04-01"],
+                  conceptTags: [],
+                },
+              ]),
+            ),
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(repair.removedOverflowEntries).toBe(3);
+      const entries = await readRecallStoreEntries(workspaceDir);
+      expect(Object.keys(entries)).toHaveLength(maxEntries);
+      expect(entries["entry-0"]).toBeUndefined();
+      expect(entries[`entry-${maxEntries + 2}`]).toBeDefined();
+    });
+  });
+
   it("rejects long contaminated legacy recall entries before truncating snippets", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
