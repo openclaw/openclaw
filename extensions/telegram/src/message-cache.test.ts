@@ -21,8 +21,6 @@ type PersistedCacheEntry = {
 type PersistedCacheValue = {
   sourceMessage: Message;
   threadId?: string;
-  mediaPath?: string;
-  mediaType?: string;
 };
 
 let persistentStoreId = 0;
@@ -183,42 +181,6 @@ describe("telegram message cache", () => {
     } finally {
       await rm(persistedPath, { force: true });
     }
-  });
-
-  it("persists hydrated media paths for recent context", async () => {
-    const { bucketKey, store } = createMemoryPersistentStore();
-    const firstCache = createTelegramMessageCache({ bucketKey, persistentStore: store });
-    await firstCache.record({
-      accountId: "default",
-      chatId: 7,
-      msg: {
-        chat: { id: 7, type: "private", first_name: "Ada" },
-        message_id: 201,
-        date: 1736380700,
-        from: { id: 1, is_bot: false, first_name: "Ada" },
-        photo: [{ file_id: "recent-photo-1", width: 640, height: 480 }],
-      } as Message,
-      media: { path: "/tmp/openclaw/recent-photo.png", contentType: "image/png" },
-    });
-
-    resetTelegramMessageCacheBucketsForTest();
-    const secondCache = createTelegramMessageCache({ bucketKey, persistentStore: store });
-    const context = await buildTelegramConversationContext({
-      cache: secondCache,
-      accountId: "default",
-      chatId: 7,
-      messageId: "202",
-      replyChainNodes: [],
-      recentLimit: 10,
-      replyTargetWindowSize: 2,
-    });
-
-    expect(context.map((entry) => entry.node.messageId)).toEqual(["201"]);
-    expect(context[0]?.node).toMatchObject({
-      mediaRef: "telegram:file/recent-photo-1",
-      mediaPath: "/tmp/openclaw/recent-photo.png",
-      mediaType: "image/png",
-    });
   });
 
   it("records embedded reply targets as normal cached messages", async () => {

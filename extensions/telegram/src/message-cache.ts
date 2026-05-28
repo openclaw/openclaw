@@ -32,7 +32,6 @@ export type TelegramMessageCache = {
     chatId: string | number;
     msg: Message;
     threadId?: number;
-    media?: TelegramCachedMediaRef;
   }) => Promise<TelegramCachedMessageNode | null>;
   get: (params: {
     accountId: string;
@@ -80,11 +79,6 @@ type TelegramCachedMessageObservation = {
   mode: TelegramMessageObservationMode;
 };
 
-type TelegramCachedMediaRef = {
-  path?: string;
-  contentType?: string;
-};
-
 type TelegramEmbeddedReplyMessage = NonNullable<Message["reply_to_message"]>;
 
 const DEFAULT_MAX_MESSAGES = 5000;
@@ -97,8 +91,6 @@ const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>
 export type PersistedTelegramMessageCacheValue = {
   sourceMessage: Message;
   threadId?: string;
-  mediaPath?: string;
-  mediaType?: string;
 };
 
 export type TelegramMessageCachePersistentStore = {
@@ -158,23 +150,15 @@ function resolveMediaType(placeholder?: string): string | undefined {
   return placeholder?.match(/^<media:([^>]+)>$/)?.[1];
 }
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
 function normalizeMessageNode(
   msg: Message,
-  params: { threadId?: number; media?: TelegramCachedMediaRef },
+  params: { threadId?: number },
 ): TelegramCachedMessageNode | null {
   if (typeof msg.message_id !== "number") {
     return null;
   }
   const media = resolveTelegramPrimaryMedia(msg);
   const fileId = media?.fileRef.file_id;
-  const mediaPath = normalizeOptionalString(params.media?.path);
-  const mediaType =
-    normalizeOptionalString(params.media?.contentType) ??
-    (media ? (resolveMediaType(media.placeholder) ?? media.placeholder) : undefined);
   const forwardedFrom = normalizeForwardedContext(msg);
   const replyMessage = resolveReplyMessage(msg);
   const body = resolveMessageBody(msg);
@@ -186,9 +170,8 @@ function normalizeMessageNode(
     ...(msg.from?.username ? { senderUsername: msg.from.username } : {}),
     ...(msg.date ? { timestamp: msg.date * 1000 } : {}),
     ...(body ? { body } : {}),
-    ...(mediaType ? { mediaType } : {}),
+    ...(media ? { mediaType: resolveMediaType(media.placeholder) ?? media.placeholder } : {}),
     ...(fileId ? { mediaRef: `telegram:file/${fileId}` } : {}),
-    ...(mediaPath ? { mediaPath } : {}),
     ...(replyMessage?.message_id != null ? { replyToId: String(replyMessage.message_id) } : {}),
     ...(forwardedFrom?.from ? { forwardedFrom: forwardedFrom.from } : {}),
     ...(forwardedFrom?.fromId ? { forwardedFromId: forwardedFrom.fromId } : {}),
@@ -200,7 +183,7 @@ function normalizeMessageNode(
 
 function normalizeRequiredMessageNode(
   msg: Message,
-  params: { threadId?: number; media?: TelegramCachedMediaRef },
+  params: { threadId?: number },
 ): TelegramCachedMessageNode {
   const node = normalizeMessageNode(msg, params);
   if (!node) {
@@ -218,7 +201,7 @@ function resolveMessageThreadId(msg: Message): number | undefined {
 
 function normalizeMessageNodes(
   msg: Message,
-  params: { threadId?: number; media?: TelegramCachedMediaRef },
+  params: { threadId?: number },
 ): TelegramCachedMessageObservation[] {
   const observations: TelegramCachedMessageObservation[] = [];
   const visited = new Set<string>();
@@ -233,7 +216,6 @@ function normalizeMessageNodes(
   ) => {
     const node = normalizeMessageNode(message, {
       threadId: resolveMessageThreadId(message) ?? inheritedThreadId,
-      ...(message === msg && params.media ? { media: params.media } : {}),
     });
     if (!node?.messageId || visited.has(node.messageId)) {
       return;
@@ -286,15 +268,11 @@ function parsePersistedEntry(value: unknown): Array<{
   }
   const keyPrefix = value.key.slice(0, separatorIndex + 1);
   const threadId = Number(readOptionalString(value.node, "threadId"));
-  const mediaPath = readOptionalString(value.node, "mediaPath");
-  const mediaType = readOptionalString(value.node, "mediaType");
   const sourceMessageId = String(value.node.sourceMessage.message_id);
-  return normalizeMessageNodes(value.node.sourceMessage, {
-    ...(Number.isFinite(threadId) ? { threadId } : {}),
-    ...(mediaPath
-      ? { media: { path: mediaPath, ...(mediaType ? { contentType: mediaType } : {}) } }
-      : {}),
-  }).map(({ node, mode }) => ({
+  return normalizeMessageNodes(
+    value.node.sourceMessage,
+    Number.isFinite(threadId) ? { threadId } : {},
+  ).map(({ node, mode }) => ({
     key: `${keyPrefix}${node.messageId}`,
     node,
     mode: node.messageId === sourceMessageId ? "authoritative" : mode,
@@ -309,8 +287,6 @@ function persistedValueToEntry(
   node: {
     sourceMessage: Message;
     threadId?: string;
-    mediaPath?: string;
-    mediaType?: string;
   };
 } {
   return {
@@ -318,8 +294,6 @@ function persistedValueToEntry(
     node: {
       sourceMessage: value.sourceMessage,
       ...(value.threadId ? { threadId: value.threadId } : {}),
-      ...(value.mediaPath ? { mediaPath: value.mediaPath } : {}),
-      ...(value.mediaType ? { mediaType: value.mediaType } : {}),
     },
   };
 }
@@ -451,24 +425,7 @@ function mergeCachedMessageNode(
     mode === "authoritative"
       ? mergeAuthoritativeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage)
       : mergeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage);
-  const normalized = normalizeRequiredMessageNode(
-    sourceMessage,
-    Number.isFinite(threadId) ? { threadId } : {},
-  );
-  const reusableExistingMedia =
-    normalized.mediaRef && existing.mediaRef === normalized.mediaRef ? existing : undefined;
-  const mediaPath = incoming.mediaPath ?? reusableExistingMedia?.mediaPath;
-  let mediaType = normalized.mediaType;
-  if (mediaPath === incoming.mediaPath) {
-    mediaType = incoming.mediaType ?? normalized.mediaType;
-  } else if (reusableExistingMedia && mediaPath === reusableExistingMedia.mediaPath) {
-    mediaType = reusableExistingMedia.mediaType ?? normalized.mediaType;
-  }
-  return {
-    ...normalized,
-    ...(mediaPath ? { mediaPath } : {}),
-    ...(mediaType ? { mediaType } : {}),
-  };
+  return normalizeRequiredMessageNode(sourceMessage, Number.isFinite(threadId) ? { threadId } : {});
 }
 
 function upsertCachedMessageNode(params: {
@@ -519,8 +476,6 @@ function toPersistedCacheValue(
   return {
     sourceMessage: node.sourceMessage,
     ...(node.threadId ? { threadId: node.threadId } : {}),
-    ...(node.mediaPath ? { mediaPath: node.mediaPath } : {}),
-    ...(node.mediaType ? { mediaType: node.mediaType } : {}),
   };
 }
 
@@ -805,9 +760,9 @@ export function createTelegramMessageCache(params?: {
   };
 
   return {
-    record: async ({ accountId, chatId, msg, threadId, media }) => {
+    record: async ({ accountId, chatId, msg, threadId }) => {
       await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
-      const observations = normalizeMessageNodes(msg, { threadId, media });
+      const observations = normalizeMessageNodes(msg, { threadId });
       const currentObservation = observations.at(-1);
       if (!currentObservation) {
         return null;

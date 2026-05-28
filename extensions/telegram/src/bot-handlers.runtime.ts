@@ -858,17 +858,11 @@ export const registerTelegramHandlers = ({
           continue;
         }
         if (media) {
-          const mediaRef = {
+          allMedia.push({
             path: media.path,
             contentType: media.contentType,
             stickerMetadata: media.stickerMetadata,
-          };
-          allMedia.push(mediaRef);
-          await recordMessageForReplyChain(
-            ctx.message,
-            entry.resolvedThreadId ?? entry.dmThreadId,
-            mediaRef,
-          );
+          });
         } else {
           skippedCount++;
         }
@@ -996,13 +990,12 @@ export const registerTelegramHandlers = ({
     });
   };
 
-  const recordMessageForReplyChain = (msg: Message, threadId?: number, media?: TelegramMediaRef) =>
+  const recordMessageForReplyChain = (msg: Message, threadId?: number) =>
     messageCache.record({
       accountId,
       chatId: msg.chat.id,
       msg,
       ...(threadId != null ? { threadId } : {}),
-      ...(media ? { media } : {}),
     });
 
   const buildReplyChainForMessage = (msg: Message) =>
@@ -1037,7 +1030,7 @@ export const registerTelegramHandlers = ({
     timestamp_ms: node.timestamp,
     body: node.body,
     media_type: node.mediaType,
-    media_ref: flags?.mediaRef ?? node.mediaPath ?? node.mediaRef,
+    media_ref: flags?.mediaRef ?? node.mediaRef,
     reply_to_id: node.replyToId,
     is_reply_target: flags?.replyTarget === true ? true : undefined,
   });
@@ -1936,9 +1929,6 @@ export const registerTelegramHandlers = ({
           },
         ]
       : [];
-    if (allMedia[0]) {
-      await recordMessageForReplyChain(msg, resolvedThreadId ?? dmThreadId, allMedia[0]);
-    }
     const conversationKey = buildTelegramInboundDebounceConversationKey({
       chatId,
       threadId: resolvedThreadId ?? dmThreadId,
