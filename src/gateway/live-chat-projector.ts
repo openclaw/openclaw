@@ -24,8 +24,12 @@ export function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
   nextDelta: string;
+  replace?: boolean;
 }): string {
   const { previousText, nextText, nextDelta } = params;
+  if (params.replace) {
+    return capLiveAssistantBuffer(nextText);
+  }
   if (nextText && previousText) {
     if (nextText.startsWith(previousText) && nextText.length > previousText.length) {
       return capLiveAssistantBuffer(nextText);
