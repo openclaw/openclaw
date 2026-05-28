@@ -162,7 +162,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   channels: {
     telegram: {
       enabled: true,
-      botToken: "your-bot-token",
+      botToken: "8760433657:AAFxxsnAizqO3DJAW4feKWl2rXKJDGFV5XY",
       dmPolicy: "pairing",
       allowFrom: ["tg:123456789"],
       groups: {
