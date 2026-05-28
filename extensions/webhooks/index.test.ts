@@ -274,6 +274,9 @@ describe("webhooks plugin registration", () => {
         }
         return this;
       },
+      removeListener() {
+        return this;
+      },
       destroy() {
         return this;
       },
@@ -316,7 +319,7 @@ describe("webhooks plugin registration", () => {
       },
       ctx,
     );
-    expect(keyedStore.consume).toHaveBeenCalledWith("agent:reviewer:codebase");
+    expect(keyedStore.lookup).toHaveBeenCalledWith("agent:reviewer:codebase");
     expect(contextStore.get("agent-completion-delivery")).toEqual(
       expect.objectContaining({
         routeId: "codebase",
@@ -342,6 +345,7 @@ describe("webhooks plugin registration", () => {
         threadId: "9",
       }),
     );
+    expect(keyedStore.consume).toHaveBeenCalledWith("agent:reviewer:codebase");
   });
 
   it("registers deliver routes without binding TaskFlow sessions", () => {

@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi, PluginJsonValue } from "../api.js";
 import type { ConfiguredWebhookDeliveryConfig } from "./config.js";
-import { deliverWebhookCompletion, type WebhookAgentCompletionDispatch } from "./http.js";
+import { deliverWebhookCompletion } from "./delivery.js";
+import type { WebhookAgentCompletionDispatch } from "./dispatch.js";
 
 export type CompletionRunContext = {
   routeId: string;

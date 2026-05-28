@@ -42,9 +42,7 @@ function openIdempotencyStore(api: OpenClawPluginApi) {
 }
 
 function registerWebhookRoutes(api: OpenClawPluginApi): void {
-  const routes = resolveWebhooksPluginConfig({
-    pluginConfig: api.pluginConfig,
-  });
+  const routes = resolveWebhooksPluginConfig({ pluginConfig: api.pluginConfig });
   if (routes.length === 0) {
     return;
   }
@@ -99,10 +97,7 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
       ...(route.skills ? { skills: route.skills } : {}),
     };
     if (route.dispatchMode === "ack") {
-      target = {
-        ...commonTarget,
-        dispatchMode: "ack",
-      };
+      target = { ...commonTarget, dispatchMode: "ack" };
     } else if (route.dispatchMode === "agent") {
       target = {
         ...commonTarget,
@@ -111,11 +106,7 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
         agent: route.agent,
       };
     } else if (route.dispatchMode === "deliver") {
-      target = {
-        ...commonTarget,
-        dispatchMode: "deliver",
-        delivery: route.delivery,
-      };
+      target = { ...commonTarget, dispatchMode: "deliver", delivery: route.delivery };
     } else {
       target = {
         ...commonTarget,
@@ -123,9 +114,7 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
         secretInput: route.secret,
         defaultControllerId: route.controllerId,
         ...(route.taskflow ? { taskflow: route.taskflow } : {}),
-        taskFlow: api.runtime.tasks.managedFlows.bindSession({
-          sessionKey: route.sessionKey,
-        }),
+        taskFlow: api.runtime.tasks.managedFlows.bindSession({ sessionKey: route.sessionKey }),
       };
     }
     targetsByPath.set(target.path, [...(targetsByPath.get(target.path) ?? []), target]);
