@@ -18,7 +18,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**OpenClaw** is a _personal AI assistant_ you run on your own devices.
+**OpenClawMac** is a fork of [OpenClaw](https://github.com/openclaw/openclaw) — a _personal AI assistant_ you run on your own devices.
 It answers you on the channels you already use. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
@@ -94,18 +94,52 @@ Works with npm, pnpm, or bun.
 
 Model note: while many providers and models are supported, prefer a current flagship model from the provider you trust and already use. See [Onboarding](https://docs.openclaw.ai/start/wizard).
 
-## Install (recommended)
+## Install from this fork
+
+This is a personal fork. You install it by cloning the repo, building it, and then using the built package globally.
 
 Runtime: **Node 24 (recommended) or Node 22.19+**.
 
 ```bash
-npm install -g openclaw@latest
-# or: pnpm add -g openclaw@latest
+# Clone this fork
+git clone https://github.com/jeremyunck/OpenClawMac.git
+cd OpenClawMac
 
+# Install workspace dependencies (requires pnpm)
+pnpm install
+
+# Build the dist output
+pnpm build
+
+# Install the forked package globally from the local checkout
+npm install -g .
+
+# Run onboarding to set up the gateway, workspace, etc.
 openclaw onboard --install-daemon
 ```
 
 OpenClaw Onboard installs the Gateway daemon (launchd/systemd user service) so it stays running.
+
+To update from the upstream source:
+
+```bash
+cd OpenClawMac
+git pull
+pnpm install
+pnpm build
+npm install -g .
+```
+
+To pull upstream OpenClaw changes into your fork:
+
+```bash
+git remote add upstream https://github.com/openclaw/openclaw.git
+git fetch upstream
+git merge upstream/main
+pnpm install
+pnpm build
+npm install -g .
+```
 
 ## Quick start (TL;DR)
 
@@ -231,8 +265,8 @@ root is not a supported source setup.
 For the dev loop:
 
 ```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
+git clone https://github.com/jeremyunck/OpenClawMac.git
+cd OpenClawMac
 
 pnpm install
 
