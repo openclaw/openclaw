@@ -262,6 +262,8 @@ jobs:
           EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
           EXPECTED_RELEASE_PROFILE: ${{ inputs.release_profile }}
           EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           RUN_JSON="$(gh run view "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
@@ -289,7 +291,11 @@ jobs:
             echo "Full release validation profile mismatch: expected $EXPECTED_RELEASE_PROFILE, got $release_profile" >&2
             exit 1
           fi
-          if [[ "$rerun_group" != "all" ]]; then
+          allow_tideclaw_alpha_install_smoke=false
+          if [[ "$RELEASE_TAG" == *"-alpha."* && "$RELEASE_NPM_DIST_TAG" == "alpha" && "$EXPECTED_WORKFLOW_BRANCH" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ && "$rerun_group" == "install-smoke" ]]; then
+            allow_tideclaw_alpha_install_smoke=true
+          fi
+          if [[ "$rerun_group" != "all" && "$allow_tideclaw_alpha_install_smoke" != "true" ]]; then
             echo "Full release validation must run rerun_group=all before npm publish; got $rerun_group" >&2
             exit 1
           fi

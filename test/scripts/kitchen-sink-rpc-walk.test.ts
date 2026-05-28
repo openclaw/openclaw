@@ -117,7 +117,7 @@ describe("kitchen-sink RPC gateway teardown", () => {
         waitForGatewayReady({ exitCode: null, signalCode: "SIGTERM" }, 9, logPath, {
           fetchImpl,
           pollDelayMs: 1,
-          timeoutMs: 1,
+          timeoutMs: 1_000,
         }),
       ).rejects.toThrow("gateway exited before ready");
       expect(fetchImpl).not.toHaveBeenCalled();

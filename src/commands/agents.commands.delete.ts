@@ -29,6 +29,13 @@ type AgentsDeleteGatewayResult = {
   removedBindings: number;
 };
 
+function isMissingGatewayCredentialsError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("requires credentials before opening a websocket")
+  );
+}
+
 async function maybeDeleteAgentThroughGateway(params: {
   agentId: string;
   deleteFiles: boolean;
@@ -45,7 +52,7 @@ async function maybeDeleteAgentThroughGateway(params: {
       requiredMethods: ["agents.delete"],
     });
   } catch (error) {
-    if (isGatewayTransportError(error)) {
+    if (isGatewayTransportError(error) || isMissingGatewayCredentialsError(error)) {
       return null;
     }
     throw error;

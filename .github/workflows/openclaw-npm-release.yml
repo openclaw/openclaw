@@ -140,6 +140,7 @@ jobs:
       - name: Check
         env:
           OPENCLAW_LOCAL_CHECK: "0"
+          OPENCLAW_OXLINT_SHARDS_SERIAL: "1"
         run: pnpm check
 
       - name: Check test types

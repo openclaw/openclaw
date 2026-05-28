@@ -165,7 +165,12 @@ openclaw channels add --channel "$CHANNEL" "${CHANNEL_ADD_ARGS[@]}" >/tmp/opencl
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-channel-config "$CHANNEL" "${CHANNEL_CONFIG_TOKENS[@]}"
 
 echo "Checking status surfaces for $CHANNEL..."
-openclaw channels status --json >/tmp/openclaw-channels-status.json 2>/tmp/openclaw-channels-status.err
+if ! openclaw channels status --json >/tmp/openclaw-channels-status.json 2>/tmp/openclaw-channels-status.err; then
+  if [ ! -s /tmp/openclaw-channels-status.json ]; then
+    cat /tmp/openclaw-channels-status.err >&2
+    exit 1
+  fi
+fi
 openclaw status >/tmp/openclaw-status.txt 2>/tmp/openclaw-status.err
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-status-surfaces "$CHANNEL" /tmp/openclaw-channels-status.json /tmp/openclaw-status.txt
 
@@ -178,12 +183,20 @@ else
 fi
 
 echo "Running local agent turn against mocked OpenAI..."
+set +e
 openclaw agent --local \
   --agent main \
   --session-id npm-onboard-channel-agent \
+  --model openai/gpt-5.5 \
   --message "Return the success marker from the test server." \
   --thinking off \
   --json >/tmp/openclaw-agent.combined 2>&1
+agent_status=$?
+set -e
+if [ "$agent_status" -ne 0 ]; then
+  dump_debug_logs "$agent_status"
+  exit 1
+fi
 
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-agent-turn "$SUCCESS_MARKER" "$MOCK_REQUEST_LOG"
 

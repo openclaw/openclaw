@@ -187,6 +187,37 @@ describe("agents delete command", () => {
     });
   });
 
+  it("falls back to local deletion when optional Gateway deletion cannot authenticate", async () => {
+    await withStateDirEnv("openclaw-agents-delete-auth-fallback-", async ({ stateDir }) => {
+      const sharedWorkspace = path.join(stateDir, "workspace-shared");
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: sharedWorkspace },
+            { id: "ops", workspace: sharedWorkspace },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        sessions: {},
+      });
+      gatewayMocks.callGateway.mockRejectedValue(
+        new Error("gateway agents.delete requires credentials before opening a websocket"),
+      );
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
+      const output = readJsonLogs()[0];
+      expect(output?.agentId).toBe("ops");
+      expect(output?.workspaceRetained).toBe(true);
+      expect(output?.transport).toBeUndefined();
+    });
+  });
+
   it("purges legacy main-alias entries owned by the deleted default agent", async () => {
     await withStateDirEnv("openclaw-agents-delete-main-alias-", async ({ stateDir }) => {
       const now = Date.now();

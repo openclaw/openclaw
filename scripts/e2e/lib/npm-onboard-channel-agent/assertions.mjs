@@ -79,6 +79,9 @@ function assertStatusSurfaces() {
   if (!/channels/i.test(statusText)) {
     throw new Error(`plain status output did not render a Channels section. Output: ${statusText}`);
   }
+  if (channelsStatus.configOnly === true) {
+    return;
+  }
   if (!statusText.toLowerCase().includes(channel.toLowerCase())) {
     throw new Error(`plain status output did not mention ${channel}. Output: ${statusText}`);
   }

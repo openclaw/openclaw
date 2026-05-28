@@ -602,12 +602,16 @@ function readCandidatePackageManifest(params: {
   }
   const canUseProcessCache = params.origin === "bundled" || !params.rejectHardlinks;
   const stat = readPackageManifestStat(params.dir);
-  if (canUseProcessCache && stat) {
-    const processCached = packageManifestProcessCache.get(cacheKey);
-    if (processCached?.mtimeMs === stat.mtimeMs && processCached.size === stat.size) {
-      params.packageManifestCache?.set(cacheKey, processCached.manifest);
-      return processCached.manifest;
-    }
+  const processCached =
+    canUseProcessCache && stat ? packageManifestProcessCache.get(cacheKey) : undefined;
+  if (
+    stat &&
+    processCached &&
+    processCached.mtimeMs === stat.mtimeMs &&
+    processCached.size === stat.size
+  ) {
+    params.packageManifestCache?.set(cacheKey, processCached.manifest);
+    return processCached.manifest;
   }
   const manifest =
     params.origin === "bundled"

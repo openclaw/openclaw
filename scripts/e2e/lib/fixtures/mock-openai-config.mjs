@@ -9,6 +9,7 @@ export function applyMockOpenAiModelConfig(cfg, params) {
       ...cfg.models?.providers,
       openai: {
         ...cfg.models?.providers?.openai,
+        agentRuntime: { id: "openclaw" },
         baseUrl: `http://127.0.0.1:${params.mockPort}/v1`,
         apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
         api: "openai-responses",
@@ -17,6 +18,7 @@ export function applyMockOpenAiModelConfig(cfg, params) {
           {
             id: modelId,
             name: modelId,
+            agentRuntime: { id: "openclaw" },
             api: "openai-responses",
             reasoning: false,
             input: ["text", "image"],

@@ -10,6 +10,8 @@ import {
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
+  normalizePnpmLockedPatchDrift,
+  packageDependencySurfaceForPackageJson,
   packageDependencyInputsChanged,
   pnpmLockOverrideVersionForVersions,
   parsePnpmPackageKey,
@@ -324,6 +326,32 @@ describe("generate-npm-shrinkwrap", () => {
     });
   });
 
+  it("normalizes npm-resolved patch versions back to the pnpm lock graph", () => {
+    const lockfile = {
+      packages: {
+        "node_modules/lru-cache": {
+          version: "11.5.1",
+          resolved: "https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.1.tgz",
+          integrity: "sha512-floating",
+        },
+      },
+    };
+    const pnpmPackages = new Map([
+      ["lru-cache@11.5.0", { resolution: { integrity: "sha512-locked" } }],
+      ["lru-cache@6.0.0", { resolution: { integrity: "sha512-legacy" } }],
+    ]);
+
+    expect(normalizePnpmLockedPatchDrift(lockfile, pnpmPackages)).toEqual({
+      packages: {
+        "node_modules/lru-cache": {
+          version: "11.5.0",
+          resolved: "https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.0.tgz",
+          integrity: "sha512-locked",
+        },
+      },
+    });
+  });
+
   it("uses legacy peer resolution when package extensions mark dependency peers optional", () => {
     expect(
       shouldUseLegacyPeerDepsForShrinkwrap(
@@ -407,18 +435,31 @@ describe("generate-npm-shrinkwrap", () => {
   it("detects package dependency inputs that make current shrinkwrap pins unsafe", () => {
     expect(
       packageDependencyInputsChanged(process.cwd(), ["scripts/generate-npm-shrinkwrap.mjs"]),
-    ).toBe(true);
+    ).toBe(false);
     expect(packageDependencyInputsChanged(process.cwd(), ["pnpm-lock.yaml"])).toBe(true);
-    expect(packageDependencyInputsChanged(process.cwd(), ["package.json"])).toBe(true);
-    expect(
-      packageDependencyInputsChanged(path.join(process.cwd(), "extensions/acpx"), [
-        "extensions/acpx/npm-shrinkwrap.json",
-      ]),
-    ).toBe(true);
+    expect(packageDependencyInputsChanged(process.cwd(), ["npm-shrinkwrap.json"])).toBe(false);
     expect(
       packageDependencyInputsChanged(path.join(process.cwd(), "extensions/acpx"), [
         "extensions/brave/package.json",
       ]),
     ).toBe(false);
+  });
+
+  it("ignores package version metadata when comparing shrinkwrap dependency surfaces", () => {
+    expect(
+      packageDependencySurfaceForPackageJson({
+        name: "example",
+        version: "2026.5.27-alpha.1",
+        dependencies: { zod: "4.4.4" },
+        peerDependencies: { openclaw: ">=2026.5.27-alpha.1" },
+        openclaw: { build: { openclawVersion: "2026.5.27-alpha.1" } },
+      }),
+    ).toEqual({
+      bundleDependencies: null,
+      bundledDependencies: null,
+      dependencies: { zod: "4.4.4" },
+      optionalDependencies: null,
+      overrides: null,
+    });
   });
 });

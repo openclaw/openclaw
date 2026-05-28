@@ -94,6 +94,10 @@ openclaw_find_toolcache_node() {
     fi
   done
 
+  if [[ "${#roots[@]}" -eq 0 ]]; then
+    return 1
+  fi
+
   local node_root candidate candidate_version
   for node_root in "${roots[@]}"; do
     while IFS= read -r candidate; do

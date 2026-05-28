@@ -1178,7 +1178,7 @@ jobs:
               pnpm tsgo:prod
               ;;
             lint)
-              pnpm lint --threads=8
+              OPENCLAW_OXLINT_SHARDS_SERIAL=1 pnpm lint --threads=8
               ;;
             dependencies)
               if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
