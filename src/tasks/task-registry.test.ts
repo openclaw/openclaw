@@ -2863,6 +2863,74 @@ describe("task-registry", () => {
     });
   });
 
+  it("defaults Discord-originated deliverable tasks to state-change notifications", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryMemoryForTest();
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:123",
+        },
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-discord-default-notify",
+        task: "Investigate issue",
+        status: "queued",
+      });
+
+      expectRecordFields(requireTaskByRunId("run-discord-default-notify"), {
+        deliveryStatus: "pending",
+        notifyPolicy: "state_changes",
+      });
+    });
+  });
+
+  it("keeps explicit and non-Discord task notify defaults unchanged", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryMemoryForTest();
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:123",
+        },
+        childSessionKey: "agent:codex:acp:explicit",
+        runId: "run-discord-explicit-notify",
+        task: "Investigate silently",
+        status: "queued",
+        notifyPolicy: "silent",
+      });
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "guildchat",
+          to: "guildchat:123",
+        },
+        childSessionKey: "agent:codex:acp:guildchat",
+        runId: "run-guildchat-default-notify",
+        task: "Investigate issue",
+        status: "queued",
+      });
+
+      expectRecordFields(requireTaskByRunId("run-discord-explicit-notify"), {
+        notifyPolicy: "silent",
+      });
+      expectRecordFields(requireTaskByRunId("run-guildchat-default-notify"), {
+        notifyPolicy: "done_only",
+      });
+    });
+  });
+
   it("delivers concise state-change updates only when notify policy requests them", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

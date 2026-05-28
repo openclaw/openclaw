@@ -348,6 +348,7 @@ function ensureDeliveryStatus(params: {
 function ensureNotifyPolicy(params: {
   notifyPolicy?: TaskNotifyPolicy;
   deliveryStatus?: TaskDeliveryStatus;
+  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   ownerKey: string;
   scopeKind: TaskScopeKind;
 }): TaskNotifyPolicy {
@@ -360,7 +361,13 @@ function ensureNotifyPolicy(params: {
       ownerKey: params.ownerKey,
       scopeKind: params.scopeKind,
     });
-  return deliveryStatus === "not_applicable" ? "silent" : "done_only";
+  if (deliveryStatus === "not_applicable") {
+    return "silent";
+  }
+  if (params.requesterOrigin?.channel === "discord") {
+    return "state_changes";
+  }
+  return "done_only";
 }
 
 function resolveTaskScopeKind(params: {
@@ -804,6 +811,7 @@ function mergeExistingTaskForCreate(
   const notifyPolicy = ensureNotifyPolicy({
     notifyPolicy: params.notifyPolicy,
     deliveryStatus: params.deliveryStatus,
+    requesterOrigin,
     ownerKey: existing.ownerKey,
     scopeKind: existing.scopeKind,
   });
@@ -1561,9 +1569,11 @@ export function createTaskRecord(params: {
       ownerKey,
       scopeKind,
     });
+  const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const notifyPolicy = ensureNotifyPolicy({
     notifyPolicy: params.notifyPolicy,
     deliveryStatus,
+    requesterOrigin,
     ownerKey,
     scopeKind,
   });
@@ -1603,7 +1613,7 @@ export function createTaskRecord(params: {
   tasks.set(taskId, record);
   upsertTaskDeliveryState({
     taskId,
-    requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
+    requesterOrigin,
   });
   addRunIdIndex(taskId, record.runId);
   addOwnerKeyIndex(taskId, record);
