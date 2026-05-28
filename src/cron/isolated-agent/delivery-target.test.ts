@@ -1375,4 +1375,37 @@ describe("resolveDeliveryTarget", () => {
     expect(result.ok).toBe(true);
     expect(result.accountId).toBe("explicit");
   });
+
+  it("rejects raw cron payload with channel=webchat using WebchatNotDeliverableError before normalization", async () => {
+    // Regression: raw jobs.json / RPC callers that bypass the CLI guardrails
+    // used to land here with channel="webchat" and get the generic
+    // "no configured channels detected" error after resolveSessionDeliveryTarget
+    // normalized the non-deliverable channel away. The check now fires first.
+    setMainSessionEntry(undefined);
+    const { WebchatNotDeliverableError } = await import("../../utils/message-channel-constants.js");
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "webchat",
+      to: "anything",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(WebchatNotDeliverableError);
+    }
+  });
+
+  it("rejects raw cron payload with mixed-case channel=WebChat after normalization", async () => {
+    setMainSessionEntry(undefined);
+    const { WebchatNotDeliverableError } = await import("../../utils/message-channel-constants.js");
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "WebChat" as never,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(WebchatNotDeliverableError);
+    }
+  });
 });

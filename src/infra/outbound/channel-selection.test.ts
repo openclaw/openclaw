@@ -341,4 +341,22 @@ describe("resolveMessageChannelSelection", () => {
     setup?.();
     await expect(expectResolvedSelection(params)).rejects.toThrow(expectedMessage);
   });
+
+  it("rejects channel=webchat with a typed WebchatNotDeliverableError", async () => {
+    const { WebchatNotDeliverableError } = await import(
+      "../../utils/message-channel-constants.js"
+    );
+    await expect(
+      expectResolvedSelection({ cfg: {} as never, channel: "webchat" }),
+    ).rejects.toBeInstanceOf(WebchatNotDeliverableError);
+  });
+
+  it("rejects channel=WebChat (mixed case) with the typed error after normalization", async () => {
+    const { WebchatNotDeliverableError } = await import(
+      "../../utils/message-channel-constants.js"
+    );
+    await expect(
+      expectResolvedSelection({ cfg: {} as never, channel: "WebChat" }),
+    ).rejects.toBeInstanceOf(WebchatNotDeliverableError);
+  });
 });

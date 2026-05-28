@@ -81,6 +81,7 @@ type CronUpdatePatch = {
 type CronAddParams = {
   schedule?: { kind?: string; at?: string; staggerMs?: number };
   payload?: {
+    kind?: string;
     model?: string;
     thinking?: string;
     lightContext?: boolean;
@@ -192,6 +193,24 @@ function mockCronEditJobLookup(schedule: unknown): void {
           ok: true,
           params: {},
           jobs: [{ id: "job-1", schedule }],
+        };
+      }
+      return { ok: true, params };
+    },
+  );
+}
+
+function mockCronEditExistingJob(jobPatch: Partial<CronJob>): void {
+  callGatewayFromCli.mockImplementation(
+    async (method: string, _opts: unknown, params?: unknown) => {
+      if (method === "cron.status") {
+        return { enabled: true };
+      }
+      if (method === "cron.list") {
+        return {
+          ok: true,
+          params: {},
+          jobs: [{ ...createCronJob("job-1", "Target Job"), ...jobPatch }],
         };
       }
       return { ok: true, params };
@@ -564,6 +583,131 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("rejects --announce --channel webchat on cron add", async () => {
+    // Webchat is INTERNAL_MESSAGE_CHANNEL, not a deliverable channel plugin;
+    // an announce route to webchat always fails at fire time with
+    // "Channel is required (no configured channels detected)". The CLI rejects
+    // this misconfiguration at create time so it never lands in jobs.json.
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "announce-to-webchat",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--announce",
+      "--channel",
+      "webchat",
+    ]);
+  });
+
+  it("rejects --announce --channel WebChat (mixed-case) on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "announce-to-WebChat",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--announce",
+      "--channel",
+      "WebChat",
+    ]);
+  });
+
+  it("rejects implicit announce --channel webchat on cron add (no --announce flag)", async () => {
+    // Regression for ClawSweeper finding 1: isolated agent-turn jobs default
+    // delivery.mode to "announce" when neither --announce nor --no-deliver is
+    // passed. The guard must therefore check the EFFECTIVE delivery mode
+    // (post-defaults), not just the explicit --announce flag.
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "implicit-announce-to-webchat",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--channel",
+      "webchat",
+    ]);
+    expectRuntimeErrorContaining("Webchat is not a deliverable channel");
+  });
+
+  it("accepts the documented default-agent main-session reminder example (no --no-deliver)", async () => {
+    // Regression for ClawSweeper finding 4: the previous docs example combined
+    // --session main --system-event with --no-deliver, which the CLI rejects
+    // (`--announce/--no-deliver require a non-main agentTurn session target`).
+    // The docs were corrected to drop --no-deliver from the main-session
+    // example; this test pins the documented shape so the docs example stays
+    // runnable.
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "morning standup reminder",
+      "--cron",
+      "0 9 * * 1-5",
+      "--tz",
+      "Asia/Dubai",
+      "--session",
+      "main",
+      "--system-event",
+      "Morning standup at 9:30. Slides on the team drive.",
+    ]);
+    expect(params.payload?.kind).toBe("systemEvent");
+    // Main-session systemEvent jobs do not carry delivery (no announce path).
+    expect(params.delivery).toBeUndefined();
+  });
+
+  it("rejects the previously-documented main-session --no-deliver shape", async () => {
+    // Asserts the CLI guard that motivated finding 4. --no-deliver requires a
+    // non-main agentTurn session target, so the old docs example never ran.
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "morning standup reminder",
+      "--cron",
+      "0 9 * * 1-5",
+      "--tz",
+      "Asia/Dubai",
+      "--session",
+      "main",
+      "--system-event",
+      "Morning standup at 9:30. Slides on the team drive.",
+      "--no-deliver",
+    ]);
+  });
+
+  it("accepts --channel webchat on cron add when --no-deliver opts the job out of announce", async () => {
+    // Confirms the new effective-mode guard does not over-fire on jobs that
+    // explicitly disable announce delivery.
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "no-deliver-webchat",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--no-deliver",
+      "--channel",
+      "webchat",
+    ]);
+    expect(params.delivery?.mode).toBe("none");
+  });
+
   it.each([
     { command: "enable" as const, expectedEnabled: true },
     { command: "disable" as const, expectedEnabled: false },
@@ -929,6 +1073,53 @@ describe("cron cli", () => {
 
   it("rejects negative --thread-id on cron edit", async () => {
     await expectCronCommandExit(["cron", "edit", "job-1", "--thread-id", "-5"]);
+  });
+
+  it("rejects --announce --channel webchat on cron edit", async () => {
+    await expectCronCommandExit(["cron", "edit", "job-1", "--announce", "--channel", "webchat"]);
+  });
+
+  it("rejects --channel webchat on cron edit when patch flips the merged delivery target (no --announce flag)", async () => {
+    // Regression for ClawSweeper finding 2: cron edit supports
+    // delivery-target-only patches that the gateway merges into the existing
+    // delivery object. An existing announce job can be re-pointed to webchat
+    // with --channel webchat alone, so the create-time guard must reject the
+    // effective merged delivery instead of only --announce.
+    resetGatewayMock();
+    mockCronEditExistingJob({ delivery: { mode: "announce", channel: "telegram" } });
+    const program = buildProgram();
+    await expect(
+      program.parseAsync(["cron", "edit", "job-1", "--channel", "webchat"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+    expectRuntimeErrorContaining("Webchat is not a deliverable channel");
+  });
+
+  it("accepts target-only cron edit --channel webchat when merged delivery mode is none", async () => {
+    resetGatewayMock();
+    mockCronEditExistingJob({ delivery: { mode: "none", channel: "telegram" } });
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--channel", "webchat"], { from: "user" });
+
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+    expect(patch?.patch?.delivery?.mode).toBeUndefined();
+    expect(patch?.patch?.delivery?.channel).toBe("webchat");
+  });
+
+  it("rejects deprecated --deliver --channel webchat on cron edit", async () => {
+    // Finding 2 also called out the deprecated --deliver spelling. The new
+    // effective-mode guard covers it because --deliver flips delivery.mode
+    // to "announce" via the same merged-delivery path.
+    await expectCronCommandExit(["cron", "edit", "job-1", "--deliver", "--channel", "webchat"]);
+    expectRuntimeErrorContaining("Webchat is not a deliverable channel");
+  });
+
+  it("accepts cron edit --no-deliver --channel webchat (mode=none unblocks the target)", async () => {
+    // A patch that explicitly turns off announce delivery should not be
+    // rejected just because the target was webchat — mode="none" means the
+    // runner will not try to deliver at all.
+    const patch = await runCronEditAndGetPatch(["--no-deliver", "--channel", "webchat"]);
+    expect(patch?.patch?.delivery?.mode).toBe("none");
+    expect(patch?.patch?.delivery?.channel).toBe("webchat");
   });
 
   it("supports --no-deliver on cron edit", async () => {
