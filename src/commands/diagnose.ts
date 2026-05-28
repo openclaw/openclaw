@@ -13,6 +13,7 @@ export type DiagnoseOptions = {
 };
 
 const DIAGNOSE_BASELINE_NAME = "diagnose-latest";
+const DIAGNOSE_SCHEMA_VERSION = "openclaw-diagnose/v1";
 
 function summarizeIncident(incident: {
   id: string;
@@ -85,8 +86,19 @@ export async function buildDiagnoseJson(opts: DiagnoseOptions, _runtime: Runtime
   const baselines = listBaselines(cfg);
   const probeCache = listCachedProbes(cfg);
   return {
+    schemaVersion: DIAGNOSE_SCHEMA_VERSION,
     ok: pluginContracts.ok && tasks.summary.combined.errors === 0 && openIncidents.length === 0,
     timestamp: new Date().toISOString(),
+    redaction: {
+      secretsIncluded: false,
+      rawConfigIncluded: false,
+      rawEnvIncluded: false,
+    },
+    persistence: {
+      writesBaseline: true,
+      writesProbeCache: true,
+      writesIncidentLedger: true,
+    },
     status: {
       gateway: summarizeGatewayConfig(redactedGatewayConfig),
       configuredChannels: Object.keys(cfg.channels ?? {}).length,
