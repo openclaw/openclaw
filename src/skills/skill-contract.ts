@@ -1,5 +1,5 @@
-import type { Skill as CanonicalSkill } from "../agents/sessions/skills.js";
 import type { SourceInfo } from "../agents/sessions/source-info.js";
+import type { Skill as CanonicalSkill } from "./session.js";
 
 export type SourceScope = "user" | "project" | "temporary";
 export type SourceOrigin = "package" | "top-level";

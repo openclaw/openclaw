@@ -34,6 +34,14 @@ export {
   syncSkillsToWorkspace,
 } from "./workspace.js";
 export { buildWorkspaceSkillCommandSpecs } from "./command-specs.js";
+export type {
+  LoadSkillsFromDirOptions,
+  LoadSkillsOptions,
+  LoadSkillsResult,
+  Skill,
+  SkillFrontmatter,
+} from "./session.js";
+export { formatSkillsForPrompt as formatSessionSkillsForPrompt, loadSkills } from "./session.js";
 export type { SkillIndex, SkillIndexEntry } from "./registry.js";
 export { buildSkillIndex, skillIndexEntries, skillIndexResolvedSkills } from "./registry.js";
 export type { SkillSourceKind, SkillTrustInfo, SkillWritablePolicy } from "./trust.js";
