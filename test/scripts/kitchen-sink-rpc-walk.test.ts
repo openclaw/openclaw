@@ -237,7 +237,7 @@ setInterval(() => {}, 1000);
     const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
       detached: undefined,
       timeoutKillGraceMs: 50,
-      timeoutMs: 2000,
+      timeoutMs: 1000,
     });
 
     try {
@@ -246,7 +246,7 @@ setInterval(() => {}, 1000);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      await expect(runPromise).rejects.toThrow("timed out after 2000ms");
+      await expect(runPromise).rejects.toThrow("timed out after 1000ms");
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
       await runPromise.catch(() => {});

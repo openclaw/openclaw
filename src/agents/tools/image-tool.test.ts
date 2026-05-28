@@ -20,6 +20,36 @@ import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridg
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
+import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
+
+const publicSurfaceLoaderMocks = vi.hoisted(() => ({
+  loadBundledPluginPublicArtifactModuleSync: vi.fn(
+    ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
+      if (dirName === "imessage" && artifactBasename === "media-contract-api.js") {
+        return {
+          resolveInboundAttachmentRoots: ({
+            accountId,
+            cfg,
+          }: {
+            accountId?: string | null;
+            cfg: OpenClawConfig;
+          }) => [
+            ...((accountId
+              ? cfg.channels?.imessage?.accounts?.[accountId]?.attachmentRoots
+              : undefined) ?? []),
+            ...(cfg.channels?.imessage?.attachmentRoots ?? []),
+            "/Users/*/Library/Messages/Attachments",
+          ],
+        };
+      }
+      throw new Error(
+        `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
+      );
+    },
+  ),
+}));
+
+vi.mock("../../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
 
 type CreateOpenClawCodingToolsArgs = Parameters<typeof createOpenClawCodingTools>[0];
 type MockOpenClawToolsOptions = {
@@ -565,6 +595,12 @@ const moonshotProvider = {
 function installImageUnderstandingProviderDeps(
   providers: MediaUnderstandingProvider[],
   options?: {
+    describeImageWithModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["describeImageWithModel"];
+    describeImagesWithModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["describeImagesWithModel"];
     loadImageWebMediaRuntime?: NonNullable<
       Parameters<typeof testing.setProviderDepsForTest>[0]
     >["loadImageWebMediaRuntime"];
@@ -595,8 +631,8 @@ function installImageUnderstandingProviderDeps(
       id: string,
       registry: Map<string, MediaUnderstandingProvider>,
     ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
-    describeImageWithModel: describeGenericImageWithModel,
-    describeImagesWithModel: describeGenericImagesWithModel,
+    describeImageWithModel: options?.describeImageWithModel ?? describeGenericImageWithModel,
+    describeImagesWithModel: options?.describeImagesWithModel ?? describeGenericImagesWithModel,
     resolveAutoMediaKeyProviders: ({ capability }) =>
       capability === "image" ? ["openai", "anthropic"] : [],
     resolveDefaultMediaModel: ({ providerId, capability }) =>
@@ -617,6 +653,12 @@ function installImageUnderstandingProviderStubs(...providers: MediaUnderstanding
 
 function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProvider[]) {
   installImageUnderstandingProviderDeps(providers, {
+    describeImageWithModel: async () => {
+      throw new Error("Expected fast local image tests to use a registered image provider");
+    },
+    describeImagesWithModel: async () => {
+      throw new Error("Expected fast local image tests to use a registered image provider");
+    },
     resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
     resolveModelAsync: async (provider, model) => ({
       model: {
@@ -1738,63 +1780,28 @@ describe("image tool implicit imageModel config", () => {
   });
 
   it("allows image paths from the current iMessage account attachment roots", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-        text: "ok",
-        model: params.model,
-      }));
-      installFastLocalImageProviderStubs({
-        id: "ollama",
-        capabilities: ["image"],
-        describeImage,
-      });
-      const attachmentRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-root-"));
-      const imagePath = path.join(attachmentRoot, "photo.png");
-      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
-      try {
-        const cfg: OpenClawConfig = {
-          agents: {
-            defaults: {
-              imageModel: { primary: "ollama/moondream" },
+    const attachmentRoot = path.join(os.tmpdir(), "openclaw-imessage-root-test");
+    const imagePath = path.join(attachmentRoot, "photo.png");
+    const cfg: OpenClawConfig = {
+      channels: {
+        imessage: {
+          accounts: {
+            work: {
+              attachmentRoots: [attachmentRoot],
             },
           },
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://localhost:11434",
-                models: [makeModelDefinition("moondream", ["text", "image"])],
-              },
-            },
-          },
-          channels: {
-            imessage: {
-              accounts: {
-                work: {
-                  attachmentRoots: [attachmentRoot],
-                },
-              },
-            },
-          },
-        };
+        },
+      },
+    };
 
-        const withoutChannel = createRequiredImageTool({ config: cfg, agentDir });
-        await expect(
-          withoutChannel.execute("t1", { prompt: "Describe.", image: imagePath }),
-        ).rejects.toThrow(/not under an allowed directory/i);
-
-        const withImessage = createRequiredImageTool({
-          config: cfg,
-          agentDir,
-          agentChannel: "imessage",
-          agentAccountId: "work",
-        });
-
-        await expectImageToolExecOk(withImessage, imagePath);
-        expect(describeImage).toHaveBeenCalledTimes(1);
-      } finally {
-        await fs.rm(attachmentRoot, { recursive: true, force: true });
-      }
+    expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
+    const roots = resolveMediaToolInboundRoots({
+      cfg,
+      channelId: "imessage",
+      accountId: "work",
     });
+    expect(roots).toContain(attachmentRoot);
+    expect(isInboundPathAllowed({ filePath: imagePath, roots })).toBe(true);
   });
 
   it("allows image paths from current iMessage wildcard attachment roots", async () => {

@@ -1101,6 +1101,7 @@ describe("buildContextOverflowRecoveryText", () => {
 
 describe("runAgentTurnWithFallback", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     state.runEmbeddedAgentMock.mockReset();
     state.runCliAgentMock.mockReset();
     state.runWithModelFallbackMock.mockReset();

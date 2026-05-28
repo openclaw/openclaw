@@ -456,6 +456,30 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     buildAgentRuntimePlan: mockedBuildAgentRuntimePlan,
   }));
 
+  vi.doMock("../model-runtime-aliases.js", () => ({
+    resolveCliRuntimeExecutionProvider: ({
+      provider,
+      cfg,
+      modelId,
+    }: {
+      provider?: string;
+      cfg?: {
+        agents?: {
+          defaults?: {
+            models?: Record<string, { agentRuntime?: { id?: string } }>;
+          };
+        };
+      };
+      modelId?: string;
+    }) => {
+      const key = provider && modelId ? `${provider}/${modelId}` : undefined;
+      const runtime = key
+        ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
+        : undefined;
+      return runtime || undefined;
+    },
+  }));
+
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => ({})),

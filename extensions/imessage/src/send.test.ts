@@ -48,6 +48,7 @@ describe("sendMessageIMessage receipts", () => {
   afterEach(() => {
     clearIMessageApprovalReactionTargetsForTest();
     vi.unstubAllEnvs();
+    vi.useRealTimers();
   });
 
   it("attaches a text receipt for native send ids", async () => {
@@ -424,31 +425,32 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not use the local default chat.db path for custom cliPath wrappers", async () => {
+    vi.useFakeTimers();
     vi.stubEnv("HOME", "/Users/me");
     const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const approvalText = createApprovalText("approval-remote");
 
-    await expect(
-      sendMessageIMessage("chat_id:42", approvalText, {
-        config: {
-          channels: {
-            imessage: {
-              accounts: {
-                default: {
-                  remoteHost: "bot@gateway-host",
-                },
+    const send = sendMessageIMessage("chat_id:42", approvalText, {
+      config: {
+        channels: {
+          imessage: {
+            accounts: {
+              default: {
+                remoteHost: "bot@gateway-host",
               },
             },
           },
         },
-        client,
-        cliPath: "/Users/me/.openclaw/scripts/imsg",
-        runCliJson,
-        resolveSentMessageGuidImpl,
-      }),
-    ).rejects.toThrow("imsg rpc timeout (send)");
+      },
+      client,
+      cliPath: "/Users/me/.openclaw/scripts/imsg",
+      runCliJson,
+      resolveSentMessageGuidImpl,
+    });
+    await vi.advanceTimersByTimeAsync(5_250);
+    await expect(send).rejects.toThrow("imsg rpc timeout (send)");
 
     expect(runCliJson).not.toHaveBeenCalled();
     expect(resolveSentMessageGuidImpl).toHaveBeenCalledWith({
@@ -460,6 +462,7 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not use the local default chat.db path for auto-detected ssh wrappers", async () => {
+    vi.useFakeTimers();
     vi.stubEnv("HOME", "/Users/me");
     const wrapperDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-wrapper-"));
     const wrapperPath = path.join(wrapperDir, "imsg");
@@ -470,15 +473,15 @@ describe("sendMessageIMessage receipts", () => {
     const approvalText = createApprovalText("approval-ssh-wrapper");
 
     try {
-      await expect(
-        sendMessageIMessage("chat_id:42", approvalText, {
-          config: IMESSAGE_TEST_CFG,
-          client,
-          cliPath: wrapperPath,
-          runCliJson,
-          resolveSentMessageGuidImpl,
-        }),
-      ).rejects.toThrow("imsg rpc timeout (send)");
+      const send = sendMessageIMessage("chat_id:42", approvalText, {
+        config: IMESSAGE_TEST_CFG,
+        client,
+        cliPath: wrapperPath,
+        runCliJson,
+        resolveSentMessageGuidImpl,
+      });
+      await vi.advanceTimersByTimeAsync(5_250);
+      await expect(send).rejects.toThrow("imsg rpc timeout (send)");
     } finally {
       fs.rmSync(wrapperDir, { recursive: true, force: true });
     }
@@ -512,20 +515,21 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("throws the rpc timeout without resending when approval GUID recovery misses", async () => {
+    vi.useFakeTimers();
     const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const approvalText = createApprovalText();
 
-    await expect(
-      sendMessageIMessage("chat_id:42", approvalText, {
-        config: IMESSAGE_TEST_CFG,
-        client,
-        runCliJson,
-        dbPath: "/Users/me/Library/Messages/chat.db",
-        resolveSentMessageGuidImpl,
-      }),
-    ).rejects.toThrow("imsg rpc timeout (send)");
+    const send = sendMessageIMessage("chat_id:42", approvalText, {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      runCliJson,
+      dbPath: "/Users/me/Library/Messages/chat.db",
+      resolveSentMessageGuidImpl,
+    });
+    await vi.advanceTimersByTimeAsync(5_250);
+    await expect(send).rejects.toThrow("imsg rpc timeout (send)");
 
     expect(runCliJson).not.toHaveBeenCalled();
     expect(resolveSentMessageGuidImpl).toHaveBeenCalled();

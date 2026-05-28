@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 const authProfilesStoreMock = vi.hoisted(() => ({
   profiles: {} as Record<
     string,
@@ -251,6 +252,17 @@ function setDirectiveTestProviders(providers: ProviderPlugin[]): void {
 }
 
 beforeEach(() => {
+  vi.useRealTimers();
+  cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupRegistry: () => ({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    }),
+    resolveRuntimeCliBackends: () => [],
+  });
   setDirectiveTestProviders([]);
   clearRuntimeAuthProfileStoreSnapshots();
   replaceRuntimeAuthProfileStoreSnapshots([
@@ -268,6 +280,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   setDirectiveTestProviders([]);
   clearRuntimeAuthProfileStoreSnapshots();
   clearInternalHooks();

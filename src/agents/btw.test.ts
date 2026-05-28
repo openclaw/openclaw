@@ -70,6 +70,30 @@ vi.mock("./model-auth.js", () => ({
   requireApiKey: (...args: unknown[]) => requireApiKeyMock(...args),
 }));
 
+vi.mock("./model-runtime-aliases.js", () => ({
+  resolveCliRuntimeExecutionProvider: ({
+    provider,
+    cfg,
+    modelId,
+  }: {
+    provider?: string;
+    cfg?: {
+      agents?: {
+        defaults?: {
+          models?: Record<string, { agentRuntime?: { id?: string } }>;
+        };
+      };
+    };
+    modelId?: string;
+  }) => {
+    const key = provider && modelId ? `${provider}/${modelId}` : undefined;
+    const runtime = key
+      ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
+      : undefined;
+    return runtime || undefined;
+  },
+}));
+
 vi.mock("./embedded-agent-runner/runs.js", () => ({
   getActiveEmbeddedRunSnapshot: (...args: unknown[]) => getActiveEmbeddedRunSnapshotMock(...args),
 }));
