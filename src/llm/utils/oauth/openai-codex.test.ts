@@ -1,211 +1,199 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { openaiCodexOAuthProvider, refreshOpenAICodexToken, testing } from "./openai-codex.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-function createJwt(payload: Record<string, unknown>): string {
-  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${header}.${body}.signature`;
+type LoginOpenAICodexOAuth =
+  typeof import("../../../plugins/provider-openai-codex-oauth.js").loginOpenAICodexOAuth;
+
+const mocks = vi.hoisted(() => ({
+  loginOpenAICodexOAuth: vi.fn<LoginOpenAICodexOAuth>(),
+  loadActivatedBundledPluginPublicSurfaceModuleSync: vi.fn(),
+  refreshOpenAICodexToken: vi.fn(),
+  refreshProviderOAuthCredentialWithPlugin: vi.fn(),
+}));
+
+vi.mock("../../../plugins/provider-openai-codex-oauth.js", () => ({
+  loginOpenAICodexOAuth: mocks.loginOpenAICodexOAuth,
+}));
+
+vi.mock("../../../plugins/provider-runtime.runtime.js", () => ({
+  refreshProviderOAuthCredentialWithPlugin: mocks.refreshProviderOAuthCredentialWithPlugin,
+}));
+
+vi.mock("../../../plugin-sdk/facade-runtime.js", () => ({
+  loadActivatedBundledPluginPublicSurfaceModuleSync:
+    mocks.loadActivatedBundledPluginPublicSurfaceModuleSync,
+}));
+
+import { loginOpenAICodex, refreshOpenAICodexToken } from "./openai-codex.js";
+
+function createCredential() {
+  return {
+    type: "oauth" as const,
+    provider: "openai-codex",
+    access: "access-token",
+    refresh: "refresh-token",
+    expires: 1_700_000_000_000,
+    accountId: "acct_123",
+  };
 }
 
-function stubTokenResponse(body: Record<string, unknown>): void {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })),
-  );
-}
-
-function stubHangingTokenRequest(timeoutMs: number): void {
-  vi.spyOn(AbortSignal, "timeout").mockImplementation((actualTimeoutMs) => {
-    expect(actualTimeoutMs).toBe(timeoutMs);
-    const controller = new AbortController();
-    queueMicrotask(() => {
-      controller.abort(new DOMException("timed out", "TimeoutError"));
+describe("OpenAI Codex OAuth compatibility provider", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      refreshOpenAICodexToken: mocks.refreshOpenAICodexToken,
     });
-    return controller.signal;
   });
 
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(
-      (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
-        new Promise<Response>((_resolve, reject) => {
-          const signal = init?.signal;
-          if (!signal) {
-            reject(new Error("missing abort signal"));
-            return;
-          }
+  it("routes legacy login callbacks through the OpenAI provider auth hook", async () => {
+    const credential = createCredential();
+    const onAuth = vi.fn();
+    const onPrompt = vi.fn(async () => "manual-code");
+    mocks.loginOpenAICodexOAuth.mockImplementationOnce(async (params) => {
+      await params.openUrl("https://auth.openai.com/oauth/authorize?state=abc");
+      await expect(params.prompter.text({ message: "Paste code" })).resolves.toBe("manual-code");
+      return credential;
+    });
 
-          const abort = () => {
-            reject(
-              signal.reason instanceof Error
-                ? signal.reason
-                : new DOMException("aborted", "AbortError"),
-            );
-          };
-          if (signal.aborted) {
-            abort();
-            return;
-          }
-          signal.addEventListener("abort", abort, { once: true });
-        }),
-    ),
-  );
-}
+    await expect(loginOpenAICodex({ onAuth, onPrompt })).resolves.toEqual(credential);
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+    expect(onAuth).toHaveBeenCalledWith({
+      url: "https://auth.openai.com/oauth/authorize?state=abc",
+    });
+    expect(onPrompt).toHaveBeenCalledWith({ message: "Paste code", placeholder: undefined });
+    expect(mocks.loginOpenAICodexOAuth).toHaveBeenCalledWith({
+      prompter: expect.any(Object),
+      runtime: expect.any(Object),
+      isRemote: false,
+      signal: undefined,
+      onManualCodeInput: undefined,
+      openUrl: expect.any(Function),
+    });
+  });
 
-describe("OpenAI Codex OAuth token responses", () => {
-  it("cancels provider login before opening the OAuth flow", async () => {
+  it("passes legacy manual input through so it starts alongside browser auth", async () => {
+    const onManualCodeInput = vi.fn(async () => "manual-code");
+    mocks.loginOpenAICodexOAuth.mockImplementationOnce(async (params) => {
+      await expect(params.onManualCodeInput?.()).resolves.toBe("manual-code");
+      await expect(params.prompter.text({ message: "Fallback code" })).resolves.toBe(
+        "fallback-code",
+      );
+      return createCredential();
+    });
+
+    await expect(
+      loginOpenAICodex({
+        onAuth: vi.fn(),
+        onPrompt: vi.fn(async () => "fallback-code"),
+        onManualCodeInput,
+      }),
+    ).resolves.toEqual(createCredential());
+
+    expect(onManualCodeInput).toHaveBeenCalledOnce();
+  });
+
+  it("honors legacy login cancellation before opening OAuth", async () => {
     const controller = new AbortController();
     controller.abort();
 
     await expect(
-      openaiCodexOAuthProvider.login({
+      loginOpenAICodex({
         onAuth: vi.fn(),
-        onPrompt: vi.fn(async () => "unused-code"),
+        onPrompt: vi.fn(async () => "manual-code"),
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("Login cancelled");
+    expect(mocks.loginOpenAICodexOAuth).not.toHaveBeenCalled();
+  });
+
+  it("passes legacy cancellation into the provider auth hook", async () => {
+    const controller = new AbortController();
+    mocks.loginOpenAICodexOAuth.mockImplementationOnce(async (params) => {
+      expect(params.signal).toBe(controller.signal);
+      controller.abort();
+      await expect(params.onManualCodeInput?.()).rejects.toThrow("Login cancelled");
+      return createCredential();
+    });
+
+    await expect(
+      loginOpenAICodex({
+        onAuth: vi.fn(),
+        onPrompt: vi.fn(async () => "manual-code"),
+        onManualCodeInput: vi.fn(async () => "manual-code"),
         signal: controller.signal,
       }),
     ).rejects.toThrow("Login cancelled");
   });
 
-  it("does not open the OAuth flow after cancellation during setup", async () => {
+  it("honors legacy login cancellation before invoking the auth callback", async () => {
     const controller = new AbortController();
     const onAuth = vi.fn();
-    const loginPromise = openaiCodexOAuthProvider.login({
-      onAuth,
-      onPrompt: vi.fn(async () => "unused-code"),
-      signal: controller.signal,
+    mocks.loginOpenAICodexOAuth.mockImplementationOnce(async (params) => {
+      controller.abort();
+      await params.openUrl("https://auth.openai.com/oauth/authorize?state=abc");
+      return createCredential();
     });
 
-    controller.abort();
-
-    await expect(loginPromise).rejects.toThrow("Login cancelled");
+    await expect(
+      loginOpenAICodex({
+        onAuth,
+        onPrompt: vi.fn(async () => "manual-code"),
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("Login cancelled");
     expect(onAuth).not.toHaveBeenCalled();
   });
 
-  it("waits for Node OAuth runtime before creating an authorization flow", async () => {
-    const flow = await testing.createAuthorizationFlow("openclaw-test");
-    const url = new URL(flow.url);
+  it("refreshes through the provider runtime hook without returning auth-profile fields", async () => {
+    mocks.refreshProviderOAuthCredentialWithPlugin.mockResolvedValueOnce(createCredential());
 
-    expect(flow.state).toMatch(/^[a-f0-9]{32}$/u);
-    expect(url.searchParams.get("state")).toBe(flow.state);
-    expect(url.searchParams.get("originator")).toBe("openclaw-test");
-    const redirectUri = url.searchParams.get("redirect_uri");
-    expect(redirectUri).toBeTruthy();
-    expect(flow.redirectUri).toBe(redirectUri);
-    expect(testing.callbackHost).toBe(new URL(redirectUri ?? "").hostname);
-  });
-
-  it("builds callback redirect URIs from the configured loopback host", () => {
-    expect(testing.resolveRedirectUri("127.0.0.1")).toBe("http://127.0.0.1:1455/auth/callback");
-  });
-
-  it("rejects non-loopback callback bind hosts", () => {
-    expect(() => testing.resolveCallbackHost({ OPENCLAW_OAUTH_CALLBACK_HOST: "0.0.0.0" })).toThrow(
-      "callback host must be localhost, 127.0.0.1, or ::1",
-    );
-  });
-
-  it("does not echo token payload values when the exchange response is malformed", async () => {
-    stubTokenResponse({
-      access_token: "secret-access-token",
-      expires_in: 3600,
+    await expect(refreshOpenAICodexToken("old-refresh-token")).resolves.toEqual({
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: 1_700_000_000_000,
+      accountId: "acct_123",
     });
 
-    const result = await testing.exchangeAuthorizationCode("code", "verifier");
-
-    expect(result).toMatchObject({
-      type: "failed",
-      message: "OpenAI Codex token exchange response missing fields: refresh_token",
-    });
-    if (result.type === "failed") {
-      expect(result.message).not.toContain("secret-access-token");
-      expect(result.message).not.toContain("access_token");
-    }
-  });
-
-  it("times out token exchange requests", async () => {
-    stubHangingTokenRequest(5);
-
-    const result = await testing.exchangeAuthorizationCode(
-      "code",
-      "verifier",
-      testing.resolveRedirectUri("localhost"),
-      { timeoutMs: 5 },
-    );
-
-    expect(result).toMatchObject({
-      type: "failed",
-      message: "OpenAI Codex token exchange timed out after 5ms",
-    });
-  });
-
-  it("cancels token exchange requests with the caller signal", async () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    const result = await testing.exchangeAuthorizationCode(
-      "code",
-      "verifier",
-      testing.resolveRedirectUri("localhost"),
-      { signal: controller.signal, timeoutMs: 5 },
-    );
-
-    expect(result).toMatchObject({
-      type: "failed",
-      message: "Login cancelled",
-    });
-  });
-
-  it("does not echo token payload values when the refresh response is malformed", async () => {
-    stubTokenResponse({
-      access_token: "new-secret-access-token",
-      refresh_token: "new-secret-refresh-token",
-    });
-
-    const result = await testing.refreshAccessToken("old-refresh-token");
-
-    expect(result).toMatchObject({
-      type: "failed",
-      message: "OpenAI Codex token refresh response missing fields: expires_in",
-    });
-    if (result.type === "failed") {
-      expect(result.message).not.toContain("new-secret-access-token");
-      expect(result.message).not.toContain("new-secret-refresh-token");
-      expect(result.message).not.toContain("access_token");
-      expect(result.message).not.toContain("refresh_token");
-    }
-  });
-
-  it("times out token refresh requests", async () => {
-    stubHangingTokenRequest(5);
-
-    const result = await testing.refreshAccessToken("old-refresh-token", { timeoutMs: 5 });
-
-    expect(result).toMatchObject({
-      type: "failed",
-      message: "OpenAI Codex token refresh timed out after 5ms",
-    });
-  });
-
-  it("extracts the account id from URL-safe base64 JWT payloads", async () => {
-    const accessToken = createJwt({
-      "https://api.openai.com/auth": {
-        chatgpt_account_id: "w_ébé_1fzcswWN6Pi5zL",
+    expect(mocks.refreshProviderOAuthCredentialWithPlugin).toHaveBeenCalledWith({
+      provider: "openai-codex",
+      context: {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "",
+        refresh: "old-refresh-token",
+        expires: 0,
       },
     });
-    expect(accessToken.split(".")[1]).toContain("_");
-    stubTokenResponse({
-      access_token: accessToken,
-      refresh_token: "new-secret-refresh-token",
-      expires_in: 3600,
+    expect(mocks.loadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the OpenAI plugin facade when provider runtime refresh is unavailable", async () => {
+    const credential = {
+      access: "facade-access-token",
+      refresh: "facade-refresh-token",
+      expires: 1_700_000_000_000,
+      accountId: "acct_facade",
+    };
+    mocks.refreshProviderOAuthCredentialWithPlugin.mockResolvedValueOnce(null);
+    mocks.refreshOpenAICodexToken.mockResolvedValueOnce(credential);
+
+    await expect(refreshOpenAICodexToken("old-refresh-token")).resolves.toEqual(credential);
+
+    expect(mocks.loadActivatedBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+      dirName: "openai",
+      artifactBasename: "api.js",
+    });
+    expect(mocks.refreshOpenAICodexToken).toHaveBeenCalledWith("old-refresh-token");
+  });
+
+  it("preserves activated-facade failures when refresh fallback is disabled", async () => {
+    mocks.refreshProviderOAuthCredentialWithPlugin.mockResolvedValueOnce(null);
+    mocks.loadActivatedBundledPluginPublicSurfaceModuleSync.mockImplementationOnce(() => {
+      throw new Error("plugin runtime is not activated");
     });
 
-    await expect(refreshOpenAICodexToken("old-refresh-token")).resolves.toMatchObject({
-      accountId: "w_ébé_1fzcswWN6Pi5zL",
-    });
+    await expect(refreshOpenAICodexToken("old-refresh-token")).rejects.toThrow(
+      "plugin runtime is not activated",
+    );
+    expect(mocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
   });
 });

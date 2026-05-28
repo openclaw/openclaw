@@ -195,6 +195,7 @@ async function deliverSlackThreadAnnouncement(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
+  requesterAbandoned?: boolean;
 }) {
   testing.setDepsForTest({
     callGateway: params.callGateway,
@@ -202,6 +203,7 @@ async function deliverSlackThreadAnnouncement(params: {
       sessionId: params.sessionId,
       isActive: params.isActive,
     }),
+    isRequesterSessionAbandoned: () => params.requesterAbandoned === true,
     getRuntimeConfig: () => ({}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.queueEmbeddedAgentMessageWithOutcome
@@ -276,6 +278,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
   requesterSessionKey?: string;
   sourceTool?: string;
   runtimeConfig?: Record<string, unknown>;
+  requesterAbandoned?: boolean;
   origin?: {
     channel: "telegram";
     to: string;
@@ -298,6 +301,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
           : (params.requesterSessionId ?? "requester-session-telegram"),
       isActive: params.isActive === true,
     }),
+    isRequesterSessionAbandoned: () => params.requesterAbandoned === true,
     getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.queueEmbeddedAgentMessageWithOutcome
@@ -1985,6 +1989,59 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not restart an abandoned requester session for late completion delivery", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "child completion output" }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      requesterAbandoned: true,
+      isActive: false,
+      queueEmbeddedAgentMessageWithOutcome,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "telegram late completion",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "none",
+      error: "requester session abandoned after timeout",
+    });
+    expect(result.phases).toEqual([
+      expect.objectContaining({
+        phase: "direct-primary",
+        delivered: false,
+        path: "none",
+        error: "requester session abandoned after timeout",
+      }),
+      expect.objectContaining({
+        phase: "steer-fallback",
+        delivered: false,
+        path: "none",
+      }),
+    ]);
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
 
   it("uses steer fallback when a completion handoff has no visible output", async () => {

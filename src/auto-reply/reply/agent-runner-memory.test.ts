@@ -1,3 +1,4 @@
+import fsCore from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1123,6 +1124,60 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const compactCall = requireCompactEmbeddedAgentSessionCall();
     expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
+  });
+
+  it("reuses the transcript tail scan stat when memory flush needs usage and byte size", async () => {
+    const sessionFile = path.join(rootDir, "memory-flush-usage-and-size.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        message: {
+          role: "assistant",
+          content: "large answer",
+          usage: { input: 80_000, output: 4_000 },
+        },
+      })}\n`,
+      "utf8",
+    );
+    const originalStat = fsCore.promises.stat.bind(fsCore.promises);
+    const statSpy = vi
+      .spyOn(fsCore.promises, "stat")
+      .mockImplementation(async (target, options) => originalStat(target, options));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    try {
+      await runMemoryFlushIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "main",
+        }),
+        sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100_000,
+        resolvedVerboseLevel: "off",
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
+        sessionKey: "main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+    } finally {
+      statSpy.mockRestore();
+    }
+
+    const directTranscriptStats = statSpy.mock.calls.filter(
+      ([target]) => String(target) === sessionFile,
+    );
+    expect(directTranscriptStats).toEqual([]);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
   });
 
   it("continues when preflight compaction returns a successful no-op", async () => {
