@@ -201,6 +201,33 @@ export interface QuotaSuspension {
   state: LaneExecutionState; // State machine check for hot-path
 }
 
+export type SessionGoalStatus =
+  | "active"
+  | "paused"
+  | "blocked"
+  | "usage_limited"
+  | "budget_limited"
+  | "complete";
+
+export type SessionGoal = {
+  schemaVersion: 1;
+  id: string;
+  objective: string;
+  status: SessionGoalStatus;
+  createdAt: number;
+  updatedAt: number;
+  tokenStart: number;
+  tokensUsed: number;
+  tokenBudget?: number;
+  continuationTurns: number;
+  lastStatusNote?: string;
+  pausedAt?: number;
+  blockedAt?: number;
+  completedAt?: number;
+  usageLimitedAt?: number;
+  budgetLimitedAt?: number;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -254,6 +281,8 @@ export type SessionEntry = {
   subagentRecovery?: SubagentRecoveryState;
   /** Quota cascade protection and state-aware failover status. */
   quotaSuspension?: QuotaSuspension;
+  /** Core-owned durable goal state for this thread/session. */
+  goal?: SessionGoal;
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
   /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
