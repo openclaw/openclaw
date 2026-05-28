@@ -3641,6 +3641,39 @@ describe("installPluginFromDir", () => {
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
+  it("checks package plugin API before current-host extension shape validation", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.27-beta.1");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      openclaw?: Record<string, unknown>;
+    };
+    manifest.openclaw = {
+      ...manifest.openclaw,
+      extensions: { runtime: "./src/index.ts" },
+      compat: { pluginApi: ">=2026.5.27-beta.2" },
+    };
+    fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectFailedInstallResult({
+      result,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+      messageIncludes: [
+        "requires plugin API >=2026.5.27-beta.2",
+        "runtime exposes 2026.5.27-beta.1",
+      ],
+    });
+    if (!result.ok) {
+      expect(result.error).not.toContain("openclaw.extensions");
+    }
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
   it("allows plugins when a beta host is on the package plugin API floor", async () => {
     resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.27-beta.1");
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();

@@ -1365,18 +1365,6 @@ async function validatePackagePluginInstallSource(params: {
     return { ok: false, error: `invalid package.json: ${String(err)}` };
   }
 
-  const extensionsResult = ensureOpenClawExtensions({
-    manifest,
-  });
-  if (!extensionsResult.ok) {
-    return {
-      ok: false,
-      error: extensionsResult.error,
-      code: extensionsResult.code,
-    };
-  }
-  const extensions = extensionsResult.entries;
-
   const pkgName = normalizeOptionalString(manifest.name) ?? "";
   const npmPluginId = pkgName || "plugin";
   const ocManifestResult = params.runtime.loadPluginManifest(params.packageDir);
@@ -1453,6 +1441,18 @@ async function validatePackagePluginInstallSource(params: {
   if (compatibilityError) {
     return compatibilityError;
   }
+
+  const extensionsResult = ensureOpenClawExtensions({
+    manifest,
+  });
+  if (!extensionsResult.ok) {
+    return {
+      ok: false,
+      error: extensionsResult.error,
+      code: extensionsResult.code,
+    };
+  }
+  const extensions = extensionsResult.entries;
 
   const extensionValidation = await validatePackageExtensionEntriesForInstall({
     packageDir: params.packageDir,
