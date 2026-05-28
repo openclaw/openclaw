@@ -134,9 +134,10 @@ describe("native PDF provider API calls", () => {
       .catch((caught: unknown) => caught as Error);
 
     expect(error).toBeInstanceOf(Error);
-    expect(error.message).toContain("Anthropic PDF request failed");
-    expect(error.message).not.toContain("tail-marker");
-    expect(error.message.length).toBeLessThan(500);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    expect(errorMessage).toContain("Anthropic PDF request failed");
+    expect(errorMessage).not.toContain("tail-marker");
+    expect(errorMessage.length).toBeLessThan(500);
     expect(canceled).toBe(true);
   });
 
@@ -167,7 +168,8 @@ describe("native PDF provider API calls", () => {
     ]);
 
     expect(error).toBeInstanceOf(Error);
-    expect(error.message).toContain("Anthropic PDF request failed");
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    expect(errorMessage).toContain("Anthropic PDF request failed");
     expect(canceled).toBe(true);
   });
 

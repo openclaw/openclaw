@@ -181,10 +181,11 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     }).catch((caught: unknown) => caught as Error);
 
     expect(error).toBeInstanceOf(Error);
-    expect(error.message).toContain("MiniMax VLM request failed");
-    expect(error.message).toContain("Trace-Id: trace-123");
-    expect(error.message).not.toContain("tail-marker");
-    expect(error.message.length).toBeLessThan(520);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    expect(errorMessage).toContain("MiniMax VLM request failed");
+    expect(errorMessage).toContain("Trace-Id: trace-123");
+    expect(errorMessage).not.toContain("tail-marker");
+    expect(errorMessage.length).toBeLessThan(520);
     expect(canceled).toBe(true);
   });
 });
