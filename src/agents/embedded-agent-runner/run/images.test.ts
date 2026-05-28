@@ -81,6 +81,35 @@ describe("detectImageReferences", () => {
     });
   });
 
+  it("ignores OpenClaw CLI image cache paths from prior prompt transcripts", () => {
+    const refs = detectImageReferences(
+      [
+        '<system-reminder>Called the Read tool with {"file_path":"/Users/ada/.openclaw/workspace/.openclaw-cli-images/stale.png"}</system-reminder>',
+        "Compare it with /Users/ada/Pictures/current.png",
+      ].join("\n"),
+    );
+
+    expect(refs).toStrictEqual([
+      {
+        raw: "/Users/ada/Pictures/current.png",
+        type: "path",
+        resolved: "/Users/ada/Pictures/current.png",
+      },
+    ]);
+  });
+
+  it("ignores temporary OpenClaw CLI image cache paths", () => {
+    expectNoImageReferences(
+      `Prior turn wrote ${path.join(os.tmpdir(), "openclaw-cli-images", "stale.jpg")}`,
+    );
+  });
+
+  it("ignores file URLs into the OpenClaw CLI image cache", () => {
+    const stalePath = path.join(os.tmpdir(), "openclaw-cli-images", "stale.png");
+
+    expectNoImageReferences(`Prior turn wrote ${pathToFileURL(stalePath).href}`);
+  });
+
   it("detects multiple image references in a prompt", () => {
     const refs = expectImageReferenceCount(
       `
