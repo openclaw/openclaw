@@ -4,6 +4,7 @@ import {
   onAgentEvent as registerAgentEventListener,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import { buildChannelProgressDraftLine } from "../plugin-sdk/channel-streaming.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import {
   handleToolExecutionEnd,
@@ -1850,5 +1851,347 @@ describe("control UI credential redaction (issue #72283)", () => {
     }
     expect(emittedResult).not.toContain("sk-or-v1-abcdef0123456789");
     expect(emittedResult).toContain("OPENROUTER_API_KEY=");
+  });
+});
+
+describe("handleToolExecutionUpdate non-exec progress", () => {
+  afterEach(() => {
+    resetAgentEventsForTest();
+  });
+
+  function captureItemEvents(): {
+    events: CapturedAgentEvent[];
+    dispose: () => void;
+  } {
+    const events: CapturedAgentEvent[] = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    return {
+      events,
+      dispose: () => resetAgentEventsForTest(),
+    };
+  }
+
+  it("surfaces web_fetch partialResult as progressText on the kind:tool item", async () => {
+    resetAgentEventsForTest();
+    const { events, dispose } = captureItemEvents();
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "web_fetch",
+        toolCallId: "wf-1",
+        args: { url: "https://example.com/slow" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "wf-1",
+        partialResult: {
+          content: [{ type: "text", text: "Fetching web page…" }],
+        },
+      } as never,
+    );
+
+    const itemUpdateEvent = requireEvent(
+      events,
+      (evt) =>
+        evt.stream === "item" &&
+        (evt.data as { itemId?: string; phase?: string; kind?: string })?.itemId === "tool:wf-1" &&
+        (evt.data as { phase?: string }).phase === "update",
+      "web_fetch tool item update",
+    );
+    expectRecordFields(itemUpdateEvent.data, "web_fetch tool item update data", {
+      itemId: "tool:wf-1",
+      phase: "update",
+      kind: "tool",
+      name: "web_fetch",
+      progressText: "Fetching web page…",
+    });
+    // `meta` MUST be absent on the update event so the channel draft formatter
+    // (input.meta ?? input.summary ?? input.progressText) falls through to
+    // `progressText`. The start event still carries `meta` for consumers that
+    // snapshot it at item start (covered separately by handleToolExecutionStart
+    // tests).
+    expect((itemUpdateEvent.data as { meta?: string }).meta).toBeUndefined();
+
+    // Subscriber-facing onAgentEvent gets the same shape via the item channel.
+    const subscriberItemUpdate = onAgentEvent.mock.calls
+      .map((call) => call[0] as CapturedAgentEvent)
+      .find(
+        (evt) =>
+          evt.stream === "item" &&
+          (evt.data as { itemId?: string; phase?: string })?.itemId === "tool:wf-1" &&
+          (evt.data as { phase?: string }).phase === "update",
+      );
+    if (!subscriberItemUpdate) {
+      throw new Error("expected subscriber item update");
+    }
+    expect((subscriberItemUpdate.data as { progressText?: string }).progressText).toBe(
+      "Fetching web page…",
+    );
+    expect((subscriberItemUpdate.data as { meta?: string }).meta).toBeUndefined();
+
+    dispose();
+  });
+
+  it("renders channel draft as 'Fetching web page…' (formatter integration with meta+progressText)", async () => {
+    resetAgentEventsForTest();
+    const { events, dispose } = captureItemEvents();
+    const { ctx } = createTestContext();
+
+    // handleToolExecutionStart records the web_fetch `meta` value (e.g.
+    // `from <url>`) on the start item event, mimicking what
+    // `inferToolMetaFromArgs` returns at runtime.
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "web_fetch",
+        toolCallId: "wf-draft",
+        args: { url: "https://example.com/slow" },
+      } as never,
+    );
+
+    // Verify the start event carries the URL-bearing meta — this is the meta
+    // value that, prior to the precedence fix, hid `progressText` from the
+    // channel draft formatter.
+    const startEvent = requireEvent(
+      events,
+      (evt) =>
+        evt.stream === "item" &&
+        (evt.data as { itemId?: string; phase?: string })?.itemId === "tool:wf-draft" &&
+        (evt.data as { phase?: string }).phase === "start",
+      "web_fetch tool item start",
+    );
+    const startMeta = (startEvent.data as { meta?: string }).meta;
+    expect(typeof startMeta).toBe("string");
+    if (typeof startMeta !== "string") {
+      throw new Error("expected start meta");
+    }
+    expect(startMeta).toContain("example.com");
+
+    // Now drive the progress update. The runtime omits `meta` on this event
+    // so the channel draft formatter falls through to `progressText`.
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "wf-draft",
+        partialResult: {
+          content: [{ type: "text", text: "Fetching web page…" }],
+        },
+      } as never,
+    );
+
+    const updateEvent = requireEvent(
+      events,
+      (evt) =>
+        evt.stream === "item" &&
+        (evt.data as { itemId?: string; phase?: string })?.itemId === "tool:wf-draft" &&
+        (evt.data as { phase?: string }).phase === "update",
+      "web_fetch tool item update",
+    );
+    const updateData = updateEvent.data as Record<string, unknown>;
+
+    // Channel-side static contract: pass the update item payload to the real
+    // formatter and assert the rendered text contains the generic progress
+    // literal (not the URL-bearing meta).
+    const formatterInput = { ...updateData, event: "item", itemKind: "tool" } as never;
+    const draft = buildChannelProgressDraftLine(formatterInput);
+    expect(draft).toBeDefined();
+    if (!draft) {
+      throw new Error("expected channel draft");
+    }
+    expect(draft.text).toContain("Fetching web page…");
+    expect(draft.text).not.toContain("example.com");
+    expect(draft.text).not.toContain("https://");
+
+    // Defensive: even if the formatter ever falls back to summary, summary is
+    // not set on this event either.
+    expect(updateData.summary).toBeUndefined();
+
+    dispose();
+  });
+
+  it("caps non-exec progressText at the live-output character budget", async () => {
+    resetAgentEventsForTest();
+    const { events, dispose } = captureItemEvents();
+    const { ctx } = createTestContext();
+    const large = "x".repeat(9_000);
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "web_fetch",
+        toolCallId: "wf-cap",
+        args: { url: "https://example.com/slow" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "wf-cap",
+        partialResult: {
+          content: [{ type: "text", text: large }],
+        },
+      } as never,
+    );
+
+    const itemUpdateEvent = requireEvent(
+      events,
+      (evt) =>
+        evt.stream === "item" &&
+        (evt.data as { itemId?: string; phase?: string })?.itemId === "tool:wf-cap" &&
+        (evt.data as { phase?: string }).phase === "update",
+      "capped tool item update",
+    );
+    const progressText = (itemUpdateEvent.data as { progressText?: string }).progressText;
+    expect(typeof progressText).toBe("string");
+    if (typeof progressText !== "string") {
+      throw new Error("expected progressText");
+    }
+    expect(progressText.length).toBeLessThan(large.length);
+    expect(progressText).toContain("...(live output truncated)...");
+
+    dispose();
+  });
+
+  it("does not surface progressText for non-allow-listed non-exec tools", async () => {
+    resetAgentEventsForTest();
+    const { events, dispose } = captureItemEvents();
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "random_plugin_tool",
+        toolCallId: "rp-1",
+        args: {},
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "random_plugin_tool",
+        toolCallId: "rp-1",
+        partialResult: {
+          content: [{ type: "text", text: "secret=abc123" }],
+        },
+      } as never,
+    );
+
+    const itemUpdateEvent = requireEvent(
+      events,
+      (evt) =>
+        evt.stream === "item" &&
+        (evt.data as { itemId?: string; phase?: string })?.itemId === "tool:rp-1" &&
+        (evt.data as { phase?: string }).phase === "update",
+      "non-allow-list tool item update",
+    );
+    expect((itemUpdateEvent.data as { progressText?: string }).progressText).toBeUndefined();
+
+    // The upstream stream:"tool" partialResult is preserved for ACP/TUI consumers.
+    const partialResultEvent = requireEvent(
+      events,
+      (evt) =>
+        evt.stream === "tool" &&
+        (evt.data as { phase?: string; toolCallId?: string })?.phase === "update" &&
+        (evt.data as { toolCallId?: string }).toolCallId === "rp-1",
+      "non-allow-list partial result event",
+    );
+    expect((partialResultEvent.data as { partialResult?: unknown }).partialResult).toBeTruthy();
+
+    dispose();
+  });
+
+  it("preserves the existing exec command-output progress flow (regression)", async () => {
+    resetAgentEventsForTest();
+    const { events, dispose } = captureItemEvents();
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "exec-regression",
+        args: { command: "npm test" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "exec",
+        toolCallId: "exec-regression",
+        partialResult: {
+          details: {
+            status: "running",
+            aggregated: "RUN  src/example.test.ts",
+          },
+        },
+      } as never,
+    );
+
+    // Exec command item carries progressText (unchanged behavior). Filter on
+    // phase:"update" because the start phase emits the same itemId without
+    // progressText.
+    const commandUpdate = requireEvent(
+      events,
+      (evt) =>
+        evt.stream === "item" &&
+        (evt.data as { itemId?: string; kind?: string; phase?: string })?.itemId ===
+          "command:exec-regression" &&
+        (evt.data as { kind?: string }).kind === "command" &&
+        (evt.data as { phase?: string }).phase === "update",
+      "exec command item update",
+    );
+    expectRecordFields(commandUpdate.data, "exec command item update data", {
+      kind: "command",
+      progressText: "RUN  src/example.test.ts",
+    });
+
+    // Exec kind:"tool" item never carries progressText (it lives on the
+    // sibling kind:"command" item to avoid alternating renders).
+    const toolUpdate = requireEvent(
+      events,
+      (evt) =>
+        evt.stream === "item" &&
+        (evt.data as { itemId?: string; kind?: string; phase?: string })?.itemId ===
+          "tool:exec-regression" &&
+        (evt.data as { kind?: string }).kind === "tool" &&
+        (evt.data as { phase?: string }).phase === "update",
+      "exec tool item update",
+    );
+    expect((toolUpdate.data as { progressText?: string }).progressText).toBeUndefined();
+
+    const commandOutputDelta = onAgentEvent.mock.calls
+      .map((call) => call[0] as CapturedAgentEvent)
+      .find((evt) => evt.stream === "command_output");
+    if (!commandOutputDelta) {
+      throw new Error("expected exec command_output delta");
+    }
+    expect((commandOutputDelta.data as { output?: string }).output).toBe(
+      "RUN  src/example.test.ts",
+    );
+
+    dispose();
   });
 });

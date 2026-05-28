@@ -26,6 +26,7 @@ import {
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
+import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
@@ -53,7 +54,6 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
-import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -81,6 +81,19 @@ const TRACE_REQUIRED_PARAM_GROUPS = {
   write: REQUIRED_PARAM_GROUPS.write,
   edit: REQUIRED_PARAM_GROUPS.edit,
 } satisfies Record<string, readonly RequiredParamGroup[]>;
+
+/**
+ * Non-exec tools whose `partialResult` first-text-block is contractually safe
+ * to surface as channel-visible `progressText`. Each entry is a promise from
+ * the tool's `onUpdate` callsite that the emitted text is host-class only —
+ * no full URL with path/query, no request/response body bytes, no headers
+ * (cookies / auth / set-cookie), no raw tool args beyond a safe summary.
+ *
+ * Adding a tool here requires auditing its `onUpdate` emit sites. See
+ * `src/agents/tools/web-fetch.ts` `emitWebFetchProgressSafely` for the
+ * reference single-shot contract.
+ */
+const NON_EXEC_PROGRESS_SAFE_TOOLS: ReadonlySet<string> = new Set(["web_fetch"]);
 
 function isMiddlewareToolResultError(result: unknown): boolean {
   if (!result || typeof result !== "object") {
@@ -344,6 +357,21 @@ function extractExecOutput(result: unknown): string | undefined {
 function extractLiveExecOutput(result: unknown): string | undefined {
   const output = extractExecOutput(result);
   return typeof output === "string" ? truncateLiveExecOutput(output) : undefined;
+}
+
+/**
+ * Extract a safe progress string from an allow-listed non-exec `partialResult`.
+ * Caller MUST gate on `NON_EXEC_PROGRESS_SAFE_TOOLS` before calling; this
+ * helper does no semantic filtering. The same `LIVE_EXEC_OUTPUT_MAX_CHARS`
+ * cap is applied so a misbehaving tool cannot flush a large body into a
+ * channel progress draft.
+ */
+function extractLiveNonExecProgressText(result: unknown): string | undefined {
+  const text = extractToolResultText(result);
+  if (typeof text !== "string" || text.length === 0) {
+    return undefined;
+  }
+  return truncateLiveExecOutput(text);
 }
 
 function shouldEmitLiveExecUpdate(ctx: ToolHandlerContext, toolCallId: string): boolean {
@@ -1075,15 +1103,34 @@ export function handleToolExecutionUpdate(
       },
     });
   }
+  // Allow-listed non-exec tools surface their first text content block as
+  // channel-visible `progressText`. Channel renderers already consume this
+  // field for exec command output via `kind:"command"`; we reuse the same
+  // contract for the existing `kind:"tool"` item, which keeps channel-side
+  // code untouched. Non-allow-listed non-exec tools never populate this
+  // field — their `partialResult` may carry URLs, bodies, or tokens that
+  // must not leak into a draft.
+  const nonExecProgressText =
+    !isExecTool && NON_EXEC_PROGRESS_SAFE_TOOLS.has(toolName)
+      ? extractLiveNonExecProgressText(sanitized)
+      : undefined;
+  const storedMeta = ctx.state.toolMetaById.get(toolCallId)?.meta;
+  // Channel draft formatter precedence is `meta ?? summary ?? progressText`
+  // (src/plugin-sdk/channel-streaming.ts:423). When we surface a non-exec
+  // live progress milestone (e.g. web_fetch's delayed "Fetching web page…"),
+  // omit `meta` on the update event so the channel draft falls through to
+  // the progress text. The start event still carries `meta` for consumers
+  // that snapshot it at item start.
   const itemData: AgentItemEventData = {
     itemId: buildToolItemId(toolCallId),
     phase: "update",
     kind: "tool",
-    title: buildToolItemTitle(toolName, ctx.state.toolMetaById.get(toolCallId)?.meta),
+    title: buildToolItemTitle(toolName, storedMeta),
     status: "running",
     name: toolName,
-    meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
+    ...(nonExecProgressText ? {} : { meta: storedMeta }),
     toolCallId,
+    ...(nonExecProgressText ? { progressText: nonExecProgressText } : {}),
   };
   emitTrackedItemEvent(ctx, itemData);
   void ctx.params.onAgentEvent?.({

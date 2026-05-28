@@ -13,6 +13,7 @@ import {
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
+import type { AgentToolUpdateCallback } from "../runtime/index.js";
 import { stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
@@ -47,6 +48,13 @@ const DEFAULT_ERROR_MAX_CHARS = 4_000;
 const DEFAULT_ERROR_MAX_BYTES = 64_000;
 const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+
+// Generic single-shot progress milestone. Fires once if the underlying network
+// work is still in flight after this threshold so channel UIs no longer show a
+// silent gap during slow TTFB or slow body streams. URL path/query/headers and
+// body content are intentionally absent from the payload.
+const WEB_FETCH_PROGRESS_THRESHOLD_MS = 1_000;
+const WEB_FETCH_PROGRESS_TEXT = "Fetching web page…";
 
 const FETCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
@@ -286,7 +294,44 @@ type WebFetchRuntimeParams = {
   providerCacheKey?: string;
   lookupFn?: LookupFn;
   resolveProviderFallback: () => Promise<WebFetchProviderFallback>;
+  onUpdate?: AgentToolUpdateCallback<unknown>;
 };
+
+// Fail-open progress emit. onUpdate is declared `void`-returning but may throw
+// synchronously when the runtime subscriber has already torn down; that must
+// never break the fetch result. We swallow the error here so callers can stay
+// in a single try/finally without spreading defensive guards.
+function emitWebFetchProgressSafely(onUpdate: AgentToolUpdateCallback<unknown>): void {
+  try {
+    onUpdate({
+      content: [{ type: "text", text: WEB_FETCH_PROGRESS_TEXT }],
+      details: undefined,
+    });
+  } catch {
+    // Best-effort: progress emit must never fail the fetch.
+  }
+}
+
+// Schedule a single delayed progress emit and return a cleanup function the
+// caller invokes in finally. Cleared cleanly on success, error, abort, or any
+// throw from the surrounding network/extract work.
+function scheduleWebFetchProgressTimer(
+  onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+): () => void {
+  if (!onUpdate) {
+    return () => undefined;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
+    timer = undefined;
+    emitWebFetchProgressSafely(onUpdate);
+  }, WEB_FETCH_PROGRESS_THRESHOLD_MS);
+  return () => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+}
 
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
   const trimmed = normalizeOptionalString(value);
@@ -426,190 +471,203 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   }
 
   const start = Date.now();
-  let res: Response;
-  let release: (() => Promise<void>) | null = null;
-  let finalUrl = params.url;
+  // Progress timer covers TTFB, redirects, and body streaming. A single
+  // delayed emit reaches the runtime via onUpdate; the runtime allow-list in
+  // pi-embedded-subscribe.handlers.tools.ts surfaces it as channel-visible
+  // progressText. Cleared in the outer finally so success, provider-fallback
+  // return, and any rethrow all clean up exactly once.
+  const releaseProgressTimer = scheduleWebFetchProgressTimer(params.onUpdate);
   try {
-    const fetchWithWebToolsNetworkGuard = await loadWebGuardedFetch();
-    const result = await fetchWithWebToolsNetworkGuard({
-      url: params.url,
-      maxRedirects: params.maxRedirects,
-      timeoutSeconds: params.timeoutSeconds,
-      lookupFn: params.lookupFn,
-      useEnvProxy: useTrustedEnvProxy,
-      policy: ssrfPolicy,
-      init: {
-        headers: {
-          Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
-          "User-Agent": params.userAgent,
-          "Accept-Language": "en-US,en;q=0.9",
+    let res: Response;
+    let release: (() => Promise<void>) | null = null;
+    let finalUrl = params.url;
+    try {
+      const fetchWithWebToolsNetworkGuard = await loadWebGuardedFetch();
+      const result = await fetchWithWebToolsNetworkGuard({
+        url: params.url,
+        maxRedirects: params.maxRedirects,
+        timeoutSeconds: params.timeoutSeconds,
+        lookupFn: params.lookupFn,
+        useEnvProxy: useTrustedEnvProxy,
+        policy: ssrfPolicy,
+        init: {
+          headers: {
+            Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
+            "User-Agent": params.userAgent,
+            "Accept-Language": "en-US,en;q=0.9",
+          },
         },
-      },
-    });
-    res = result.response;
-    finalUrl = result.finalUrl;
-    release = result.release;
+      });
+      res = result.response;
+      finalUrl = result.finalUrl;
+      release = result.release;
 
-    // Cloudflare Markdown for Agents — log token budget hint when present
-    const markdownTokens = res.headers.get("x-markdown-tokens");
-    if (markdownTokens) {
-      logDebug(
-        `[web-fetch] x-markdown-tokens: ${markdownTokens} (${redactUrlForDebugLog(finalUrl)})`,
-      );
-    }
-  } catch (error) {
-    if (error instanceof SsrFBlockedError) {
-      throw error;
-    }
-    const payload = await maybeFetchProviderWebFetchPayload({
-      ...params,
-      urlToFetch: finalUrl,
-      cacheKey,
-      tookMs: Date.now() - start,
-    });
-    if (payload) {
-      return payload;
-    }
-    throw error;
-  }
-
-  try {
-    if (!res.ok) {
+      // Cloudflare Markdown for Agents — log token budget hint when present
+      const markdownTokens = res.headers.get("x-markdown-tokens");
+      if (markdownTokens) {
+        logDebug(
+          `[web-fetch] x-markdown-tokens: ${markdownTokens} (${redactUrlForDebugLog(finalUrl)})`,
+        );
+      }
+    } catch (error) {
+      if (error instanceof SsrFBlockedError) {
+        throw error;
+      }
       const payload = await maybeFetchProviderWebFetchPayload({
         ...params,
-        urlToFetch: params.url,
+        urlToFetch: finalUrl,
         cacheKey,
         tookMs: Date.now() - start,
       });
       if (payload) {
         return payload;
       }
-      const rawDetailResult = await readResponseText(res, { maxBytes: DEFAULT_ERROR_MAX_BYTES });
-      const rawDetail = rawDetailResult.text;
-      const detail = formatWebFetchErrorDetail({
-        detail: rawDetail,
-        contentType: res.headers.get("content-type"),
-        maxChars: DEFAULT_ERROR_MAX_CHARS,
-      });
-      const wrappedDetail = wrapWebFetchContent(detail || res.statusText, DEFAULT_ERROR_MAX_CHARS);
-      throw new Error(`Web fetch failed (${res.status}): ${wrappedDetail.text}`);
+      throw error;
     }
 
-    const contentType = res.headers.get("content-type") ?? "application/octet-stream";
-    const normalizedContentType = normalizeContentType(contentType) ?? "application/octet-stream";
-    const bodyResult = await readResponseText(res, { maxBytes: params.maxResponseBytes });
-    const body = bodyResult.text;
-    const responseTruncatedWarning = bodyResult.truncated
-      ? `Response body truncated after ${params.maxResponseBytes} bytes.`
-      : undefined;
-
-    let title: string | undefined;
-    let extractor = "raw";
-    let text = body;
-    if (contentType.includes("text/markdown")) {
-      // Cloudflare Markdown for Agents: server returned pre-rendered markdown
-      extractor = "cf-markdown";
-      if (params.extractMode === "text") {
-        text = markdownToText(body);
-      }
-    } else if (contentType.includes("text/html")) {
-      if (params.readabilityEnabled) {
-        const readable = await extractReadableContent({
-          html: body,
-          url: finalUrl,
-          extractMode: params.extractMode,
-          config: params.config,
-        });
-        if (readable?.text) {
-          text = readable.text;
-          title = readable.title;
-          extractor = readable.extractor;
-        } else {
-          let payload: Record<string, unknown> | null = null;
-          try {
-            payload = await maybeFetchProviderWebFetchPayload({
-              ...params,
-              urlToFetch: finalUrl,
-              cacheKey,
-              tookMs: Date.now() - start,
-            });
-          } catch {
-            payload = null;
-          }
-          if (payload) {
-            return payload;
-          }
-          const basic = await extractBasicHtmlContent({
-            html: body,
-            extractMode: params.extractMode,
-          });
-          if (basic?.text) {
-            text = basic.text;
-            title = basic.title;
-            extractor = "raw-html";
-          } else {
-            const providerLabel =
-              (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
-            throw new Error(
-              `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
-            );
-          }
-        }
-      } else {
+    try {
+      if (!res.ok) {
         const payload = await maybeFetchProviderWebFetchPayload({
           ...params,
-          urlToFetch: finalUrl,
+          urlToFetch: params.url,
           cacheKey,
           tookMs: Date.now() - start,
         });
         if (payload) {
           return payload;
         }
-        throw new Error(
-          "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
+        const rawDetailResult = await readResponseText(res, { maxBytes: DEFAULT_ERROR_MAX_BYTES });
+        const rawDetail = rawDetailResult.text;
+        const detail = formatWebFetchErrorDetail({
+          detail: rawDetail,
+          contentType: res.headers.get("content-type"),
+          maxChars: DEFAULT_ERROR_MAX_CHARS,
+        });
+        const wrappedDetail = wrapWebFetchContent(
+          detail || res.statusText,
+          DEFAULT_ERROR_MAX_CHARS,
         );
+        throw new Error(`Web fetch failed (${res.status}): ${wrappedDetail.text}`);
       }
-    } else if (contentType.includes("application/json")) {
-      try {
-        text = JSON.stringify(JSON.parse(body), null, 2);
-        extractor = "json";
-      } catch {
-        text = body;
-        extractor = "raw";
-      }
-    }
 
-    const wrapped = wrapWebFetchContent(text, params.maxChars);
-    const wrappedTitle = title ? wrapWebFetchField(title) : undefined;
-    const wrappedWarning = wrapWebFetchField(responseTruncatedWarning);
-    const payload = {
-      url: params.url, // Keep raw for tool chaining
-      finalUrl, // Keep raw
-      status: res.status,
-      contentType: normalizedContentType, // Protocol metadata, don't wrap
-      title: wrappedTitle,
-      extractMode: params.extractMode,
-      extractor,
-      externalContent: {
-        untrusted: true,
-        source: "web_fetch",
-        wrapped: true,
-      },
-      truncated: wrapped.truncated,
-      length: wrapped.wrappedLength,
-      rawLength: wrapped.rawLength, // Actual content length, not wrapped
-      wrappedLength: wrapped.wrappedLength,
-      fetchedAt: new Date().toISOString(),
-      tookMs: Date.now() - start,
-      text: wrapped.text,
-      warning: wrappedWarning,
-    };
-    writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
-  } finally {
-    if (release) {
-      await release();
+      const contentType = res.headers.get("content-type") ?? "application/octet-stream";
+      const normalizedContentType = normalizeContentType(contentType) ?? "application/octet-stream";
+      const bodyResult = await readResponseText(res, { maxBytes: params.maxResponseBytes });
+      const body = bodyResult.text;
+      const responseTruncatedWarning = bodyResult.truncated
+        ? `Response body truncated after ${params.maxResponseBytes} bytes.`
+        : undefined;
+
+      let title: string | undefined;
+      let extractor = "raw";
+      let text = body;
+      if (contentType.includes("text/markdown")) {
+        // Cloudflare Markdown for Agents: server returned pre-rendered markdown
+        extractor = "cf-markdown";
+        if (params.extractMode === "text") {
+          text = markdownToText(body);
+        }
+      } else if (contentType.includes("text/html")) {
+        if (params.readabilityEnabled) {
+          const readable = await extractReadableContent({
+            html: body,
+            url: finalUrl,
+            extractMode: params.extractMode,
+            config: params.config,
+          });
+          if (readable?.text) {
+            text = readable.text;
+            title = readable.title;
+            extractor = readable.extractor;
+          } else {
+            let payload: Record<string, unknown> | null = null;
+            try {
+              payload = await maybeFetchProviderWebFetchPayload({
+                ...params,
+                urlToFetch: finalUrl,
+                cacheKey,
+                tookMs: Date.now() - start,
+              });
+            } catch {
+              payload = null;
+            }
+            if (payload) {
+              return payload;
+            }
+            const basic = await extractBasicHtmlContent({
+              html: body,
+              extractMode: params.extractMode,
+            });
+            if (basic?.text) {
+              text = basic.text;
+              title = basic.title;
+              extractor = "raw-html";
+            } else {
+              const providerLabel =
+                (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
+              throw new Error(
+                `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
+              );
+            }
+          }
+        } else {
+          const payload = await maybeFetchProviderWebFetchPayload({
+            ...params,
+            urlToFetch: finalUrl,
+            cacheKey,
+            tookMs: Date.now() - start,
+          });
+          if (payload) {
+            return payload;
+          }
+          throw new Error(
+            "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
+          );
+        }
+      } else if (contentType.includes("application/json")) {
+        try {
+          text = JSON.stringify(JSON.parse(body), null, 2);
+          extractor = "json";
+        } catch {
+          text = body;
+          extractor = "raw";
+        }
+      }
+
+      const wrapped = wrapWebFetchContent(text, params.maxChars);
+      const wrappedTitle = title ? wrapWebFetchField(title) : undefined;
+      const wrappedWarning = wrapWebFetchField(responseTruncatedWarning);
+      const payload = {
+        url: params.url, // Keep raw for tool chaining
+        finalUrl, // Keep raw
+        status: res.status,
+        contentType: normalizedContentType, // Protocol metadata, don't wrap
+        title: wrappedTitle,
+        extractMode: params.extractMode,
+        extractor,
+        externalContent: {
+          untrusted: true,
+          source: "web_fetch",
+          wrapped: true,
+        },
+        truncated: wrapped.truncated,
+        length: wrapped.wrappedLength,
+        rawLength: wrapped.rawLength, // Actual content length, not wrapped
+        wrappedLength: wrapped.wrappedLength,
+        fetchedAt: new Date().toISOString(),
+        tookMs: Date.now() - start,
+        text: wrapped.text,
+        warning: wrappedWarning,
+      };
+      writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+      return payload;
+    } finally {
+      if (release) {
+        await release();
+      }
     }
+  } finally {
+    releaseProgressTimer();
   }
 }
 
@@ -630,7 +688,7 @@ export function createWebFetchTool(options?: {
     description:
       "Fetch URL and extract readable markdown/text. Lightweight page access; no browser automation.",
     parameters: WebFetchSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, _signal, onUpdate) => {
       const { config, preferRuntimeProviders, runtimeWebFetch } = resolveWebFetchToolRuntimeContext(
         {
           config: options?.config,
@@ -702,6 +760,7 @@ export function createWebFetchTool(options?: {
         ...(providerCacheKey ? { providerCacheKey } : {}),
         lookupFn: options?.lookupFn,
         resolveProviderFallback,
+        ...(onUpdate ? { onUpdate } : {}),
       });
       return jsonResult(result);
     },
