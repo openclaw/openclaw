@@ -809,7 +809,7 @@
         "timeoutMs": {
           "description": "Provider timeout ms.",
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         }
       },
       "required": ["text"],
