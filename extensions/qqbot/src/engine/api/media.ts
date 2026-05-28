@@ -12,7 +12,8 @@
  */
 
 import * as fs from "node:fs";
-import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   MediaFileType,
   type ChatScope,
@@ -20,6 +21,7 @@ import {
   type MessageResponse,
   type EngineLogger,
 } from "../types.js";
+import { getMaxUploadSize } from "../utils/file-utils.js";
 import { ApiClient } from "./api-client.js";
 import { withRetry, UPLOAD_RETRY_POLICY } from "./retry.js";
 import { mediaUploadPath, messagePath, getNextMsgSeq } from "./routes.js";
@@ -51,7 +53,7 @@ interface MediaApiConfig {
   sanitizeFileName?: SanitizeFileNameFn;
 }
 
-async function assertDirectUploadUrlAllowed(url: string): Promise<string> {
+async function downloadDirectUploadUrl(url: string, fileType: MediaFileType): Promise<Buffer> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -63,11 +65,18 @@ async function assertDirectUploadUrlAllowed(url: string): Promise<string> {
     throw new Error("Direct-upload media URL must use HTTP or HTTPS");
   }
 
-  // urlDirectUpload forwards the original URL to QQ/Tencent for the fetch, so
-  // this must validate as a public remote-provider URL. Local fake-IP DNS
-  // allowances are only safe for guarded local downloads that use the pinned lookup.
-  await resolvePinnedHostnameWithPolicy(parsed.hostname, { policy: {} });
-  return parsed.toString();
+  const { response, release } = await fetchWithSsrFGuard({
+    url: parsed.toString(),
+    policy: { allowRfc2544BenchmarkRange: true },
+  });
+  try {
+    if (!response.ok) {
+      throw new Error(`Direct-upload media URL returned HTTP ${response.status}`);
+    }
+    return await readResponseWithLimit(response, getMaxUploadSize(fileType));
+  } finally {
+    await release?.();
+  }
 }
 
 /**
@@ -149,6 +158,9 @@ export class MediaApi {
     } else if (opts.localPath) {
       const buf = await fs.promises.readFile(opts.localPath);
       fileData = buf.toString("base64");
+    } else if (opts.url !== undefined) {
+      const buf = await downloadDirectUploadUrl(opts.url, fileType);
+      fileData = buf.toString("base64");
     }
 
     // Check cache for base64 uploads.
@@ -164,9 +176,7 @@ export class MediaApi {
       file_type: fileType,
       srv_send_msg: opts.srvSendMsg ?? false,
     };
-    if (opts.url !== undefined) {
-      body.url = await assertDirectUploadUrlAllowed(opts.url);
-    } else if (fileData !== undefined) {
+    if (fileData !== undefined) {
       body.file_data = fileData;
     }
     if (fileType === MediaFileType.FILE && opts.fileName) {
