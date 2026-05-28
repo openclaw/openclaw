@@ -1112,11 +1112,13 @@ vi.mock("./preview-finalize.js", () => ({
 
 let dispatchPreparedSlackMessage: typeof import("./dispatch.js").dispatchPreparedSlackMessage;
 let clearSlackHandlerTimeoutFallbackDedupeForTests: typeof import("./dispatch.js").clearSlackHandlerTimeoutFallbackDedupeForTests;
+let SlackRetryableInboundError: typeof import("../inbound-delivery-state.js").SlackRetryableInboundError;
 
 describe("dispatchPreparedSlackMessage preview fallback", () => {
   beforeAll(async () => {
     ({ dispatchPreparedSlackMessage, clearSlackHandlerTimeoutFallbackDedupeForTests } =
       await import("./dispatch.js"));
+    ({ SlackRetryableInboundError } = await import("../inbound-delivery-state.js"));
   });
 
   beforeEach(() => {
@@ -1295,7 +1297,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
 
     await expect(dispatchPreparedSlackMessage(prepared)).rejects.toThrow(
-      "codex app-server attempt timed out",
+      SlackRetryableInboundError,
     );
     await expect(dispatchPreparedSlackMessage(prepared)).rejects.toThrow(
       "codex app-server attempt timed out",

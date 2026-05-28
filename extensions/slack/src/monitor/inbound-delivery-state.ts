@@ -12,6 +12,13 @@ type SlackInboundDeliveryRecord = {
   deliveredAt: number;
 };
 
+export class SlackRetryableInboundError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "SlackRetryableInboundError";
+  }
+}
+
 type SlackInboundDeliveryStore = {
   register(
     key: string,
