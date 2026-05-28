@@ -586,7 +586,10 @@ export async function runBtwSideQuestion(
 
     if (event.type === "text_delta") {
       sawTextEvent = true;
-      answerText += event.delta;
+      answerText = event.replace ? event.delta : answerText + event.delta;
+      if (event.replace) {
+        chunker?.reset();
+      }
       chunker?.append(event.delta);
       if (chunker && params.resolvedBlockStreamingBreak === "text_end") {
         chunker.drain({ force: false, emit: (chunk) => void emitBlockChunk(chunk) });

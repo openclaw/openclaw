@@ -43,7 +43,7 @@ class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, Assista
 export type ProxyAssistantMessageEvent =
   | { type: "start" }
   | { type: "text_start"; contentIndex: number }
-  | { type: "text_delta"; contentIndex: number; delta: string }
+  | { type: "text_delta"; contentIndex: number; delta: string; replace?: boolean }
   | { type: "text_end"; contentIndex: number; contentSignature?: string }
   | { type: "thinking_start"; contentIndex: number }
   | { type: "thinking_delta"; contentIndex: number; delta: string }
@@ -261,7 +261,9 @@ function processProxyEvent(
       return accumulator.startText(proxyEvent.contentIndex);
 
     case "text_delta":
-      return accumulator.appendTextDelta(proxyEvent.contentIndex, proxyEvent.delta);
+      return accumulator.appendTextDelta(proxyEvent.contentIndex, proxyEvent.delta, {
+        replace: proxyEvent.replace === true,
+      });
 
     case "text_end":
       return accumulator.endText(proxyEvent.contentIndex, {

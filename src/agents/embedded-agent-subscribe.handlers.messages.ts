@@ -521,6 +521,7 @@ export function handleMessageUpdate(
     content,
     accumulatedText: ctx.state.deltaBuffer,
   });
+  const isReplacementDelta = evtType === "text_delta" && assistantRecord?.replace === true;
 
   const partialAssistant =
     assistantRecord?.partial && typeof assistantRecord.partial === "object"
@@ -556,8 +557,18 @@ export function handleMessageUpdate(
   const phaseAwareVisibleText = shouldUsePhaseAwareBlockReply
     ? coerceChatContentText(extractAssistantVisibleText(partialAssistant)).trim()
     : "";
+  const isUnphasedReplacementDelta = isReplacementDelta && !shouldUsePhaseAwareBlockReply;
 
   if (chunk) {
+    if (isUnphasedReplacementDelta) {
+      ctx.state.deltaBuffer = "";
+      ctx.state.blockBuffer = "";
+      ctx.blockChunker?.reset();
+      ctx.state.partialBlockState.thinking = false;
+      ctx.state.partialBlockState.final = false;
+      ctx.state.partialBlockState.inlineCode = createInlineCodeState();
+      ctx.state.partialBlockState.pendingTagFragment = undefined;
+    }
     ctx.state.deltaBuffer += chunk;
     if (!shouldUsePhaseAwareBlockReply) {
       appendBlockReplyChunk(ctx, chunk);
@@ -588,11 +599,9 @@ export function handleMessageUpdate(
   const parsedFull = shouldUsePhaseAwareBlockReply
     ? parseReplyDirectives(splitTrailingDirective(phaseAwareVisibleText).text)
     : null;
-  const isReplacementDelta =
-    !shouldUsePhaseAwareBlockReply && evtType === "text_delta" && assistantRecord?.replace === true;
   const cleanedText = shouldUsePhaseAwareBlockReply
     ? (parsedFull?.text ?? "")
-    : isReplacementDelta
+    : isUnphasedReplacementDelta
       ? (parsedStreamDirectives?.text ?? "")
       : `${previousCleaned}${parsedStreamDirectives?.text ?? ""}`;
   const next = shouldUsePhaseAwareBlockReply ? phaseAwareVisibleText : cleanedText;
@@ -610,7 +619,8 @@ export function handleMessageUpdate(
       shouldEmit = false;
     } else {
       replace =
-        isReplacementDelta || Boolean(previousCleaned && !cleanedText.startsWith(previousCleaned));
+        isUnphasedReplacementDelta ||
+        Boolean(previousCleaned && !cleanedText.startsWith(previousCleaned));
       deltaText = replace ? "" : cleanedText.slice(previousCleaned.length);
       shouldEmit = replace
         ? cleanedText !== previousCleaned || hasMedia || hasAudio

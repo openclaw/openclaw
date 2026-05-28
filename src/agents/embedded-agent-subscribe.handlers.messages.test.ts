@@ -339,7 +339,12 @@ describe("handleMessageUpdate text signatures", () => {
     const context = createMessageUpdateContext({
       onAgentEvent,
       consumePartialReplyDirectives: vi.fn((text: string) => ({ text })),
-      state: { lastStreamedAssistantCleaned: "Final answer", emittedAssistantUpdate: true },
+      state: {
+        deltaBuffer: "Final answer",
+        blockBuffer: "Final answer",
+        lastStreamedAssistantCleaned: "Final answer",
+        emittedAssistantUpdate: true,
+      },
     });
 
     handleMessageUpdate(context, {
@@ -374,6 +379,8 @@ describe("handleMessageUpdate text signatures", () => {
       },
     });
     expect(context.state.lastStreamedAssistantCleaned).toBe("Corrected answer");
+    expect(context.state.deltaBuffer).toBe("Corrected answer");
+    expect(context.state.blockBuffer).toBe("Corrected answer");
   });
 
   it("emits media-only unphased streaming directives", () => {
