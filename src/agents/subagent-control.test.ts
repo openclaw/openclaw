@@ -6,7 +6,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
-  __testing,
+  testing,
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
   killSubagentRunAdmin,
@@ -14,7 +14,7 @@ import {
   steerControlledSubagentRun,
 } from "./subagent-control.js";
 import {
-  __testing as subagentRegistryTesting,
+  testing as subagentRegistryTesting,
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
@@ -109,9 +109,9 @@ vi.mock("./run-wait.js", () => {
 });
 
 function setSubagentControlDepsForTest(
-  overrides: Parameters<typeof __testing.setDepsForTest>[0] = {},
+  overrides: Parameters<typeof testing.setDepsForTest>[0] = {},
 ) {
-  __testing.setDepsForTest({
+  testing.setDepsForTest({
     abortEmbeddedPiRun: () => false,
     clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     updateSessionStore: async <T>(
@@ -180,7 +180,7 @@ afterEach(() => {
 describe("sendControlledSubagentMessage", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("rejects runs controlled by another session", async () => {
@@ -524,7 +524,7 @@ describe("sendControlledSubagentMessage", () => {
 describe("killSubagentRunAdmin", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("kills a subagent by session key without requester ownership checks", async () => {
@@ -653,7 +653,7 @@ describe("killSubagentRunAdmin", () => {
 describe("killControlledSubagentRun", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("does not mutate the live session when the caller passes a stale run entry", async () => {
@@ -904,7 +904,7 @@ describe("killControlledSubagentRun", () => {
 describe("killAllControlledSubagentRuns", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("ignores stale run snapshots in bulk kill requests", async () => {
@@ -1162,7 +1162,7 @@ describe("killAllControlledSubagentRuns", () => {
 describe("steerControlledSubagentRun", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("returns an error and clears the restart marker when run remap fails", async () => {
@@ -1358,7 +1358,7 @@ describe("steerControlledSubagentRun", () => {
 describe("sendControlledSubagentMessage timeout", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("uses configured runTimeoutSeconds + 5s buffer", async () => {
@@ -1488,5 +1488,74 @@ describe("sendControlledSubagentMessage timeout", () => {
     expect(result.status).toBe("ok");
     // Default should be 30000ms
     expect(capturedTimeouts[0]).toBe(30_000);
+  });
+
+  it("uses per-run runTimeoutSeconds from entry when provided", async () => {
+    const capturedTimeouts: number[] = [];
+
+    addSubagentRunForTests({
+      runId: "run-per-run-timeout",
+      childSessionKey: "agent:main:subagent:per-run-timeout",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "per-run timeout test",
+      cleanup: "keep",
+      createdAt: Date.now() - 2_000,
+      startedAt: Date.now() - 1_000,
+    });
+
+    setSubagentControlDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "chat.history") {
+          return { messages: [] } as T;
+        }
+        if (request.method === "agent") {
+          return { runId: "run-per-run-followup" } as T;
+        }
+        if (request.method === "agent.wait") {
+          capturedTimeouts.push(request.params?.timeoutMs as number);
+          return { status: "done" } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await sendControlledSubagentMessage({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        // Global config has lower value, but per-run should override
+        agents: {
+          defaults: {
+            subagents: {
+              runTimeoutSeconds: 30,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-per-run-timeout",
+        childSessionKey: "agent:main:subagent:per-run-timeout",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "per-run timeout test",
+        cleanup: "keep",
+        createdAt: Date.now() - 2_000,
+        startedAt: Date.now() - 1_000,
+        runTimeoutSeconds: 90, // Per-run timeout should override global config
+      },
+      message: "continue",
+    });
+
+    expect(result.status).toBe("ok");
+    // 90 seconds * 1000 + 5000 buffer = 95000ms
+    expect(capturedTimeouts[0]).toBe(95_000);
   });
 });

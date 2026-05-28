@@ -683,6 +683,7 @@ export async function sendControlledSubagentMessage(params: {
 
     const configuredTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
       cfg: params.cfg,
+      runTimeoutSeconds: params.entry.runTimeoutSeconds,
     });
     const controlTimeoutMs =
       configuredTimeoutSeconds > 0
@@ -738,7 +739,7 @@ export function resolveControlledSubagentTarget(
   });
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides?: Partial<{
       callGateway: GatewayCaller;
@@ -755,3 +756,4 @@ export const __testing = {
       : defaultSubagentControlDeps;
   },
 };
+export { testing as __testing };

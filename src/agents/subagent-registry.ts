@@ -1047,7 +1047,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   }
 }
 
-export const __testing = {
+export const testing = {
   async sweepOnceForTests() {
     await sweepSubagentRuns();
   },
@@ -1060,6 +1060,7 @@ export const __testing = {
       : defaultSubagentRegistryDeps;
   },
 } as const;
+export { testing as __testing };
 
 export function addSubagentRunForTests(entry: SubagentRunRecord) {
   subagentRuns.set(entry.runId, entry);
