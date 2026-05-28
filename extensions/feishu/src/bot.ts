@@ -75,6 +75,34 @@ export { toMessageResourceType } from "./bot-content.js";
 // Cache permission errors to avoid spamming the user with repeated notifications.
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
+
+/**
+ * Validate that the channel runtime's inbound dispatch surface is available.
+ *
+ * Issue #87646: During gateway cold starts, the feishu plugin can receive
+ * messages before createRuntimeChannel() has been wired into the runtime store.
+ * In that state core.channel.inbound.run is undefined and any dispatch attempt
+ * would crash the handler.
+ *
+ * Returns the bound run function when ready, or null if the runtime is not
+ * wired yet (caller should log and skip/return).
+ */
+function getChannelInboundRun(
+  core: ReturnType<typeof getFeishuRuntime>,
+  log: (msg: string) => void,
+  context: string,
+): typeof core.channel.inbound.run | null {
+  if (typeof core.channel?.inbound?.run === "function") {
+    return core.channel.inbound.run;
+  }
+  const channelKeys = core.channel ? Object.keys(core.channel) : [];
+  const inboundKeys = core.channel?.inbound ? Object.keys(core.channel.inbound) : [];
+  log(
+    `[${context}] channel runtime not ready ` +
+    `(channel=[${channelKeys}], inbound=[${inboundKeys}]); skipping`,
+  );
+  return null;
+}
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
 const groupNameCache = new Map<string, { name: string; expiresAt: number }>();
@@ -1493,7 +1521,9 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: broadcast active dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
-          await core.channel.inbound.run({
+          const broadcastInboundRun = getChannelInboundRun(core, log, `feishu[${account.accountId}] broadcast-active`);
+          if (broadcastInboundRun) {
+          await broadcastInboundRun({
             channel: "feishu",
             accountId: route.accountId,
             raw: ctx,
@@ -1534,6 +1564,7 @@ export async function handleFeishuMessage(params: {
               }),
             },
           });
+          } // end broadcastInboundRun check
         } else {
           // Observer agent: no-op dispatcher (session entry + inference, no Feishu reply).
           // Strip CommandAuthorized so slash commands (e.g. /reset) don't silently
@@ -1552,7 +1583,9 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: broadcast observer dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
-          await core.channel.inbound.run({
+          const observerInboundRun = getChannelInboundRun(core, log, `feishu[${account.accountId}] broadcast-observer`);
+          if (observerInboundRun) {
+          await observerInboundRun({
             channel: "feishu",
             accountId: route.accountId,
             raw: ctx,
@@ -1586,6 +1619,7 @@ export async function handleFeishuMessage(params: {
               }),
             },
           });
+          } // end observerInboundRun check
         }
       };
 
@@ -1657,24 +1691,10 @@ export async function handleFeishuMessage(params: {
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
 
-      // Validate channel runtime binding before dispatch.
-      // Issue #87646: core.channel.inbound.run can be undefined when the feishu
-      // plugin receives a message before the gateway finishes wiring the channel
-      // runtime via createRuntimeChannel(). This happens during cold starts or
-      // when the plugin's message listener fires before setFeishuRuntime()
-      // receives a fully-constructed PluginRuntime object.
-      if (typeof core.channel?.inbound?.run !== "function") {
-        const channelKeys = core.channel ? Object.keys(core.channel) : [];
-        const inboundKeys = core.channel?.inbound ? Object.keys(core.channel.inbound) : [];
-        log(
-          `feishu[${account.accountId}]: channel runtime not ready ` +
-          `(channel=[${channelKeys}], inbound=[${inboundKeys}]); ` +
-          `dropping message ${ctx.messageId} to prevent crash`,
-        );
-        return;
-      }
+      const inboundRun = getChannelInboundRun(core, log, `feishu[${account.accountId}]`);
+      if (!inboundRun) return;
 
-      const turnResult = await core.channel.inbound.run({
+      const turnResult = await inboundRun({
         channel: "feishu",
         accountId: route.accountId,
         raw: ctx,
