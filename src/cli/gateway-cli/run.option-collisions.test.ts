@@ -151,6 +151,7 @@ vi.mock("../../commands/doctor/shared/pristine-startup-state.js", () => ({
 
 vi.mock("../../config/paths.js", () => ({
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
+  isExplicitOpenClawHomeStateDir: () => false,
   normalizeStateDirEnv: (env?: NodeJS.ProcessEnv) => normalizeStateDirEnv(env),
   pinRuntimePaths: (env?: NodeJS.ProcessEnv) => pinRuntimePaths(env),
   resolveConfigPath: () => "/tmp/openclaw-test-missing-config.json",
