@@ -7,7 +7,7 @@ metadata: { "openclaw": { "emoji": "🪂", "requires": { "bins": ["agy"] } } }
 
 # Antigravity CLI (agy)
 
-Use Google Antigravity in headless one-shot mode or interactive TUI. The binary is `agy`, not `antigravity`.
+Use Google Antigravity CLI in headless one-shot mode or interactive TUI. The binary is `agy`, not `antigravity`.
 
 ## Quick start
 
@@ -61,57 +61,57 @@ Use Google Antigravity in headless one-shot mode or interactive TUI. The binary 
 
 Launch with `agy` in a project directory for the full TUI. Type `/` inside the prompt box to open the typeahead command selection menu.
 
-| Command | Alias | Purpose |
-|-|-|-|
-| `/add-dir <path>` | — | Add a directory path to the active workspace |
-| `/agents` | — | Open Agent Manager Panel to monitor background subagents |
-| `/btw <query>` | — | Ask a side question in the background without interrupting main conversation |
-| `/clear` | — | Clear the terminal and reset active conversation contexts |
-| `/config` | `/settings` | Open the interactive Settings Editor Overlay |
-| `/diff` | — | Show unified diff of all modified workspace files |
-| `/exit` | — | Close the TUI session and restore your host shell |
-| `/fast` | — | Enable fast mode (bypass reasoning plans) for quick actions |
-| `/fork` | `/branch` | Clone the current conversation thread into a new parallel session |
-| `/hooks` | — | Browse active pre-flight/post-format script hooks |
-| `/keybindings` | — | Open the interactive Keyboard Shortcut Editor |
-| `/logout` | — | Disconnect profile and purge auth tokens from secure keyring |
-| `/mcp` | — | Open the Model Context Protocol (MCP) server manager |
-| `/model` | — | Choose preferred reasoning model (persists across sessions) |
-| `/open <path>` | — | Force path to open inside default system editor |
-| `/permissions` | — | Switch global permission presets (`request-review`, `always-proceed`, `strict`) |
-| `/planning` | — | Enable multi-turn plan generation mode for complex tasks |
-| `/rename <name>` | — | Rename the current session thread |
-| `/resume` | `/switch`, `/conversation` | Open conversation picker to select and load previous threads |
-| `/rewind` | `/undo` | Roll back conversation history to a previous message |
-| `/skills` | — | Browse loaded local and global Agent Skills |
-| `/statusline` | — | Open the Status Bar customization overlay |
-| `/tasks` | — | Open Task Manager Panel to monitor background shell execution logs |
-| `/title [on/off]` | — | Toggle or set terminal window title updates |
-| `/usage` | — | Launch the offline developer help manual inside the terminal |
+| Command           | Alias                      | Purpose                                                                         |
+| ----------------- | -------------------------- | ------------------------------------------------------------------------------- |
+| `/add-dir <path>` | —                          | Add a directory path to the active workspace                                    |
+| `/agents`         | —                          | Open Agent Manager Panel to monitor background subagents                        |
+| `/btw <query>`    | —                          | Ask a side question in the background without interrupting main conversation    |
+| `/clear`          | —                          | Clear the terminal and reset active conversation contexts                       |
+| `/config`         | `/settings`                | Open the interactive Settings Editor Overlay                                    |
+| `/diff`           | —                          | Show unified diff of all modified workspace files                               |
+| `/exit`           | —                          | Close the TUI session and restore your host shell                               |
+| `/fast`           | —                          | Enable fast mode (bypass reasoning plans) for quick actions                     |
+| `/fork`           | `/branch`                  | Clone the current conversation thread into a new parallel session               |
+| `/hooks`          | —                          | Browse active pre-flight/post-format script hooks                               |
+| `/keybindings`    | —                          | Open the interactive Keyboard Shortcut Editor                                   |
+| `/logout`         | —                          | Disconnect profile and purge auth tokens from secure keyring                    |
+| `/mcp`            | —                          | Open the Model Context Protocol (MCP) server manager                            |
+| `/model`          | —                          | Choose preferred reasoning model (persists across sessions)                     |
+| `/open <path>`    | —                          | Force path to open inside default system editor                                 |
+| `/permissions`    | —                          | Switch global permission presets (`request-review`, `always-proceed`, `strict`) |
+| `/planning`       | —                          | Enable multi-turn plan generation mode for complex tasks                        |
+| `/rename <name>`  | —                          | Rename the current session thread                                               |
+| `/resume`         | `/switch`, `/conversation` | Open conversation picker to select and load previous threads                    |
+| `/rewind`         | `/undo`                    | Roll back conversation history to a previous message                            |
+| `/skills`         | —                          | Browse loaded local and global Agent Skills                                     |
+| `/statusline`     | —                          | Open the Status Bar customization overlay                                       |
+| `/tasks`          | —                          | Open Task Manager Panel to monitor background shell execution logs              |
+| `/title [on/off]` | —                          | Toggle or set terminal window title updates                                     |
+| `/usage`          | —                          | Launch the offline developer help manual inside the terminal                    |
 
 ## Essential Keybindings
 
 Most-used keyboard shortcuts inside the TUI.
 
-| Key | Action |
-|-|-|
-| `Esc` | Cancel stream, close panels, clear prompt (global escape) |
-| `Ctrl+C` | Terminate CLI session |
-| `Ctrl+L` | Clear terminal buffer |
-| `Enter` | Submit prompt / confirm selection |
-| `Shift+Enter` / `Ctrl+J` | Insert newline without submitting |
-| `Ctrl+R` | Open Artifact Review Panel |
-| `Ctrl+G` | Edit prompt in `$EDITOR` |
-| `Ctrl+V` | Paste media from clipboard |
-| `Ctrl+O` | Toggle tool reasoning output |
-| `Ctrl+K` | Fast-approve pending subagent action |
-| `Alt+J` | Teleport to next subagent awaiting approval |
-| `Ctrl+A` / `Ctrl+E` | Cursor to line start / end |
-| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo text edit |
-| `y` / `n` | Approve / reject tool command or artifact |
-| `Shift+A` | Approve all artifacts (review panel) |
-| `Ctrl+D` | Exit CLI (same as `/exit`) |
-| `Ctrl+Z` (terminal) | Suspend CLI to background |
+| Key                       | Action                                                    |
+| ------------------------- | --------------------------------------------------------- |
+| `Esc`                     | Cancel stream, close panels, clear prompt (global escape) |
+| `Ctrl+C`                  | Terminate CLI session                                     |
+| `Ctrl+L`                  | Clear terminal buffer                                     |
+| `Enter`                   | Submit prompt / confirm selection                         |
+| `Shift+Enter` / `Ctrl+J`  | Insert newline without submitting                         |
+| `Ctrl+R`                  | Open Artifact Review Panel                                |
+| `Ctrl+G`                  | Edit prompt in `$EDITOR`                                  |
+| `Ctrl+V`                  | Paste media from clipboard                                |
+| `Ctrl+O`                  | Toggle tool reasoning output                              |
+| `Ctrl+K`                  | Fast-approve pending subagent action                      |
+| `Alt+J`                   | Teleport to next subagent awaiting approval               |
+| `Ctrl+A` / `Ctrl+E`       | Cursor to line start / end                                |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo text edit                                     |
+| `y` / `n`                 | Approve / reject tool command or artifact                 |
+| `Shift+A`                 | Approve all artifacts (review panel)                      |
+| `Ctrl+D`                  | Exit CLI (same as `/exit`)                                |
+| `Ctrl+Z` (terminal)       | Suspend CLI to background                                 |
 
 ## Artifact Review Workflow
 
@@ -125,6 +125,7 @@ When the agent proposes file changes, press `Ctrl+R` to open the Artifact Review
 6. Press `Esc` to save state and return to the prompt
 
 Files are organized by type:
+
 - **Actionable code files**: require explicit approve/reject
 - **Media drawer**: images/videos grouped separately, expand with `Enter`
 
@@ -147,10 +148,10 @@ Files are organized by type:
 
 ## Skills paths
 
-| Scope | Path |
-|-------|------|
-| Global shared | `~/.gemini/antigravity-cli/skills/` |
-| Workspace project | `.agents/skills/` |
+| Scope             | Path                                |
+| ----------------- | ----------------------------------- |
+| Global shared     | `~/.gemini/antigravity-cli/skills/` |
+| Workspace project | `.agents/skills/`                   |
 
 ## Notes
 
@@ -164,12 +165,14 @@ Files are organized by type:
 ## Documentation
 
 **Getting started:**
+
 - [Installation & Auth](https://antigravity.google/docs/cli-install) — Setup, configuration, enterprise parameters
 - [CLI Overview](https://antigravity.google/docs/cli-overview) — Platform comparison, integration features, migration
 - [Getting Started](https://antigravity.google/docs/cli-getting-started) — Onboarding roadmap, first-launch setup
 - [Tutorial](https://antigravity.google/docs/cli-tutorial) — First agent-assisted workflow walkthrough
 
 **Reference:**
+
 - [CLI Reference](https://antigravity.google/docs/cli-reference) — Slash commands, keybindings, JSON config parameters
 - [CLI Features](https://antigravity.google/docs/cli-features) — Plugins, sandbox, subagents
 - [Using AGY CLI](https://antigravity.google/docs/cli-using) — Settings, quick tips, default keybindings
@@ -177,4 +180,5 @@ Files are organized by type:
 - [Reviewing Artifacts](https://antigravity.google/docs/cli-artifacts) — Artifact review workflow
 
 **Migration:**
+
 - [Migrating from Gemini CLI](https://antigravity.google/docs/gcli-migration) — `agy plugin import gemini` converts legacy extensions
