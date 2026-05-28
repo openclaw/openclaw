@@ -1,11 +1,11 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type {
   AssistantMessage,
   AssistantMessageEventStream,
   Context,
   Model,
-  StreamFn,
   Usage,
-} from "openclaw/plugin-sdk/agent-core";
+} from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   createOpenRouterCostReconciliationWrapper,

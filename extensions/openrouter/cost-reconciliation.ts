@@ -15,7 +15,8 @@
  * `total_cost` smaller than the streamed estimate is logged at warn-level and
  * the original cost is preserved so a flaky lookup never breaks a turn.
  */
-import type { AssistantMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
