@@ -426,9 +426,11 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.experimental.planTool":
     "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. Leave this off unless you explicitly want the tool outside strict-agentic embedded OpenClaw runs.",
   "tools.toolSearch":
-    "Compact large OpenClaw, MCP, and client tool catalogs behind one search/call surface. Set to true for the default code bridge or use the object form to choose the structured fallback.",
+    "Compact large OpenClaw, MCP, and client tool catalogs behind one search/call surface. Defaults to auto: small catalogs stay direct and large ones (>= `autoEnableMinTools`) compact automatically. Set to true to always compact, false to disable.",
   "tools.toolSearch.enabled":
-    "Enables Tool Search. When on, OpenClaw hides large tool catalogs behind `tool_search_code` or structured search/describe/call tools during embedded runtime runs.",
+    "Enables Tool Search. Leave unset for auto mode (compact only once the catalog reaches `autoEnableMinTools`). Set true to always compact, false to always expose tools directly.",
+  "tools.toolSearch.autoEnableMinTools":
+    "In auto mode (when `enabled` is unset), the catalog size at which Tool Search starts compacting tools behind the search surface. Default: 40. Ignored when `enabled` is set true or false.",
   "tools.toolSearch.mode":
     'Choose the model-facing surface: "code" exposes `tool_search_code`; "tools" exposes structured search/describe/call fallback tools.',
   "tools.toolSearch.codeTimeoutMs":

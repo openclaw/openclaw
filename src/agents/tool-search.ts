@@ -35,6 +35,11 @@ const DEFAULT_CODE_TIMEOUT_MS = 10_000;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;
 const MAX_REUSABLE_CATALOG_SNAPSHOTS = 256;
+// Default catalog size at which Tool Search auto-compacts when the user has not
+// pinned tools.toolSearch on/off. Kept above the core tool count so typical
+// core-only runs stay fully direct (no behavior change); larger MCP/plugin
+// catalogs auto-compact to keep schema bytes out of the prompt.
+const DEFAULT_AUTO_ENABLE_MIN_TOOLS = 40;
 
 type ToolSearchMode = "code" | "tools";
 type CatalogSource = "openclaw" | "mcp" | "client";
@@ -71,6 +76,12 @@ export type ToolSearchConfig = {
   codeTimeoutMs: number;
   searchDefaultLimit: number;
   maxSearchLimit: number;
+  /**
+   * Minimum catalogable tool count before compaction actually runs. 0 means
+   * always compact when enabled. Used for the default "auto" mode so small
+   * catalogs stay direct while large ones compact without explicit opt-in.
+   */
+  minCatalogTools: number;
 };
 
 export type ToolSearchToolContext = {
@@ -394,10 +405,6 @@ function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> 
   return isRecord(toolSearch) ? toolSearch : {};
 }
 
-function readBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
 function readInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
@@ -418,13 +425,29 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     rawMode === "tools" || rawMode === "code" ? rawMode : "code";
   const mode: ToolSearchMode =
     requestedMode === "code" && !isToolSearchCodeModeSupported() ? "tools" : requestedMode;
-  const configured = Object.keys(raw).some((key) => key !== "enabled");
   const maxSearchLimit = Math.max(
     1,
     Math.min(50, readInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT)),
   );
+  // Default-on: controls are available unless explicitly disabled. When the user
+  // actively pinned Tool Search on (enabled:true or any non-threshold key) keep
+  // the historical always-compact behavior (threshold 0) unless they also set an
+  // explicit autoEnableMinTools. With no config, auto-compact only above the
+  // default threshold so small core-only runs stay fully direct.
+  const explicitlyOff = raw.enabled === false;
+  const pinnedOn =
+    raw.enabled === true ||
+    Object.keys(raw).some((key) => key !== "enabled" && key !== "autoEnableMinTools");
+  const thresholdConfigured =
+    typeof raw.autoEnableMinTools === "number" &&
+    Number.isInteger(raw.autoEnableMinTools) &&
+    raw.autoEnableMinTools > 0;
+  const autoEnableMinTools = thresholdConfigured
+    ? (raw.autoEnableMinTools as number)
+    : DEFAULT_AUTO_ENABLE_MIN_TOOLS;
+  const minCatalogTools = pinnedOn && !thresholdConfigured ? 0 : autoEnableMinTools;
   return {
-    enabled: readBoolean(raw.enabled, configured),
+    enabled: !explicitlyOff,
     mode,
     codeTimeoutMs: Math.max(
       1000,
@@ -435,6 +458,7 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
       Math.min(maxSearchLimit, readInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT)),
     ),
     maxSearchLimit,
+    minCatalogTools,
   };
 }
 
@@ -831,6 +855,7 @@ export function applyToolSearchCatalog(params: {
   return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
+    minCatalogTools: config.minCatalogTools,
     isVisibleControlTool: (tool) =>
       TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) &&
       shouldExposeControlTool(tool.name, config.mode),
@@ -1149,6 +1174,8 @@ export class ToolSearchRuntime {
 export function applyToolCatalogCompaction(params: {
   tools: AnyAgentTool[];
   enabled: boolean;
+  /** Minimum catalogable tools before compaction runs. Defaults to 0 (always). */
+  minCatalogTools?: number;
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
@@ -1201,6 +1228,19 @@ export function applyToolCatalogCompaction(params: {
       continue;
     }
     visible.push(tool);
+  }
+  // Auto mode: below the threshold, leave the catalog direct so small tool sets
+  // keep full schemas. Strip only the control tools so they never leak as bare
+  // no-op tools when nothing was compacted.
+  const minCatalogTools = params.minCatalogTools ?? 0;
+  if (catalog.length < minCatalogTools) {
+    return {
+      tools: params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)),
+      compacted: false,
+      catalogToolCount: 0,
+      catalogRegistered: false,
+      catalogReused: false,
+    };
   }
   const incomingFingerprint = catalogEntriesFingerprint(catalog);
   const existingCatalog =

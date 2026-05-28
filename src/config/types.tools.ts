@@ -193,8 +193,17 @@ export type ToolLoopDetectionConfig = {
 export type ToolSearchConfig =
   | boolean
   | {
-      /** Enable compact search/call cataloging for large tool sets. */
+      /**
+       * Enable compact search/call cataloging for large tool sets. Unset means
+       * auto: compact only when the catalog reaches `autoEnableMinTools`. Set
+       * `true` to always compact, `false` to always expose tools directly.
+       */
       enabled?: boolean;
+      /**
+       * Catalog size that triggers auto-compaction when `enabled` is unset.
+       * Default: 40. Ignored when `enabled` is explicitly true or false.
+       */
+      autoEnableMinTools?: number;
       /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools. */
       mode?: "code" | "tools";
       /** Timeout in milliseconds for one tool_search_code execution. Runtime clamps to 1s..60s. */

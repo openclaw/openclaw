@@ -7,9 +7,15 @@ read_when:
   - You are implementing or debugging tool discovery for OpenClaw runs
 ---
 
-Tool Search is an experimental OpenClaw agent runtime feature. It gives agents one
+Tool Search is an OpenClaw agent runtime feature. It gives agents one
 compact way to discover and call large tool catalogs. It is useful when the run
 has many available tools but the model is likely to need only a few of them.
+
+By default Tool Search runs in **auto** mode: small catalogs stay fully direct
+(every schema in the prompt, no behavior change), and large catalogs compact
+automatically once the eligible tool count reaches `autoEnableMinTools`
+(default `40`). Set `tools.toolSearch` to `true` to always compact, or `false`
+to always expose tools directly.
 
 This page documents OpenClaw Tool Search. It is not the Codex-native tool
 search or dynamic-tools surface. Codex-native code mode, tool search, deferred
@@ -158,7 +164,21 @@ Normal OpenClaw behavior still applies to final calls:
 
 ## Config
 
-Enable Tool Search for OpenClaw runs with the default code bridge:
+Tool Search defaults to auto mode, so no config is required to benefit from it
+on large catalogs. Tune the auto-compaction threshold (catalog size that
+triggers compaction when `enabled` is unset):
+
+```json5
+{
+  tools: {
+    toolSearch: {
+      autoEnableMinTools: 40,
+    },
+  },
+}
+```
+
+Always compact (legacy always-on behavior) with the default code bridge:
 
 ```bash
 openclaw config set tools.toolSearch true

@@ -70,6 +70,67 @@ describe("Tool Search", () => {
     } as never);
     expect(resolved.enabled).toBe(true);
     expect(resolved.mode).toBe("tools");
+    // Pinned on (non-threshold key) keeps historical always-compact behavior.
+    expect(resolved.minCatalogTools).toBe(0);
+  });
+
+  it("defaults to auto mode with a catalog threshold when unconfigured", () => {
+    const resolved = testing.resolveToolSearchConfig(undefined);
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.minCatalogTools).toBeGreaterThan(0);
+  });
+
+  it("treats explicit enabled:true as always-compact, false as off", () => {
+    const on = testing.resolveToolSearchConfig({
+      tools: { toolSearch: { enabled: true } },
+    } as never);
+    expect(on.enabled).toBe(true);
+    expect(on.minCatalogTools).toBe(0);
+
+    const off = testing.resolveToolSearchConfig({
+      tools: { toolSearch: false },
+    } as never);
+    expect(off.enabled).toBe(false);
+  });
+
+  it("honors an explicit autoEnableMinTools threshold", () => {
+    const resolved = testing.resolveToolSearchConfig({
+      tools: { toolSearch: { autoEnableMinTools: 25 } },
+    } as never);
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.minCatalogTools).toBe(25);
+  });
+
+  it("auto mode leaves small catalogs direct and strips control tools", () => {
+    const config = { tools: { toolSearch: { autoEnableMinTools: 3 } } } as never;
+    const compacted = applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"),
+        pluginTool("fake_one", "Tool one"),
+        pluginTool("fake_two", "Tool two"),
+      ],
+      config,
+      sessionId: "session-auto-below",
+    });
+    expect(compacted.compacted).toBe(false);
+    expect(compacted.catalogToolCount).toBe(0);
+    expect(compacted.tools.map((tool) => tool.name)).toEqual(["fake_one", "fake_two"]);
+  });
+
+  it("auto mode compacts once the catalog reaches the threshold", () => {
+    const config = { tools: { toolSearch: { autoEnableMinTools: 2 } } } as never;
+    const compacted = applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"),
+        pluginTool("fake_one", "Tool one"),
+        pluginTool("fake_two", "Tool two"),
+      ],
+      config,
+      sessionId: "session-auto-above",
+    });
+    expect(compacted.compacted).toBe(true);
+    expect(compacted.catalogToolCount).toBe(2);
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
   });
 
   it("falls back to structured controls when code mode is unsupported", () => {

@@ -53,6 +53,14 @@ for bounded runtime excerpts and injected runtime-owned blocks. They are
 separate from bootstrap limits, startup-context limits, and skills prompt
 limits.
 
+Tool schemas are a large, recurring part of the prompt for tool-rich setups
+(many plugins or MCP servers). [Tool Search](/tools/tool-search) defaults to
+auto mode: small catalogs stay fully direct, and once the eligible tool count
+reaches `tools.toolSearch.autoEnableMinTools` (default `40`) the catalog is
+compacted behind a compact search/call surface so schemas are loaded on demand
+instead of sent up front. Set `tools.toolSearch` to `true` to always compact or
+`false` to always expose tool schemas directly.
+
 `toolResultMaxChars` is an advanced ceiling. When it is unset, OpenClaw chooses
 the live tool-result cap from the effective model context window: `16000` chars
 below 100K tokens, `32000` chars at 100K+ tokens, and `64000` chars at 200K+

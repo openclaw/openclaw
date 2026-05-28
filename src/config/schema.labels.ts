@@ -247,6 +247,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.experimental.planTool": "Enable Structured Plan Tool",
   "tools.toolSearch": "Tool Search",
   "tools.toolSearch.enabled": "Enable Tool Search",
+  "tools.toolSearch.autoEnableMinTools": "Tool Search Auto Threshold",
   "tools.toolSearch.mode": "Tool Search Surface",
   "tools.toolSearch.codeTimeoutMs": "Tool Search Code Timeout",
   "tools.toolSearch.searchDefaultLimit": "Tool Search Default Results",

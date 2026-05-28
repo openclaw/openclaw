@@ -228,6 +228,8 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
 function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
   return {
     enabled: true,
+    // Code mode always compacts when enabled; it has its own opt-in gate.
+    minCatalogTools: 0,
     mode: "tools",
     codeTimeoutMs: config.timeoutMs,
     searchDefaultLimit: config.searchDefaultLimit,
