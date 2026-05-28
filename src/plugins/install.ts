@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { packageNameMatchesId } from "../infra/install-safe-path.js";
 import {
   resolveNpmPackArchiveMetadata,
@@ -56,6 +57,7 @@ import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import {
   resolvePackageExtensionEntries,
+  type OpenClawPackageManifest,
   type PackageManifest as PluginPackageManifest,
 } from "./manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
@@ -107,6 +109,7 @@ export const PLUGIN_INSTALL_ERROR_CODE = {
   INVALID_MIN_HOST_VERSION: "invalid_min_host_version",
   UNKNOWN_HOST_VERSION: "unknown_host_version",
   INCOMPATIBLE_HOST_VERSION: "incompatible_host_version",
+  INCOMPATIBLE_PLUGIN_API: "incompatible_plugin_api",
   MISSING_OPENCLAW_EXTENSIONS: "missing_openclaw_extensions",
   MISSING_PLUGIN_MANIFEST: "missing_plugin_manifest",
   EMPTY_OPENCLAW_EXTENSIONS: "empty_openclaw_extensions",
@@ -132,6 +135,23 @@ export type InstallPluginResult =
       integrityDrift?: NpmIntegrityDrift;
     }
   | { ok: false; error: string; code?: PluginInstallErrorCode };
+
+function validateOpenClawPackageCompatibility(params: {
+  pluginId: string;
+  currentHostVersion: string;
+  packageMetadata?: OpenClawPackageManifest;
+}): InstallPluginResult | null {
+  const pluginApiRange = normalizeOptionalString(params.packageMetadata?.compat?.pluginApi);
+  if (pluginApiRange && !satisfiesPluginApiRange(params.currentHostVersion, pluginApiRange)) {
+    return {
+      ok: false,
+      error: `plugin "${params.pluginId}" requires plugin API ${pluginApiRange}, but this OpenClaw runtime exposes ${params.currentHostVersion}. Upgrade OpenClaw or install a compatible plugin version and retry.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+    };
+  }
+
+  return null;
+}
 
 export type PluginNpmIntegrityDriftParams = {
   spec: string;
@@ -1397,8 +1417,9 @@ async function validatePackagePluginInstallSource(params: {
   }
 
   const packageMetadata = params.runtime.getPackageManifestMetadata(manifest);
+  const currentHostVersion = params.runtime.resolveCompatibilityHostVersion();
   const minHostVersionCheck = params.runtime.checkMinHostVersion({
-    currentVersion: params.runtime.resolveCompatibilityHostVersion(),
+    currentVersion: currentHostVersion,
     minHostVersion: packageMetadata?.install?.minHostVersion,
   });
   if (!minHostVersionCheck.ok) {
@@ -1421,6 +1442,14 @@ async function validatePackagePluginInstallSource(params: {
       error: `plugin "${pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}. Upgrade OpenClaw and retry.`,
       code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION,
     };
+  }
+  const compatibilityError = validateOpenClawPackageCompatibility({
+    pluginId,
+    currentHostVersion,
+    packageMetadata,
+  });
+  if (compatibilityError) {
+    return compatibilityError;
   }
 
   const extensionValidation = await validatePackageExtensionEntriesForInstall({

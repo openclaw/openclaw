@@ -595,7 +595,8 @@ function satisfiesSemverRange(version: string, range: string): boolean {
   return tokens.every((token) => satisfiesComparator(version, token));
 }
 
-const OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN = /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})-\d+$/;
+const OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN =
+  /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})(?:-\d+|-(?:alpha|beta|rc)\.\d+)$/i;
 
 function normalizeCalVerCorrectionForPluginApi(pluginApiVersion: string): string {
   const match = OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN.exec(pluginApiVersion.trim());
