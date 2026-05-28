@@ -68,9 +68,9 @@ export async function runSkillSetupHook(params: SkillSetupParams): Promise<Skill
     return { ok: true };
   }
 
-  const scriptPath = path.resolve(params.targetDir, setup.script);
-  const resolvedTargetDir = path.resolve(params.targetDir);
-  if (!scriptPath.startsWith(resolvedTargetDir + path.sep)) {
+  const resolvedTargetDir = fs.realpathSync(params.targetDir);
+  const rawScriptPath = path.resolve(resolvedTargetDir, setup.script);
+  if (!rawScriptPath.startsWith(resolvedTargetDir + path.sep)) {
     return {
       ok: false,
       error: `Setup script path escapes skill directory: ${setup.script}`,
@@ -78,10 +78,18 @@ export async function runSkillSetupHook(params: SkillSetupParams): Promise<Skill
     };
   }
 
-  let executable: boolean;
+  let scriptPath: string;
   try {
-    fs.accessSync(scriptPath, fs.constants.F_OK);
-    executable = true;
+    fs.accessSync(rawScriptPath, fs.constants.F_OK);
+    // Resolve symlinks after confirming the file exists to prevent escapes.
+    scriptPath = fs.realpathSync(rawScriptPath);
+    if (!scriptPath.startsWith(resolvedTargetDir + path.sep)) {
+      return {
+        ok: false,
+        error: `Setup script resolves outside skill directory: ${setup.script}`,
+        failureKind: "setup-failed",
+      };
+    }
   } catch {
     return {
       ok: false,
@@ -90,6 +98,7 @@ export async function runSkillSetupHook(params: SkillSetupParams): Promise<Skill
     };
   }
 
+  let executable = true;
   try {
     fs.accessSync(scriptPath, fs.constants.X_OK);
   } catch {
@@ -103,10 +112,38 @@ export async function runSkillSetupHook(params: SkillSetupParams): Promise<Skill
     OPENCLAW_HOOK_KIND: params.mode,
   };
 
+  const BLOCKED_ENV = new Set([
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "PWD",
+    "OLDPWD",
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "PYTHONPATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "OPENCLAW_GATEWAY_TOKEN",
+    "OPENCLAW_CONFIG_PATH",
+  ]);
   const requiredEnv = metadata?.requires?.env ?? [];
   for (const envName of requiredEnv) {
     const trimmed = envName.trim();
     if (!trimmed || hookEnv[trimmed] !== undefined) {
+      continue;
+    }
+    if (BLOCKED_ENV.has(trimmed)) {
+      continue;
+    }
+    if (
+      trimmed.startsWith("OPENCLAW_") ||
+      trimmed.startsWith("NPM_") ||
+      trimmed.startsWith("GITHUB_")
+    ) {
       continue;
     }
     const value = process.env[trimmed];

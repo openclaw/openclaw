@@ -137,6 +137,8 @@ export async function installExtractedSkillRoot(params: {
   logger?: ArchiveLogger;
   policy?: SkillArchiveInstallPolicy;
   rootMarkers?: readonly string[];
+  /** Explicitly allow skill-defined setup hooks. Default false for safety. */
+  allowSetupHooks?: boolean;
 }): Promise<SkillArchiveInstallResult> {
   try {
     if (
@@ -191,17 +193,19 @@ export async function installExtractedSkillRoot(params: {
       copyErrorPrefix: "failed to install skill",
       hasDeps: false,
       depsLogMessage: "",
-      afterInstall: async (installedDir) => {
-        const setupResult = await runSkillSetupHook({
-          targetDir: installedDir,
-          mode: params.mode,
-          logger: params.logger,
-        });
-        if (!setupResult.ok) {
-          return { ok: false, error: `Setup hook failed: ${setupResult.error}` };
-        }
-        return { ok: true };
-      },
+      afterInstall: params.allowSetupHooks
+        ? async (installedDir) => {
+            const setupResult = await runSkillSetupHook({
+              targetDir: installedDir,
+              mode: params.mode,
+              logger: params.logger,
+            });
+            if (!setupResult.ok) {
+              return { ok: false, error: `Setup hook failed: ${setupResult.error}` };
+            }
+            return { ok: true };
+          }
+        : undefined,
     });
     if (!install.ok) {
       return installFailure(install.error, "unavailable");
@@ -220,6 +224,7 @@ export async function installSkillArchiveFromPath(params: {
   timeoutMs?: number;
   logger?: ArchiveLogger;
   policy?: SkillArchiveInstallPolicy;
+  allowSetupHooks?: boolean;
 }): Promise<SkillArchiveInstallResult> {
   const result = await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -236,6 +241,7 @@ export async function installSkillArchiveFromPath(params: {
         timeoutMs: params.timeoutMs,
         logger: params.logger,
         policy: params.policy,
+        allowSetupHooks: params.allowSetupHooks,
       }),
   });
   if (!result.ok) {
