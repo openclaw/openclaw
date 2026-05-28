@@ -27,6 +27,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       selectedSessions: [],
       selectedDays: [],
       selectedHours: [],
+      agentId: null,
       query: "",
       queryDraft: "",
       timeZone: "local",
@@ -64,6 +65,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
         onStartDateChange: noop,
         onEndDateChange: noop,
         onScopeChange: noop,
+        onAgentChange: noop,
         onRefresh: noop,
         onTimeZoneChange: noop,
         onToggleHeaderPinned: noop,
@@ -141,5 +143,48 @@ describe("renderUsage", () => {
 
     expect(agentFilter?.textContent).toContain("main");
     expect(agentFilter?.textContent).toContain("research");
+  });
+
+  it("filters visible sessions when an agent scope is selected", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            agents: ["main", "research"],
+            sessions: [
+              {
+                key: "agent:main:main",
+                agentId: "main",
+                lastUpdated: Date.now(),
+                usage: {
+                  totalTokens: 10,
+                  totalCost: 0,
+                } as UsageProps["data"]["sessions"][number]["usage"],
+              } as UsageProps["data"]["sessions"][number],
+              {
+                key: "agent:research:main",
+                agentId: "research",
+                lastUpdated: Date.now(),
+                usage: {
+                  totalTokens: 20,
+                  totalCost: 0,
+                } as UsageProps["data"]["sessions"][number]["usage"],
+              } as UsageProps["data"]["sessions"][number],
+            ],
+          },
+          filters: {
+            ...createUsageProps().filters,
+            agentId: "research",
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("agent:research:main");
+    expect(container.textContent).not.toContain("agent:main:main");
   });
 });

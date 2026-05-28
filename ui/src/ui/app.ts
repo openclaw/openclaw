@@ -472,6 +472,7 @@ export class OpenClawApp extends LitElement {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   })();
   @state() usageScope: "instance" | "family" = "family";
+  @state() usageAgentId: string | null = null;
   @state() usageSelectedSessions: string[] = [];
   @state() usageSelectedDays: string[] = [];
   @state() usageSelectedHours: number[] = [];

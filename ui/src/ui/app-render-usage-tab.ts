@@ -1,12 +1,7 @@
 import { nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
 import type { UsageState } from "./controllers/usage.ts";
-import {
-  loadUsage,
-  loadSessionTimeSeries,
-  loadSessionLogs,
-  resolveUsageAgentIdFromQuery,
-} from "./controllers/usage.ts";
+import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
 import { renderUsage } from "./views/usage.ts";
 
 type UsageCacheStatus = NonNullable<NonNullable<UsageState["usageResult"]>["cacheStatus"]>;
@@ -72,6 +67,7 @@ export function renderUsageTab(state: AppViewState) {
       selectedSessions: state.usageSelectedSessions,
       selectedDays: state.usageSelectedDays,
       selectedHours: state.usageSelectedHours,
+      agentId: state.usageAgentId,
       query: state.usageQuery,
       queryDraft: state.usageQueryDraft,
       timeZone: state.usageTimeZone,
@@ -129,6 +125,15 @@ export function renderUsageTab(state: AppViewState) {
           state.usageSessionLogs = null;
           void loadUsage(state);
         },
+        onAgentChange: (agentId) => {
+          state.usageAgentId = agentId;
+          state.usageSelectedDays = [];
+          state.usageSelectedHours = [];
+          state.usageSelectedSessions = [];
+          state.usageTimeSeries = null;
+          state.usageSessionLogs = null;
+          void loadUsage(state);
+        },
         onRefresh: () => loadUsage(state),
         onTimeZoneChange: (zone) => {
           state.usageTimeZone = zone;
@@ -162,37 +167,25 @@ export function renderUsageTab(state: AppViewState) {
           if (state.usageQueryDebounceTimer) {
             window.clearTimeout(state.usageQueryDebounceTimer);
           }
-          const previousAgentId = resolveUsageAgentIdFromQuery(state.usageQuery);
           state.usageQueryDebounceTimer = window.setTimeout(() => {
             state.usageQuery = state.usageQueryDraft;
             state.usageQueryDebounceTimer = null;
-            if (resolveUsageAgentIdFromQuery(state.usageQuery) !== previousAgentId) {
-              void loadUsage(state);
-            }
           }, 250);
         },
         onApplyQuery: () => {
-          const previousAgentId = resolveUsageAgentIdFromQuery(state.usageQuery);
           if (state.usageQueryDebounceTimer) {
             window.clearTimeout(state.usageQueryDebounceTimer);
             state.usageQueryDebounceTimer = null;
           }
           state.usageQuery = state.usageQueryDraft;
-          if (resolveUsageAgentIdFromQuery(state.usageQuery) !== previousAgentId) {
-            void loadUsage(state);
-          }
         },
         onClearQuery: () => {
-          const previousAgentId = resolveUsageAgentIdFromQuery(state.usageQuery);
           if (state.usageQueryDebounceTimer) {
             window.clearTimeout(state.usageQueryDebounceTimer);
             state.usageQueryDebounceTimer = null;
           }
           state.usageQueryDraft = "";
           state.usageQuery = "";
-          if (previousAgentId) {
-            void loadUsage(state);
-          }
         },
         onSelectDay: (day, shiftKey) => {
           if (shiftKey && state.usageSelectedDays.length > 0) {

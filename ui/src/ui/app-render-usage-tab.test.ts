@@ -29,6 +29,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     usageStartDate: "2026-02-16",
     usageEndDate: "2026-02-16",
     usageScope: "family",
+    usageAgentId: null,
     usageSelectedSessions: [],
     usageSelectedDays: [],
     usageSelectedHours: [],
@@ -60,8 +61,8 @@ describe("renderUsageTab", () => {
     );
   });
 
-  it("reloads usage when applying a query changes the server-side agent scope", () => {
-    const state = createState({ usageQuery: "", usageQueryDraft: "agent:research " });
+  it("reloads usage when selecting an agent scope", () => {
+    const state = createState();
 
     renderUsageTab(state);
     expect(renderUsageMock).toHaveBeenCalled();
@@ -69,9 +70,9 @@ describe("renderUsageTab", () => {
     if (!props) {
       throw new Error("expected renderUsage props");
     }
-    props.callbacks.filters.onApplyQuery();
+    props.callbacks.filters.onAgentChange("research");
 
-    expect(state.usageQuery).toBe("agent:research ");
+    expect(state.usageAgentId).toBe("research");
     expect(loadUsageMock).toHaveBeenCalledWith(state);
   });
 });
