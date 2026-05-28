@@ -15,3 +15,11 @@ export const ChannelHealthMonitorSchema = z
   })
   .strict()
   .optional();
+
+/**
+ * Per-conversation system prompt overlay map shared by every channel config
+ * schema. Keys are the exact conversation ids as seen at runtime
+ * (`currentChannelId`); values are prompt file paths (absolute, `~`-relative,
+ * or workspace-relative).
+ */
+export const ChannelSystemPromptByChannelSchema = z.record(z.string(), z.string()).optional();

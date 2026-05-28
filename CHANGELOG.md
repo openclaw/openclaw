@@ -45,6 +45,7 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK: mark memory-specific embedding provider registration as deprecated compatibility and surface non-bundled usage in plugin compatibility diagnostics. (#85072) Thanks @mbelinky.
 - Pixverse: add video generation provider support, API region selection, and external plugin publishing.
 - Plugins: expose approval action metadata for plugin-driven approval surfaces.
+- Channels/system prompts: add per-channel system-prompt injection so each channel can map a conversation id to a prompt file that is auto-prepended on session start and on compaction rebuild.
 
 ### Fixes
 

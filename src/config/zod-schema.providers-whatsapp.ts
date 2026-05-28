@@ -5,6 +5,7 @@ import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   ChannelHealthMonitorSchema,
   ChannelHeartbeatVisibilitySchema,
+  ChannelSystemPromptByChannelSchema,
 } from "./zod-schema.channels.js";
 import {
   BlockStreamingCoalesceSchema,
@@ -180,6 +181,7 @@ const WhatsAppConfigObjectSchema = z
       })
       .strict()
       .optional(),
+    systemPromptByChannel: ChannelSystemPromptByChannelSchema,
   })
   .strict()
   .superRefine((value, ctx) => {

@@ -1129,6 +1129,7 @@
                   "channels/ambient-room-events",
                   "channels/broadcast-groups",
                   "channels/channel-routing",
+                  "channels/channel-system-prompts",
                   "channels/location",
                   "channels/troubleshooting",
                   "channels/qa-channel"

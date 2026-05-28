@@ -73,6 +73,16 @@ export type ExtensionChannelConfig = {
   spawnSubagentSessions?: boolean;
   dangerouslyAllowPrivateNetwork?: boolean;
   accounts?: Record<string, unknown>;
+  /**
+   * Per-conversation system prompt overlays. Keys are exact conversation ids
+   * as they appear at runtime (for example the value of `currentChannelId`);
+   * values are prompt file paths resolved against the agent workspace dir
+   * (absolute paths and `~` are honored as-is). The file contents are
+   * prepended to the assembled system prompt on every session start and
+   * compaction rebuild for the matching conversation. Missing files log a
+   * warning and are skipped; there is no fallback or wildcard matching.
+   */
+  systemPromptByChannel?: Record<string, string>;
   [key: string]: unknown;
 };
 

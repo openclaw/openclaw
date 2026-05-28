@@ -43,6 +43,7 @@ import {
 } from "../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../auth-profiles/external-cli-auth-selection.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
+import { applyChannelSystemPrompt } from "../channel-system-prompt.runtime.js";
 import {
   resolveSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
@@ -419,6 +420,16 @@ export async function runEmbeddedAgent(
   });
   if (effectiveSessionKey !== params.sessionKey) {
     params = { ...params, sessionKey: effectiveSessionKey };
+  }
+  const channelEnhancedExtraSystemPrompt = applyChannelSystemPrompt({
+    channelPluginId: params.messageChannel ?? params.messageProvider,
+    conversationId: params.currentChannelId,
+    channelsConfig: params.config?.channels,
+    workspaceDir: params.workspaceDir,
+    extraSystemPrompt: params.extraSystemPrompt,
+  });
+  if (channelEnhancedExtraSystemPrompt !== params.extraSystemPrompt) {
+    params = { ...params, extraSystemPrompt: channelEnhancedExtraSystemPrompt };
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);

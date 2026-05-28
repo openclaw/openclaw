@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { ChannelBotLoopProtectionSchema } from "./zod-schema.channels-config.js";
-import { ChannelHealthMonitorSchema } from "./zod-schema.channels.js";
+import {
+  ChannelHealthMonitorSchema,
+  ChannelSystemPromptByChannelSchema,
+} from "./zod-schema.channels.js";
 import {
   BlockStreamingCoalesceSchema,
   DmConfigSchema,
@@ -100,4 +103,5 @@ export const GoogleChatAccountSchema = z
 export const GoogleChatConfigSchema = GoogleChatAccountSchema.extend({
   accounts: z.record(z.string(), GoogleChatAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
+  systemPromptByChannel: ChannelSystemPromptByChannelSchema,
 });

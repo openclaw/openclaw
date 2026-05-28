@@ -59,6 +59,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - Fastest setup is usually **Telegram** (simple bot token). WhatsApp requires QR pairing and
   stores more state on disk.
 - Group behavior varies by channel; see [Groups](/channels/groups).
+- Per-channel persistent roles: see [Channel System Prompts](/channels/channel-system-prompts).
 - DM pairing and allowlists are enforced for safety; see [Security](/gateway/security).
 - Troubleshooting: [Channel troubleshooting](/channels/troubleshooting).
 - Model providers are documented separately; see [Model Providers](/providers/models).

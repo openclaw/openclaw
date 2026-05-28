@@ -52,6 +52,7 @@ import {
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
 } from "../bootstrap-files.js";
+import { applyChannelSystemPrompt } from "../channel-system-prompt.runtime.js";
 import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
@@ -486,6 +487,16 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const maxAttempts = params.maxAttempts ?? 1;
   const runId = params.runId ?? params.sessionId;
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  const channelEnhancedExtraSystemPrompt = applyChannelSystemPrompt({
+    channelPluginId: params.messageChannel ?? params.messageProvider,
+    conversationId: params.currentChannelId,
+    channelsConfig: params.config?.channels,
+    workspaceDir: resolvedWorkspace,
+    extraSystemPrompt: params.extraSystemPrompt,
+  });
+  if (channelEnhancedExtraSystemPrompt !== params.extraSystemPrompt) {
+    params = { ...params, extraSystemPrompt: channelEnhancedExtraSystemPrompt };
+  }
   ensureRuntimePluginsLoaded({
     config: params.config,
     workspaceDir: resolvedWorkspace,
