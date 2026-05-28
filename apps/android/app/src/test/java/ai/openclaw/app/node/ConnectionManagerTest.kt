@@ -123,7 +123,7 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun resolveTlsParamsForEndpoint_manualPrivateLanPreservesStoredPin() {
+  fun resolveTlsParamsForEndpoint_manualPrivateLanCleartextCanOverrideStoredPin() {
     val endpoint = GatewayEndpoint.manual(host = "192.168.1.20", port = 18789)
 
     val params =
@@ -133,9 +133,7 @@ class ConnectionManagerTest {
         manualTlsEnabled = false,
       )
 
-    assertEquals(true, params?.required)
-    assertEquals("pinned", params?.expectedFingerprint)
-    assertEquals(false, params?.allowTOFU)
+    assertNull(params)
   }
 
   @Test

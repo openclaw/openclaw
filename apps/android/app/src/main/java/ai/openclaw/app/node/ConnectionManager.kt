@@ -44,6 +44,7 @@ class ConnectionManager(
         }
 
       if (isManual) {
+        if (!manualTlsEnabled && cleartextAllowedHost) return null
         if (!stored.isNullOrBlank()) {
           return GatewayTlsParams(
             required = true,
@@ -52,7 +53,6 @@ class ConnectionManager(
             stableId = stableId,
           )
         }
-        if (!manualTlsEnabled && cleartextAllowedHost) return null
         return GatewayTlsParams(
           required = true,
           expectedFingerprint = null,
