@@ -101,7 +101,11 @@ describe("getEnvApiKey", () => {
         vi.resetModules();
         const { getEnvApiKey } = await import("./env-api-keys.js");
 
-        expect(getEnvApiKey("google-vertex")).toBeUndefined();
+        // With the relaxed auth gate, GOOGLE_CLOUD_PROJECT alone is sufficient
+        // to return "<authenticated>" even without a credentials file on disk.
+        // The downstream transport (vertex-adc.ts) handles actual credential
+        // resolution at request time via google-auth-library.
+        expect(getEnvApiKey("google-vertex")).toBe("<authenticated>");
         await writeFile(credentialsPath, "{}", "utf-8");
         expect(getEnvApiKey("google-vertex")).toBe("<authenticated>");
       },
