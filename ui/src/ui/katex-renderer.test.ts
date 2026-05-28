@@ -268,10 +268,16 @@ describe("preloadKatex & getKatexModule", () => {
 // ── toSanitizedMarkdownHtmlWithKatex — KaTeX integration ──
 
 // Mock katex module for integration tests
-vi.mock("katex", () => {
-  const renderToString = (
+const renderToStringMock = vi.fn(
+  (
     tex: string,
-    options?: { displayMode?: boolean; throwOnError?: boolean; trust?: boolean; strict?: boolean },
+    options?: {
+      displayMode?: boolean;
+      throwOnError?: boolean;
+      trust?: boolean;
+      strict?: boolean;
+      maxSize?: number;
+    },
   ) => {
     // Simulate KaTeX trust:false — block dangerous commands
     if (options?.trust === false && /\\href\s*\{javascript:/i.test(tex)) {
@@ -281,10 +287,13 @@ vi.mock("katex", () => {
       return `<span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>${tex}</mi></mrow></semantics></math></span><span class="katex-html">${tex}</span></span></span>`;
     }
     return `<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>${tex}</mi></mrow></semantics></math></span><span class="katex-html">${tex}</span></span>`;
-  };
+  },
+);
+
+vi.mock("katex", () => {
   return {
-    default: { renderToString },
-    renderToString,
+    default: { renderToString: renderToStringMock },
+    renderToString: renderToStringMock,
   };
 });
 
@@ -414,5 +423,83 @@ describe("Markdown cache", () => {
 
     // Second call should return cached result
     expect(html2).toBe(html1);
+  });
+});
+
+// ── Render loop guard ──
+
+describe("render loop guard prevents multiple preloadKatex calls", () => {
+  it("preloadKatex is idempotent — calling it repeatedly resolves safely without errors", async () => {
+    const results = await Promise.all([preloadKatex(), preloadKatex(), preloadKatex()]);
+
+    expect(results[0]).toBeDefined();
+    expect(results[1]).toBeDefined();
+    expect(results[2]).toBeDefined();
+    expect(results[0]).toBe(results[1]);
+    expect(results[1]).toBe(results[2]);
+  });
+
+  it("preloadKatex returns the same resolved module on subsequent calls after initial load", async () => {
+    const first = await preloadKatex();
+    const second = await preloadKatex();
+
+    expect(first).toBe(second);
+    expect(getKatexModule()).toBe(first);
+  });
+});
+
+// ── maxSize cap ──
+
+describe("maxSize option in KaTeX rendering", () => {
+  beforeEach(() => {
+    clearMarkdownCache();
+  });
+
+  it("maxSize option is passed to renderToString", async () => {
+    await preloadKatex();
+    renderToStringMock.mockClear();
+
+    toSanitizedMarkdownHtmlWithKatex("$x^2$", {
+      mathRendering: "katex",
+    });
+
+    expect(renderToStringMock).toHaveBeenCalled();
+    const lastCall = renderToStringMock.mock.calls[renderToStringMock.mock.calls.length - 1]!;
+    const options = lastCall[1] as Record<string, unknown>;
+    expect(options.maxSize).toBe(100);
+  });
+
+  it("hostile LaTeX size is capped by maxSize", async () => {
+    await preloadKatex();
+    renderToStringMock.mockClear();
+
+    const html = toSanitizedMarkdownHtmlWithKatex("$\\rule{500em}{500em}$", {
+      mathRendering: "katex",
+    });
+
+    expect(html).toContain('class="katex"');
+    expect(renderToStringMock).toHaveBeenCalled();
+    const lastCall = renderToStringMock.mock.calls[renderToStringMock.mock.calls.length - 1]!;
+    const options = lastCall[1] as Record<string, unknown>;
+    expect(options.maxSize).toBe(100);
+  });
+
+  it("normal formulas unaffected by maxSize", async () => {
+    await preloadKatex();
+    clearMarkdownCache();
+
+    const inlineHtml = toSanitizedMarkdownHtmlWithKatex("$E=mc^2$", {
+      mathRendering: "katex",
+    });
+    expect(inlineHtml).toContain('class="katex"');
+    expect(inlineHtml).toContain("<math>");
+    expect(inlineHtml).toContain("E=mc^2");
+
+    clearMarkdownCache();
+    const displayHtml = toSanitizedMarkdownHtmlWithKatex("$$\\frac{a}{b}$$", {
+      mathRendering: "katex",
+    });
+    expect(displayHtml).toContain("katex-display");
+    expect(displayHtml).toContain("\\frac{a}{b}");
   });
 });
