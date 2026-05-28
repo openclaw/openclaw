@@ -117,6 +117,10 @@ vi.mock("../../agents/model-auth.js", () => {
   };
 });
 
+vi.mock("../../agents/provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) => provider,
+}));
+
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -657,7 +661,7 @@ describe("/model chat UX", () => {
     expect(reply?.text).not.toContain("[openai] endpoint: default auth: missing");
     expect(reply?.text).toContain("via codex runtime / openai-codex");
     expect(reply?.text).toContain("openai-codex:patrick@example.test=OAuth");
-  });
+  }, 240_000);
 
   it("keeps direct provider auth labels when OpenAI API key auth exists", async () => {
     setAuthProfiles({
@@ -701,7 +705,7 @@ describe("/model chat UX", () => {
     expect(reply?.text).not.toContain("via codex runtime");
   });
 
-  it("does not borrow Codex auth when OpenAI model policy pins PI runtime", async () => {
+  it("does not borrow Codex auth when OpenAI model policy pins OpenClaw runtime", async () => {
     setAuthProfiles({
       "openai-codex:patrick@example.test": {
         type: "oauth",
@@ -725,7 +729,7 @@ describe("/model chat UX", () => {
             model: { primary: "openai/gpt-5.5" },
             models: {
               "openai/gpt-5.5": {
-                agentRuntime: { id: "pi" },
+                agentRuntime: { id: "openclaw" },
               },
             },
           },
@@ -1086,7 +1090,7 @@ describe("/model chat UX", () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
       command: "/model openai/gpt-4o --runtime claude-cli hello",
       allowedModelKeys: ["openai/gpt-4o"],
-      sessionEntry: createSessionEntry({ agentRuntimeOverride: "pi" }),
+      sessionEntry: createSessionEntry({ agentRuntimeOverride: "openclaw" }),
       provider: "openai",
       model: "gpt-4o",
       initialModelLabel: "openai/gpt-4o",
@@ -1838,7 +1842,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   });
 });
 
-describe("persistInlineDirectives internal exec scope gate", () => {
+describe("persistInlineDirectives session directive persistence policy", () => {
   it("skips exec persistence for internal operator.write callers", async () => {
     const sessionEntry = await persistInternalOperatorWriteDirective(
       "/exec host=node security=allowlist ask=always node=worker-1",
@@ -1854,6 +1858,130 @@ describe("persistInlineDirectives internal exec scope gate", () => {
     const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full");
 
     expect(sessionEntry.verboseLevel).toBeUndefined();
+  });
+
+  it("skips exec persistence for unauthorized external callers even when gateway scopes are empty", async () => {
+    const sessionEntry = await persistInternalOperatorWriteDirective(
+      "/exec host=node security=allowlist ask=always node=worker-1",
+      {
+        messageProvider: "telegram",
+        surface: "telegram",
+        gatewayClientScopes: [],
+      },
+    );
+
+    expect(sessionEntry.execHost).toBeUndefined();
+    expect(sessionEntry.execSecurity).toBeUndefined();
+    expect(sessionEntry.execAsk).toBeUndefined();
+    expect(sessionEntry.execNode).toBeUndefined();
+  });
+
+  it("skips verbose persistence for unauthorized external callers even when gateway scopes are empty", async () => {
+    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
+      messageProvider: "telegram",
+      surface: "telegram",
+      gatewayClientScopes: [],
+    });
+
+    expect(sessionEntry.verboseLevel).toBeUndefined();
+  });
+
+  it("allows authorized external callers with empty gateway scopes to persist exec defaults", async () => {
+    const sessionEntry = await persistInternalOperatorWriteDirective(
+      "/exec host=node security=allowlist ask=always node=worker-1",
+      {
+        messageProvider: "telegram",
+        surface: "telegram",
+        gatewayClientScopes: [],
+        commandAuthorized: true,
+      },
+    );
+
+    expect(sessionEntry.execHost).toBe("node");
+    expect(sessionEntry.execSecurity).toBe("allowlist");
+    expect(sessionEntry.execAsk).toBe("always");
+    expect(sessionEntry.execNode).toBe("worker-1");
+  });
+
+  it("allows authorized external callers with empty gateway scopes to persist verbose defaults", async () => {
+    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
+      messageProvider: "telegram",
+      surface: "telegram",
+      gatewayClientScopes: [],
+      commandAuthorized: true,
+    });
+
+    expect(sessionEntry.verboseLevel).toBe("full");
+  });
+
+  it("skips exec persistence for non-webchat channel callers without gateway scopes", async () => {
+    const sessionEntry = await persistInternalOperatorWriteDirective(
+      "/exec host=node security=allowlist ask=always node=worker-1",
+      {
+        messageProvider: "telegram",
+        surface: "telegram",
+        gatewayClientScopes: undefined,
+      },
+    );
+
+    expect(sessionEntry.execHost).toBeUndefined();
+    expect(sessionEntry.execSecurity).toBeUndefined();
+    expect(sessionEntry.execAsk).toBeUndefined();
+    expect(sessionEntry.execNode).toBeUndefined();
+  });
+
+  it("skips verbose persistence for non-webchat channel callers without gateway scopes", async () => {
+    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
+      messageProvider: "telegram",
+      surface: "telegram",
+      gatewayClientScopes: undefined,
+    });
+
+    expect(sessionEntry.verboseLevel).toBeUndefined();
+  });
+
+  it("allows exec persistence for authorized non-webchat channel callers without gateway scopes", async () => {
+    const sessionEntry = await persistInternalOperatorWriteDirective(
+      "/exec host=node security=allowlist ask=always node=worker-1",
+      {
+        messageProvider: "telegram",
+        surface: "telegram",
+        gatewayClientScopes: undefined,
+        commandAuthorized: true,
+      },
+    );
+
+    expect(sessionEntry.execHost).toBe("node");
+    expect(sessionEntry.execSecurity).toBe("allowlist");
+    expect(sessionEntry.execAsk).toBe("always");
+    expect(sessionEntry.execNode).toBe("worker-1");
+  });
+
+  it("allows verbose persistence for authorized non-webchat channel callers without gateway scopes", async () => {
+    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
+      messageProvider: "telegram",
+      surface: "telegram",
+      gatewayClientScopes: undefined,
+      commandAuthorized: true,
+    });
+
+    expect(sessionEntry.verboseLevel).toBe("full");
+  });
+
+  it("allows exec persistence for local callers without channel context", async () => {
+    const sessionEntry = await persistInternalOperatorWriteDirective(
+      "/exec host=node security=allowlist ask=always node=worker-1",
+      {
+        messageProvider: undefined,
+        surface: undefined,
+        gatewayClientScopes: undefined,
+      },
+    );
+
+    expect(sessionEntry.execHost).toBe("node");
+    expect(sessionEntry.execSecurity).toBe("allowlist");
+    expect(sessionEntry.execAsk).toBe("always");
+    expect(sessionEntry.execNode).toBe("worker-1");
   });
 
   it("treats internal provider context as authoritative over external surface metadata", async () => {

@@ -81,9 +81,9 @@ function readGatewayRunLoopSource(): string {
   return readFileSync(new URL("../cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
 }
 
-function readPiModelDiscoveryCacheSource(): string {
+function readAgentModelDiscoveryCacheSource(): string {
   return readFileSync(
-    new URL("../agents/pi-embedded-runner/model-discovery-cache.ts", import.meta.url),
+    new URL("../agents/embedded-agent-runner/model-discovery-cache.ts", import.meta.url),
     "utf8",
   );
 }
@@ -99,10 +99,10 @@ describe("tsdown config", () => {
       "agents/model-catalog.runtime",
       "agents/models-config.runtime",
       "cli/gateway-lifecycle.runtime",
+      "agents/model-provider-auth.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
       "task-registry-control.runtime",
-      "agents/pi-model-discovery-runtime",
       "link-understanding/apply.runtime",
       "media-understanding/apply.runtime",
       "index",
@@ -160,7 +160,7 @@ describe("tsdown config", () => {
   it("keeps PI model discovery synthetic auth refs behind one stable runtime dist entry", () => {
     const distGraph = requireUnifiedDistGraph();
     const importSpecifiers = [
-      ...readPiModelDiscoveryCacheSource().matchAll(
+      ...readAgentModelDiscoveryCacheSource().matchAll(
         /from ["']([^"']*synthetic-auth\.runtime\.js)["']/gu,
       ),
     ].map((match) => match[1]);
@@ -222,7 +222,6 @@ describe("tsdown config", () => {
       expect(neverBundle("@slack/web-api")).toBe(true);
       expect(neverBundle("@vitest/expect")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
-      expect(neverBundle("prism-media")).toBe(true);
       expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
       expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
@@ -236,7 +235,6 @@ describe("tsdown config", () => {
         "@slack/web-api",
         "@vitest/expect",
         "matrix-js-sdk",
-        "prism-media",
         "qrcode-terminal",
         "vitest",
       ]) {

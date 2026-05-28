@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
+  createReadStream,
   createWriteStream,
   existsSync,
   mkdirSync,
@@ -19,6 +20,7 @@ import {
 import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
+import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -41,7 +43,7 @@ export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS",
   600,
 );
-const CROSS_OS_AGENT_TURN_OPTIONAL = parseBooleanEnv("OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL", true);
+const CROSS_OS_AGENT_TURN_OPTIONAL = resolveCrossOsAgentTurnOptional();
 
 const providerConfig = {
   openai: {
@@ -101,7 +103,7 @@ function buildReleaseProviderConfigOverride(providerMeta) {
   }
   return {
     ...(typeof providerMeta.baseUrl === "string" ? { baseUrl: providerMeta.baseUrl } : {}),
-    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "pi" } } : {}),
+    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "openclaw" } } : {}),
     models: [],
     ...(typeof providerMeta.timeoutSeconds === "number"
       ? { timeoutSeconds: providerMeta.timeoutSeconds }
@@ -118,6 +120,7 @@ const OMITTED_QA_EXTENSION_PREFIXES = [
 ];
 export const CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS = 120_000;
 export const CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS = 10_000;
+export const CROSS_OS_FETCH_BODY_MAX_CHARS = 1024 * 1024;
 export const CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS = 30_000;
 export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
@@ -180,8 +183,8 @@ function parsePositiveIntegerEnv(name, fallback) {
   return value;
 }
 
-function parseBooleanEnv(name, fallback) {
-  const raw = process.env[name]?.trim();
+function parseBooleanEnv(name, fallback, env = process.env) {
+  const raw = env[name]?.trim();
   if (!raw) {
     return fallback;
   }
@@ -192,6 +195,10 @@ function parseBooleanEnv(name, fallback) {
     return false;
   }
   throw new Error(`${name} must be a boolean. Got: ${JSON.stringify(raw)}`);
+}
+
+export function resolveCrossOsAgentTurnOptional(env = process.env) {
+  return parseBooleanEnv("OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL", false, env);
 }
 
 export function looksLikeReleaseVersionRef(ref) {
@@ -972,6 +979,7 @@ async function runUpgradeLane(params) {
           env,
           packageSpec: params.candidateUrl,
           logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
+          ignoreScripts: true,
         });
       });
     } else {
@@ -2018,15 +2026,7 @@ async function startManualGatewayFromInstalledCli(params) {
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
   const invocation = resolveInstalledCliInvocation(
     params.cliPath,
-    [
-      "gateway",
-      "run",
-      "--bind",
-      "loopback",
-      "--port",
-      String(params.lane.gatewayPort),
-      "--force",
-    ],
+    ["gateway", "run", "--bind", "loopback", "--port", String(params.lane.gatewayPort), "--force"],
     {
       comSpec: params.env?.ComSpec ?? params.env?.COMSPEC,
       platform: process.platform,
@@ -2068,19 +2068,26 @@ async function startManualGatewayFromInstalledCli(params) {
 
 async function resolveInstalledGatewayStatusArgs(params) {
   const requireRpc = params.requireRpc !== false;
-  const help = await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["gateway", "status", "--help"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 15_000,
-    check: false,
-  });
-  if (
-    requireRpc &&
-    (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc"))
-  ) {
+  try {
+    const help = await runInstalledCli({
+      cliPath: params.cliPath,
+      args: ["gateway", "status", "--help"],
+      cwd: params.cwd,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs: 15_000,
+      check: false,
+    });
+    return buildGatewayStatusArgsFromHelpText(`${help.stdout}\n${help.stderr}`, { requireRpc });
+  } catch (error) {
+    appendGatewayStatusHelpProbeFallback(params.logPath, error);
+    return buildGatewayStatusArgsFromHelpText("--require-rpc", { requireRpc });
+  }
+}
+
+export function buildGatewayStatusArgsFromHelpText(helpText, options = {}) {
+  const requireRpc = options.requireRpc !== false;
+  if (requireRpc && helpText.includes("--require-rpc")) {
     return [
       "gateway",
       "status",
@@ -2090,6 +2097,13 @@ async function resolveInstalledGatewayStatusArgs(params) {
     ];
   }
   return ["gateway", "status"];
+}
+
+function appendGatewayStatusHelpProbeFallback(logPath, error) {
+  appendFileSync(
+    logPath,
+    `${new Date().toISOString()} gateway status help probe failed; assuming current --require-rpc support: ${formatError(error)}\n`,
+  );
 }
 
 export async function canConnectToLoopbackPort(port, timeoutMs = 1_000) {
@@ -2274,7 +2288,10 @@ async function runInstalledAgentTurn(params) {
       return result;
     } catch (error) {
       lastError = error;
-      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
+      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath, {
+        attempt,
+        maxAttempts: 2,
+      });
       if (skipped) {
         return skipped;
       }
@@ -2446,6 +2463,45 @@ async function configureDiscordSmoke(params) {
   });
 }
 
+export async function readBoundedCrossOsResponseText(
+  response: Response,
+  maxChars = CROSS_OS_FETCH_BODY_MAX_CHARS,
+): Promise<string> {
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let truncated = false;
+
+  try {
+    while (text.length <= maxChars) {
+      const { done, value } = await reader.read();
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+
+      text += decoder.decode(value, { stream: true });
+      if (text.length > maxChars) {
+        text = text.slice(0, maxChars);
+        truncated = true;
+        break;
+      }
+    }
+  } finally {
+    if (truncated) {
+      await reader.cancel().catch(() => undefined);
+    } else {
+      reader.releaseLock();
+    }
+  }
+
+  return truncated ? `${text}\n[truncated]` : text;
+}
+
 async function waitForDiscordMessage(params) {
   const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() < deadline) {
@@ -2457,7 +2513,7 @@ async function waitForDiscordMessage(params) {
         },
       },
     );
-    const text = await response.text();
+    const text = await readBoundedCrossOsResponseText(response);
     if (!response.ok) {
       await sleep(2_000);
       continue;
@@ -2485,7 +2541,7 @@ async function postDiscordMessage(params) {
       }),
     },
   );
-  const text = await response.text();
+  const text = await readBoundedCrossOsResponseText(response);
   if (!response.ok) {
     throw new Error(`Failed to post Discord smoke message: ${text}`);
   }
@@ -2993,24 +3049,20 @@ function gatewayReadyDeadlineMs() {
 }
 
 async function resolveGatewayStatusArgs(lane, env, logPath) {
-  const help = await runOpenClaw({
-    lane,
-    env,
-    args: ["gateway", "status", "--help"],
-    logPath,
-    timeoutMs: 15_000,
-    check: false,
-  });
-  if (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc")) {
-    return [
-      "gateway",
-      "status",
-      "--require-rpc",
-      "--timeout",
-      String(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS),
-    ];
+  try {
+    const help = await runOpenClaw({
+      lane,
+      env,
+      args: ["gateway", "status", "--help"],
+      logPath,
+      timeoutMs: 15_000,
+      check: false,
+    });
+    return buildGatewayStatusArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
+  } catch (error) {
+    appendGatewayStatusHelpProbeFallback(logPath, error);
+    return buildGatewayStatusArgsFromHelpText("--require-rpc");
   }
-  return ["gateway", "status"];
 }
 
 async function runModelsSet(params) {
@@ -3090,7 +3142,10 @@ async function runAgentTurn(params) {
       return result;
     } catch (error) {
       lastError = error;
-      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
+      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath, {
+        attempt,
+        maxAttempts: 2,
+      });
       if (skipped) {
         return skipped;
       }
@@ -3108,8 +3163,15 @@ async function runAgentTurn(params) {
   throw lastError;
 }
 
-function maybeBuildOptionalAgentTurnSkipResult(error, logPath) {
-  if (!CROSS_OS_AGENT_TURN_OPTIONAL || !shouldSkipOptionalCrossOsAgentTurnError(error, logPath)) {
+export function maybeBuildOptionalAgentTurnSkipResult(error, logPath, options = {}) {
+  const attempt = options.attempt ?? 1;
+  const maxAttempts = options.maxAttempts ?? 2;
+  const optional = options.optional ?? CROSS_OS_AGENT_TURN_OPTIONAL;
+  if (
+    attempt < maxAttempts ||
+    !optional ||
+    !shouldSkipOptionalCrossOsAgentTurnError(error, logPath)
+  ) {
     return null;
   }
   const message = error instanceof Error ? error.message : String(error);
@@ -3270,7 +3332,7 @@ async function runDashboardSmoke(params) {
         const response = await fetch(dashboardUrl, {
           signal: AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS),
         });
-        const html = await response.text();
+        const html = await readBoundedCrossOsResponseText(response);
         if (
           response.ok &&
           html.includes("<title>OpenClaw Control</title>") &&
@@ -3661,11 +3723,12 @@ async function runCommandInvocation(invocation, options) {
   });
 }
 
-async function startStaticFileServer(params) {
+export async function startStaticFileServer(params) {
   mkdirSync(dirname(params.logPath), { recursive: true });
   const logStream = createWriteStream(params.logPath, { flags: "a" });
   const fileName = String(params.filePath.split(/[/\\]/u).at(-1) ?? "artifact");
-  const fileBytes = readFileSync(params.filePath);
+  const fileStat = statSync(params.filePath);
+  const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
     logStream.write(`${new Date().toISOString()} ${request.method} ${request.url}\n`);
     if (request.url !== `/${fileName}`) {
@@ -3675,8 +3738,26 @@ async function startStaticFileServer(params) {
     }
     response.statusCode = 200;
     response.setHeader("content-type", resolveStaticFileContentType(params.filePath));
-    response.setHeader("content-length", String(fileBytes.length));
-    response.end(fileBytes);
+    response.setHeader("content-length", String(fileStat.size));
+    response.setHeader("connection", "close");
+    const fileStream = createReadStream(params.filePath);
+    fileStream.once("error", (error) => {
+      logStream.write(`${new Date().toISOString()} static-file-read-error ${formatError(error)}\n`);
+      if (response.headersSent) {
+        response.destroy(error);
+        return;
+      }
+      response.removeHeader("content-length");
+      response.statusCode = 500;
+      response.end("failed to read file");
+    });
+    fileStream.pipe(response);
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => {
+      sockets.delete(socket);
+    });
   });
   await new Promise((resolvePromise, rejectPromise) => {
     server.once("error", rejectPromise);
@@ -3699,6 +3780,9 @@ async function startStaticFileServer(params) {
           }
           resolvePromise();
         });
+        for (const socket of sockets) {
+          socket.destroy();
+        }
       }),
   };
 }

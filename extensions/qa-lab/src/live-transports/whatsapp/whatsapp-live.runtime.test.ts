@@ -95,6 +95,33 @@ describe("WhatsApp QA live runtime", () => {
     ]);
   });
 
+  it("derives a stable non-secret credential fingerprint", () => {
+    expect(testing.fingerprintWhatsAppCredentialId("cred-stale-row")).toMatch(
+      /^sha256:[0-9a-f]{16}$/,
+    );
+    expect(testing.fingerprintWhatsAppCredentialId("cred-stale-row")).toBe(
+      testing.fingerprintWhatsAppCredentialId("cred-stale-row"),
+    );
+    expect(testing.fingerprintWhatsAppCredentialId(undefined)).toBeUndefined();
+  });
+
+  it("keeps credential fingerprints visible in redacted reports", () => {
+    const report = testing.renderWhatsAppQaMarkdown({
+      cleanupIssues: [],
+      credentialFingerprint: "sha256:1234567890abcdef",
+      credentialSource: "convex",
+      finishedAt: "2026-05-04T12:01:00.000Z",
+      redactMetadata: true,
+      scenarios: [],
+      startedAt: "2026-05-04T12:00:00.000Z",
+      sutPhoneE164: "+15550000002",
+    });
+
+    expect(report).toContain("Credential fingerprint: `sha256:1234567890abcdef`");
+    expect(report).toContain("SUT phone: `<redacted>`");
+    expect(report).not.toContain("+15550000002");
+  });
+
   it("unpacks auth archives into a caller-provided temp directory", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-qa-test-"));
     try {

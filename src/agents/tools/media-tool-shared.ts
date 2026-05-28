@@ -1,8 +1,14 @@
-import { type Api, type Model } from "@earendil-works/pi-ai";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import { getDefaultLocalRoots } from "../../media/web-media.js";
+import type { Model } from "../../llm/types.js";
+import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
+import { normalizeInboundPathRoots } from "../../media/inbound-path-policy.js";
+import {
+  findCapabilityProviderById,
+  resolveCapabilityModelRefForProviders,
+} from "../../media-generation/capability-model-ref.js";
+import { getDefaultLocalRoots } from "../../media/local-media-access.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
 import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
@@ -147,45 +153,17 @@ type GenerationCapabilityProviderKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 
-function findCapabilityProviderById<T extends CapabilityProvider>(params: {
-  providers: T[];
-  providerId?: string;
-}): T | undefined {
-  const selectedProvider = normalizeProviderId(params.providerId ?? "");
-  return params.providers.find(
-    (provider) =>
-      normalizeProviderId(provider.id) === selectedProvider ||
-      (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === selectedProvider),
-  );
-}
-
 function parseCapabilityModelRefForProviders(params: {
   providers: CapabilityProvider[];
   raw?: string;
   parseModelRef: ParseGenerationModelRef;
 }): GenerationModelRef | null {
-  const raw = normalizeOptionalString(params.raw);
-  if (!raw) {
-    return null;
-  }
-  const parsed = params.parseModelRef(raw);
-  if (
-    parsed &&
-    findCapabilityProviderById({
-      providers: params.providers,
-      providerId: parsed.provider,
-    })
-  ) {
-    return parsed;
-  }
-  const provider = params.providers.find((candidate) => {
-    const models = [candidate.defaultModel, ...(candidate.models ?? [])];
-    return models.some((model) => normalizeOptionalString(model) === raw);
+  return resolveCapabilityModelRefForProviders({
+    providers: params.providers,
+    raw: params.raw,
+    parseModelRef: params.parseModelRef,
+    normalizeProviderId,
   });
-  if (provider) {
-    return { provider: provider.id, model: raw };
-  }
-  return parsed;
 }
 
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
@@ -202,6 +180,7 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     findCapabilityProviderById({
       providers: params.providers,
       providerId: params.providerId,
+      normalizeProviderId,
     });
   if (!provider) {
     return params.providerId
@@ -252,6 +231,7 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   return findCapabilityProviderById({
     providers: params.providers,
     providerId: selectedRef.provider,
+    normalizeProviderId,
   });
 }
 
@@ -542,7 +522,12 @@ export function buildTaskRunDetails(
 
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
-  options?: { workspaceOnly?: boolean },
+  options?: {
+    workspaceOnly?: boolean;
+    cfg?: OpenClawConfig;
+    channelId?: string | null;
+    accountId?: string | null;
+  },
   _mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
@@ -550,7 +535,25 @@ export function resolveMediaToolLocalRoots(
     return workspaceDir ? [workspaceDir] : [];
   }
   const roots = getDefaultLocalRoots();
-  return workspaceDir ? uniqueStrings([...roots, workspaceDir]) : [...roots];
+  return uniqueStrings([...roots, ...(workspaceDir ? [workspaceDir] : [])]);
+}
+
+export function resolveMediaToolInboundRoots(options?: {
+  workspaceOnly?: boolean;
+  cfg?: OpenClawConfig;
+  channelId?: string | null;
+  accountId?: string | null;
+}): string[] {
+  if (options?.workspaceOnly || !options?.cfg || !options.channelId) {
+    return [];
+  }
+  return normalizeInboundPathRoots(
+    resolveChannelInboundAttachmentRootsForChannel({
+      cfg: options.cfg,
+      channelId: options.channelId,
+      accountId: options.accountId,
+    }),
+  );
 }
 
 export function resolvePromptAndModelOverride(
@@ -586,19 +589,16 @@ export function resolveModelFromRegistry(params: {
   modelRegistry: { find: (provider: string, modelId: string) => unknown };
   provider: string;
   modelId: string;
-}): Model<Api> {
+}): Model {
   const resolvedRef = normalizeModelRef(params.provider, params.modelId, {
     allowPluginNormalization: false,
   });
-  let model = params.modelRegistry.find(
-    resolvedRef.provider,
-    resolvedRef.model,
-  ) as Model<Api> | null;
+  let model = params.modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model | null;
   if (!model && !resolvedRef.model.includes("/")) {
     model = params.modelRegistry.find(
       resolvedRef.provider,
       `${resolvedRef.provider}/${resolvedRef.model}`,
-    ) as Model<Api> | null;
+    ) as Model | null;
   }
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
@@ -607,7 +607,7 @@ export function resolveModelFromRegistry(params: {
 }
 
 export async function resolveModelRuntimeApiKey(params: {
-  model: Model<Api>;
+  model: Model;
   cfg: OpenClawConfig | undefined;
   agentDir: string;
   authStorage: {

@@ -9,18 +9,19 @@ import {
 } from "../../media-understanding/defaults.js";
 import { matchesMediaEntryCapability } from "../../media-understanding/entry-capabilities.js";
 import { normalizeMediaProviderId } from "../../media-understanding/provider-id.js";
-import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
+import {
+  buildMediaUnderstandingRegistry as buildProviderRegistry,
+  getMediaUnderstandingProvider,
+} from "../../media-understanding/provider-registry.js";
 import { resolveTimeoutMs } from "../../media-understanding/resolve.js";
-import { buildProviderRegistry } from "../../media-understanding/runner.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
-import {
-  loadWebMedia,
-  optimizeImageBufferForWebMedia,
-  type ImageCompressionModelPolicy,
-  type ImageCompressionPolicy,
+import type {
+  ImageCompressionModelPolicy,
+  ImageCompressionPolicy,
+  WebMediaResult,
 } from "../../media/web-media.js";
 import {
   describeImageWithModel,
@@ -34,16 +35,16 @@ import {
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { resolveModelAsync } from "../embedded-agent-runner/model.js";
+import {
+  bundledStaticCatalogProviderUsesRuntimeAugment,
+  resolveBundledStaticCatalogModel,
+} from "../embedded-agent-runner/model.static-catalog.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   resolveImageFallbackCandidates,
   resolveImageFallbackDefaultProvider,
 } from "../model-fallback.js";
-import { resolveModelAsync } from "../pi-embedded-runner/model.js";
-import {
-  bundledStaticCatalogProviderUsesRuntimeAugment,
-  resolveBundledStaticCatalogModel,
-} from "../pi-embedded-runner/model.static-catalog.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -56,6 +57,7 @@ import {
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
+  resolveMediaToolInboundRoots,
   resolveMediaToolLocalRoots,
   resolveRemoteMediaSsrfPolicy,
   resolvePromptAndModelOverride,
@@ -78,6 +80,28 @@ import {
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
 
+type ImageToolLoadWebMediaOptions = {
+  maxBytes?: number;
+  sandboxValidated?: boolean;
+  readFile?: (filePath: string) => Promise<Buffer>;
+  imageCompression?: ImageCompressionPolicy;
+  localRoots?: readonly string[] | "any";
+  inboundRoots?: readonly string[];
+  ssrfPolicy?: ReturnType<typeof resolveRemoteMediaSsrfPolicy>;
+};
+
+type ImageWebMediaRuntime = {
+  loadWebMedia: (
+    mediaUrl: string,
+    options?: ImageToolLoadWebMediaOptions,
+  ) => Promise<WebMediaResult>;
+  optimizeImageBufferForWebMedia: (typeof import("../../media/web-media.js"))["optimizeImageBufferForWebMedia"];
+};
+
+async function loadImageWebMediaRuntime(): Promise<ImageWebMediaRuntime> {
+  return await import("../../media/web-media.js");
+}
+
 const imageToolProviderDeps = {
   buildProviderRegistry,
   getMediaUnderstandingProvider,
@@ -87,6 +111,8 @@ const imageToolProviderDeps = {
   resolveDefaultMediaModel,
   resolveBundledStaticCatalogModel,
   resolveModelAsync,
+  resolveImageCompressionPolicy,
+  loadImageWebMediaRuntime,
 };
 
 function hasExplicitDefaultPrimaryModel(cfg?: OpenClawConfig): boolean {
@@ -148,6 +174,8 @@ export const testing = {
     resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
     resolveBundledStaticCatalogModel?: typeof resolveBundledStaticCatalogModel;
     resolveModelAsync?: typeof resolveModelAsync;
+    resolveImageCompressionPolicy?: typeof resolveImageCompressionPolicy;
+    loadImageWebMediaRuntime?: typeof loadImageWebMediaRuntime;
   }) {
     imageToolProviderDeps.buildProviderRegistry =
       overrides?.buildProviderRegistry ?? buildProviderRegistry;
@@ -164,6 +192,10 @@ export const testing = {
     imageToolProviderDeps.resolveBundledStaticCatalogModel =
       overrides?.resolveBundledStaticCatalogModel ?? resolveBundledStaticCatalogModel;
     imageToolProviderDeps.resolveModelAsync = overrides?.resolveModelAsync ?? resolveModelAsync;
+    imageToolProviderDeps.resolveImageCompressionPolicy =
+      overrides?.resolveImageCompressionPolicy ?? resolveImageCompressionPolicy;
+    imageToolProviderDeps.loadImageWebMediaRuntime =
+      overrides?.loadImageWebMediaRuntime ?? loadImageWebMediaRuntime;
   },
 } as const;
 
@@ -410,7 +442,7 @@ async function resolveCompressionModelPolicyWithHooks(params: {
       {
         allowBundledStaticCatalogFallback: true,
         skipProviderRuntimeHooks: params.skipProviderRuntimeHooks,
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
         workspaceDir: params.workspaceDir,
       },
     );
@@ -575,11 +607,11 @@ async function runImagePrompt(params: {
         cfg: providerCfg,
         provider,
         model: modelId,
-        providerRegistry: providerRegistry as Map<string, MediaUnderstandingProvider>,
+        providerRegistry,
       });
       const imageProvider = imageToolProviderDeps.getMediaUnderstandingProvider(
         provider,
-        providerRegistry as Map<string, MediaUnderstandingProvider>,
+        providerRegistry,
       );
       if (
         params.images.length > 1 &&
@@ -668,6 +700,9 @@ export function createImageTool(options?: {
   workspaceDir?: string;
   sandbox?: ImageSandboxConfig;
   fsPolicy?: ToolFsPolicy;
+  agentChannel?: string | null;
+  agentAccountId?: string | null;
+  currentChannelId?: string | null;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
   /**
@@ -799,7 +834,7 @@ export function createImageTool(options?: {
           "No image model is configured. Set agents.defaults.imageModel or configure an image-capable provider.",
         );
       }
-      const imageCompression = await resolveImageCompressionPolicy({
+      const imageCompression = await imageToolProviderDeps.resolveImageCompressionPolicy({
         cfg: options?.config,
         imageModelConfig,
         modelOverride,
@@ -840,7 +875,7 @@ export function createImageTool(options?: {
         // shared image registry here, so fail gracefully instead of attempting to
         // `fs.readFile("image:0")` and producing a noisy ENOENT.
         const refInfo = classifyMediaReferenceSource(normalizedRef);
-        const { isDataUrl, isFileUrl, isHttpUrl } = refInfo;
+        const { isDataUrl, isFileUrl, isHttpUrl, isMediaStoreUrl } = refInfo;
         if (refInfo.hasUnsupportedScheme) {
           return {
             content: [
@@ -874,6 +909,7 @@ export function createImageTool(options?: {
             !isDataUrl &&
             !isFileUrl &&
             !isHttpUrl &&
+            !isMediaStoreUrl &&
             !refInfo.looksLikeWindowsDrivePath &&
             !isAbsolute(normalizedRef) &&
             options?.workspaceDir
@@ -900,14 +936,24 @@ export function createImageTool(options?: {
           options?.workspaceDir,
           {
             workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+            cfg: options?.config,
+            channelId: options?.agentChannel ?? options?.currentChannelId,
+            accountId: options?.agentAccountId,
           },
           resolvedPath ? [resolvedPath] : undefined,
         );
+        const mediaInboundRoots = resolveMediaToolInboundRoots({
+          workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+          cfg: options?.config,
+          channelId: options?.agentChannel ?? options?.currentChannelId,
+          accountId: options?.agentAccountId,
+        });
+        const imageWebMedia = await imageToolProviderDeps.loadImageWebMediaRuntime();
 
         const media = isDataUrl
           ? await (async () => {
               const decoded = decodeDataUrl(resolvedImage, { maxBytes });
-              return await optimizeImageBufferForWebMedia({
+              return await imageWebMedia.optimizeImageBufferForWebMedia({
                 buffer: decoded.buffer,
                 contentType: decoded.mimeType,
                 maxBytes,
@@ -915,15 +961,16 @@ export function createImageTool(options?: {
               });
             })()
           : sandboxConfig
-            ? await loadWebMedia(resolvedPath ?? resolvedImage, {
+            ? await imageWebMedia.loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
                 sandboxValidated: true,
                 readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
                 imageCompression,
               })
-            : await loadWebMedia(resolvedPath ?? resolvedImage, {
+            : await imageWebMedia.loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
                 localRoots: mediaLocalRoots,
+                inboundRoots: mediaInboundRoots,
                 ssrfPolicy: remoteMediaSsrfPolicy,
                 imageCompression,
               });

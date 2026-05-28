@@ -18,7 +18,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
-type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
+type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 
 const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
 const contextModuleLoader = createLazyImportLoader(() => import("../context.js"));
@@ -253,14 +253,18 @@ export async function updateSessionStoreAfterAgentRun(params: {
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
     : removeLifecycleStateFromMetadataPatch(next);
-  const persisted = await updateSessionStore(storePath, (store) => {
-    if (preserveUserFacingRunState && !store[sessionKey]) {
-      return undefined;
-    }
-    const merged = mergeSessionEntry(store[sessionKey], metadataPatch);
-    store[sessionKey] = merged;
-    return merged;
-  });
+  const persisted = await updateSessionStore(
+    storePath,
+    (store) => {
+      if (preserveUserFacingRunState && !store[sessionKey]) {
+        return undefined;
+      }
+      const merged = mergeSessionEntry(store[sessionKey], metadataPatch);
+      store[sessionKey] = merged;
+      return merged;
+    },
+    { takeCacheOwnership: true },
+  );
   if (persisted) {
     sessionStore[sessionKey] = persisted;
   }
