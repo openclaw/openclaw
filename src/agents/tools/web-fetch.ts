@@ -3,7 +3,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
-import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
+import {
+  analyzeExternalContent,
+  wrapExternalContent,
+  wrapWebContent,
+} from "../../security/external-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -321,6 +325,14 @@ function normalizeProviderWebFetchPayload(params: {
   const payload = isRecord(params.payload) ? params.payload : {};
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const wrapped = wrapWebFetchContent(rawText, params.maxChars);
+  const analysis = analyzeExternalContent(rawText);
+  let resultWrapped = wrapped;
+  if (analysis.injectionRisk === "high") {
+    const summary =
+      `[INJECTION RISK: HIGH — CONTENT QUARANTINED] ` +
+      `hash=${analysis.contentHash.slice(0, 16)} patterns=${analysis.suspiciousPatterns.length}`;
+    resultWrapped = wrapWebFetchContent(summary, params.maxChars);
+  }
   const url = params.requestedUrl;
   const finalUrl = normalizeProviderFinalUrl(payload.finalUrl) ?? url;
   const status =
@@ -350,11 +362,16 @@ function normalizeProviderWebFetchPayload(params: {
       source: "web_fetch",
       wrapped: true,
       provider: params.providerId,
+      injectionRisk: analysis.injectionRisk,
+      contentHash: analysis.contentHash,
+      ...(analysis.suspiciousPatterns.length > 0
+        ? { suspiciousPatterns: analysis.suspiciousPatterns }
+        : {}),
     },
-    truncated: wrapped.truncated,
-    length: wrapped.wrappedLength,
+    truncated: resultWrapped.truncated || analysis.injectionRisk === "high",
+    length: resultWrapped.wrappedLength,
     rawLength: wrapped.rawLength,
-    wrappedLength: wrapped.wrappedLength,
+    wrappedLength: resultWrapped.wrappedLength,
     fetchedAt:
       typeof payload.fetchedAt === "string" && payload.fetchedAt
         ? payload.fetchedAt
@@ -363,7 +380,7 @@ function normalizeProviderWebFetchPayload(params: {
       typeof payload.tookMs === "number" && Number.isFinite(payload.tookMs)
         ? Math.max(0, Math.floor(payload.tookMs))
         : params.tookMs,
-    text: wrapped.text,
+    text: resultWrapped.text,
     ...(warning ? { warning } : {}),
   };
 }
@@ -582,6 +599,14 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     const wrapped = wrapWebFetchContent(text, params.maxChars);
     const wrappedTitle = title ? wrapWebFetchField(title) : undefined;
     const wrappedWarning = wrapWebFetchField(responseTruncatedWarning);
+    const analysis = analyzeExternalContent(text);
+    let resultWrapped = wrapped;
+    if (analysis.injectionRisk === "high") {
+      const summary =
+        `[INJECTION RISK: HIGH — CONTENT QUARANTINED] ` +
+        `hash=${analysis.contentHash.slice(0, 16)} patterns=${analysis.suspiciousPatterns.length}`;
+      resultWrapped = wrapWebFetchContent(summary, params.maxChars);
+    }
     const payload = {
       url: params.url, // Keep raw for tool chaining
       finalUrl, // Keep raw
@@ -594,14 +619,19 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         untrusted: true,
         source: "web_fetch",
         wrapped: true,
+        injectionRisk: analysis.injectionRisk,
+        contentHash: analysis.contentHash,
+        ...(analysis.suspiciousPatterns.length > 0
+          ? { suspiciousPatterns: analysis.suspiciousPatterns }
+          : {}),
       },
-      truncated: wrapped.truncated,
-      length: wrapped.wrappedLength,
+      truncated: resultWrapped.truncated || analysis.injectionRisk === "high",
+      length: resultWrapped.wrappedLength,
       rawLength: wrapped.rawLength, // Actual content length, not wrapped
-      wrappedLength: wrapped.wrappedLength,
+      wrappedLength: resultWrapped.wrappedLength,
       fetchedAt: new Date().toISOString(),
       tookMs: Date.now() - start,
-      text: wrapped.text,
+      text: resultWrapped.text,
       warning: wrappedWarning,
     };
     writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);

@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 export {
   isExternalHookSession,
   mapHookExternalContentSource,
@@ -28,7 +28,7 @@ const SUSPICIOUS_PATTERNS = [
   /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)/i,
   /disregard\s+(all\s+)?(previous|prior|above)/i,
   /forget\s+(everything|all|your)\s+(instructions?|rules?|guidelines?)/i,
-  /you\s+are\s+now\s+(a|an)\s+/i,
+  /you\s+are\s+now\s+/i,
   /new\s+instructions?:/i,
   /system\s*:?\s*(prompt|override|command)/i,
   /\bexec\b.*command\s*=/i,
@@ -52,6 +52,68 @@ export function detectSuspiciousPatterns(content: string): string[] {
     }
   }
   return matches;
+}
+
+/**
+ * Compute a SHA-256 hash of the given content string.
+ * Returns the hex-encoded digest.
+ */
+export function hashContent(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+/**
+ * Injection risk level derived from the count and nature of suspicious patterns.
+ */
+export type InjectionRiskLevel = "low" | "medium" | "high";
+
+export type InjectionRiskAssessment = {
+  risk: InjectionRiskLevel;
+  score: number;
+};
+
+/**
+ * Score injection risk based on the number of suspicious patterns detected.
+ *
+ * - 0 patterns → low (score 0)
+ * - 1-2 patterns → medium (score = pattern count)
+ * - 3+ patterns → high (score = pattern count)
+ */
+export function scoreInjectionRisk(suspiciousPatterns: string[]): InjectionRiskAssessment {
+  const count = suspiciousPatterns.length;
+  if (count === 0) {
+    return { risk: "low", score: 0 };
+  }
+  if (count <= 2) {
+    return { risk: "medium", score: count };
+  }
+  return { risk: "high", score: count };
+}
+
+export type ExternalContentAnalysis = {
+  /** Detected suspicious pattern sources */
+  suspiciousPatterns: string[];
+  /** Overall injection risk level */
+  injectionRisk: InjectionRiskLevel;
+  /** Numeric risk score (equals pattern count) */
+  riskScore: number;
+  /** SHA-256 hash of the content */
+  contentHash: string;
+};
+
+/**
+ * Comprehensive analysis of external content: detection, hashing, and risk scoring.
+ */
+export function analyzeExternalContent(content: string): ExternalContentAnalysis {
+  const suspiciousPatterns = detectSuspiciousPatterns(content);
+  const { risk, score } = scoreInjectionRisk(suspiciousPatterns);
+  const contentHash = hashContent(content);
+  return {
+    suspiciousPatterns,
+    injectionRisk: risk,
+    riskScore: score,
+    contentHash,
+  };
 }
 
 /**

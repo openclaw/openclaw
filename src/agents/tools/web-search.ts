@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
+import { analyzeExternalContent } from "../../security/external-content.js";
 import { resolveWebSearchProviderId, runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult } from "./common.js";
@@ -104,9 +105,22 @@ export function createWebSearchTool(options?: {
         args: asToolParamsRecord(args),
         signal,
       });
+      // Analyze search result text for injection patterns
+      const resultText =
+        typeof result.result === "string" ? result.result : JSON.stringify(result.result);
+      const analysis = analyzeExternalContent(resultText);
       return jsonResult({
         ...result.result,
         provider: result.provider,
+        externalContent: {
+          untrusted: true,
+          source: "web_search",
+          injectionRisk: analysis.injectionRisk,
+          contentHash: analysis.contentHash,
+          ...(analysis.suspiciousPatterns.length > 0
+            ? { suspiciousPatterns: analysis.suspiciousPatterns }
+            : {}),
+        },
       });
     },
   };
