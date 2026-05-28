@@ -109,7 +109,7 @@ export type MemoryDeepDreamingConfig = {
   minUniqueQueries: number;
   recencyHalfLifeDays: number;
   maxAgeDays?: number;
-  maxPromotedSnippetTokens: number;
+  maxPromotedSnippetTokens?: number;
   sources: MemoryDeepDreamingSource[];
   recovery: MemoryDeepDreamingRecoveryConfig;
   execution: MemoryDreamingExecutionConfig;

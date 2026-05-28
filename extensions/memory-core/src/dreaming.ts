@@ -111,7 +111,7 @@ type ShortTermPromotionDreamingConfig = {
   minUniqueQueries: number;
   recencyHalfLifeDays?: number;
   maxAgeDays?: number;
-  maxPromotedSnippetTokens: number;
+  maxPromotedSnippetTokens?: number;
   verboseLogging: boolean;
   storage?: {
     mode: "inline" | "separate" | "both";
