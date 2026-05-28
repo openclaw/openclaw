@@ -102,6 +102,13 @@ function normalizeRefForDedupe(raw: string): string {
   return process.platform === "win32" ? normalizeLowercaseStringOrEmpty(raw) : raw;
 }
 
+function isOpenClawCliImageCachePath(filePath: string): boolean {
+  const normalized = filePath.replaceAll("\\", "/");
+  return normalized.split("/").some((part) => {
+    return part === ".openclaw-cli-images" || part === "openclaw-cli-images";
+  });
+}
+
 export function mergePromptAttachmentImages(params: {
   imageOrder?: PromptImageOrderEntry[];
   existingImages?: ImageContent[];
@@ -321,8 +328,11 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     } catch {
       return;
     }
-    seen.add(dedupeKey);
     const resolved = trimmed.startsWith("~") ? resolveUserPath(trimmed) : trimmed;
+    if (isOpenClawCliImageCachePath(resolved)) {
+      return;
+    }
+    seen.add(dedupeKey);
     refs.push({ raw: trimmed, type: "path", resolved });
   };
 
@@ -388,6 +398,9 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     // Use fileURLToPath for proper handling (e.g., file://localhost/path)
     try {
       const resolved = safeFileURLToPath(raw);
+      if (isOpenClawCliImageCachePath(resolved)) {
+        continue;
+      }
       refs.push({ raw, type: "path", resolved });
     } catch {
       // Skip malformed file:// URLs
