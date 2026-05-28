@@ -351,6 +351,47 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
+  it("resets block parsing before consuming replacement text deltas", async () => {
+    const onBlockReply = vi.fn();
+    const onAgentEvent = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onAgentEvent,
+      onBlockReply,
+      blockReplyBreak: "text_end",
+    });
+
+    emitAssistantTextDelta(emit, "<think>\nDraft reasoning");
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Corrected answer",
+        replace: true,
+      },
+    });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+        content: "Corrected answer",
+      },
+    });
+    await flushBlockReplyCallbacks();
+
+    expectBlockReplyPayload(onBlockReply, { text: "Corrected answer" });
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual({
+      text: "Corrected answer",
+      delta: "",
+      replace: true,
+      mediaUrls: undefined,
+      phase: undefined,
+    });
+  });
+
   it("blocks local MEDIA urls from case-variant tool names in verbose output", async () => {
     const onToolResult = vi.fn();
     const { emit } = createSubscribedHarness({

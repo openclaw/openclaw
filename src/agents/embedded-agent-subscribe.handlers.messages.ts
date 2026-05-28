@@ -606,13 +606,7 @@ export function handleMessageUpdate(
 
   if (chunk) {
     if (isUnphasedReplacementDelta) {
-      ctx.state.deltaBuffer = "";
-      ctx.state.blockBuffer = "";
-      ctx.blockChunker?.reset();
-      ctx.state.partialBlockState.thinking = false;
-      ctx.state.partialBlockState.final = false;
-      ctx.state.partialBlockState.inlineCode = createInlineCodeState();
-      ctx.state.partialBlockState.pendingTagFragment = undefined;
+      ctx.resetAssistantTextStreamState();
     }
     ctx.state.deltaBuffer += chunk;
     if (!shouldUsePhaseAwareBlockReply) {

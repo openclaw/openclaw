@@ -296,7 +296,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
   };
 
-  const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
+  const resetAssistantTextStreamState = () => {
     state.deltaBuffer = "";
     state.blockBuffer = "";
     blockChunker?.reset();
@@ -324,6 +324,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.partialBlockState.finalFence = undefined;
     state.partialBlockState.pendingFenceFragment = undefined;
     state.partialBlockState.pendingTagFragment = undefined;
+  };
+
+  const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
+    resetAssistantTextStreamState();
     state.lastStreamedAssistant = undefined;
     state.lastStreamedAssistantCleaned = undefined;
     state.emittedAssistantUpdate = false;
@@ -752,10 +756,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           const after = scanText.slice(afterIndex);
           if (hasOrphanReasoningCloseBoundary({ before, after })) {
             processed = "";
+            lastIndex = afterIndex + after.length - after.trimStart().length;
           } else {
             processed += before;
+            lastIndex = afterIndex;
           }
-          lastIndex = afterIndex;
           continue;
         }
         processed += scanText.slice(lastIndex, idx);
@@ -1156,6 +1161,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     emitReasoningStream,
     consumeReplyDirectives,
     consumePartialReplyDirectives,
+    resetAssistantTextStreamState,
     resetAssistantMessageState,
     resetForCompactionRetry,
     finalizeAssistantTexts,
