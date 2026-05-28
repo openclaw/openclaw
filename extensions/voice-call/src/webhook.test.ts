@@ -777,6 +777,78 @@ describe("VoiceCallWebhookServer replay handling", () => {
     }
   });
 
+  it("caches realtime TwiML for replayed Twilio webhook requests and reuses the exact response body", async () => {
+    const buildTwiMLPayload = vi.fn(() => ({
+      statusCode: 200,
+      headers: { "Content-Type": "text/xml" },
+      body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
+    }));
+    let verifyCount = 0;
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook: () => {
+        verifyCount += 1;
+        if (verifyCount === 1) {
+          return { ok: true, verifiedRequestKey: "twilio:req:replay-cache" };
+        }
+        return { ok: true, isReplay: true, verifiedRequestKey: "twilio:req:replay-cache" };
+      },
+      parseWebhookEvent: () => ({ events: [], statusCode: 200 }),
+    };
+    const { manager, processEvent } = createManager([]);
+    const config = createConfig({
+      provider: "twilio",
+      inboundPolicy: "open",
+      realtime: {
+        enabled: true,
+        streamPath: "/voice/stream/realtime",
+        instructions: "Be helpful.",
+        toolPolicy: "safe-read-only",
+        tools: [],
+        providers: {},
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+    server.setRealtimeHandler({
+      buildTwiMLPayload,
+      getStreamPathPattern: () => "/voice/stream/realtime",
+      handleWebSocketUpgrade: () => {},
+      registerToolHandler: () => {},
+      setPublicUrl: () => {},
+    } as unknown as RealtimeCallHandler);
+
+    try {
+      const baseUrl = await server.start();
+      const firstResponse = await postWebhookFormWithHeaders(
+        server,
+        baseUrl,
+        "CallSid=CA123&Direction=inbound&CallStatus=ringing",
+        { "x-twilio-signature": "sig" },
+      );
+      expect(firstResponse.status).toBe(200);
+      const firstText = await firstResponse.text();
+      expect(firstText).toContain(
+        '<Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect>',
+      );
+      expect(buildTwiMLPayload).toHaveBeenCalledTimes(1);
+
+      const secondResponse = await postWebhookFormWithHeaders(
+        server,
+        baseUrl,
+        "CallSid=CA123&Direction=inbound&CallStatus=ringing",
+        { "x-twilio-signature": "sig" },
+      );
+      expect(secondResponse.status).toBe(200);
+      const secondText = await secondResponse.text();
+      expect(secondText).toBe(firstText);
+      expect(buildTwiMLPayload).toHaveBeenCalledTimes(1);
+      expect(processEvent).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
   it.each(["outbound-api", "outbound-dial"] as const)(
     "returns realtime TwiML for %s twilio TwiML fetches",
     async (direction) => {
