@@ -172,8 +172,11 @@ function canGatewaySecretInputPathWin(params: {
         options: params.options,
       }),
     );
-    const tokenCanWin = resolved.token === sentinel && !resolved.password;
-    const passwordCanWin = resolved.password === sentinel && !resolved.token;
+    const authMode = params.config.gateway?.auth?.mode;
+    const tokenCanWin = resolved.token === sentinel && (authMode === "token" || !resolved.password);
+    const passwordCanWin =
+      resolved.password === sentinel &&
+      (authMode === "password" || authMode === "trusted-proxy" || !resolved.token);
     return tokenCanWin || passwordCanWin;
   } catch {
     return false;
