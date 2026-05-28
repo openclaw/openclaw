@@ -1124,7 +1124,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
-  it("times out post-tool raw assistant progress after the assistant idle timeout", async () => {
+  it("times out post-tool raw assistant progress after the post-tool timeout", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let handleRequest:
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
@@ -1167,6 +1167,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const run = runCodexAppServerAttempt(params, {
       turnCompletionIdleTimeoutMs: 50,
       turnAssistantCompletionIdleTimeoutMs: 5,
+      postToolRawAssistantCompletionIdleTimeoutMs: 5,
       turnTerminalIdleTimeoutMs: 500,
     });
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
@@ -1331,7 +1332,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(completionWarnData?.lastActivityReason).toBe("notification:rawResponseItem/completed");
   });
 
-  it("times out post-native-tool raw assistant progress after the assistant idle timeout", async () => {
+  it("times out post-native-tool raw assistant progress after the post-tool timeout", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -1362,6 +1363,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const run = runCodexAppServerAttempt(params, {
       turnCompletionIdleTimeoutMs: 100,
       turnAssistantCompletionIdleTimeoutMs: 5,
+      postToolRawAssistantCompletionIdleTimeoutMs: 5,
       turnTerminalIdleTimeoutMs: 500,
     });
     await vi.waitFor(

@@ -134,7 +134,7 @@ import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
-import { resolveCodexAppServerClientCloseRetry } from "./run/codex-app-server-recovery.js";
+import { resolveCodexAppServerRecoveryRetry } from "./run/codex-app-server-recovery.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
@@ -1209,7 +1209,7 @@ export async function runEmbeddedAgent(
       });
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
-      let codexAppServerClientCloseRetries = 0;
+      let codexAppServerRecoveryRetries = 0;
       // Silent-error retry: non-strict-agentic models (e.g. ollama/glm-5.1) can
       // end a turn with stopReason="error" + zero output tokens, producing no
       // user-visible text. This is an orthogonal, model-agnostic resubmission
@@ -2379,15 +2379,17 @@ export async function runEmbeddedAgent(
           }
 
           if (promptError && !aborted && promptErrorSource !== "compaction") {
-            const codexClientCloseRetry = resolveCodexAppServerClientCloseRetry({
+            // Retry replay-safe Codex app-server failures.
+            const codexAppServerRecoveryRetry = resolveCodexAppServerRecoveryRetry({
               attempt,
-              alreadyRetried: codexAppServerClientCloseRetries > 0,
+              alreadyRetried: codexAppServerRecoveryRetries > 0,
             });
-            if (codexClientCloseRetry.retry) {
-              codexAppServerClientCloseRetries += 1;
+            if (codexAppServerRecoveryRetry.retry) {
+              codexAppServerRecoveryRetries += 1;
               suppressNextUserMessagePersistence = true;
               log.warn(
-                `codex app-server stdio client closed before turn completion; retrying once ` +
+                `codex app-server replay-safe failure; retrying once ` +
+                  `failureKind=${attempt.codexAppServerFailure?.kind} ` +
                   `runId=${params.runId} sessionId=${params.sessionId}`,
               );
               continue;
