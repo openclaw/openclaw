@@ -25,6 +25,7 @@ export function buildWebhookTargets(params: {
       event: route.event,
       ...(route.events ? { events: route.events } : {}),
       ...(route.idempotency ? { idempotency: route.idempotency } : {}),
+      ...(route.verification ? { verification: route.verification } : {}),
       ...(route.prompt ? { prompt: route.prompt } : {}),
       ...(route.skills ? { skills: route.skills } : {}),
     };

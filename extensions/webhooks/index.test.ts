@@ -308,6 +308,66 @@ describe("webhooks plugin registration", () => {
     expectDynamicPrefixRoute(registerHttpRoute);
   });
 
+  it("answers static route verification challenges without dispatching", async () => {
+    const registerHttpRoute = vi.fn();
+    const scheduleSessionTurn = vi.fn(async () => ({
+      id: "job-meego",
+      pluginId: "webhooks",
+      sessionKey: "agent:webhook-reviewer:meego",
+      kind: "agentTurn",
+    }));
+
+    plugin.register(
+      createApi({
+        pluginConfig: {
+          routes: {
+            meego_requirement_created: {
+              path: "/plugins/webhooks/meego-requirement-created",
+              sessionKey: "agent:webhook-reviewer:meego",
+              auth: {
+                mode: "header",
+                header: "x-meego-webhook-token",
+                secret: "shared-secret",
+              },
+              dispatch: {
+                mode: "agent",
+                agent: { deliveryMode: "none" },
+              },
+              verification: {
+                challengePath: "challenge",
+                responsePath: "challenge",
+              },
+            },
+          },
+        },
+        registerHttpRoute,
+        scheduleSessionTurn,
+      }),
+    );
+
+    const route = requireRouteRegistration(
+      registerHttpRoute,
+      "/plugins/webhooks/meego-requirement-created",
+    );
+    const req = createJsonRequest({
+      url: "/plugins/webhooks/meego-requirement-created",
+      headers: {
+        "x-meego-webhook-token": "shared-secret",
+      },
+      body: {
+        type: "url_verification",
+        challenge: "verify-me",
+      },
+    });
+    const res = createJsonResponse();
+
+    await route.handler(req as never, res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ challenge: "verify-me" });
+    expect(scheduleSessionTurn).not.toHaveBeenCalled();
+  });
+
   it("registers ack-only routes without binding TaskFlow sessions", () => {
     const registerHttpRoute = vi.fn();
     const bindSession = vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey }));
