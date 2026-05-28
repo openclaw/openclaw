@@ -217,6 +217,84 @@ describe("SessionHistorySseState", () => {
     ).toBe("Cursor-visible reply.");
   });
 
+  test("mirrors sessions_yield tool-result messages for durable WebChat replay", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "start worker" }],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "toolResult",
+          toolName: "sessions_yield",
+          toolCallId: "call-yield-status",
+          content: [
+            {
+              content: JSON.stringify({
+                status: "yielded",
+                message: "Waiting for the subagent to finish.",
+              }),
+            },
+          ],
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    expect(snapshot.history.messages).toHaveLength(3);
+    const mirror = snapshot.history.messages[2] as {
+      content?: Array<{ text?: string }>;
+      openclawVisibleToolMirror?: { toolName?: string; toolCallId?: string };
+      __openclaw?: { seq?: number };
+    };
+    expect(mirror.content?.[0]?.text).toBe("Waiting for the subagent to finish.");
+    expect(mirror.openclawVisibleToolMirror).toEqual({
+      toolName: "sessions_yield",
+      toolCallId: "call-yield-status",
+    });
+    expect(mirror["__openclaw"]?.seq).toBe(2);
+  });
+
+  test("emits sessions_yield visible mirror for inline replay appends", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "start worker" }],
+          __openclaw: { seq: 1 },
+        },
+      ],
+    });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "toolResult",
+        toolName: "sessions_yield",
+        toolCallId: "call-yield-inline",
+        content: JSON.stringify({
+          status: "yielded",
+          message: "Still waiting for child completion.",
+        }),
+      },
+      messageSeq: 2,
+    });
+
+    expect(appended).toEqual({ shouldRefresh: true });
+    const message = state.snapshot().messages.at(-1) as
+      | {
+          content?: Array<{ text?: string }>;
+          openclawVisibleToolMirror?: { toolName?: string; toolCallId?: string };
+        }
+      | undefined;
+    expect(message?.content?.[0]?.text).toBe("Still waiting for child completion.");
+    expect(message?.openclawVisibleToolMirror).toEqual({
+      toolName: "sessions_yield",
+      toolCallId: "call-yield-inline",
+    });
+  });
+
   test("does not coerce partial cursor values", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [

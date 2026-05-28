@@ -99,6 +99,37 @@ describe("buildChatItems", () => {
     ]);
   });
 
+  it("renders visible tool mirrors while default-hiding raw sessions_yield tool results", () => {
+    const groups = messageGroups({
+      showToolCalls: false,
+      messages: [
+        {
+          role: "toolResult",
+          toolName: "sessions_yield",
+          content: JSON.stringify({
+            status: "yielded",
+            message: "Waiting for the subagent to finish.",
+          }),
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Waiting for the subagent to finish." }],
+          openclawVisibleToolMirror: {
+            toolName: "sessions_yield",
+          },
+          timestamp: 1,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].role).toBe("assistant");
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "Waiting for the subagent to finish." },
+    ]);
+  });
+
   it("suppresses assistant HEARTBEAT_OK acknowledgements that carry hidden thinking blocks", () => {
     const groups = messageGroups({
       messages: [
