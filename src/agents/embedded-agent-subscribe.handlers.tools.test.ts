@@ -2120,10 +2120,10 @@ describe("handleToolExecutionUpdate non-exec progress", () => {
     dispose();
   });
 
-  it("suppresses the legacy stream:tool partialResult bridge when web_fetch progressText is surfaced", async () => {
+  it("suppresses both the global and subscriber stream:tool update bridges when web_fetch progressText is surfaced", async () => {
     resetAgentEventsForTest();
     const { events, dispose } = captureItemEvents();
-    const { ctx } = createTestContext();
+    const { ctx, onAgentEvent } = createTestContext();
 
     await handleToolExecutionStart(
       ctx as never,
@@ -2134,6 +2134,10 @@ describe("handleToolExecutionUpdate non-exec progress", () => {
         args: { url: "https://example.com/slow" },
       } as never,
     );
+
+    // Reset the subscriber callback spy after the start phase so the
+    // assertions below isolate the update-phase events only.
+    onAgentEvent.mockClear();
 
     handleToolExecutionUpdate(
       ctx as never,
@@ -2160,11 +2164,12 @@ describe("handleToolExecutionUpdate non-exec progress", () => {
       "Fetching web page…",
     );
 
-    // The legacy stream:"tool" phase:"update" partialResult bridge MUST NOT
-    // fire for this same tool call. Downstream runners convert that bridge
-    // into an extra `onToolStart` render which would produce a bare "Web
-    // Fetch" row alongside the new progress draft (ClawSweeper round 4 P1).
-    const bridgeBypass = events.find(
+    // (a) The global event-bus `stream:"tool"` `phase:"update"`
+    // `partialResult` bridge MUST NOT fire. Downstream runners convert
+    // that bridge into an extra `onToolStart` render which would produce a
+    // bare "Web Fetch" row alongside the new progress draft (ClawSweeper
+    // round 4 P1).
+    const globalBridgeUpdate = events.find(
       (evt) =>
         evt.stream === "tool" &&
         (evt.data as { phase?: string; toolCallId?: string; partialResult?: unknown })?.phase ===
@@ -2172,7 +2177,67 @@ describe("handleToolExecutionUpdate non-exec progress", () => {
         (evt.data as { toolCallId?: string }).toolCallId === "wf-bridge" &&
         (evt.data as { partialResult?: unknown }).partialResult !== undefined,
     );
-    expect(bridgeBypass).toBeUndefined();
+    expect(globalBridgeUpdate).toBeUndefined();
+
+    // (b) The subscriber-side `ctx.params.onAgentEvent` callback that
+    // forwards a bare `stream:"tool"` `phase:"update"` (without
+    // `partialResult`) is the SECOND surface the runners ingest as a
+    // fresh tool update — and the path that channel progress rendering
+    // also consumes. That bridge MUST NOT fire either (ClawSweeper round
+    // 5 P1).
+    const subscriberToolUpdates = onAgentEvent.mock.calls
+      .map((call) => call[0] as CapturedAgentEvent)
+      .filter(
+        (evt) =>
+          evt.stream === "tool" &&
+          (evt.data as { phase?: string; toolCallId?: string })?.phase === "update" &&
+          (evt.data as { toolCallId?: string }).toolCallId === "wf-bridge",
+      );
+    expect(subscriberToolUpdates).toHaveLength(0);
+
+    dispose();
+  });
+
+  it("preserves the subscriber stream:tool update for non-allow-listed tools", async () => {
+    resetAgentEventsForTest();
+    const { dispose } = captureItemEvents();
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "random_plugin_tool",
+        toolCallId: "rp-bridge",
+        args: {},
+      } as never,
+    );
+    onAgentEvent.mockClear();
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "random_plugin_tool",
+        toolCallId: "rp-bridge",
+        partialResult: {
+          content: [{ type: "text", text: "secret=abc123" }],
+        },
+      } as never,
+    );
+
+    // Non-allow-list non-exec tools keep the subscriber bridge — ACP / TUI /
+    // gateway consumers still need partials there. Only allow-listed tools
+    // whose item progress takes over the channel-visible path lose it.
+    const subscriberToolUpdate = onAgentEvent.mock.calls
+      .map((call) => call[0] as CapturedAgentEvent)
+      .find(
+        (evt) =>
+          evt.stream === "tool" &&
+          (evt.data as { phase?: string; toolCallId?: string })?.phase === "update" &&
+          (evt.data as { toolCallId?: string }).toolCallId === "rp-bridge",
+      );
+    expect(subscriberToolUpdate).toBeDefined();
 
     dispose();
   });

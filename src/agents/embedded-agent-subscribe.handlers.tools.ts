@@ -1140,14 +1140,21 @@ export function handleToolExecutionUpdate(
     ...(nonExecProgressText ? { progressText: nonExecProgressText } : {}),
   };
   emitTrackedItemEvent(ctx, itemData);
-  void ctx.params.onAgentEvent?.({
-    stream: "tool",
-    data: {
-      phase: "update",
-      name: toolName,
-      toolCallId,
-    },
-  });
+  // Subscriber-facing `stream:"tool"` `phase:"update"` signal must be gated
+  // by the same `nonExecProgressText` condition as the global event bridge
+  // above: the auto-reply and follow-up runners route this callback through
+  // `onToolStart`, which would otherwise still render a bare `Web Fetch`
+  // row alongside the item progress draft (ClawSweeper round 5 P1).
+  if (!nonExecProgressText) {
+    void ctx.params.onAgentEvent?.({
+      stream: "tool",
+      data: {
+        phase: "update",
+        name: toolName,
+        toolCallId,
+      },
+    });
+  }
   if (isExecTool) {
     const output = extractLiveExecOutput(liveResult);
     const commandData: AgentItemEventData = {
