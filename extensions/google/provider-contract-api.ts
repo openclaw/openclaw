@@ -128,7 +128,7 @@ export function createGoogleVertexProvider(): ProviderPlugin {
               `Project: ${project}, Location: ${location}`,
               "Credentials will be resolved via Application Default Credentials (ADC).",
               "On GCE/GKE/Cloud Run, the metadata server provides credentials automatically.",
-              "For local development, run: gcloud auth application-default login",
+              "With gcloud CLI, run: gcloud auth application-default login",
             ],
           };
         },
