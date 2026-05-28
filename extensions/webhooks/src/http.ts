@@ -54,8 +54,8 @@ export type ScheduleSessionTurn = (params: {
 }) => Promise<{ id: string; pluginId: string; sessionKey: string; kind: string } | undefined>;
 
 export type WebhookLogger = {
-  info?: (...args: unknown[]) => void;
-  warn?: (...args: unknown[]) => void;
+  info?: (message: string, details?: unknown) => void;
+  warn?: (message: string, details?: unknown) => void;
 };
 
 export type { WebhookAgentCompletionDispatch } from "./dispatch.js";

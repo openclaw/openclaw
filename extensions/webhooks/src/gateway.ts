@@ -15,13 +15,15 @@ import { createInMemoryIdempotencyRecords } from "./idempotency.js";
 import { signWebhookTestPayload, type WebhookSubscriptionStore } from "./subscriptions.js";
 
 type Logger = {
-  warn?: (...args: unknown[]) => void;
+  warn?: (message: string, details?: unknown) => void;
 };
+
+type GatewayErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 
 function respondError(
   respond: GatewayRequestHandlerOptions["respond"],
   message: string,
-  code = ErrorCodes.INVALID_REQUEST,
+  code: GatewayErrorCode = ErrorCodes.INVALID_REQUEST,
 ): void {
   respond(false, undefined, errorShape(code, message));
 }

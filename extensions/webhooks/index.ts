@@ -15,6 +15,17 @@ import { createTaskFlowWebhookRequestHandler } from "./src/http.js";
 import { createWebhookSubscriptionStore } from "./src/subscriptions.js";
 import { buildWebhookTargets } from "./src/targets.js";
 
+function adaptLogger(api: OpenClawPluginApi) {
+  return {
+    info: (message: string, details?: unknown) => {
+      api.logger.info(details === undefined ? message : `${message} ${JSON.stringify(details)}`);
+    },
+    warn: (message: string, details?: unknown) => {
+      api.logger.warn(details === undefined ? message : `${message} ${JSON.stringify(details)}`);
+    },
+  };
+}
+
 function hasIdempotency(routes: { idempotency?: ConfiguredWebhookIdempotencyConfig }[]): boolean {
   return routes.some((route) => route.idempotency);
 }
@@ -47,6 +58,7 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
   const routes = runtimeConfig.routes;
 
   const targetsByPath = buildWebhookTargets({ api, routes });
+  const logger = adaptLogger(api);
   const subscriptionStore = createWebhookSubscriptionStore({
     api,
     staticRoutes: routes,
@@ -77,7 +89,7 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
     loadChannelOutboundAdapter: api.runtime.channel?.outbound?.loadAdapter?.bind(
       api.runtime.channel.outbound,
     ),
-    logger: api.logger,
+    logger,
   });
 
   registerWebhooksGatewayMethods({
@@ -95,7 +107,7 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
     loadChannelOutboundAdapter: api.runtime.channel?.outbound?.loadAdapter?.bind(
       api.runtime.channel.outbound,
     ),
-    logger: api.logger,
+    logger,
   });
 
   api.registerCli(({ program }) => registerWebhooksCli({ program }), {
@@ -108,6 +120,7 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
       api,
       pendingCompletionBySessionKey,
       completionContextStore,
+      logger,
     });
   }
 

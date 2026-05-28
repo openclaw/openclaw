@@ -52,8 +52,11 @@ openclaw webhooks subscribe github-pr-review \
   --prompt 'Review GitHub PR {{body.pull_request.html_url}}. Payload: {{__raw__}}'
 ```
 
-The response includes the route path, a generated HMAC secret, and `webhookUrl`
-when `plugins.entries.webhooks.config.publicUrl` is configured:
+By default the command prints a Hermes-style setup summary with the URL, secret,
+events, dispatch mode, and provider configuration hint. Pass `--json` when a
+script needs the raw Gateway RPC response. The response includes the route path,
+a generated HMAC secret, and `webhookUrl` when
+`plugins.entries.webhooks.config.publicUrl` is configured:
 
 ```json
 {
@@ -86,6 +89,7 @@ when `plugins.entries.webhooks.config.publicUrl` is configured:
 | `--skills <csv>`                    | Skills to include in dispatch context.                              |
 | `--description <text>`              | Human-readable route description.                                   |
 | `--secret <secret>`                 | Explicit HMAC secret. If omitted, OpenClaw generates one.           |
+| `--json`                            | Print the raw Gateway RPC response.                                 |
 
 Dynamic subscriptions use HMAC-SHA256 by default:
 
@@ -100,8 +104,9 @@ Value:  sha256=<hex HMAC of raw request body>
 openclaw webhooks list
 ```
 
-Returns dynamic subscriptions. Secrets are not printed; the output only shows
-whether a secret is configured.
+Prints dynamic subscriptions in a readable list. Pass `--json` for the raw
+response. Secrets are not printed; the output only shows whether a secret is
+configured.
 
 ## `webhooks remove`
 
@@ -110,7 +115,8 @@ openclaw webhooks remove github-pr-review
 ```
 
 Removes a dynamic subscription by name. Static routes declared in
-`openclaw.json` or plugin config remain managed by config.
+`openclaw.json` or plugin config remain managed by config. Pass `--json` for
+the raw response.
 
 ## `webhooks test`
 
@@ -126,7 +132,7 @@ handler path that real HTTP deliveries use. It is a control-plane test for route
 configuration; it does not prove that GitHub, Codebase, Meego, or another
 external system can reach the route. For production proof, create a real object
 in the source system and confirm its delivery id, OpenClaw dispatch/run id, and
-writeback result.
+writeback result. Pass `--json` for the raw response.
 
 ## Public URL
 

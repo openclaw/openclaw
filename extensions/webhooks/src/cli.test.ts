@@ -36,4 +36,78 @@ describe("webhooks CLI", () => {
       { progress: false },
     );
   });
+
+  it("prints Hermes-style subscription setup output by default", async () => {
+    const callGateway = vi.fn(async () => ({
+      subscription: {
+        name: "github-pr-review",
+        path: "/plugins/webhooks/github-pr-review",
+        events: ["pull_request"],
+        dispatch: {
+          mode: "agent",
+          agent: {
+            agentId: "webhook-reviewer",
+            messageTemplate: "Review GitHub PR {{body.pull_request.html_url}}.",
+          },
+        },
+      },
+      secret: "generated-secret",
+      webhookUrl: "https://gateway.example.com/plugins/webhooks/github-pr-review",
+    }));
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    testing.setCallGatewayFromCliForTests(callGateway as never);
+    const program = createProgram();
+    const webhooks = program.command("webhooks");
+    registerWebhooksCli({ program: webhooks });
+
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "webhooks",
+      "subscribe",
+      "github-pr-review",
+      "--events",
+      "pull_request",
+      "--agent-id",
+      "webhook-reviewer",
+    ]);
+
+    const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(output).toContain("Webhook subscription: github-pr-review");
+    expect(output).toContain(
+      "URL:    https://gateway.example.com/plugins/webhooks/github-pr-review",
+    );
+    expect(output).toContain("Secret: generated-secret");
+    expect(output).toContain("Events: pull_request");
+    expect(output).toContain("Dispatch: agent (webhook-reviewer)");
+    expect(output).toContain("Configure your service to POST to the URL above.");
+  });
+
+  it("keeps raw JSON output for scripts", async () => {
+    const result = {
+      subscription: {
+        name: "github-pr-review",
+        path: "/plugins/webhooks/github-pr-review",
+      },
+      secret: "generated-secret",
+    };
+    const callGateway = vi.fn(async () => result);
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    testing.setCallGatewayFromCliForTests(callGateway as never);
+    const program = createProgram();
+    const webhooks = program.command("webhooks");
+    registerWebhooksCli({ program: webhooks });
+
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "webhooks",
+      "subscribe",
+      "github-pr-review",
+      "--json",
+    ]);
+
+    const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(JSON.parse(output)).toEqual(result);
+  });
 });

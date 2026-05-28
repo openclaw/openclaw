@@ -2,6 +2,7 @@ import type { OpenClawPluginApi, PluginJsonValue } from "../api.js";
 import type { ConfiguredWebhookDeliveryConfig } from "./config.js";
 import { deliverWebhookCompletion } from "./delivery.js";
 import type { WebhookAgentCompletionDispatch } from "./dispatch.js";
+import type { WebhookLogger } from "./http.js";
 
 export type CompletionRunContext = {
   routeId: string;
@@ -41,6 +42,22 @@ function readAssistantSnapshot(value: unknown): string | undefined {
   return isRecord(value) ? normalizeAssistantText(value.text) : undefined;
 }
 
+function isPluginJsonValue(value: unknown): value is PluginJsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return true;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (Array.isArray(value)) {
+    return value.every(isPluginJsonValue);
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Object.values(value).every(isPluginJsonValue);
+}
+
 function appendAssistantDelta(currentText: string | undefined, value: unknown): string | undefined {
   if (!isRecord(value)) {
     return currentText;
@@ -62,13 +79,14 @@ function readCompletionContext(value: unknown): CompletionRunContext | undefined
   const eventType = readString(value.eventType);
   const idempotencyKey = readString(value.idempotencyKey);
   const text = readString(value.text);
+  const body = isPluginJsonValue(value.body) ? value.body : {};
   return {
     routeId,
     sessionKey,
     delivery: value.delivery as ConfiguredWebhookDeliveryConfig,
     ...(eventType ? { eventType } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
-    body: value.body,
+    body,
     rawBody,
     headers: Object.fromEntries(
       Object.entries(value.headers).filter(
@@ -146,6 +164,7 @@ export function registerAgentCompletionDelivery(params: {
   api: OpenClawPluginApi;
   pendingCompletionBySessionKey: Map<string, CompletionRunContext>;
   completionContextStore: CompletionContextStore | undefined;
+  logger?: WebhookLogger;
 }): void {
   const { api, completionContextStore, pendingCompletionBySessionKey } = params;
   const activeCompletionByRunId = new Map<string, CompletionRunContext>();
@@ -190,7 +209,7 @@ export function registerAgentCompletionDelivery(params: {
 
       const text = normalizeAssistantText(current.text);
       if (!text) {
-        api.logger.warn?.("[webhooks] skipped empty agent completion delivery", {
+        params.logger?.warn?.("[webhooks] skipped empty agent completion delivery", {
           routeId: current.routeId,
           sessionKey: current.sessionKey,
           runId: event.runId,
@@ -216,7 +235,7 @@ export function registerAgentCompletionDelivery(params: {
         loadChannelOutboundAdapter: api.runtime.channel?.outbound?.loadAdapter?.bind(
           api.runtime.channel.outbound,
         ),
-        logger: api.logger,
+        logger: params.logger,
         cfg: api.config,
       });
       await consumeCompletionContext({
@@ -225,7 +244,7 @@ export function registerAgentCompletionDelivery(params: {
         sessionKey: current.sessionKey,
       });
       activeCompletionByRunId.delete(event.runId);
-      api.logger.info?.("[webhooks] delivered agent completion", {
+      params.logger?.info?.("[webhooks] delivered agent completion", {
         routeId: current.routeId,
         sessionKey: current.sessionKey,
         runId: event.runId,
