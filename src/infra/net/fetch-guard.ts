@@ -306,6 +306,9 @@ function resolveRetainedAuthorizationForRedirect(params: {
   if (!init?.headers || !params.hostnameAllowlist?.length) {
     return undefined;
   }
+  if (params.nextUrl.protocol !== "https:") {
+    return undefined;
+  }
   if (!matchesHostnameAllowlist(params.nextUrl.hostname, params.hostnameAllowlist)) {
     return undefined;
   }
