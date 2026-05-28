@@ -3326,6 +3326,60 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].cacheRead).toBe(4_000);
   });
 
+  it("uses positive compactionTokensAfter when final usage has no prompt total", async () => {
+    const storePath = await createStorePath("openclaw-usage-compaction-fallback-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        totalTokens: 180_000,
+        totalTokensFresh: true,
+        inputTokens: 5_000,
+        outputTokens: 2_000,
+        cacheRead: 50_000,
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: 1,
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          route: "compact_only",
+          shouldCompact: true,
+          estimatedPromptTokens: 180_000,
+          contextTokenBudget: 1_048_576,
+          promptBudgetBeforeReserve: 1_044_480,
+          reserveTokens: 4_096,
+          effectiveReserveTokens: 4_096,
+          remainingPromptBudgetTokens: 864_480,
+          overflowTokens: 0,
+          toolResultReducibleChars: 0,
+          messageCount: 0,
+          unwindowedMessageCount: 0,
+        },
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { output: 125 },
+      lastCallUsage: { output: 125 },
+      providerUsed: "claude-cli",
+      compactionTokensAfter: 80_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(80_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(stored[sessionKey].inputTokens).toBeUndefined();
+    expect(stored[sessionKey].outputTokens).toBeUndefined();
+    expect(stored[sessionKey].cacheRead).toBeUndefined();
+    expect(stored[sessionKey].contextBudgetStatus).toBeUndefined();
+  });
+
   it("persists totalTokens from promptTokens when usage is unavailable", async () => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";

@@ -115,9 +115,6 @@ export async function persistSessionUsageUpdate(params: {
     Boolean(params.lastCallUsage) || hasPromptTokens || params.usageIsContextSnapshot === true;
   const compactionTokensAfter = resolveNonNegativeTokenCount(params.compactionTokensAfter);
   const hasCompactionSnapshot = compactionTokensAfter !== undefined;
-  const useCompactionSnapshot =
-    compactionTokensAfter !== undefined &&
-    (compactionTokensAfter === 0 || !hasFreshContextSnapshot);
 
   if (hasUsage || hasFreshContextSnapshot || hasCompactionSnapshot) {
     try {
@@ -140,16 +137,23 @@ export async function persistSessionUsageUpdate(params: {
           const usageForContext =
             params.lastCallUsage ??
             (params.usageIsContextSnapshot === true ? params.usage : undefined);
-          const totalTokens =
-            !preserveUserFacingRunState && useCompactionSnapshot
-              ? compactionTokensAfter
-              : hasFreshContextSnapshot && !preserveUserFacingRunState
-                ? deriveSessionTotalTokens({
-                    usage: usageForContext,
-                    contextTokens: resolvedContextTokens,
-                    promptTokens: params.promptTokens,
-                  })
-                : undefined;
+          const usageTotalTokens =
+            hasFreshContextSnapshot && !preserveUserFacingRunState
+              ? deriveSessionTotalTokens({
+                  usage: usageForContext,
+                  contextTokens: resolvedContextTokens,
+                  promptTokens: params.promptTokens,
+                })
+              : undefined;
+          const hasPositiveUsageTotal =
+            typeof usageTotalTokens === "number" &&
+            Number.isFinite(usageTotalTokens) &&
+            usageTotalTokens > 0;
+          const useCompactionSnapshot =
+            !preserveUserFacingRunState &&
+            compactionTokensAfter !== undefined &&
+            (compactionTokensAfter === 0 || !hasPositiveUsageTotal);
+          const totalTokens = useCompactionSnapshot ? compactionTokensAfter : usageTotalTokens;
           const runEstimatedCostUsd = preserveUserFacingRunState
             ? undefined
             : estimateSessionRunCostUsd({
