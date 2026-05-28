@@ -96,6 +96,10 @@ export function getLoadSessionStoreMock(): AnyMock {
   return loadSessionStoreMock;
 }
 
+export function getReadSessionUpdatedAtMock(): AnyMock {
+  return readSessionUpdatedAtMock;
+}
+
 export function setSessionStoreEntriesForTest(entries: SessionStore) {
   sessionStoreEntries.value = structuredClone(entries);
 }

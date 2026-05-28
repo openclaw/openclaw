@@ -24,6 +24,7 @@ import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/secur
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
+import { filterTelegramPromptContextForPersistentDm } from "./bot-message-context.prompt-context-filter.js";
 import type {
   TelegramMediaRef,
   TelegramMessageContextOptions,
@@ -360,6 +361,19 @@ export async function buildTelegramInboundContextPayload(params: {
     storePath,
     sessionKey: route.sessionKey,
   });
+  // Suppress the Telegram chat_window prompt-context block for private DMs
+  // routed to a persistent session that already has prior activity — the
+  // session transcript already covers that recent history (issue #87566).
+  const effectivePromptContext = filterTelegramPromptContextForPersistentDm(promptContext, {
+    isGroup,
+    threadId: threadSpec.id ?? null,
+    previousTimestampMs: previousTimestamp ?? null,
+  });
+  if (shouldLogVerbose() && effectivePromptContext.length !== promptContext.length) {
+    logVerbose(
+      `telegram: suppressed chat_window prompt-context for persistent DM session ${route.sessionKey} (chat ${chatId})`,
+    );
+  }
   const body = formatInboundEnvelope({
     channel: "Telegram",
     from: conversationLabel,
@@ -529,7 +543,7 @@ export async function buildTelegramInboundContextPayload(params: {
           }
         : undefined,
       groupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
-      untrustedContext: promptContext.length > 0 ? promptContext : undefined,
+      untrustedContext: effectivePromptContext.length > 0 ? effectivePromptContext : undefined,
     },
     contextVisibility: contextVisibilityMode,
     extra: {

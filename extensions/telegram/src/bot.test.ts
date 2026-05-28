@@ -20,6 +20,7 @@ const {
   getLoadConfigMock,
   getLoadWebMediaMock,
   getReadChannelAllowFromStoreMock,
+  getReadSessionUpdatedAtMock,
   getOnHandler,
   listSkillCommandsForAgents,
   onSpy,
@@ -3777,5 +3778,283 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
+  // Regression tests for issue #87566 — Telegram DMs were duplicating recent
+  // conversation context inside every user turn, even when the session already
+  // contained the full transcript. The fix suppresses the chat_window
+  // prompt-context block for private DMs that route to a persistent session.
+  describe("Telegram chat_window suppression for persistent DMs (#87566)", () => {
+    const readSessionUpdatedAtMock = getReadSessionUpdatedAtMock();
+
+    function getInboundPayloadFromReplySpy() {
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      return mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    }
+
+    async function pumpDmMessage(
+      handler: (ctx: Record<string, unknown>) => Promise<void>,
+      params: {
+        messageId: number;
+        text: string;
+        date?: number;
+        chatId?: number;
+        chatType?: "private" | "group" | "supergroup";
+        chatTitle?: string;
+        threadId?: number;
+      },
+    ) {
+      const baseCtx = {
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+      const chatId = params.chatId ?? 4242;
+      const chatType = params.chatType ?? "private";
+      const chat: Record<string, unknown> = { id: chatId, type: chatType };
+      if (params.chatTitle) {
+        chat.title = params.chatTitle;
+      }
+      if (params.threadId !== undefined && (chatType === "supergroup" || chatType === "group")) {
+        chat.is_forum = chatType === "supergroup" ? true : undefined;
+      }
+      const message: Record<string, unknown> = {
+        chat,
+        text: params.text,
+        date: params.date ?? 1736380800,
+        message_id: params.messageId,
+        from: { id: chatId, is_bot: false, first_name: "Ada" },
+      };
+      if (params.threadId !== undefined) {
+        message.message_thread_id = params.threadId;
+        message.is_topic_message = true;
+      }
+      await handler({ ...baseCtx, message });
+    }
+
+    beforeEach(() => {
+      loadConfig.mockReturnValue({
+        agents: { defaults: { envelopeTimezone: "utc" } },
+        channels: {
+          telegram: { dmPolicy: "open", allowFrom: ["*"] },
+        },
+      });
+    });
+
+    it("suppresses chat_window for a private DM routed to a persistent session", async () => {
+      // Simulate that the session has already been written to before (i.e.
+      // the persistent session transcript already contains earlier turns).
+      readSessionUpdatedAtMock.mockReturnValue(1736380000_000);
+
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      // Prime the message cache so buildTelegramConversationContext has
+      // recent messages to surface — these are exactly the ones that would
+      // otherwise duplicate the session transcript.
+      await pumpDmMessage(handler, { messageId: 1, text: "first", date: 1736380700 });
+      await pumpDmMessage(handler, { messageId: 2, text: "second", date: 1736380750 });
+
+      replySpy.mockClear();
+      await pumpDmMessage(handler, {
+        messageId: 3,
+        text: "third turn",
+        date: 1736380800,
+      });
+
+      const payload = getInboundPayloadFromReplySpy() as MsgContext & {
+        UntrustedStructuredContext?: unknown[];
+      };
+      // No chat_window block should be present — the persistent transcript
+      // covers this history.
+      const structured = payload.UntrustedStructuredContext ?? [];
+      const chatWindows = structured.filter((entry) => {
+        if (!entry || typeof entry !== "object") return false;
+        return (entry as Record<string, unknown>).type === "chat_window";
+      });
+      expect(chatWindows).toEqual([]);
+    });
+
+    it("keeps chat_window for a private DM whose session has no prior activity (fresh session)", async () => {
+      // No previousTimestamp → fresh session. We must NOT suppress, because
+      // the transcript does not yet cover the recent cached messages.
+      readSessionUpdatedAtMock.mockReturnValue(undefined);
+
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await pumpDmMessage(handler, { messageId: 10, text: "hi", date: 1736380700 });
+
+      replySpy.mockClear();
+      await pumpDmMessage(handler, {
+        messageId: 11,
+        text: "second hi",
+        date: 1736380800,
+      });
+
+      const payload = getInboundPayloadFromReplySpy() as MsgContext & {
+        UntrustedStructuredContext?: unknown[];
+      };
+      const structured = payload.UntrustedStructuredContext ?? [];
+      const chatWindows = structured.filter((entry) => {
+        if (!entry || typeof entry !== "object") return false;
+        return (entry as Record<string, unknown>).type === "chat_window";
+      });
+      expect(chatWindows.length).toBeGreaterThan(0);
+    });
+
+    it("keeps chat_window for a group chat even when the session has prior activity", async () => {
+      readSessionUpdatedAtMock.mockReturnValue(1736380000_000);
+      loadConfig.mockReturnValue({
+        agents: { defaults: { envelopeTimezone: "utc" } },
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      });
+
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await pumpDmMessage(handler, {
+        messageId: 20,
+        text: "first in group",
+        chatId: 7777,
+        chatType: "group",
+        chatTitle: "Ops",
+        date: 1736380700,
+      });
+
+      replySpy.mockClear();
+      await pumpDmMessage(handler, {
+        messageId: 21,
+        text: "second in group",
+        chatId: 7777,
+        chatType: "group",
+        chatTitle: "Ops",
+        date: 1736380800,
+      });
+
+      const payload = getInboundPayloadFromReplySpy() as MsgContext & {
+        UntrustedStructuredContext?: unknown[];
+      };
+      const structured = payload.UntrustedStructuredContext ?? [];
+      const chatWindows = structured.filter((entry) => {
+        if (!entry || typeof entry !== "object") return false;
+        return (entry as Record<string, unknown>).type === "chat_window";
+      });
+      expect(chatWindows.length).toBeGreaterThan(0);
+    });
+
+    it("keeps reply-chain context in private DMs even when chat_window is suppressed", async () => {
+      readSessionUpdatedAtMock.mockReturnValue(1736380000_000);
+
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const baseCtx = {
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+
+      // First, an earlier message in the DM that the user will reply to.
+      await handler({
+        ...baseCtx,
+        message: {
+          chat: { id: 4242, type: "private" },
+          text: "What about deploys?",
+          date: 1736380700,
+          message_id: 30,
+          from: { id: 4242, is_bot: false, first_name: "Ada" },
+        },
+      });
+
+      replySpy.mockClear();
+
+      // Now a reply to msg 30. Reply-chain context must still surface even
+      // when chat_window is suppressed by the persistent-DM rule.
+      await handler({
+        ...baseCtx,
+        message: {
+          chat: { id: 4242, type: "private" },
+          text: "yes, deploys are next",
+          date: 1736380800,
+          message_id: 31,
+          from: { id: 4242, is_bot: false, first_name: "Ada" },
+          reply_to_message: {
+            chat: { id: 4242, type: "private" },
+            text: "What about deploys?",
+            date: 1736380700,
+            message_id: 30,
+            from: { id: 4242, is_bot: false, first_name: "Ada" },
+          },
+        },
+      });
+
+      const payload = getInboundPayloadFromReplySpy() as MsgContext & {
+        UntrustedStructuredContext?: unknown[];
+        ReplyChain?: Array<{ messageId?: string; body?: string }>;
+      };
+
+      const structured = payload.UntrustedStructuredContext ?? [];
+      const chatWindows = structured.filter((entry) => {
+        if (!entry || typeof entry !== "object") return false;
+        return (entry as Record<string, unknown>).type === "chat_window";
+      });
+      // chat_window is suppressed (persistent DM)…
+      expect(chatWindows).toEqual([]);
+      // …but the reply-chain context is preserved.
+      expect(payload.ReplyChain?.[0]?.messageId).toBe("30");
+      expect(payload.ReplyChain?.[0]?.body).toBe("What about deploys?");
+    });
+
+    it("keeps chat_window for a group topic (message_thread_id) even when session is persistent", async () => {
+      readSessionUpdatedAtMock.mockReturnValue(1736380000_000);
+      loadConfig.mockReturnValue({
+        agents: { defaults: { envelopeTimezone: "utc" } },
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      });
+
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      // Group chat with a topic thread — the suppression rule must NOT fire
+      // (different session per topic, recent-context still useful).
+      await pumpDmMessage(handler, {
+        messageId: 40,
+        text: "in topic",
+        chatId: 5555,
+        chatType: "group",
+        chatTitle: "Topic Group",
+        threadId: 7,
+        date: 1736380700,
+      });
+
+      replySpy.mockClear();
+      await pumpDmMessage(handler, {
+        messageId: 41,
+        text: "more in topic",
+        chatId: 5555,
+        chatType: "group",
+        chatTitle: "Topic Group",
+        threadId: 7,
+        date: 1736380800,
+      });
+
+      const payload = getInboundPayloadFromReplySpy() as MsgContext & {
+        UntrustedStructuredContext?: unknown[];
+      };
+      const structured = payload.UntrustedStructuredContext ?? [];
+      const chatWindows = structured.filter((entry) => {
+        if (!entry || typeof entry !== "object") return false;
+        return (entry as Record<string, unknown>).type === "chat_window";
+      });
+      expect(chatWindows.length).toBeGreaterThan(0);
+    });
   });
 });
