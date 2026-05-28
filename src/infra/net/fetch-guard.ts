@@ -309,7 +309,10 @@ function resolveRetainedAuthorizationForRedirect(params: {
   if (params.nextUrl.protocol !== "https:") {
     return undefined;
   }
-  if (!matchesHostnameAllowlist(params.nextUrl.hostname, params.hostnameAllowlist)) {
+  if (
+    !params.hostnameAllowlist.includes("*") &&
+    !matchesHostnameAllowlist(params.nextUrl.hostname, params.hostnameAllowlist)
+  ) {
     return undefined;
   }
   const normalizedInit = normalizeRequestInitHeadersForFetch(init);

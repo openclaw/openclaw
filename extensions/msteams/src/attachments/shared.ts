@@ -495,6 +495,18 @@ function resolveGuardedFetchImpl(params: {
   );
 }
 
+function resolveRetainedAuthorizationRedirectHostnameAllowlist(
+  input?: string[],
+): string[] | undefined {
+  if (!input) {
+    return undefined;
+  }
+  if (input.includes("*")) {
+    return ["*"];
+  }
+  return resolveMediaSsrfPolicy(input)?.hostnameAllowlist;
+}
+
 export function resolveAttachmentFetchPolicy(params?: {
   allowHosts?: string[];
   authAllowHosts?: string[];
@@ -659,9 +671,8 @@ export async function safeFetch(params: {
       requireHttps: true,
       policy: resolveMediaSsrfPolicy(params.allowHosts),
       lookupFn: resolveFn as LookupFn,
-      retainAuthorizationRedirectHostnameAllowlist: params.authorizationAllowHosts
-        ? resolveMediaSsrfPolicy(params.authorizationAllowHosts)?.hostnameAllowlist
-        : undefined,
+      retainAuthorizationRedirectHostnameAllowlist:
+        resolveRetainedAuthorizationRedirectHostnameAllowlist(params.authorizationAllowHosts),
       auditContext: "msteams.attachment",
     });
     return responseWithRelease(guarded.response, guarded.release);

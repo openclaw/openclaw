@@ -443,6 +443,35 @@ describe("safeFetch", () => {
     expect(seenAuth[0]).toContain("Bearer secret");
     expect(seenAuth[1]).toContain("Bearer secret");
   });
+
+  it("keeps authorization across HTTPS redirects when auth allowlist is wildcard", async () => {
+    const seenAuth: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      seenAuth.push(`${url}|${auth}`);
+      if (url === "https://graph.microsoft.com/file.pdf") {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://cdn.example.com/storage/file.pdf" },
+        });
+      }
+      return new Response("ok", { status: 200 });
+    });
+
+    const headers = new Headers({ Authorization: "Bearer secret" });
+    const res = await safeFetch({
+      url: "https://graph.microsoft.com/file.pdf",
+      allowHosts: ["*"],
+      authorizationAllowHosts: ["*"],
+      fetchFn: fetchMock as unknown as typeof fetch,
+      requestInit: { headers },
+      resolveFn: publicResolve,
+    });
+    expect(res.status).toBe(200);
+    await res.body?.cancel();
+    expect(seenAuth[0]).toContain("Bearer secret");
+    expect(seenAuth[1]).toContain("Bearer secret");
+  });
 });
 
 describe("attachment fetch auth helpers", () => {
