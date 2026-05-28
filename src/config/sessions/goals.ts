@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { formatTokenCount } from "../../utils/usage-format.js";
 import { patchSessionEntry } from "./store.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
@@ -27,7 +28,7 @@ type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
 
 export const MODEL_UPDATABLE_SESSION_GOAL_STATUSES = ["complete", "blocked"] as const;
 
-const TERMINAL_GOAL_STATUSES = new Set<SessionGoalStatus>(["blocked", "complete"]);
+const TERMINAL_GOAL_STATUSES = new Set<SessionGoalStatus>(["complete"]);
 
 function nowMs(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
@@ -60,20 +61,39 @@ function cloneGoal(goal: SessionGoal): SessionGoal {
   return { ...goal };
 }
 
-function accountGoalUsage(entry: SessionEntry, now: number): SessionGoal | undefined {
+export function resolveSessionGoalDisplayState(
+  entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh">,
+  now?: number,
+  options?: { adoptFreshBaseline?: boolean },
+): SessionGoal | undefined {
+  return accountGoalUsage(entry, nowMs(now), options);
+}
+
+function accountGoalUsage(
+  entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh">,
+  now: number,
+  options?: { adoptFreshBaseline?: boolean },
+): SessionGoal | undefined {
   const goal = entry.goal;
   if (!goal) {
     return undefined;
   }
   const totalTokens = resolveEntryFreshTotalTokens(entry);
-  const tokenStart = normalizeTokenCount(goal.tokenStart) ?? totalTokens ?? 0;
+  const hasFreshStart = goal.tokenStartFresh !== false;
+  const shouldHoldStaleStart = !hasFreshStart && options?.adoptFreshBaseline === false;
+  const shouldAdoptFreshStart =
+    !shouldHoldStaleStart && totalTokens !== undefined && !hasFreshStart;
+  const tokenStart = shouldAdoptFreshStart
+    ? totalTokens
+    : (normalizeTokenCount(goal.tokenStart) ?? totalTokens ?? 0);
   const tokensUsed =
-    totalTokens === undefined
+    totalTokens === undefined || shouldAdoptFreshStart || shouldHoldStaleStart
       ? goal.tokensUsed
       : Math.max(goal.tokensUsed, Math.max(0, totalTokens - tokenStart));
   const next: SessionGoal = {
     ...goal,
     tokenStart,
+    tokenStartFresh: hasFreshStart || shouldAdoptFreshStart,
     tokensUsed,
   };
   if (
@@ -94,12 +114,39 @@ function goalsEqual(a: SessionGoal | undefined, b: SessionGoal | undefined): boo
 
 export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
   if (!goal) {
-    return "No active goal.";
+    return "No goal for this session.\nStart one with /goal start <objective>.";
   }
   const budget =
-    goal.tokenBudget === undefined ? "" : `\nToken budget: ${goal.tokensUsed}/${goal.tokenBudget}`;
+    goal.tokenBudget === undefined
+      ? ""
+      : `\nToken budget: ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
   const note = goal.lastStatusNote ? `\nNote: ${goal.lastStatusNote}` : "";
-  return `Goal: ${goal.objective}\nStatus: ${goal.status}\nTokens used: ${goal.tokensUsed}${budget}${note}`;
+  const commands = resolveGoalCommandHint(goal.status);
+  return [
+    "Goal",
+    `Status: ${goal.status}`,
+    `Objective: ${goal.objective}`,
+    `Tokens used: ${formatTokenCount(goal.tokensUsed)}`,
+    ...(budget ? [budget.slice(1)] : []),
+    ...(note ? [note.slice(1)] : []),
+    "",
+    `Commands: ${commands}`,
+  ].join("\n");
+}
+
+function resolveGoalCommandHint(status: SessionGoalStatus): string {
+  switch (status) {
+    case "active":
+      return "/goal pause, /goal complete, /goal clear";
+    case "paused":
+    case "blocked":
+    case "usage_limited":
+    case "budget_limited":
+      return "/goal resume, /goal clear";
+    case "complete":
+      return "/goal clear";
+  }
+  return "/goal";
 }
 
 export async function getSessionGoal(
@@ -142,6 +189,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
         throw new Error("goal already exists");
       }
       const tokenBudget = normalizeTokenBudget(options.tokenBudget);
+      const tokenStartFresh = resolveEntryFreshTotalTokens(entry) !== undefined;
       created = {
         schemaVersion: 1,
         id: crypto.randomUUID(),
@@ -150,6 +198,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
         createdAt: now,
         updatedAt: now,
         tokenStart: resolveEntryGoalStartTokens(entry),
+        tokenStartFresh,
         tokensUsed: 0,
         ...(tokenBudget ? { tokenBudget } : {}),
         continuationTurns: 0,
@@ -179,7 +228,11 @@ export async function updateSessionGoalStatus(
       if (TERMINAL_GOAL_STATUSES.has(accounted.status) && accounted.status !== options.status) {
         throw new Error(`goal is already ${accounted.status}`);
       }
-      updated = {
+      const resetsBudgetWindow =
+        options.status === "active" &&
+        (accounted.status === "budget_limited" || accounted.status === "usage_limited");
+      const freshTokenStart = resetsBudgetWindow ? resolveEntryFreshTotalTokens(entry) : undefined;
+      const next: SessionGoal = {
         ...accounted,
         status: options.status,
         updatedAt: now,
@@ -188,6 +241,14 @@ export async function updateSessionGoalStatus(
         ...(options.status === "blocked" ? { blockedAt: now } : {}),
         ...(options.status === "complete" ? { completedAt: now } : {}),
       };
+      if (resetsBudgetWindow) {
+        next.tokenStart = freshTokenStart ?? 0;
+        next.tokenStartFresh = freshTokenStart !== undefined;
+        next.tokensUsed = 0;
+        delete next.budgetLimitedAt;
+        delete next.usageLimitedAt;
+      }
+      updated = next;
       return { goal: updated };
     },
   });

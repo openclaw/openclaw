@@ -217,6 +217,7 @@ export type SessionGoal = {
   createdAt: number;
   updatedAt: number;
   tokenStart: number;
+  tokenStartFresh?: boolean;
   tokensUsed: number;
   tokenBudget?: number;
   continuationTurns: number;

@@ -144,6 +144,7 @@ export function createSessionActions(context: SessionActionContext) {
     defaults?: SessionInfoDefaults | null;
     force?: boolean;
   }) => {
+    const hasEntryUpdate = "entry" in params;
     const entry = params.entry ?? undefined;
     const defaults = params.defaults ?? lastSessionDefaults ?? undefined;
     const previousDefaults = lastSessionDefaults;
@@ -199,6 +200,9 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
     }
+    if (hasEntryUpdate) {
+      next.goal = entry?.goal;
+    }
     if (entry?.contextTokens !== undefined || defaults?.contextTokens !== undefined) {
       next.contextTokens =
         entry?.contextTokens ?? defaults?.contextTokens ?? state.sessionInfo.contextTokens;
@@ -237,8 +241,8 @@ export function createSessionActions(context: SessionActionContext) {
       const result = await client.listSessions({
         limit: TUI_SESSION_LOOKUP_LIMIT,
         search: state.currentSessionKey,
-        includeGlobal: false,
-        includeUnknown: false,
+        includeGlobal: state.currentSessionKey === "global",
+        includeUnknown: state.currentSessionKey === "unknown",
         agentId: listAgentId,
       });
       const normalizeMatchKey = (key: string) => parseAgentSessionKey(key)?.rest ?? key;

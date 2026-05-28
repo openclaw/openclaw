@@ -1,3 +1,5 @@
+import type { SessionGoal } from "../config/sessions/types.js";
+
 export type TuiOptions = {
   local?: boolean;
   url?: string;
@@ -63,6 +65,7 @@ export type SessionInfo = {
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
+  goal?: SessionGoal;
   responseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;

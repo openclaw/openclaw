@@ -197,6 +197,70 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.updatedAt).toBe(200);
   });
 
+  it("clears the footer goal when the current session has no row yet", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 0,
+      defaults: {},
+      sessions: [],
+    });
+    const state = createBaseState({
+      sessionInfo: {
+        goal: {
+          schemaVersion: 1,
+          id: "goal-1",
+          objective: "old goal",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokenStartFresh: true,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
+      },
+    });
+
+    const { refreshSessionInfo } = createTestSessionActions({
+      client: { listSessions } as unknown as TuiBackend,
+      state,
+    });
+
+    await refreshSessionInfo();
+
+    expect(state.sessionInfo.goal).toBeUndefined();
+  });
+
+  it("includes the global row when refreshing a global session", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: {},
+      sessions: [{ key: "global", updatedAt: 1 }],
+    });
+    const state = createBaseState({
+      currentSessionKey: "global",
+      sessionScope: "global",
+    });
+
+    const { refreshSessionInfo } = createTestSessionActions({
+      client: { listSessions } as unknown as TuiBackend,
+      state,
+    });
+
+    await refreshSessionInfo();
+
+    expect(listSessions).toHaveBeenCalledWith({
+      limit: TUI_SESSION_LOOKUP_LIMIT,
+      search: "global",
+      includeGlobal: true,
+      includeUnknown: false,
+      agentId: undefined,
+    });
+  });
+
   it("accepts older session snapshots after switching session keys", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),

@@ -52,6 +52,7 @@ import {
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
+  resolveSessionGoalDisplayState,
   resolveStorePath,
   type SessionEntry,
   type SessionStoreTarget,
@@ -1938,6 +1939,20 @@ export function buildGatewaySessionRow(params: {
     typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
       ? true
       : transcriptUsage?.totalTokensFresh === true;
+  const goal =
+    entry?.goal && totalTokens !== undefined
+      ? resolveSessionGoalDisplayState(
+          {
+            goal: entry.goal,
+            totalTokens,
+            totalTokensFresh,
+          },
+          now,
+          // Session listing is read-only; stale goal baselines are adopted only
+          // by goal commands/tools that can persist the first fresh snapshot.
+          { adoptFreshBaseline: false },
+        )
+      : entry?.goal;
   const childSessions = params.storeChildSessionsByKey
     ? mergeChildSessionKeys(
         resolveRuntimeChildSessionKeys(key, now, rowContext?.subagentRuns),
@@ -2065,6 +2080,7 @@ export function buildGatewaySessionRow(params: {
     outputTokens: entry?.outputTokens,
     totalTokens,
     totalTokensFresh,
+    goal,
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
     subagentRunState,

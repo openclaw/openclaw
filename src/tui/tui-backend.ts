@@ -49,6 +49,7 @@ export type TuiSessionList = {
       | "inputTokens"
       | "outputTokens"
       | "totalTokens"
+      | "goal"
       | "modelProvider"
       | "displayName"
     > & {
