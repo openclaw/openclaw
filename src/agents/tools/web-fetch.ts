@@ -326,6 +326,13 @@ function normalizeProviderWebFetchPayload(params: {
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const wrapped = wrapWebFetchContent(rawText, params.maxChars);
   const analysis = analyzeExternalContent(rawText);
+  let resultWrapped = wrapped;
+  if (analysis.injectionRisk === "high") {
+    const summary =
+      `[INJECTION RISK: HIGH — CONTENT QUARANTINED] ` +
+      `hash=${analysis.contentHash.slice(0, 16)} patterns=${analysis.suspiciousPatterns.length}`;
+    resultWrapped = wrapWebFetchContent(summary, params.maxChars);
+  }
   const url = params.requestedUrl;
   const finalUrl = normalizeProviderFinalUrl(payload.finalUrl) ?? url;
   const status =
@@ -361,10 +368,10 @@ function normalizeProviderWebFetchPayload(params: {
         ? { suspiciousPatterns: analysis.suspiciousPatterns }
         : {}),
     },
-    truncated: wrapped.truncated,
-    length: wrapped.wrappedLength,
+    truncated: resultWrapped.truncated || analysis.injectionRisk === "high",
+    length: resultWrapped.wrappedLength,
     rawLength: wrapped.rawLength,
-    wrappedLength: wrapped.wrappedLength,
+    wrappedLength: resultWrapped.wrappedLength,
     fetchedAt:
       typeof payload.fetchedAt === "string" && payload.fetchedAt
         ? payload.fetchedAt
@@ -373,7 +380,7 @@ function normalizeProviderWebFetchPayload(params: {
       typeof payload.tookMs === "number" && Number.isFinite(payload.tookMs)
         ? Math.max(0, Math.floor(payload.tookMs))
         : params.tookMs,
-    text: wrapped.text,
+    text: resultWrapped.text,
     ...(warning ? { warning } : {}),
   };
 }
