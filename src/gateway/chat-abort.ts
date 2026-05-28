@@ -16,6 +16,12 @@ export type ChatAbortControllerEntry = {
   authProviderId?: string;
   abortStopReason?: string;
   /**
+   * Controls only the sessions.list active-run projection. Terminal lifecycle
+   * clears this before chat.send settles, while the entry stays as the retry
+   * idempotency guard until normal cleanup removes it.
+   */
+  projectSessionActive?: boolean;
+  /**
    * Which RPC owns this registration. Absent (undefined) is treated as
    * `"chat-send"` so pre-existing callers that constructed entries without
    * a kind keep their behavior. Consumers that need "chat.send specifically
