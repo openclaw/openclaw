@@ -13,6 +13,7 @@ import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
+  resolveRuntimeConfigCacheKey,
   selectApplicableRuntimeConfig,
   type OpenClawConfig,
 } from "../../config/config.js";
@@ -61,12 +62,14 @@ function getQueuedReplyExecutionConfigCache(): QueuedReplyExecutionConfigCache {
 }
 
 function buildQueuedReplyExecutionConfigCacheKey(params?: {
+  runtimeConfigKey?: string;
   originatingChannel?: string;
   messageProvider?: string;
   originatingAccountId?: string;
   agentAccountId?: string;
 }): string {
   return JSON.stringify({
+    runtimeConfigKey: params?.runtimeConfigKey,
     originatingChannel: params?.originatingChannel,
     messageProvider: params?.messageProvider,
     originatingAccountId: params?.originatingAccountId,
@@ -131,12 +134,13 @@ export async function resolveQueuedReplyExecutionConfig(
     agentAccountId?: string;
   },
 ): Promise<OpenClawConfig> {
-  const cacheKey = buildQueuedReplyExecutionConfigCacheKey(params);
+  const runtimeConfig = resolveQueuedReplyRuntimeConfig(config);
+  const runtimeConfigKey = resolveRuntimeConfigCacheKey(runtimeConfig);
+  const cacheKey = buildQueuedReplyExecutionConfigCacheKey({ ...params, runtimeConfigKey });
   const cached = readQueuedReplyExecutionConfigCache(config, cacheKey);
   if (cached) {
     return cached;
   }
-  const runtimeConfig = resolveQueuedReplyRuntimeConfig(config);
   const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
     config: runtimeConfig,
     commandName: "reply",

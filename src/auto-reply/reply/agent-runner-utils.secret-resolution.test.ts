@@ -172,6 +172,28 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
     });
   });
 
+  it("does not reuse a cached reply config after the runtime snapshot changes", async () => {
+    const sourceConfig = { source: true } as unknown as OpenClawConfig;
+    const firstRuntimeConfig = { runtime: "first" } as unknown as OpenClawConfig;
+    const secondRuntimeConfig = { runtime: "second" } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(firstRuntimeConfig, sourceConfig);
+    hoisted.getScopedChannelsCommandSecretTargetsMock.mockReturnValue({
+      targetIds: new Set<string>(),
+    });
+
+    const first = await resolveQueuedReplyExecutionConfig(sourceConfig, {
+      messageProvider: "discord",
+    });
+    setRuntimeConfigSnapshot(secondRuntimeConfig, sourceConfig);
+    const second = await resolveQueuedReplyExecutionConfig(sourceConfig, {
+      messageProvider: "discord",
+    });
+
+    expect(first).toBe(firstRuntimeConfig);
+    expect(second).toBe(secondRuntimeConfig);
+    expect(hoisted.resolveCommandSecretRefsViaGatewayMock).toHaveBeenCalledTimes(2);
+  });
+
   it("does not replace an already resolved run config with a stale runtime snapshot", () => {
     const sourceConfig = {
       models: {
