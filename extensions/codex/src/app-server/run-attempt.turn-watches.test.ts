@@ -151,7 +151,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.itemLifecycle.completedCount).toBe(1);
     expect(result.promptTimeoutOutcome).toEqual({
       message:
-        "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+        "Codex stopped after tool activity before confirming the turn was complete. Some work may already have been performed, so OpenClaw did not replay the turn automatically. Verify the current state before retrying.",
       replayInvalid: true,
       livenessState: "abandoned",
     });
@@ -198,7 +198,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       }),
     ).toEqual({
       message:
-        "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+        "Codex stopped after tool activity before confirming the turn was complete. Some work may already have been performed, so OpenClaw did not replay the turn automatically. Verify the current state before retrying.",
       replayInvalid: true,
       livenessState: "abandoned",
     });
@@ -237,7 +237,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.itemLifecycle).toMatchObject({ activeCount: 1, completedCount: 0 });
     expect(result.promptTimeoutOutcome).toEqual({
       message:
-        "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+        "Codex stopped after tool activity before confirming the turn was complete. Some work may already have been performed, so OpenClaw did not replay the turn automatically. Verify the current state before retrying.",
       replayInvalid: true,
       livenessState: "abandoned",
     });
