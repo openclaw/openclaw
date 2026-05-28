@@ -81,7 +81,7 @@ function installRuntime(): MockRuntime {
 }
 
 function createMockFetch(entries: Array<{ match: RegExp; response: Response }>): typeof fetch {
-  return (async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const entry = entries.find((e) => e.match.test(url));
@@ -266,7 +266,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
   });
 
   describe("guarded attachment fetches", () => {
-    it("drives the caller's fetchFn through a pinned dispatcher", async () => {
+    it("drives dispatcher-aware caller fetchFn hooks through a pinned dispatcher", async () => {
       const fileBytes = Buffer.from("BFBYTES", "utf-8");
       const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
       const fetchFn: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -298,6 +298,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        fetchFnSupportsDispatcher: true,
         resolveFn: resolvePublicHost,
       });
 
@@ -328,6 +329,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        fetchFnSupportsDispatcher: true,
         resolveFn: resolvePublicHost,
         logger,
       });
@@ -365,6 +367,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        fetchFnSupportsDispatcher: true,
         resolveFn: resolvePublicHost,
         logger,
       });

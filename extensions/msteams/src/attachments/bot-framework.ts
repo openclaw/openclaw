@@ -59,6 +59,7 @@ async function fetchBotFrameworkAttachmentInfo(params: {
   accessToken: string;
   policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
   logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<BotFrameworkAttachmentInfo | undefined> {
@@ -69,6 +70,7 @@ async function fetchBotFrameworkAttachmentInfo(params: {
       url,
       policy: params.policy,
       fetchFn: params.fetchFn,
+      fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
       resolveFn: params.resolveFn,
       requestInit: {
         headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
@@ -108,6 +110,7 @@ async function saveBotFrameworkAttachmentView(params: {
   preserveFilenames?: boolean;
   policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
   logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<{ path: string; contentType?: string } | undefined> {
@@ -118,6 +121,7 @@ async function saveBotFrameworkAttachmentView(params: {
       url,
       policy: params.policy,
       fetchFn: params.fetchFn,
+      fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
       resolveFn: params.resolveFn,
       requestInit: {
         headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
@@ -172,6 +176,7 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
   fileNameHint?: string | null;
   contentTypeHint?: string | null;
@@ -209,6 +214,7 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
     accessToken,
     policy,
     fetchFn: params.fetchFn,
+    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
     resolveFn: params.resolveFn,
     logger: params.logger,
   });
@@ -256,6 +262,7 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
     preserveFilenames: params.preserveFilenames,
     policy,
     fetchFn: params.fetchFn,
+    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
     resolveFn: params.resolveFn,
     logger: params.logger,
   });
@@ -284,6 +291,7 @@ export async function downloadMSTeamsBotFrameworkAttachments(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
   fileNameHint?: string | null;
   contentTypeHint?: string | null;
@@ -318,6 +326,7 @@ export async function downloadMSTeamsBotFrameworkAttachments(params: {
         allowHosts: params.allowHosts,
         authAllowHosts: params.authAllowHosts,
         fetchFn: params.fetchFn,
+        fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
         resolveFn: params.resolveFn,
         fileNameHint: params.fileNameHint,
         contentTypeHint: params.contentTypeHint,

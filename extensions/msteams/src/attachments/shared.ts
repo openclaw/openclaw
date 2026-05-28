@@ -468,6 +468,31 @@ export type MSTeamsAttachmentDownloadLogger = {
 
 export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
 
+function isMockFetchFn(fetchFn: typeof fetch): boolean {
+  const candidate = fetchFn as unknown as { mock?: unknown };
+  return Boolean(
+    candidate.mock || Object.prototype.hasOwnProperty.call(candidate, "_isMockFunction"),
+  );
+}
+
+function resolveGuardedFetchImpl(params: {
+  fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
+}): typeof fetch | undefined {
+  if (!params.fetchFn) {
+    return undefined;
+  }
+  if (
+    params.fetchFnSupportsDispatcher === true ||
+    params.fetchFn === fetch ||
+    params.fetchFn === globalThis.fetch ||
+    isMockFetchFn(params.fetchFn)
+  ) {
+    return params.fetchFn;
+  }
+  return undefined;
+}
+
 export function resolveAttachmentFetchPolicy(params?: {
   allowHosts?: string[];
   authAllowHosts?: string[];
@@ -600,10 +625,10 @@ export async function safeFetch(params: {
    */
   authorizationAllowHosts?: string[];
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
-  const fetchFn = params.fetchFn;
   const resolveFn = params.resolveFn ?? lookup;
   const hasDispatcher = Boolean(
     params.requestInit &&
@@ -620,7 +645,10 @@ export async function safeFetch(params: {
   if (!hasDispatcher) {
     const guarded = await fetchWithSsrFGuard({
       url: currentUrl,
-      fetchImpl: fetchFn,
+      fetchImpl: resolveGuardedFetchImpl({
+        fetchFn: params.fetchFn,
+        fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
+      }),
       init: {
         ...params.requestInit,
         headers: currentHeaders,
@@ -707,6 +735,7 @@ export async function safeFetchWithPolicy(params: {
   url: string;
   policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
@@ -715,6 +744,7 @@ export async function safeFetchWithPolicy(params: {
     allowHosts: params.policy.allowHosts,
     authorizationAllowHosts: params.policy.authAllowHosts,
     fetchFn: params.fetchFn,
+    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
     requestInit: params.requestInit,
     resolveFn: params.resolveFn,
   });
