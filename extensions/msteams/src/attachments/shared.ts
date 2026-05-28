@@ -629,6 +629,9 @@ export async function safeFetch(params: {
       requireHttps: true,
       policy: resolveMediaSsrfPolicy(params.allowHosts),
       lookupFn: resolveFn as LookupFn,
+      retainAuthorizationRedirectHostnameAllowlist: params.authorizationAllowHosts
+        ? resolveMediaSsrfPolicy(params.authorizationAllowHosts)?.hostnameAllowlist
+        : undefined,
       auditContext: "msteams.attachment",
     });
     return responseWithRelease(guarded.response, guarded.release);

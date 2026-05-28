@@ -396,6 +396,35 @@ describe("safeFetch", () => {
     expect(seenAuth[0]).toContain("Bearer secret");
     expect(seenAuth[1]).toMatch(/\|$/);
   });
+
+  it("keeps authorization across redirects inside auth allowlist", async () => {
+    const seenAuth: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      seenAuth.push(`${url}|${auth}`);
+      if (url === "https://graph.microsoft.com/file.pdf") {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://cdn.sharepoint.com/storage/file.pdf" },
+        });
+      }
+      return new Response("ok", { status: 200 });
+    });
+
+    const headers = new Headers({ Authorization: "Bearer secret" });
+    const res = await safeFetch({
+      url: "https://graph.microsoft.com/file.pdf",
+      allowHosts: ["graph.microsoft.com", "sharepoint.com"],
+      authorizationAllowHosts: ["graph.microsoft.com", "sharepoint.com"],
+      fetchFn: fetchMock as unknown as typeof fetch,
+      requestInit: { headers },
+      resolveFn: publicResolve,
+    });
+    expect(res.status).toBe(200);
+    await res.body?.cancel();
+    expect(seenAuth[0]).toContain("Bearer secret");
+    expect(seenAuth[1]).toContain("Bearer secret");
+  });
 });
 
 describe("attachment fetch auth helpers", () => {
