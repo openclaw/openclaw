@@ -180,7 +180,7 @@ describe("resolveAgentConfig", () => {
     });
   });
 
-  it("inherits default compaction and contextPruning when per-agent blocks are absent", () => {
+  it("inherits default compaction when per-agent compaction is absent", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -188,10 +188,6 @@ describe("resolveAgentConfig", () => {
             mode: "default",
             reserveTokensFloor: 20_000,
             model: "gpt-5.4",
-          },
-          contextPruning: {
-            mode: "off",
-            minPrunableToolChars: 8_192,
           },
         },
         list: [{ id: "main" }],
@@ -203,13 +199,9 @@ describe("resolveAgentConfig", () => {
       reserveTokensFloor: 20_000,
       model: "gpt-5.4",
     });
-    expect(resolveAgentConfig(cfg, "main")?.contextPruning).toEqual({
-      mode: "off",
-      minPrunableToolChars: 8_192,
-    });
   });
 
-  it("merges default compaction and contextPruning with per-agent blocks", () => {
+  it("merges default compaction with per-agent compaction", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -218,20 +210,12 @@ describe("resolveAgentConfig", () => {
             reserveTokensFloor: 20_000,
             model: "gpt-5.4",
           },
-          contextPruning: {
-            mode: "off",
-            minPrunableToolChars: 8_192,
-          },
         },
         list: [
           {
             id: "main",
             compaction: {
               reserveTokensFloor: 24_000,
-            },
-            contextPruning: {
-              mode: "cache-ttl",
-              ttl: "15m",
             },
           },
         ],
@@ -243,14 +227,9 @@ describe("resolveAgentConfig", () => {
       reserveTokensFloor: 24_000,
       model: "gpt-5.4",
     });
-    expect(resolveAgentConfig(cfg, "main")?.contextPruning).toEqual({
-      mode: "cache-ttl",
-      minPrunableToolChars: 8_192,
-      ttl: "15m",
-    });
   });
 
-  it("inherits compaction and contextPruning from empty per-agent blocks", () => {
+  it("inherits compaction from an empty per-agent compaction block", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -258,16 +237,11 @@ describe("resolveAgentConfig", () => {
             model: "gpt-5.4",
             provider: "test-provider",
           },
-          contextPruning: {
-            mode: "cache-ttl",
-            ttl: "15m",
-          },
         },
         list: [
           {
             id: "main",
             compaction: {},
-            contextPruning: {},
           },
         ],
       },
@@ -277,13 +251,9 @@ describe("resolveAgentConfig", () => {
       model: "gpt-5.4",
       provider: "test-provider",
     });
-    expect(resolveAgentConfig(cfg, "main")?.contextPruning).toEqual({
-      mode: "cache-ttl",
-      ttl: "15m",
-    });
   });
 
-  it("deep-merges nested per-agent compaction and contextPruning blocks", () => {
+  it("deep-merges nested per-agent compaction blocks", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -295,11 +265,6 @@ describe("resolveAgentConfig", () => {
               prompt: "Write durable notes.",
             },
           },
-          contextPruning: {
-            mode: "cache-ttl",
-            tools: { allow: ["exec"], deny: ["browser"] },
-            hardClear: { enabled: true, placeholder: "[trimmed]" },
-          },
         },
         list: [
           {
@@ -307,10 +272,6 @@ describe("resolveAgentConfig", () => {
             compaction: {
               qualityGuard: { maxRetries: 3 },
               memoryFlush: { model: "openai/gpt-5.4-mini" },
-            },
-            contextPruning: {
-              tools: { deny: ["image_generate"] },
-              hardClear: { placeholder: "[cleared]" },
             },
           },
         ],
@@ -324,11 +285,6 @@ describe("resolveAgentConfig", () => {
         model: "openai/gpt-5.4-mini",
         prompt: "Write durable notes.",
       },
-    });
-    expect(resolveAgentConfig(cfg, "main")?.contextPruning).toEqual({
-      mode: "cache-ttl",
-      tools: { allow: ["exec"], deny: ["image_generate"] },
-      hardClear: { enabled: true, placeholder: "[cleared]" },
     });
   });
 

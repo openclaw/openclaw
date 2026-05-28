@@ -360,11 +360,11 @@ describe("runCliTurnCompactionLifecycle", () => {
     await runCliTurnCompactionLifecycle({
       cfg: {
         agents: {
-          defaults: { compaction: { model: "openai/gpt-5.5", thinkingLevel: "high" } },
+          defaults: { compaction: { model: "openai/gpt-5.5" } },
           list: [
             {
               id: "lossless-agent",
-              compaction: { model: "openai/gpt-5-mini", thinkingLevel: "off" },
+              compaction: { model: "openai/gpt-5-mini" },
             },
           ],
         },
@@ -396,7 +396,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       sessionKey,
       provider: "openai",
       model: "gpt-5-mini",
-      thinkLevel: "off",
+      thinkLevel: "high",
       currentTokenCount: 950,
       tokenBudget: 1_000,
       trigger: "cli_native_budget",
@@ -1079,7 +1079,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(calls).toEqual(["ensure", "resolve"]);
   });
 
-  it("uses compaction.thinkingLevel for CLI context-engine compaction", async () => {
+  it("uses caller thinking level for CLI context-engine compaction", async () => {
     const sessionKey = "agent:lossless-agent:cli";
     const sessionId = "session-cli-thinking";
     const sessionFile = path.join(tmpDir, "session-cli-thinking.jsonl");
@@ -1116,8 +1116,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     await runCliTurnCompactionLifecycle({
       cfg: {
         agents: {
-          defaults: { compaction: { thinkingLevel: "high" } },
-          list: [{ id: "lossless-agent", compaction: { thinkingLevel: "off" } }],
+          defaults: { compaction: {} },
+          list: [{ id: "lossless-agent", compaction: {} }],
         },
       } as OpenClawConfig,
       sessionId,
@@ -1132,7 +1132,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     });
 
     expect(compactCalls).toHaveLength(1);
-    expect(compactCalls[0]?.runtimeContext?.thinkLevel).toBe("off");
+    expect(compactCalls[0]?.runtimeContext?.thinkLevel).toBe("high");
   });
 
   it("binds CLI post-compaction maintenance to the resolved legacy session agent", async () => {

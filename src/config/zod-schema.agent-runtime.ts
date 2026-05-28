@@ -1084,9 +1084,6 @@ export const AgentCompactionSchema = z
     postIndexSync: z.enum(["off", "async", "await"]).optional(),
     postCompactionSections: z.array(z.string()).optional(),
     model: z.string().optional(),
-    thinkingLevel: z
-      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
-      .optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     memoryFlush: z
       .object({
@@ -1138,7 +1135,6 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
-    contextPruning: AgentContextPruningSchema,
     compaction: AgentCompactionSchema,
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     thinkingDefault: z

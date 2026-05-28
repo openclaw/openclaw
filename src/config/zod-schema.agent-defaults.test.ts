@@ -194,27 +194,19 @@ describe("agent defaults schema", () => {
     expect(agent.bootstrapTotalMaxChars).toBe(16384);
   });
 
-  it("accepts per-agent compaction and contextPruning overrides", () => {
+  it("accepts per-agent compaction overrides", () => {
     const agent = AgentEntrySchema.parse({
       id: "worker",
-      contextPruning: {
-        mode: "cache-ttl",
-        ttl: "15m",
-      },
       compaction: {
         mode: "safeguard",
         reserveTokensFloor: 24_000,
         model: "anthropic/claude-opus-4-6",
-        thinkingLevel: "off",
       },
     });
 
-    expect(agent.contextPruning?.mode).toBe("cache-ttl");
-    expect(agent.contextPruning?.ttl).toBe("15m");
     expect(agent.compaction?.mode).toBe("safeguard");
     expect(agent.compaction?.reserveTokensFloor).toBe(24_000);
     expect(agent.compaction?.model).toBe("anthropic/claude-opus-4-6");
-    expect(agent.compaction?.thinkingLevel).toBe("off");
   });
 
   it("rejects invalid per-agent bootstrap profile overrides", () => {

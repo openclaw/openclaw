@@ -120,10 +120,7 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   agentId?: string | null;
   thinkLevel?: ThinkLevel | null;
 }): ThinkLevel {
-  const configured = normalizeThinkLevel(
-    resolveAgentCompactionConfig(params.config, params.agentId)?.thinkingLevel,
-  );
-  return configured ?? normalizeThinkLevel(params.thinkLevel) ?? "off";
+  return normalizeThinkLevel(params.thinkLevel) ?? "off";
 }
 
 export function buildEmbeddedCompactionRuntimeContext(params: {

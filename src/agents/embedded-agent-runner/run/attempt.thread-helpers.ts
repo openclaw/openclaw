@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
-import { resolveAgentContextPruningConfig } from "../../agent-scope-config.js";
 import { normalizeStructuredPromptSection } from "../../prompt-cache-stability.js";
 
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
@@ -51,9 +50,9 @@ function shouldAppendAttemptCacheTtl(params: {
   if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
     return false;
   }
-  const agentContextPruning = resolveAgentContextPruningConfig(params.config, params.agentId);
+  const contextPruning = params.config?.agents?.defaults?.contextPruning;
   return (
-    agentContextPruning?.mode === "cache-ttl" &&
+    contextPruning?.mode === "cache-ttl" &&
     params.isCacheTtlEligibleProvider(params.provider, params.modelId, params.modelApi)
   );
 }

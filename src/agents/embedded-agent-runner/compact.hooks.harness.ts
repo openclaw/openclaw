@@ -180,32 +180,6 @@ export const resolveSandboxContextMock = vi.fn(async () => null);
 export const resolveContextEngineCapabilitiesMock = vi.fn();
 export const maybeCompactAgentHarnessSessionMock: Mock<(params?: unknown) => Promise<unknown>> =
   vi.fn(async () => undefined);
-export const createAgentSessionMock = vi.fn(async () => {
-  const session = {
-    sessionId: "session-1",
-    messages: sessionMessages.map((message) => structuredClone(message)),
-    agent: {
-      streamFn: vi.fn(),
-      transport: "sse",
-      state: {
-        get messages() {
-          return session.messages;
-        },
-        set messages(messages: unknown[]) {
-          session.messages = [...messages];
-        },
-      },
-    },
-    compact: vi.fn(async () => {
-      session.messages.splice(1);
-      return await sessionCompactImpl();
-    }),
-    setActiveToolsByName: vi.fn(),
-    abortCompaction: sessionAbortCompactionMock,
-    dispose: vi.fn(),
-  };
-  return { session };
-});
 export const resolveCompactionTimeoutMsMock: Mock<
   (cfg?: unknown, agentId?: string | null) => number
 > = vi.fn(() => 30_000);

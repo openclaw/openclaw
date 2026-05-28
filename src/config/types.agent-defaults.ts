@@ -520,12 +520,6 @@ export type AgentCompactionConfig = {
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
-  /**
-   * Optional thinking/reasoning level used only for compaction summarization.
-   * Set to "off" to explicitly disable reasoning during compaction.
-   * Falls back to the active session thinking level when unset.
-   */
-  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Maximum time in seconds for a single compaction operation (default: 900). */
   timeoutSeconds?: number;
   /**

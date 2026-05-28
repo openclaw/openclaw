@@ -1489,8 +1489,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 900). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
   "agents.defaults.compaction.model":
     "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
-  "agents.defaults.compaction.thinkingLevel":
-    'Optional thinking/reasoning level used only for compaction summarization. Use "off" to explicitly disable reasoning for compaction, or one of minimal/low/medium/high/xhigh/adaptive/max when the compaction model should think independently from the active session.',
   "agents.defaults.compaction.truncateAfterCompaction":
     "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
@@ -1511,40 +1509,6 @@ export const FIELD_HELP: Record<string, string> = {
     "User-prompt template used for the pre-compaction memory flush turn when generating memory candidates. Use this only when you need custom extraction instructions beyond the default memory flush behavior.",
   "agents.defaults.compaction.memoryFlush.systemPrompt":
     "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
-  "agents.defaults.contextPruning":
-    "Default transcript-pruning policy applied before a turn runs. Use this to trim stale tool output, keep cache-TTL metadata, and control soft-trim or hard-clear behavior when transcripts grow noisy.",
-  "agents.defaults.contextPruning.mode":
-    'Transcript-pruning strategy: "off" disables pruning and "cache-ttl" preserves cache-touch markers while trimming eligible transcript content.',
-  "agents.defaults.contextPruning.ttl":
-    "Cache TTL window used by cache-ttl pruning to decide when old tool/context entries may be discarded. Use duration strings such as 30m or 2h.",
-  "agents.defaults.contextPruning.keepLastAssistants":
-    "Keep this many most-recent assistant messages during pruning, even when older tool output is trimmed.",
-  "agents.defaults.contextPruning.softTrimRatio":
-    "Use this fraction of the transcript budget to trigger a soft trim pass before hard clearing is considered. Values must stay between 0 and 1.",
-  "agents.defaults.contextPruning.hardClearRatio":
-    "Use this fraction of the transcript budget to trigger hard-clear placeholder replacement when pruning cannot recover enough space. Values must stay between 0 and 1.",
-  "agents.defaults.contextPruning.minPrunableToolChars":
-    "Use this minimum aggregate tool-output character threshold before pruning considers tool results eligible for trimming.",
-  "agents.defaults.contextPruning.tools":
-    "Tool-name allow/deny policy for transcript pruning. Use this when only specific tools should remain prunable or protected.",
-  "agents.defaults.contextPruning.tools.allow":
-    "Use this optional tool-name allowlist to control pruning eligibility. When set, only listed tools may be pruned.",
-  "agents.defaults.contextPruning.tools.deny":
-    "Use this optional tool-name denylist to control pruning eligibility. Listed tools stay protected from pruning.",
-  "agents.defaults.contextPruning.softTrim":
-    "Soft-trim sizing controls used before hard clear. Tune these when you want bounded head/tail preservation instead of default trimming heuristics.",
-  "agents.defaults.contextPruning.softTrim.maxChars":
-    "Use this maximum character budget for a soft-trimmed transcript segment before older content is dropped.",
-  "agents.defaults.contextPruning.softTrim.headChars":
-    "Keep this many characters from the start of a soft-trimmed transcript segment when pruning older content.",
-  "agents.defaults.contextPruning.softTrim.tailChars":
-    "Keep this many characters from the end of a soft-trimmed transcript segment when pruning older content.",
-  "agents.defaults.contextPruning.hardClear":
-    "Hard-clear controls for replacing aggressively pruned transcript blocks with a placeholder marker when soft trimming is not enough.",
-  "agents.defaults.contextPruning.hardClear.enabled":
-    "Enable hard-clear placeholder replacement when pruning crosses the hard-clear threshold.",
-  "agents.defaults.contextPruning.hardClear.placeholder":
-    "Placeholder text inserted when hard clear removes transcript content. Keep this short and explicit so later turns know pruning happened.",
   "agents.list[].compaction":
     "Optional per-agent compaction block. Omit it to inherit agents.defaults.compaction; set only the fields that should differ. Per-agent compaction deep-merges over the default block.",
   "agents.list[].compaction.mode":
@@ -1583,8 +1547,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Use this per-agent compaction timeout override in seconds when the matching agent needs a different compaction budget.",
   "agents.list[].compaction.model":
     "Use this per-agent exact compaction model override when one agent should compact on a different model. This stays exact instead of inheriting session fallback chains.",
-  "agents.list[].compaction.thinkingLevel":
-    'Use this per-agent exact compaction thinking/reasoning level override when one agent should compact with a different reasoning budget. Set "off" to disable reasoning for that agent\'s compaction runs.',
   "agents.list[].compaction.truncateAfterCompaction":
     "Use this per-agent transcript rotation override to control whether the matching agent truncates transcript files after successful compaction.",
   "agents.list[].compaction.maxActiveTranscriptBytes":
@@ -1605,40 +1567,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Use this per-agent user prompt template to control memory flush turns before compaction.",
   "agents.list[].compaction.memoryFlush.systemPrompt":
     "Use this per-agent system prompt override to control memory flush turns before compaction.",
-  "agents.list[].contextPruning":
-    "Optional per-agent transcript-pruning block. Omit it to inherit agents.defaults.contextPruning; set only the fields that should differ. Per-agent contextPruning deep-merges over the default block.",
-  "agents.list[].contextPruning.mode":
-    'Use this per-agent transcript-pruning strategy to select "off" or "cache-ttl" behavior for the matching agent.',
-  "agents.list[].contextPruning.ttl":
-    "Use this per-agent cache TTL window to control when transcript pruning may discard stale entries.",
-  "agents.list[].contextPruning.keepLastAssistants":
-    "Keep this many recent assistant messages for the matching agent during pruning so fresh replies stay visible.",
-  "agents.list[].contextPruning.softTrimRatio":
-    "Use this per-agent soft-trim trigger ratio to decide when transcript pruning starts trimming older content.",
-  "agents.list[].contextPruning.hardClearRatio":
-    "Use this per-agent hard-clear trigger ratio to decide when transcript pruning replaces content with a placeholder.",
-  "agents.list[].contextPruning.minPrunableToolChars":
-    "Use this per-agent minimum tool-output size before transcript pruning trims tool results for the matching agent.",
-  "agents.list[].contextPruning.tools":
-    "Use this per-agent tool allow/deny policy to control which tool results remain eligible for transcript pruning.",
-  "agents.list[].contextPruning.tools.allow":
-    "Use this per-agent tool allowlist to control pruning eligibility for the matching agent.",
-  "agents.list[].contextPruning.tools.deny":
-    "Use this per-agent tool denylist to control pruning eligibility for the matching agent.",
-  "agents.list[].contextPruning.softTrim":
-    "Use these per-agent soft-trim sizing controls to tune how transcript pruning preserves head and tail context.",
-  "agents.list[].contextPruning.softTrim.maxChars":
-    "Use this per-agent maximum character budget for soft-trimmed transcript segments when pruning older content.",
-  "agents.list[].contextPruning.softTrim.headChars":
-    "Keep this many head characters for the matching agent during soft trim so early context remains visible.",
-  "agents.list[].contextPruning.softTrim.tailChars":
-    "Keep this many tail characters for the matching agent during soft trim so recent context remains visible.",
-  "agents.list[].contextPruning.hardClear":
-    "Use these per-agent hard-clear placeholder controls when transcript pruning must aggressively remove content.",
-  "agents.list[].contextPruning.hardClear.enabled":
-    "Enable per-agent hard-clear placeholder replacement when the matching agent needs aggressive transcript pruning.",
-  "agents.list[].contextPruning.hardClear.placeholder":
-    "Use this per-agent placeholder text when hard clear removes transcript content for the matching agent.",
   "agents.defaults.runRetries":
     "Outer run loop retry iteration boundaries for the embedded OpenClaw runner to prevent infinite execution loops during failure recovery.",
   "agents.defaults.runRetries.base":

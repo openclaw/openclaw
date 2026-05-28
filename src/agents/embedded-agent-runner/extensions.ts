@@ -9,10 +9,7 @@ import contextPruningExtension from "../agent-hooks/context-pruning.js";
 import { setContextPruningRuntime } from "../agent-hooks/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../agent-hooks/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../agent-hooks/context-pruning/tools.js";
-import {
-  resolveAgentCompactionConfig,
-  resolveAgentContextPruningConfig,
-} from "../agent-scope-config.js";
+import { resolveAgentCompactionConfig } from "../agent-scope-config.js";
 import {
   ensureAgentCompactionReserveTokens,
   resolveEffectiveCompactionMode,
@@ -141,12 +138,11 @@ function resolveSafeguardRuntimeModel(params: {
 function buildContextPruningFactory(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
-  agentId?: string | null;
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
 }): ExtensionFactory | undefined {
-  const raw = resolveAgentContextPruningConfig(params.cfg, params.agentId);
+  const raw = params.cfg?.agents?.defaults?.contextPruning;
   if (raw?.mode !== "cache-ttl") {
     return undefined;
   }

@@ -7,7 +7,6 @@ import {
   contextEngineCompactMock,
   createAgentSessionMock,
   createPreparedEmbeddedAgentSettingsManagerMock,
-  createAgentSessionMock,
   createOpenClawCodingToolsMock,
   enqueueCommandInLaneMock,
   ensureRuntimePluginsLoaded,
@@ -978,63 +977,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     if (mockCallArg(resolveModelMock, 0, 3) === undefined) {
       throw new Error("Expected resolve-model options");
     }
-  });
-
-  it("uses global compaction.thinkingLevel for compaction sessions", async () => {
-    const result = await compactEmbeddedAgentSessionDirect({
-      sessionId: "session-1",
-      sessionKey: TEST_SESSION_KEY,
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp/workspace",
-      thinkLevel: "high",
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              thinkingLevel: "off",
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(createAgentSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ thinkingLevel: "off" }),
-    );
-  });
-
-  it("prefers per-agent compaction.thinkingLevel for compaction sessions", async () => {
-    const result = await compactEmbeddedAgentSessionDirect({
-      sessionId: "session-1",
-      sessionKey: TEST_SESSION_KEY,
-      agentId: "main",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp/workspace",
-      thinkLevel: "high",
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              thinkingLevel: "off",
-            },
-          },
-          list: [
-            {
-              id: "main",
-              compaction: {
-                thinkingLevel: "low",
-              },
-            },
-          ],
-        },
-      } as never,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(createAgentSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ thinkingLevel: "low" }),
-    );
   });
 
   it("preserves compaction failure status and code metadata", async () => {
@@ -2051,7 +1993,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(resolveCompactionTimeoutMsMock).toHaveBeenCalledWith(config, "lossless-agent");
   });
 
-  it("uses compaction.thinkingLevel for queued context-engine compaction", async () => {
+  it("uses caller thinking level for queued context-engine compaction", async () => {
     await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
         sessionKey: "legacy-topic-47",
@@ -2059,16 +2001,12 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         config: {
           agents: {
             defaults: {
-              compaction: {
-                thinkingLevel: "high",
-              },
+              compaction: {},
             },
             list: [
               {
                 id: "lossless-agent",
-                compaction: {
-                  thinkingLevel: "off",
-                },
+                compaction: {},
               },
             ],
           },
@@ -2080,7 +2018,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     const compactArg = mockCallArg(contextEngineCompactMock) as {
       runtimeContext?: Record<string, unknown>;
     };
-    expect(compactArg.runtimeContext?.thinkLevel).toBe("off");
+    expect(compactArg.runtimeContext?.thinkLevel).toBe("high");
   });
 
   it("binds queued post-compaction maintenance to the resolved legacy session agent", async () => {

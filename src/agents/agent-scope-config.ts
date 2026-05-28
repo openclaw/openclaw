@@ -12,7 +12,6 @@ import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 type AgentCompactionConfig = NonNullable<AgentEntry["compaction"]>;
-type AgentContextPruningConfig = NonNullable<AgentEntry["contextPruning"]>;
 
 export type ResolvedAgentConfig = {
   name?: string;
@@ -20,7 +19,6 @@ export type ResolvedAgentConfig = {
   agentDir?: string;
   model?: AgentEntry["model"];
   compaction?: AgentEntry["compaction"];
-  contextPruning?: AgentEntry["contextPruning"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
@@ -145,16 +143,6 @@ function resolveScopedCompactionConfig(
   ) as AgentEntry["compaction"];
 }
 
-function resolveScopedContextPruningConfig(
-  defaults: AgentContextPruningConfig | undefined,
-  override: AgentEntry["contextPruning"],
-): AgentEntry["contextPruning"] {
-  return mergePlainConfig(
-    defaults as Record<string, unknown> | undefined,
-    override as Record<string, unknown> | undefined,
-  ) as AgentEntry["contextPruning"];
-}
-
 export function resolveAgentConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -174,10 +162,6 @@ export function resolveAgentConfig(
         ? entry.model
         : undefined,
     compaction: resolveScopedCompactionConfig(agentDefaults?.compaction, entry.compaction),
-    contextPruning: resolveScopedContextPruningConfig(
-      agentDefaults?.contextPruning,
-      entry.contextPruning,
-    ),
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,
@@ -225,19 +209,6 @@ export function resolveAgentCompactionConfig(
     return resolveAgentConfig(cfg, agentId)?.compaction ?? cfg.agents?.defaults?.compaction;
   }
   return cfg.agents?.defaults?.compaction;
-}
-
-export function resolveAgentContextPruningConfig(
-  cfg: OpenClawConfig | undefined,
-  agentId?: string | null,
-): AgentEntry["contextPruning"] | undefined {
-  if (!cfg) {
-    return undefined;
-  }
-  if (agentId) {
-    return resolveAgentConfig(cfg, agentId)?.contextPruning ?? cfg.agents?.defaults?.contextPruning;
-  }
-  return cfg.agents?.defaults?.contextPruning;
 }
 
 export function resolveAgentContextLimits(
