@@ -339,22 +339,20 @@ function resolveGoogleVertexProject(options: GoogleTransportOptions | undefined)
     normalizeOptionalString(process.env.GCLOUD_PROJECT);
   if (!project) {
     throw new Error(
-      "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options.",
+      "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT in your environment " +
+        'or add "GOOGLE_CLOUD_PROJECT" to the "env" section of openclaw.json. ' +
+        "On GCE/GKE, the project can be detected during onboarding with `openclaw onboard`.",
     );
   }
   return project;
 }
 
 function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined): string {
-  const location =
+  return (
     normalizeOptionalString((options as { location?: unknown } | undefined)?.location) ||
-    normalizeOptionalString(process.env.GOOGLE_CLOUD_LOCATION);
-  if (!location) {
-    throw new Error(
-      "Vertex AI requires a location. Set GOOGLE_CLOUD_LOCATION or pass location in options.",
-    );
-  }
-  return location;
+    normalizeOptionalString(process.env.GOOGLE_CLOUD_LOCATION) ||
+    "global"
+  );
 }
 
 export function resolveGoogleVertexBaseOrigin(
