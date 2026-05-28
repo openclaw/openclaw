@@ -4559,6 +4559,7 @@ export async function runEmbeddedAttempt(
           acceptedSessionSpawns,
           lastToolError,
           lastAssistant,
+          itemLifecycle: getItemLifecycle(),
           toolMetas: toolMetasNormalized,
           replayMetadata,
           promptErrorSource,
