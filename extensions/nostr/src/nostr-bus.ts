@@ -138,7 +138,7 @@ function createFixedWindowRateLimiter(params: {
 }
 
 export interface NostrBusHandle {
-  /** Stop the bus and close connections */
+  /** Stop the bus and close relay connections */
   close: () => void;
   /** Get the bot's public key */
   publicKey: string;
@@ -617,6 +617,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   const dmFilter = { kinds: [4], "#p": [pk], since } satisfies Parameters<
     typeof pool.subscribeMany
   >[1];
+  const relayAbort = new AbortController();
   const sub = pool.subscribeMany(relays, dmFilter, {
     onevent: handleEvent,
     oneose: () => {
@@ -634,6 +635,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
       onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
     },
+    abort: relayAbort.signal,
   });
 
   // Public sendDm function
@@ -692,8 +694,12 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
   return {
     close: () => {
-      sub.close();
-      setTimeout(() => pool.close(relays), 0);
+      relayAbort.abort("closed by caller");
+      void Promise.resolve(sub.close("closed by caller"))
+        .catch((err) => onError?.(err as Error, "close subscription"))
+        .finally(() => {
+          pool.close(relays);
+        });
       seen.stop();
       perSenderRateLimiter.clear();
       globalRateLimiter.clear();

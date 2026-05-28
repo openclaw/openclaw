@@ -12,6 +12,7 @@ const mockState = vi.hoisted(() => ({
   } | null,
   subscribeMany: vi.fn(),
   close: vi.fn(),
+  subscriptionClose: vi.fn(),
   verifyEvent: vi.fn(() => true),
   decrypt: vi.fn(() => "plaintext"),
   publishProfile: vi.fn(async () => ({
@@ -36,7 +37,7 @@ vi.mock("nostr-tools", () => {
       mockState.subscribeMany(relays, filters, handlers);
       mockState.handlers = handlers;
       return {
-        close: vi.fn(),
+        close: mockState.subscriptionClose,
       };
     }
 
@@ -100,6 +101,7 @@ describe("startNostrBus inbound guards", () => {
     mockState.handlers = null;
     mockState.subscribeMany.mockClear();
     mockState.close.mockClear();
+    mockState.subscriptionClose.mockReset();
     mockState.verifyEvent.mockClear();
     mockState.verifyEvent.mockReturnValue(true);
     mockState.decrypt.mockClear();
@@ -139,6 +141,32 @@ describe("startNostrBus inbound guards", () => {
 
     bus.close();
 
+    await vi.waitFor(() => {
+      expect(mockState.close).toHaveBeenCalledWith(["wss://relay.example"]);
+    });
+  });
+
+  it("closes the relay pool after the active subscription closes", async () => {
+    let releaseClose = () => {};
+    const subscriptionClosed = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    mockState.subscriptionClose.mockImplementationOnce(async () => {
+      await subscriptionClosed;
+    });
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      relays: ["wss://relay.example"],
+      onMessage: vi.fn(async () => {}),
+      onMetric: () => {},
+    });
+
+    bus.close();
+
+    expect(mockState.subscriptionClose).toHaveBeenCalledWith("closed by caller");
+    expect(mockState.close).not.toHaveBeenCalled();
+
+    releaseClose();
     await vi.waitFor(() => {
       expect(mockState.close).toHaveBeenCalledWith(["wss://relay.example"]);
     });

@@ -1,11 +1,13 @@
 import {
   createStartAccountContext,
+  createPluginRuntimeMock,
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getActiveNostrBuses, startNostrGatewayAccount } from "./gateway.js";
+import { setNostrRuntime } from "./runtime.js";
 import { buildResolvedNostrAccount } from "./test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
@@ -28,6 +30,10 @@ function createMockBus() {
 }
 
 describe("nostr gateway lifecycle", () => {
+  beforeEach(() => {
+    setNostrRuntime(createPluginRuntimeMock());
+  });
+
   afterEach(() => {
     mocks.startNostrBus.mockReset();
   });
