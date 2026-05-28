@@ -417,7 +417,10 @@ async function drainQueuedEntry(opts: {
           : `delivery state is ${entry.recoveryState}; refusing blind replay without adapter reconciliation`;
       opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
       opts.onFailed?.(entry, errMsg);
-      if (reconciliation?.status === "unresolved" && reconciliation.retryable === true) {
+      if (
+        reconciliation == null ||
+        (reconciliation.status === "unresolved" && reconciliation.retryable === true)
+      ) {
         try {
           await failDelivery(entry.id, errMsg, opts.stateDir);
           return "failed";
