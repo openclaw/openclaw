@@ -276,7 +276,10 @@ describe("executeNodeHostCommand", () => {
       },
     ]);
     parsePreparedSystemRunPayloadMock.mockReset();
-    parsePreparedSystemRunPayloadMock.mockReturnValue({ plan: preparedPlan });
+    parsePreparedSystemRunPayloadMock.mockReturnValue({
+      plan: preparedPlan,
+      execPolicy: { security: "full", ask: "off" },
+    });
     commandRequiresSecurityAuditSuppressionApprovalMock.mockReset();
     commandRequiresSecurityAuditSuppressionApprovalMock.mockReturnValue(false);
     evaluateShellAllowlistMock.mockReset();
@@ -508,6 +511,10 @@ describe("executeNodeHostCommand", () => {
         hostAsk: "on-miss",
         askFallback: "deny",
       });
+      parsePreparedSystemRunPayloadMock.mockReturnValue({
+        plan: preparedPlan,
+        execPolicy: { security: nodeSecurity, ask: nodeAsk },
+      });
       resolveExecApprovalsFromFileMock.mockReturnValue({
         allowlist: [],
         file: { version: 1, agents: {} },
@@ -530,7 +537,12 @@ describe("executeNodeHostCommand", () => {
             throw new Error(`unexpected gateway method: ${method}`);
           }
           if (params?.command === "system.run.prepare") {
-            return { payload: { plan: preparedPlan } };
+            return {
+              payload: {
+                plan: preparedPlan,
+                execPolicy: { security: nodeSecurity, ask: nodeAsk },
+              },
+            };
           }
           if (params?.command === "system.run") {
             return {
@@ -839,6 +851,53 @@ describe("executeNodeHostCommand", () => {
 
     const result = await executeNodeHostCommand({
       command: "echo ok; pwd",
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "on-miss",
+      autoReview: true,
+      autoReviewer,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("requests human approval when node runtime policy requires ask always", async () => {
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "test reviewer would allow it",
+    }));
+    parsePreparedSystemRunPayloadMock.mockReturnValue({
+      plan: preparedPlan,
+      execPolicy: { security: "full", ask: "always" },
+    });
+    resolveExecApprovalsFromFileMock.mockReturnValue({
+      allowlist: [],
+      file: { version: 1, agents: {} },
+      agent: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
       workdir: "/tmp/work",
       env: {},
       security: "allowlist",

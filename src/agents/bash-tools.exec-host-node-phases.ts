@@ -15,7 +15,10 @@ import {
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
-import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
+import {
+  parsePreparedSystemRunPayload,
+  type PreparedRunExecPolicy,
+} from "../infra/system-run-approval-context.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { normalizeNullableString } from "../shared/string-coerce.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
@@ -42,6 +45,7 @@ type PreparedNodeRun = {
   cwd: string | undefined;
   agentId: string | undefined;
   sessionKey: string | undefined;
+  execPolicy?: PreparedRunExecPolicy;
 };
 
 type NodeApprovalAnalysis = {
@@ -259,6 +263,7 @@ export async function prepareNodeSystemRun(params: {
     cwd: prepared.plan.cwd ?? params.request.workdir,
     agentId: prepared.plan.agentId ?? params.request.agentId,
     sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey,
+    ...(prepared.execPolicy ? { execPolicy: prepared.execPolicy } : {}),
   };
 }
 
@@ -317,9 +322,7 @@ export async function analyzeNodeApprovalRequirement(params: {
   let analysisOk = baseAllowlistEval.analysisOk;
   let allowlistSatisfied = false;
   let durableApprovalSatisfied = false;
-  let nodeApprovalPolicyKnown = false;
-  let nodeSecurity: ExecSecurity | undefined;
-  let nodeAsk: ExecAsk | undefined;
+  let nodeApprovalsFileKnown = false;
   const inlineEvalHit =
     params.request.strictInlineEval === true
       ? detectPolicyInlineEval(baseAllowlistEval.segments)
@@ -355,14 +358,12 @@ export async function analyzeNodeApprovalRequirement(params: {
           ? approvalsSnapshot.file
           : undefined;
       if (approvalsFile && typeof approvalsFile === "object") {
-        nodeApprovalPolicyKnown = true;
+        nodeApprovalsFileKnown = true;
         const resolved = resolveExecApprovalsFromFile({
           file: approvalsFile as ExecApprovalsFile,
           agentId: params.request.agentId,
           overrides: { security: "full" },
         });
-        nodeSecurity = resolved.agent.security;
-        nodeAsk = resolved.agent.ask;
         // Allowlist-only precheck; safe bins are node-local and may diverge.
         const allowlistEval = evaluateShellAllowlist({
           command: params.request.command,
@@ -390,9 +391,9 @@ export async function analyzeNodeApprovalRequirement(params: {
     analysisOk,
     allowlistSatisfied,
     durableApprovalSatisfied,
-    nodeApprovalPolicyKnown,
-    nodeSecurity,
-    nodeAsk,
+    nodeApprovalPolicyKnown: nodeApprovalsFileKnown && params.prepared.execPolicy !== undefined,
+    nodeSecurity: params.prepared.execPolicy?.security,
+    nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
     autoReviewArgv:
