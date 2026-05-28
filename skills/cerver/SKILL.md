@@ -96,9 +96,9 @@ Use `compare` **only** when the user explicitly wants multiple opinions or the a
 
 ### Feedback — the suggestion box
 
-Cerver collects in-the-loop feedback from every surface (skill, CLI, relay) so the team can ship the right fixes. This skill is one of those surfaces. Use the two verbs deliberately.
+Cerver collects in-the-loop feedback from every surface (skill, CLI, relay) so the team can ship the right fixes. This skill is one of those surfaces. Use the verbs deliberately.
 
-#### File a suggestion (write)
+#### File a private suggestion (write, per-account)
 
 ```bash
 cerver suggestions new \
@@ -108,6 +108,8 @@ cerver suggestions new \
   --detail "<longer description, optional>" \
   "<one-line summary>"
 ```
+
+The note stays scoped to the user's cerver account — only they can read it back. Use this for friction the user wants to remember for themselves, or for things you're not yet sure are worth surfacing upstream.
 
 **Fire `suggestions new` automatically when you hit any of these during a cerver run:**
 
@@ -124,6 +126,32 @@ cerver suggestions new \
 - Anything you'd be embarrassed to read out loud to the cerver maintainers.
 
 Always include `--surface skill` (this skill is the originator) and `--cli` so the maintainers can attribute the friction. Pass `--session <id>` if you have one from a recent `cerver run` header — it makes the suggestion debuggable.
+
+#### Share with the cerver maintainers (write, explicit opt-in)
+
+When the user **actually says** they want feedback to reach the cerver team — not a private gripe for themselves — use `cerver suggestions upstream` instead of `suggestions new`. Same flags, same shape, but the row is flagged `is_upstream=true` so the cerver maintainers' cross-account queue picks it up.
+
+```bash
+cerver suggestions upstream \
+  --surface skill \
+  --cli <claude|codex|grok> \
+  --session <session_id_from_run_header> \
+  --detail "<longer description, optional>" \
+  "<one-line summary>"
+```
+
+**Only use `upstream` when:**
+
+- The user explicitly asks to share the note ("send this to the cerver people", "tell them about it").
+- A reproducible bug is broadly relevant, not specific to the user's local quirks.
+
+**Don't use `upstream` for:**
+
+- A private note for the user themselves — `suggestions new` is the right call.
+- Personal preferences ("I wish my UI did X for me").
+- Anything tied to the user's specific data, sandbox, or workflow that wouldn't generalize.
+
+The default is per-account privacy; `upstream` is the explicit opt-in. Never escalate a private note to upstream without the user actually asking.
 
 #### Surface what's already queued (read)
 
