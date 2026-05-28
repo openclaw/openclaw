@@ -1749,6 +1749,50 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("keeps rehydrated promotion snippets capped in the recall store", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
+      const longSnippet = `Moved backup policy ${"x".repeat(maxSnippetChars + 100)}`;
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["intro", longSnippet]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "backup policy",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.94,
+            snippet: longSnippet,
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const candidateKey = requireCandidateKey(ranked[0], "long rehydrated");
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.snippet.length).toBeGreaterThan(maxSnippetChars);
+      const entries = await readRecallStoreEntries(workspaceDir);
+      const storedSnippet = readEntrySnippet(entries[candidateKey] ?? {});
+      expect(storedSnippet.length).toBeLessThanOrEqual(maxSnippetChars);
+      expect(storedSnippet).toBe(applied.appliedCandidates[0]?.snippet.slice(0, maxSnippetChars));
+    });
+  });
+
   it("prefers the nearest matching snippet when the same text appears multiple times", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [

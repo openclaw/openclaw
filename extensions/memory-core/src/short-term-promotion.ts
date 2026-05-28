@@ -269,6 +269,12 @@ function truncateShortTermSnippet(snippet: string): string {
   return snippet.slice(0, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
 }
 
+function enforceShortTermRecallSnippetCap(store: ShortTermRecallStore): void {
+  for (const entry of Object.values(store.entries)) {
+    entry.snippet = truncateShortTermSnippet(entry.snippet);
+  }
+}
+
 function consumeDreamingLeadPrefix(snippet: string): string {
   let index = 0;
   while (index < snippet.length) {
@@ -951,6 +957,7 @@ async function writePhaseSignalStore(
 }
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
+  enforceShortTermRecallSnippetCap(store);
   enforceShortTermRecallStoreRetention(store);
   await ensureShortTermArtifactsDir(workspaceDir);
   await privateFileStore(workspaceDir).writeJson(SHORT_TERM_STORE_RELATIVE_PATH, store, {
