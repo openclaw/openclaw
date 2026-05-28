@@ -511,23 +511,35 @@ async function main(): Promise<void> {
       const pingResultPromise = pingHealthLoop(pingClient, stopFlag, options);
       const runId = `dense-${randomUUID()}`;
       const startedAt = performance.now();
-      const sendResult = await runClient.request(
-        "chat.send",
-        {
-          sessionKey: "agent:main:gateway-dense-stream-repro",
-          idempotencyKey: runId,
-          message: "Reply normally.",
-        },
-        { timeoutMs: 30_000 },
-      );
-      const ackMs = performance.now() - startedAt;
-      const waitResult = await runClient.request(
-        "agent.wait",
-        { runId, timeoutMs: 120_000 },
-        { timeoutMs: 125_000 },
-      );
-      stopFlag.done = true;
+      let sendResult: unknown;
+      let waitResult: unknown;
+      let ackMs = 0;
+      let runError: unknown;
+      try {
+        sendResult = await runClient.request(
+          "chat.send",
+          {
+            sessionKey: "agent:main:gateway-dense-stream-repro",
+            idempotencyKey: runId,
+            message: "Reply normally.",
+          },
+          { timeoutMs: 30_000 },
+        );
+        ackMs = performance.now() - startedAt;
+        waitResult = await runClient.request(
+          "agent.wait",
+          { runId, timeoutMs: 120_000 },
+          { timeoutMs: 125_000 },
+        );
+      } catch (err) {
+        runError = err;
+      } finally {
+        stopFlag.done = true;
+      }
       const pingResult = await pingResultPromise;
+      if (runError) {
+        throw runError;
+      }
       const totalMs = performance.now() - startedAt;
       const during = summarizeLatency(pingResult.samples);
       const result = {
