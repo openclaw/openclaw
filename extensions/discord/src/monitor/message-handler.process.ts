@@ -659,10 +659,7 @@ export async function processDiscordMessage(
       }
     }
     const shouldFinalizeDraftPreview =
-      draftStream &&
-      isFinal &&
-      (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted) &&
-      !payload.isError;
+      draftStream && isFinal && !draftPreview.isProgressMode && !payload.isError;
     if (shouldFinalizeDraftPreview) {
       const reply = resolveSendableOutboundReplyParts(effectivePayload);
       const hasMedia = reply.hasMedia;
@@ -814,6 +811,10 @@ export async function processDiscordMessage(
       return { visibleReplySent: false };
     }
 
+    const shouldClearFinalProgressDraft = isFinal && draftPreview.isProgressMode;
+    if (shouldClearFinalProgressDraft) {
+      await draftStream?.discardPending();
+    }
     const replyToId = replyReference.use();
     if (isFinal) {
       notifyFinalReplyStart();
@@ -837,6 +838,9 @@ export async function processDiscordMessage(
       mediaLocalRoots,
       kind: info.kind,
     });
+    if (shouldClearFinalProgressDraft) {
+      await draftStream?.clear();
+    }
     replyReference.markSent();
     if (isFinal && payload.isError !== true) {
       markUserFacingFinalDelivered();
@@ -1027,7 +1031,7 @@ export async function processDiscordMessage(
             return;
           }
           await draftPreview.pushToolProgress(
-            buildChannelProgressDraftLine({
+            buildChannelProgressDraftLineForEntry(discordConfig, {
               event: "command-output",
               phase: payload.phase,
               title: payload.title,

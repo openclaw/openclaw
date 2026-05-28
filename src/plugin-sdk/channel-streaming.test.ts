@@ -451,6 +451,17 @@ describe("channel-streaming", () => {
       ),
     ).toBe("🛠️ Exec");
     expect(
+      formatChannelProgressDraftLine(
+        {
+          event: "command-output",
+          name: "exec",
+          exitCode: 1,
+          title: "run internal config check failed",
+        },
+        { commandText: "status" },
+      ),
+    ).toBe("🛠️ exit 1");
+    expect(
       formatChannelProgressDraftLine({
         event: "item",
         itemKind: "analysis",
