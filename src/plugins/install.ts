@@ -136,11 +136,13 @@ export type InstallPluginResult =
     }
   | { ok: false; error: string; code?: PluginInstallErrorCode };
 
+type PluginInstallFailureResult = Extract<InstallPluginResult, { ok: false }>;
+
 function validateOpenClawPackageCompatibility(params: {
   pluginId: string;
   currentHostVersion: string;
   packageMetadata?: OpenClawPackageManifest;
-}): InstallPluginResult | null {
+}): PluginInstallFailureResult | null {
   const pluginApiRange = normalizeOptionalString(params.packageMetadata?.compat?.pluginApi);
   if (pluginApiRange && !satisfiesPluginApiRange(params.currentHostVersion, pluginApiRange)) {
     return {
@@ -1349,7 +1351,7 @@ async function validatePackagePluginInstallSource(params: {
       ok: true;
       plugin: ValidatedPackagePlugin;
     }
-  | Extract<InstallPluginResult, { ok: false }>
+  | PluginInstallFailureResult
 > {
   const manifestPath = path.join(params.packageDir, "package.json");
   if (!(await params.runtime.fileExists(manifestPath))) {

@@ -541,6 +541,18 @@ function matchWildcardComparator(token: string): "any" | "none" | null {
   return operator === ">" || operator === "<" ? "none" : "any";
 }
 
+function shouldPreservePluginApiPrereleaseFloor(target: string): boolean {
+  return Boolean(
+    parseComparableSemver(normalizePartialComparableVersion(target).version)?.prerelease?.length,
+  );
+}
+
+function normalizePluginApiVersionForComparator(version: string, target: string): string {
+  return shouldPreservePluginApiPrereleaseFloor(target)
+    ? version
+    : normalizeCalVerCorrectionForPluginApi(version);
+}
+
 function satisfiesComparator(version: string, token: string): boolean {
   const trimmed = token.trim();
   if (!trimmed) {
@@ -553,8 +565,9 @@ function satisfiesComparator(version: string, token: string): boolean {
   if (trimmed.startsWith("^")) {
     const base = trimmed.slice(1).trim();
     const upperBound = upperBoundForCaret(base);
-    const lowerCmp = compareSemver(version, base);
-    const upperCmp = upperBound ? compareSemver(version, upperBound) : null;
+    const comparableVersion = normalizePluginApiVersionForComparator(version, base);
+    const lowerCmp = compareSemver(comparableVersion, base);
+    const upperCmp = upperBound ? compareSemver(comparableVersion, upperBound) : null;
     return lowerCmp != null && upperCmp != null && lowerCmp >= 0 && upperCmp < 0;
   }
 
@@ -567,8 +580,9 @@ function satisfiesComparator(version: string, token: string): boolean {
   if (!target) {
     return false;
   }
+  const comparableVersion = normalizePluginApiVersionForComparator(version, target);
   const normalizedTarget = normalizePartialComparableVersion(target);
-  const cmp = compareSemver(version, normalizedTarget.version);
+  const cmp = compareSemver(comparableVersion, normalizedTarget.version);
   if (cmp == null) {
     return false;
   }
@@ -1264,10 +1278,7 @@ export function satisfiesPluginApiRange(
   if (!pluginApiRange) {
     return true;
   }
-  return satisfiesSemverRange(
-    normalizeCalVerCorrectionForPluginApi(pluginApiVersion),
-    pluginApiRange,
-  );
+  return satisfiesSemverRange(pluginApiVersion, pluginApiRange);
 }
 
 export function satisfiesGatewayMinimum(

@@ -148,6 +148,13 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("2026.5.2-beta.1", ">=2026.5.3")).toBe(false);
   });
 
+  it("preserves prerelease ordering for explicit plugin API prerelease floors", () => {
+    expect(satisfiesPluginApiRange("2026.3.24-beta.1", ">=2026.3.24-beta.2")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.3.24-beta.2", ">=2026.3.24-beta.2")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.3.24", ">=2026.3.24-beta.2")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.3.24-beta.1", ">=2026.3.24")).toBe(true);
+  });
+
   it("accepts legacy bare major.minor plugin api ranges as lower bounds", () => {
     expect(satisfiesPluginApiRange("2026.5.2", "2026.4")).toBe(true);
     expect(satisfiesPluginApiRange("2026.4.0", "2026.4")).toBe(true);
