@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildLiveNvidiaProvider,
   buildNvidiaProvider,
+  buildSelectableLiveNvidiaProvider,
   clearNvidiaFeaturedModelCacheForTests,
   NVIDIA_FEATURED_MODELS_URL,
 } from "./provider-catalog.js";
@@ -73,10 +74,6 @@ describe("nvidia provider catalog", () => {
     expect(provider.models.map((model) => model.id)).toEqual([
       "z-ai/glm-5.1",
       "nvidia/nemotron-3-super-120b-a12b",
-      "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.7",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
     ]);
     expect(provider.models[0]).toMatchObject({
       name: "GLM 5.1",
@@ -118,6 +115,40 @@ describe("nvidia provider catalog", () => {
     );
   });
 
+  it("uses only selectable live catalog rows when the featured catalog returns models", async () => {
+    mockFeaturedCatalogResponse({
+      "featured-models": [
+        {
+          model: "z-ai/glm-5.1",
+          "model-name": "GLM 5.1",
+          context: 202752,
+          "max-output": 8192,
+        },
+        {
+          model: "nemotron-3-super-120b-a12b",
+          "model-name": "Nemotron 3 Super 120B",
+          context: 262144,
+          "max-output": 8192,
+        },
+      ],
+    });
+
+    const provider = await buildSelectableLiveNvidiaProvider();
+
+    expect(provider.models.map((model) => model.id)).toEqual([
+      "z-ai/glm-5.1",
+      "nvidia/nemotron-3-super-120b-a12b",
+    ]);
+  });
+
+  it("returns no selectable live rows when the featured catalog is unavailable", async () => {
+    mockFeaturedCatalogResponse({ error: "unavailable" }, 503);
+
+    const provider = await buildSelectableLiveNvidiaProvider();
+
+    expect(provider.models.map((model) => model.id)).toEqual([]);
+  });
+
   it("ignores malformed featured catalog rows and keeps valid entries", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
@@ -144,14 +175,7 @@ describe("nvidia provider catalog", () => {
 
     const provider = await buildLiveNvidiaProvider();
 
-    expect(provider.models.map((model) => model.id)).toEqual([
-      "minimaxai/minimax-m2.7",
-      "nvidia/nemotron-3-super-120b-a12b",
-      "moonshotai/kimi-k2.5",
-      "z-ai/glm-5.1",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
-    ]);
+    expect(provider.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m2.7"]);
   });
 
   it("caches the featured catalog for repeated provider builds", async () => {

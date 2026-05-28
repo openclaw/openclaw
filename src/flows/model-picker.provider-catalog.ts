@@ -44,6 +44,52 @@ function providerAuthIds(provider: ProviderPlugin): string[] {
     .filter(Boolean);
 }
 
+function hasLiveProviderCatalog(provider: ProviderPlugin): boolean {
+  return (
+    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
+  );
+}
+
+async function resolvePreferredProviderLiveCatalogProviders(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  onlyPluginIds: string[];
+  providerFilter: string;
+  workspaceDir?: string;
+}): Promise<ProviderPlugin[]> {
+  const providers = (
+    await resolveRuntimePluginDiscoveryProviders({
+      config: params.cfg,
+      env: params.env,
+      onlyPluginIds: params.onlyPluginIds,
+      includeUntrustedWorkspacePlugins: false,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    })
+  ).filter((provider) =>
+    providerMatchesFilter({ provider, providerFilter: params.providerFilter }),
+  );
+  const liveProviders = providers.filter(hasLiveProviderCatalog);
+  if (liveProviders.length > 0) {
+    return liveProviders;
+  }
+
+  const { resolvePluginProviders } = await import("../plugins/providers.runtime.js");
+  return resolvePluginProviders({
+    config: params.cfg,
+    env: params.env,
+    onlyPluginIds: params.onlyPluginIds,
+    includeUntrustedWorkspacePlugins: false,
+    mode: "setup",
+    activate: false,
+    cache: false,
+    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+  }).filter(
+    (provider) =>
+      providerMatchesFilter({ provider, providerFilter: params.providerFilter }) &&
+      hasLiveProviderCatalog(provider),
+  );
+}
+
 function resolveProviderEnvApiKey(
   provider: ProviderPlugin,
   env: NodeJS.ProcessEnv,
@@ -113,15 +159,13 @@ export async function loadPreferredProviderPickerCatalog(params: {
     return [];
   }
 
-  const providers = (
-    await resolveRuntimePluginDiscoveryProviders({
-      config: params.cfg,
-      env,
-      onlyPluginIds,
-      includeUntrustedWorkspacePlugins: false,
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    })
-  ).filter((provider) => providerMatchesFilter({ provider, providerFilter }));
+  const providers = await resolvePreferredProviderLiveCatalogProviders({
+    cfg: params.cfg,
+    env,
+    onlyPluginIds,
+    providerFilter,
+    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+  });
   if (providers.length === 0) {
     return [];
   }
@@ -172,32 +216,24 @@ export async function loadPreferredProviderPickerCatalog(params: {
       }
 
       const normalized = normalizePluginDiscoveryResult({ provider, result });
-      const canonicalProviderId = normalizeProviderId(provider.id);
-      const acceptedProviderIds = new Set(providerAuthIds(provider));
-      const canonicalProviderConfig = canonicalProviderId
-        ? normalized[canonicalProviderId]
-        : undefined;
-      const providerConfig = Array.isArray(canonicalProviderConfig?.models)
-        ? canonicalProviderConfig
-        : [...acceptedProviderIds]
-            .map((providerId) => normalized[providerId])
-            .find((candidate) => Array.isArray(candidate?.models));
-      const outputProviderId = canonicalProviderId || providerFilter;
-      if (!providerConfig || !Array.isArray(providerConfig.models)) {
-        continue;
-      }
-      for (const model of providerConfig.models) {
-        const entry = modelFromProviderCatalog({
-          provider: outputProviderId,
-          providerConfig,
-          model,
-        });
-        const key = `${entry.provider}/${entry.id}`;
-        if (seen.has(key)) {
+      for (const [providerIdRaw, providerConfig] of Object.entries(normalized)) {
+        const providerId = normalizeProviderId(providerIdRaw);
+        if (providerId !== providerFilter || !Array.isArray(providerConfig.models)) {
           continue;
         }
-        seen.add(key);
-        rows.push(entry);
+        for (const model of providerConfig.models) {
+          const entry = modelFromProviderCatalog({
+            provider: providerId,
+            providerConfig,
+            model,
+          });
+          const key = `${entry.provider}/${entry.id}`;
+          if (seen.has(key)) {
+            continue;
+          }
+          seen.add(key);
+          rows.push(entry);
+        }
       }
     }
   }

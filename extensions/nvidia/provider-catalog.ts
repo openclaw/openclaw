@@ -80,30 +80,28 @@ export async function buildLiveNvidiaProvider(): Promise<ModelProviderConfig> {
   }
   return {
     ...provider,
-    models: mergeFeaturedModels(featuredModels, provider.models),
+    models: featuredModels,
+  };
+}
+
+export async function buildSelectableLiveNvidiaProvider(): Promise<ModelProviderConfig> {
+  const provider = buildNvidiaProvider();
+  const featuredModels = await loadNvidiaFeaturedModels();
+  if (!featuredModels || featuredModels.length === 0) {
+    return {
+      ...provider,
+      models: [],
+    };
+  }
+  return {
+    ...provider,
+    models: featuredModels,
   };
 }
 
 export function clearNvidiaFeaturedModelCacheForTests() {
   featuredModelCache = undefined;
   featuredModelRequest = undefined;
-}
-
-function mergeFeaturedModels(
-  featuredModels: ModelDefinitionConfig[],
-  fallbackModels: ModelDefinitionConfig[],
-): ModelDefinitionConfig[] {
-  const seen = new Set<string>();
-  const merged: ModelDefinitionConfig[] = [];
-  for (const model of [...featuredModels, ...fallbackModels]) {
-    const key = model.id.trim().toLowerCase();
-    if (!key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    merged.push(model);
-  }
-  return merged;
 }
 
 async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | null> {

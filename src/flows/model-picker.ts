@@ -56,6 +56,21 @@ function formatKeepCurrentModelLabel(params: {
     : t("wizard.model.keepCurrentDefault", { value: params.resolvedKey });
 }
 
+function formatModelRefLabel(params: {
+  provider: string;
+  model: string;
+  key: string;
+  literalPrefixProviders: Set<string>;
+}): string {
+  const providerId = normalizeProviderId(params.provider);
+  const modelId = params.model.trim().toLowerCase();
+  return providerId &&
+    params.literalPrefixProviders.has(providerId) &&
+    modelId.startsWith(`${providerId}/`)
+    ? formatLiteralProviderPrefixedModelRef(params.provider, params.key)
+    : params.key;
+}
+
 function resolvePickerAgentDir(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -123,6 +138,7 @@ function loadPickerModelCatalog(
     preferredProvider?: string;
     preferLiveProviderCatalog?: boolean;
     providerScoped?: boolean;
+    allowStaticFallbackCatalog?: boolean;
     agentDir?: string;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
@@ -143,13 +159,15 @@ function loadPickerModelCatalog(
         if (providerCatalog.length > 0) {
           return providerCatalog;
         }
-        const manifestRows = loadStaticManifestCatalogRowsForList({
-          cfg,
-          providerFilter: opts.preferredProvider,
-          ...(opts.env !== undefined ? { env: opts.env } : {}),
-        });
-        if (manifestRows.length > 0) {
-          return manifestRows.map(toPickerCatalogEntry);
+        if (opts.allowStaticFallbackCatalog !== false) {
+          const manifestRows = loadStaticManifestCatalogRowsForList({
+            cfg,
+            providerFilter: opts.preferredProvider,
+            ...(opts.env !== undefined ? { env: opts.env } : {}),
+          });
+          if (manifestRows.length > 0) {
+            return manifestRows.map(toPickerCatalogEntry);
+          }
         }
         return opts.providerScoped
           ? []
@@ -320,9 +338,12 @@ async function addModelSelectOption(params: {
   if (!(await params.hasAuth(normalizedRef.provider))) {
     return;
   }
-  const label = params.literalPrefixProviders.has(normalizeProviderId(normalizedRef.provider))
-    ? formatLiteralProviderPrefixedModelRef(normalizedRef.provider, key)
-    : key;
+  const label = formatModelRefLabel({
+    provider: normalizedRef.provider,
+    model: normalizedRef.model,
+    key,
+    literalPrefixProviders: params.literalPrefixProviders,
+  });
   params.options.push({
     value: key,
     label,
@@ -653,9 +674,12 @@ export async function promptDefaultModel(
       return configuredRaw || resolvedKey;
     }
     const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
-    return literalPrefixProviders.has(providerId)
-      ? formatLiteralProviderPrefixedModelRef(resolved.provider, resolvedKey)
-      : configuredRaw || resolvedKey;
+    return formatModelRefLabel({
+      provider: resolved.provider,
+      model: resolved.model,
+      key: configuredRaw || resolvedKey,
+      literalPrefixProviders,
+    });
   };
 
   if (
@@ -759,7 +783,7 @@ export async function promptDefaultModel(
   try {
     const providerScopedCatalog = browseCatalogOnDemand && preferredProvider;
     catalog = await loadPickerModelCatalog(cfg, {
-      preferredProvider,
+      preferredProvider: providerScopedCatalog ? preferredProvider : undefined,
       preferLiveProviderCatalog: Boolean(providerScopedCatalog),
       providerScoped: Boolean(providerScopedCatalog),
       agentDir: pickerAgentDir,
@@ -843,9 +867,12 @@ export async function promptDefaultModel(
   // Show the literal form (e.g. nvidia/nvidia/...) in the "Keep current" label
   // for providers that set preserveLiteralProviderPrefix, so the user sees the
   // same ref they'll pick from the catalog rows. Config itself stays canonical.
-  const configuredLabel = literalPrefixProviders.has(normalizeProviderId(resolved.provider))
-    ? formatLiteralProviderPrefixedModelRef(resolved.provider, resolvedKey)
-    : configuredRaw || resolvedKey;
+  const configuredLabel = formatModelRefLabel({
+    provider: resolved.provider,
+    model: resolved.model,
+    key: configuredRaw || resolvedKey,
+    literalPrefixProviders,
+  });
 
   const options: WizardSelectOption[] = [];
   if (allowKeep) {
@@ -955,6 +982,7 @@ export async function promptModelAllowlist(params: {
   initialSelections?: string[];
   preferredProvider?: string;
   loadCatalog?: boolean;
+  providerScopedCatalog?: boolean;
 }): Promise<PromptModelAllowlistResult> {
   const cfg = params.config;
   const pickerAgentDir = resolvePickerAgentDir({
@@ -1085,6 +1113,8 @@ export async function promptModelAllowlist(params: {
     catalog = await loadPickerModelCatalog(cfg, {
       preferredProvider,
       preferLiveProviderCatalog: Boolean(preferredProvider),
+      providerScoped: Boolean(preferredProvider && params.providerScopedCatalog),
+      allowStaticFallbackCatalog: !params.providerScopedCatalog,
       agentDir: pickerAgentDir,
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.env !== undefined ? { env: params.env } : {}),
@@ -1092,17 +1122,55 @@ export async function promptModelAllowlist(params: {
   } finally {
     allowlistProgress.stop();
   }
+  let providerStaticCatalogRows:
+    | ReturnType<typeof loadStaticManifestCatalogRowsForList>
+    | undefined;
+  const loadProviderStaticCatalogRows = () =>
+    (providerStaticCatalogRows ??= preferredProvider
+      ? loadStaticManifestCatalogRowsForList({
+          cfg,
+          providerFilter: preferredProvider,
+          ...(params.env !== undefined ? { env: params.env } : {}),
+        })
+      : []);
+  const providerScopedCatalogLoaded = Boolean(
+    preferredProvider && params.providerScopedCatalog && catalog.length > 0,
+  );
+  if (providerScopedCatalogLoaded) {
+    const deprecatedStaticKeys = new Set(
+      loadProviderStaticCatalogRows()
+        .filter((entry) => entry.status === "deprecated")
+        .map((entry) => modelKey(entry.provider, entry.id)),
+    );
+    if (deprecatedStaticKeys.size > 0) {
+      catalog = catalog.filter(
+        (entry) => !deprecatedStaticKeys.has(modelKey(entry.provider, entry.id)),
+      );
+    }
+  }
   if (preferredProvider) {
-    const configuredCatalog = buildConfiguredModelCatalog({ cfg }).filter(
+    let configuredCatalog = buildConfiguredModelCatalog({ cfg }).filter(
       (entry) => matchesPreferredProvider?.(entry.provider) === true,
     );
-    const configuredKeys = new Set(
-      configuredCatalog.map((entry) => modelKey(entry.provider, entry.id)),
-    );
-    catalog = [
-      ...configuredCatalog,
-      ...catalog.filter((entry) => !configuredKeys.has(modelKey(entry.provider, entry.id))),
-    ];
+    if (providerScopedCatalogLoaded && configuredCatalog.length > 0) {
+      const staticKeys = new Set(
+        loadProviderStaticCatalogRows().map((entry) => modelKey(entry.provider, entry.id)),
+      );
+      configuredCatalog = configuredCatalog.filter(
+        (entry) => !staticKeys.has(modelKey(entry.provider, entry.id)),
+      );
+    }
+    const catalogKeys = new Set(catalog.map((entry) => modelKey(entry.provider, entry.id)));
+    const mergedCatalog = [...catalog];
+    for (const entry of configuredCatalog) {
+      const key = modelKey(entry.provider, entry.id);
+      if (catalogKeys.has(key)) {
+        continue;
+      }
+      catalogKeys.add(key);
+      mergedCatalog.push(entry);
+    }
+    catalog = mergedCatalog;
   }
   if (catalog.length === 0 && allowedKeys.length === 0) {
     const noCatalogInitialKeys =

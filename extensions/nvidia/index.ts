@@ -1,6 +1,10 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyNvidiaConfig, NVIDIA_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildLiveNvidiaProvider, buildNvidiaProvider } from "./provider-catalog.js";
+import {
+  buildLiveNvidiaProvider,
+  buildNvidiaProvider,
+  buildSelectableLiveNvidiaProvider,
+} from "./provider-catalog.js";
 
 const PROVIDER_ID = "nvidia";
 
@@ -51,7 +55,7 @@ export default defineSingleProviderPluginEntry({
       },
     ],
     catalog: {
-      buildProvider: buildLiveNvidiaProvider,
+      buildProvider: buildSelectableLiveNvidiaProvider,
       buildStaticProvider: buildNvidiaProvider,
     },
     augmentModelCatalog: buildNvidiaCatalogModels,
