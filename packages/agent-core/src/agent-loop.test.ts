@@ -57,7 +57,15 @@ function streamEvents(events: AssistantMessageEvent[]): StreamFn {
   return async () => {
     const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
       (event) => event.type === "done" || event.type === "error",
-      (event) => (event.type === "done" ? event.message : event.error),
+      (event) => {
+        if (event.type === "done") {
+          return event.message;
+        }
+        if (event.type === "error") {
+          return event.error;
+        }
+        throw new Error(`Unexpected terminal event: ${event.type}`);
+      },
     );
     queueMicrotask(() => {
       for (const event of events) {

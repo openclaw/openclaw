@@ -25,7 +25,7 @@ function createMessageUpdateContext(
     onAgentEvent?: ReturnType<typeof vi.fn>;
     onPartialReply?: ReturnType<typeof vi.fn>;
     flushBlockReplyBuffer?: ReturnType<typeof vi.fn>;
-    resetAssistantTextStreamState?: ReturnType<typeof vi.fn>;
+    resetAssistantTextStreamState?: () => void;
     resetAssistantMessageState?: ReturnType<typeof vi.fn>;
     debug?: ReturnType<typeof vi.fn>;
     shouldEmitPartialReplies?: boolean;
