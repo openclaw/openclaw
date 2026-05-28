@@ -1,4 +1,4 @@
-import { createEngine, type PdfEngine, type PdfImage } from "clawpdf";
+import type { PdfEngine, PdfImage } from "clawpdf";
 import type {
   DocumentExtractedImage,
   DocumentExtractionRequest,
@@ -13,12 +13,14 @@ let pdfEnginePromise: Promise<PdfEngine> | null = null;
 
 async function loadPdfEngine(): Promise<PdfEngine> {
   if (!pdfEnginePromise) {
-    pdfEnginePromise = createEngine().catch((err) => {
-      pdfEnginePromise = null;
-      throw new Error("Dependency clawpdf is required for PDF extraction", {
-        cause: err,
+    pdfEnginePromise = import("clawpdf")
+      .then(({ createEngine }) => createEngine())
+      .catch((err) => {
+        pdfEnginePromise = null;
+        throw new Error("Dependency clawpdf is required for PDF extraction", {
+          cause: err,
+        });
       });
-    });
   }
   return pdfEnginePromise;
 }
