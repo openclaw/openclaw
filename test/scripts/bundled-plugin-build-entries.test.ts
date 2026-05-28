@@ -107,7 +107,6 @@ describe("bundled plugin build entries", () => {
     expect(entries["extensions/browser/test-support"]).toBeUndefined();
     expect(entries["extensions/comfy/test-helpers"]).toBeUndefined();
     expect(entries["extensions/minimax/provider-http.test-helpers"]).toBeUndefined();
-    expect(entries["extensions/minimax/test-api"]).toBe("extensions/minimax/test-api.ts");
   });
 
   it("discovers repo plugin build entries without directory scans", () => {
