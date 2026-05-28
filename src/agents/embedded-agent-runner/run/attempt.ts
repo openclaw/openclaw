@@ -179,9 +179,7 @@ import {
   buildEmptyExplicitToolAllowlistError,
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
-import {
-  filterRuntimeCompatibleTools,
-} from "../../tool-schema-projection.js";
+import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
   addClientToolsToToolSearchCatalog,
@@ -266,6 +264,7 @@ import {
 } from "../tool-result-context-guard.js";
 import {
   resolveLiveToolResultMaxChars,
+  truncateOversizedToolResultsInMessages,
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
 import { splitSdkTools } from "../tool-split.js";
@@ -460,6 +459,7 @@ export {
 };
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
+const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
@@ -3434,6 +3434,31 @@ export async function runEmbeddedAttempt(
             activeSession.agent.state.messages = filteredMessages;
           }
           prePromptMessageCount = activeSession.messages.length;
+          const contextTokenBudget = params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
+          const promptToolResultMaxChars = resolveLiveToolResultMaxChars({
+            contextWindowTokens: contextTokenBudget,
+            cfg: params.config,
+            agentId: sessionAgentId,
+          });
+          let promptHistoryMessages = activeSession.messages;
+          const promptToolResultTruncation = truncateOversizedToolResultsInMessages(
+            activeSession.messages,
+            contextTokenBudget,
+            promptToolResultMaxChars,
+            promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER,
+          );
+          if (promptToolResultTruncation.truncatedCount > 0) {
+            promptHistoryMessages = promptToolResultTruncation.messages;
+            log.info(
+              `[tool-result-truncation] Truncated ${promptToolResultTruncation.truncatedCount} ` +
+                `tool result(s) for prompt history ` +
+                `(maxChars=${promptToolResultMaxChars} ` +
+                `aggregateBudgetChars=${
+                  promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER
+                }) ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
+            );
+          }
 
           const promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt: promptForRuntimeContextSplit,
@@ -3470,8 +3495,8 @@ export async function runEmbeddedAttempt(
           const runtimeContextMessageForCurrentTurn =
             buildRuntimeContextCustomMessage(runtimeContextForHook);
           const messagesForCurrentPrompt = runtimeContextMessageForCurrentTurn
-            ? [...activeSession.messages, runtimeContextMessageForCurrentTurn]
-            : activeSession.messages;
+            ? [...promptHistoryMessages, runtimeContextMessageForCurrentTurn]
+            : promptHistoryMessages;
           const hookMessagesForCurrentPrompt = normalizeMessagesForCurrentPromptBoundary({
             messages: messagesForCurrentPrompt,
             prompt: promptForModel,
@@ -3705,7 +3730,6 @@ export async function runEmbeddedAttempt(
           const promptLen = effectivePrompt.length;
           const sessionSummary = summarizeSessionContext(activeSession.messages);
           const reserveTokens = settingsManager.getCompactionReserveTokens();
-          const contextTokenBudget = params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
           emitTrustedDiagnosticEvent({
             type: "context.assembled",
             runId: params.runId,
@@ -3789,11 +3813,7 @@ export async function runEmbeddedAttempt(
                 prompt: promptForModel,
                 contextTokenBudget,
                 reserveTokens,
-                toolResultMaxChars: resolveLiveToolResultMaxChars({
-                  contextWindowTokens: contextTokenBudget,
-                  cfg: params.config,
-                  agentId: sessionAgentId,
-                }),
+                toolResultMaxChars: promptToolResultMaxChars,
               });
           if (preemptiveCompaction) {
             contextBudgetStatus = buildPrePromptContextBudgetStatus({
@@ -3901,6 +3921,29 @@ export async function runEmbeddedAttempt(
             if (normalizedReplayMessages !== activeSession.messages) {
               activeSession.agent.state.messages = normalizedReplayMessages;
             }
+            const installProviderPromptHistoryTransform = (): (() => void) => {
+              const baseStreamFn = activeSession.agent.streamFn;
+              const providerPromptStreamFn = wrapStreamFnWithMessageTransform(
+                baseStreamFn,
+                (messages) => {
+                  const providerPromptHistoryTruncation = truncateOversizedToolResultsInMessages(
+                    messages,
+                    contextTokenBudget,
+                    promptToolResultMaxChars,
+                    promptToolResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER,
+                  );
+                  return providerPromptHistoryTruncation.truncatedCount > 0
+                    ? providerPromptHistoryTruncation.messages
+                    : messages;
+                },
+              );
+              activeSession.agent.streamFn = providerPromptStreamFn;
+              return () => {
+                if (activeSession.agent.streamFn === providerPromptStreamFn) {
+                  activeSession.agent.streamFn = baseStreamFn;
+                }
+              };
+            };
             finalPromptText = promptForSession;
             trajectoryRecorder?.recordEvent("prompt.submitted", {
               prompt: promptForModel,
@@ -3928,6 +3971,7 @@ export async function runEmbeddedAttempt(
                 captureCurrentPromptForModel = true;
               }
             };
+            const cleanupProviderPromptHistoryTransform = installProviderPromptHistoryTransform();
             try {
               if (promptSubmission.runtimeOnly) {
                 await promptActiveSession(promptForSession, {
@@ -3956,6 +4000,7 @@ export async function runEmbeddedAttempt(
                 }
               }
             } finally {
+              cleanupProviderPromptHistoryTransform();
               cleanupModelPromptTransform();
             }
           }
