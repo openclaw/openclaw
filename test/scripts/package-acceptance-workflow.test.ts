@@ -96,7 +96,7 @@ describe("package acceptance workflow", () => {
       "if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}",
     );
     expect(setupPnpmAction).toContain(
-      "key: pnpm-store-${{ runner.os }}-${{ inputs.node-version }}-${{ hashFiles(inputs.lockfile-path) }}",
+      "key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ hashFiles(inputs.package-manager-file) }}-${{ hashFiles(inputs.lockfile-path) }}",
     );
     expect(setupPnpmAction).not.toContain("pnpm/action-setup");
     expect(setupPnpmAction).not.toContain("shasum");

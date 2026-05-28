@@ -8,10 +8,6 @@ vi.mock("./agent-model-discovery.js", () => ({
 
 import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 
-vi.mock("./agent-model-discovery.js", () => ({
-  normalizeDiscoveredAgentModel: <T>(value: T) => value,
-}));
-
 const REGISTRY = { find: () => undefined } as never;
 const DYNAMIC_PROVIDER = "dynamic-test-provider";
 type DynamicModelResolver = NonNullable<
@@ -19,6 +15,9 @@ type DynamicModelResolver = NonNullable<
 >;
 type DynamicModelPreparer = NonNullable<
   Parameters<typeof appendPrioritizedDynamicLiveModels>[0]["prepareDynamicModel"]
+>;
+type DynamicModelNormalizer = NonNullable<
+  Parameters<typeof appendPrioritizedDynamicLiveModels>[0]["normalizeModel"]
 >;
 
 function model(provider: string, id: string): Model {
@@ -44,7 +43,7 @@ describe("appendPrioritizedDynamicLiveModels", () => {
         : undefined,
     );
     const prepareDynamicModel: DynamicModelPreparer = vi.fn(async () => undefined);
-    const normalizeModel = vi.fn((entry: Model) => entry);
+    const normalizeModel: DynamicModelNormalizer = vi.fn((entry) => entry);
     const config = {
       models: {
         providers: {

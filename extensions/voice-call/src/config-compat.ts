@@ -15,7 +15,7 @@ const getString = readStringField;
 
 function getNumber(obj: Record<string, unknown> | undefined, key: string): number | undefined {
   const value = obj?.[key];
-  return typeof value === "number" ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function mergeProviderConfig(
@@ -204,15 +204,19 @@ export function migrateVoiceCallLegacyConfigInput(params: {
       `Moved ${configPathPrefix}.streaming.sttModel → ${configPathPrefix}.streaming.providers.openai.model.`,
     );
   }
-  if (typeof streaming?.silenceDurationMs === "number") {
+  if (getNumber(streaming, "silenceDurationMs") !== undefined) {
     changes.push(
       `Moved ${configPathPrefix}.streaming.silenceDurationMs → ${configPathPrefix}.streaming.providers.openai.silenceDurationMs.`,
     );
+  } else if (typeof streaming?.silenceDurationMs === "number") {
+    changes.push(`Removed invalid ${configPathPrefix}.streaming.silenceDurationMs.`);
   }
-  if (typeof streaming?.vadThreshold === "number") {
+  if (getNumber(streaming, "vadThreshold") !== undefined) {
     changes.push(
       `Moved ${configPathPrefix}.streaming.vadThreshold → ${configPathPrefix}.streaming.providers.openai.vadThreshold.`,
     );
+  } else if (typeof streaming?.vadThreshold === "number") {
+    changes.push(`Removed invalid ${configPathPrefix}.streaming.vadThreshold.`);
   }
 
   return { config, changes, issues };

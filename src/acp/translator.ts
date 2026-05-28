@@ -56,7 +56,7 @@ import {
   formatToolTitle,
   inferToolKind,
 } from "./event-mapper.js";
-import { readBool, readNumber, readString } from "./meta.js";
+import { readBool, readNonNegativeInteger, readNumber, readString } from "./meta.js";
 import {
   buildAcpPermissionRequest,
   parseGatewayExecApprovalEventData,
@@ -1023,7 +1023,7 @@ export class AcpGatewayAgent implements Agent {
       idempotencyKey: runId,
       thinking: readString(params["_meta"], ["thinking", "thinkingLevel"]),
       deliver: readBool(params["_meta"], ["deliver"]),
-      timeoutMs: readNumber(params["_meta"], ["timeoutMs"]),
+      timeoutMs: readNonNegativeInteger(params["_meta"], ["timeoutMs"]),
     };
 
     return new Promise<PromptResponse>((resolve, reject) => {

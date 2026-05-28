@@ -1041,6 +1041,49 @@ describe("feishuPlugin actions", () => {
     expect(requireRecord(peers[0], "peer").id).toBe("ou_1");
   });
 
+  it("ignores malformed channel-list limits", async () => {
+    listFeishuDirectoryGroupsLiveMock.mockResolvedValueOnce([{ kind: "group", id: "oc_group_1" }]);
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "channel-list",
+      params: { query: "eng", limit: "-1", scope: "groups" },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(listFeishuDirectoryGroupsLiveMock).toHaveBeenCalledWith({
+      cfg,
+      query: "eng",
+      limit: undefined,
+      fallbackToStatic: false,
+      accountId: undefined,
+    });
+  });
+
+  it("ignores non-decimal Feishu action page sizes", async () => {
+    getChatMembersMock.mockResolvedValueOnce({
+      chat_id: "oc_group_1",
+      members: [],
+      has_more: false,
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "member-info",
+      params: { chatId: "oc_group_1", pageSize: "0x10" },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(getChatMembersMock).toHaveBeenCalledWith(
+      { tag: "client" },
+      "oc_group_1",
+      undefined,
+      undefined,
+      "open_id",
+    );
+  });
+
   it("fails channel-list when live discovery fails", async () => {
     listFeishuDirectoryGroupsLiveMock.mockRejectedValueOnce(new Error("token expired"));
 

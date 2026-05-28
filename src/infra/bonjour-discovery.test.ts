@@ -1,21 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { runCommandWithTimeout } from "../process/exec.js";
-import { discoverGatewayBeacons, resolveGatewayDiscoveryEndpoint } from "./bonjour-discovery.js";
+import {
+  discoverGatewayBeacons,
+  type GatewayBonjourBeacon,
+  resolveGatewayDiscoveryEndpoint,
+} from "./bonjour-discovery.js";
 
 const WIDE_AREA_DOMAIN = "openclaw.internal.";
-
-type BeaconRecord = {
-  domain?: string;
-  instanceName?: string;
-  displayName?: string;
-  host?: string;
-  port?: number;
-  tailnetDns?: string;
-  gatewayPort?: number;
-  sshPort?: number;
-  cliPath?: string;
-  txt?: Record<string, unknown>;
-};
 
 function collectMatching<T, U>(
   items: readonly T[],
@@ -31,10 +22,22 @@ function collectMatching<T, U>(
   return matches;
 }
 
-function findBeaconByInstance(beacons: readonly BeaconRecord[], instanceName: string) {
+function findBeaconByInstance(
+  beacons: readonly GatewayBonjourBeacon[],
+  instanceName: string,
+): GatewayBonjourBeacon {
   const beacon = beacons.find((item) => item.instanceName === instanceName);
   if (!beacon) {
     throw new Error(`Expected beacon ${instanceName}`);
+  }
+  return beacon;
+}
+
+function getOnlyBeacon(beacons: readonly GatewayBonjourBeacon[]): GatewayBonjourBeacon {
+  expect(beacons).toHaveLength(1);
+  const beacon = beacons[0];
+  if (!beacon) {
+    throw new Error("Expected one beacon");
   }
   return beacon;
 }
@@ -179,8 +182,7 @@ describe("bonjour-discovery", () => {
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
-    expect(beacons).toHaveLength(1);
-    const beacon = beacons[0] as BeaconRecord;
+    const beacon = getOnlyBeacon(beacons);
     expect(beacon.domain).toBe("local.");
     expect(beacon.instanceName).toBe("Studio Gateway");
     expect(beacon.displayName).toBe("Peter’s Mac Studio");
@@ -224,8 +226,7 @@ describe("bonjour-discovery", () => {
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
-    expect(beacons).toHaveLength(1);
-    const beacon = beacons[0] as BeaconRecord;
+    const beacon = getOnlyBeacon(beacons);
     expect(beacon.host).toBe("broken.local");
     expect(beacon.port).toBeUndefined();
     expect(beacon.gatewayPort).toBeUndefined();
@@ -324,8 +325,7 @@ describe("bonjour-discovery", () => {
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
-    expect(beacons).toHaveLength(1);
-    const beacon = beacons[0] as BeaconRecord;
+    const beacon = getOnlyBeacon(beacons);
     expect(beacon.domain).toBe(WIDE_AREA_DOMAIN);
     expect(beacon.instanceName).toBe("studio-gateway");
     expect(beacon.displayName).toBe("Studio");

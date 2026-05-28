@@ -93,6 +93,14 @@ function resolveDurationSeconds(value: number | undefined): number | undefined {
   return value <= 6.5 ? 5 : 8;
 }
 
+function resolveSeed(value: unknown): number | undefined {
+  const seed = coerceProviderNumber(value);
+  if (seed == null || !Number.isSafeInteger(seed) || seed < 0 || seed > 4_294_967_295) {
+    return undefined;
+  }
+  return seed;
+}
+
 function buildDeepInfraVideoBody(
   req: VideoGenerationRequest,
   model: string,
@@ -109,7 +117,7 @@ function buildDeepInfraVideoBody(
   if (duration) {
     body.duration = duration;
   }
-  const seed = coerceProviderNumber(options.seed);
+  const seed = resolveSeed(options.seed);
   if (seed != null) {
     body.seed = seed;
   }

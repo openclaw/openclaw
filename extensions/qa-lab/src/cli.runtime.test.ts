@@ -301,6 +301,22 @@ describe("qa cli runtime", () => {
     expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
   });
 
+  it("accepts legacy pi as a runtime-pair suite alias", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      scenarioIds: ["approval-turn-tool-followthrough"],
+      runtimePair: "pi,codex",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        runtimePair: ["openclaw", "codex"],
+      }),
+    );
+  });
+
   it("drops blank suite model refs so provider defaults apply", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",

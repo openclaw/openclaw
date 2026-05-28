@@ -25,6 +25,8 @@ export type {
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
   runId: string;
+  /** Originating message channel used for subsystem log attribution. */
+  messageChannel?: string;
   initialReplayState?: EmbeddedRunReplayState;
   hookRunner?: HookRunner;
   verboseLevel?: VerboseLevel;

@@ -62,6 +62,38 @@ describe("voice-call config compatibility", () => {
     expect(streaming?.sttModel).toBeUndefined();
   });
 
+  it("does not migrate non-finite legacy streaming numbers", () => {
+    const migration = migrateVoiceCallLegacyConfigInput({
+      value: {
+        streaming: {
+          silenceDurationMs: Number.NaN,
+          vadThreshold: Number.POSITIVE_INFINITY,
+        },
+      },
+      configPathPrefix: "plugins.entries.voice-call.config",
+    });
+    const streaming = migration.config.streaming as
+      | {
+          providers?: {
+            openai?: {
+              silenceDurationMs?: number;
+              vadThreshold?: number;
+            };
+          };
+        }
+      | undefined;
+
+    expect(streaming?.providers?.openai).toBeUndefined();
+    expect(migration.changes).toEqual([
+      "Removed invalid plugins.entries.voice-call.config.streaming.silenceDurationMs.",
+      "Removed invalid plugins.entries.voice-call.config.streaming.vadThreshold.",
+    ]);
+    expect(migration.issues.map((issue) => issue.path)).toEqual([
+      "streaming.silenceDurationMs",
+      "streaming.vadThreshold",
+    ]);
+  });
+
   it("reports doctor-oriented legacy issues and warnings", () => {
     const raw = {
       provider: "log",

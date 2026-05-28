@@ -19,6 +19,10 @@ const botApiTimeoutMs = readPositiveInt(
   process.env.OPENCLAW_NPM_TELEGRAM_BOT_API_TIMEOUT_MS,
   30000,
 );
+const botApiBodyMaxBytes = readPositiveInt(
+  process.env.OPENCLAW_NPM_TELEGRAM_BOT_API_BODY_MAX_BYTES,
+  1024 * 1024,
+);
 const maxWarmFailures = Number(
   process.env.OPENCLAW_NPM_TELEGRAM_MAX_FAILURES ?? String(warmSampleCount),
 );
@@ -56,20 +60,84 @@ function readPositiveInt(raw, fallback) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-async function fetchTelegramJson(url, init) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, botApiTimeoutMs);
+function taggedError(message, code) {
+  return Object.assign(new Error(message), { code });
+}
+
+async function readBoundedResponseText(response, label, byteLimit, timeoutPromise) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    const parsedLength = Number(contentLength);
+    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
+      await response.body?.cancel().catch(() => {});
+      throw taggedError(`${label} response body exceeded ${byteLimit} bytes`, "ETOOBIG");
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteCount = 0;
+  let text = "";
   try {
-    const response = await fetch(url, {
-      ...init,
-      signal: controller.signal,
-    });
-    const payload = await response.json();
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
+      if (done) {
+        return text + decoder.decode();
+      }
+      byteCount += value.byteLength;
+      if (byteCount > byteLimit) {
+        await reader.cancel().catch(() => {});
+        throw taggedError(`${label} response body exceeded ${byteLimit} bytes`, "ETOOBIG");
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseJsonPayload(rawPayload, label) {
+  try {
+    return JSON.parse(rawPayload);
+  } catch (error) {
+    throw new Error(`${label} returned invalid JSON`, { cause: error });
+  }
+}
+
+async function fetchTelegramJson(url, init, label) {
+  const controller = new AbortController();
+  const timeoutError = taggedError(`${label} timed out after ${botApiTimeoutMs}ms`, "ETIMEDOUT");
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, botApiTimeoutMs);
+    timeout.unref?.();
+  });
+  try {
+    const response = await Promise.race([
+      fetch(url, {
+        ...init,
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    const rawPayload = await readBoundedResponseText(
+      response,
+      label,
+      botApiBodyMaxBytes,
+      timeoutPromise,
+    );
+    const payload = parseJsonPayload(rawPayload, label);
     return { payload, response };
   } finally {
-    clearTimeout(timer);
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -79,11 +147,15 @@ class TelegramBot {
   }
 
   async call(method, body) {
-    const { payload, response } = await fetchTelegramJson(`${this.baseUrl}/${method}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const { payload, response } = await fetchTelegramJson(
+      `${this.baseUrl}/${method}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      `Telegram Bot API ${method}`,
+    );
     if (!response.ok || payload.ok !== true) {
       throw new Error(`${method} failed: ${JSON.stringify(payload)}`);
     }

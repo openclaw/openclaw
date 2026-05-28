@@ -50,6 +50,7 @@ import {
   matchesExpectedPluginId,
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
+  resolvePluginNpmProjectDir,
   safePluginInstallFileName,
   validatePluginId,
 } from "./install-paths.js";
@@ -691,8 +692,12 @@ async function installPluginFromManagedNpmRoot(
     defaultLogger,
   );
   const expectedPluginId = params.expectedPluginId;
-  const npmRoot = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
-  const installRoot = path.join(npmRoot, "node_modules", params.packageName);
+  const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
+  const npmRoot = resolvePluginNpmProjectDir({
+    npmDir: npmBaseDir,
+    packageName: params.packageName,
+  });
+  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
   const effectiveMode = await resolveEffectiveInstallMode({
     runtime,
     requestedMode: mode,
@@ -2079,7 +2084,11 @@ export async function installPluginFromNpmPackArchive(
     return packageNameResult;
   }
   const packageName = packageNameResult.packageName;
-  const npmRoot = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
+  const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
+  const npmRoot = resolvePluginNpmProjectDir({
+    npmDir: npmBaseDir,
+    packageName,
+  });
   let dependencySpec = "";
   if (!dryRun) {
     try {
@@ -2113,7 +2122,7 @@ export async function installPluginFromNpmPackArchive(
       requestedSpecifier: `npm-pack:${metadataResult.archivePath}`,
     },
     extensionsDir: params.extensionsDir,
-    npmDir: npmRoot,
+    npmDir: npmBaseDir,
     timeoutMs,
     logger,
     mode,

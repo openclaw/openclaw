@@ -10,6 +10,7 @@ import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-span
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
 import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
+import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -59,7 +60,15 @@ const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
   "antml:thinking",
   "antml:thought",
 ] as const;
-const log = createSubsystemLogger("agent/embedded");
+const embeddedLog = createSubsystemLogger("agent/embedded");
+
+function resolveEmbeddedAgentSessionLogger(messageChannel?: string) {
+  const normalizedChannel = normalizeMessageChannel(messageChannel);
+  if (normalizedChannel && isDeliverableMessageChannel(normalizedChannel)) {
+    return createSubsystemLogger(`gateway/channels/${normalizedChannel}`);
+  }
+  return embeddedLog;
+}
 
 function isPotentialTrailingBlockTagFragment(fragment: string): boolean {
   if (!fragment.startsWith("<") || fragment.includes(">")) {
@@ -124,6 +133,7 @@ function collectPendingMediaFromInternalEvents(
 export type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
+  const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
   const reasoningMode = params.reasoningMode ?? "off";
   const canShowReasoning = params.thinkingLevel !== "off";
   const toolResultFormat = params.toolResultFormat ?? "markdown";
