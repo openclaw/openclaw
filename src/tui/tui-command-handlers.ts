@@ -44,6 +44,20 @@ function formatTuiFastMode(mode: unknown): "auto" | "on" | "off" {
   return mode === "auto" ? "auto" : mode === true ? "on" : "off";
 }
 
+type ApprovalDecision = "allow-once" | "allow-always" | "deny";
+
+type ParsedApproveCommand = {
+  id: string;
+  decision: ApprovalDecision;
+};
+
+type ParsedPluginSessionApprovalCommand = {
+  pluginId: string;
+  actionId: string;
+  approvalId: string;
+  decision: Extract<ApprovalDecision, "allow-once" | "allow-always">;
+};
+
 type CommandHandlerContext = {
   client: TuiBackend;
   chatLog: ChatLog;
@@ -99,6 +113,65 @@ function isTerminalChatSendAckSuccess(status: unknown): boolean {
 }
 
 const TERMINAL_CHAT_SEND_FAILURE_MESSAGE = "Chat failed before the run started; try again.";
+
+function tokenizeCommandArgs(args: string): string[] {
+  return args
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function parseApprovalDecision(token: string | undefined): ApprovalDecision | null {
+  return token === "allow-once" || token === "allow-always" || token === "deny" ? token : null;
+}
+
+function formatPluginActionReply(reply: unknown): string {
+  if (typeof reply === "string") {
+    return reply;
+  }
+  if (reply === undefined || reply === null) {
+    return "plugin action completed";
+  }
+  try {
+    return JSON.stringify(reply, null, 2);
+  } catch {
+    return "plugin action reply was not serializable";
+  }
+}
+
+function parseApproveCommand(args: string): ParsedApproveCommand | null {
+  const [id, rawDecision, ...extra] = tokenizeCommandArgs(args);
+  const decision = parseApprovalDecision(rawDecision);
+  if (!id || !decision || extra.length > 0) {
+    return null;
+  }
+  return { id, decision };
+}
+
+function parsePluginSessionApprovalCommand(params: {
+  pluginId: string;
+  args: string;
+}): ParsedPluginSessionApprovalCommand | null {
+  const [actionId, approvalId, rawDecision, ...extra] = tokenizeCommandArgs(params.args);
+  const decision = parseApprovalDecision(rawDecision);
+  if (
+    !params.pluginId ||
+    !actionId ||
+    !approvalId ||
+    extra.length > 0 ||
+    decision === null ||
+    decision === "deny"
+  ) {
+    return null;
+  }
+  return {
+    pluginId: params.pluginId,
+    actionId,
+    approvalId,
+    decision,
+  };
+}
 
 function goalContinuationPrompt(text: string): string | null {
   const parsed = parseGoalCommand(text);
@@ -347,6 +420,70 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     );
     openOverlay(settings);
     tui.requestRender();
+  };
+
+  const runWithTemporaryActivityStatus = async <T>(
+    status: string,
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    const previousStatus = state.activityStatus;
+    setActivityStatus(status);
+    tui.requestRender();
+    try {
+      return await run();
+    } finally {
+      setActivityStatus(previousStatus || "idle");
+    }
+  };
+
+  const handleApproveCommand = async (args: string): Promise<boolean> => {
+    const parsed = parseApproveCommand(args);
+    if (!parsed || !client.resolveApproval) {
+      return false;
+    }
+    try {
+      await runWithTemporaryActivityStatus("approval", async () => {
+        await client.resolveApproval?.(parsed);
+      });
+      chatLog.addSystem(`approval ${parsed.decision}. ID: ${parsed.id}`);
+    } catch (err) {
+      chatLog.addSystem(`approval failed: ${sanitizeRenderableText(String(err))}`);
+    }
+    return true;
+  };
+
+  const handlePluginSessionApprovalCommand = async (params: {
+    pluginId: string;
+    args: string;
+  }): Promise<boolean> => {
+    const parsed = parsePluginSessionApprovalCommand(params);
+    if (!parsed || !client.runPluginSessionAction) {
+      return false;
+    }
+    try {
+      const result = await runWithTemporaryActivityStatus("approval", async () =>
+        client.runPluginSessionAction?.({
+          pluginId: parsed.pluginId,
+          actionId: parsed.actionId,
+          sessionKey: state.currentSessionKey,
+          payload: {
+            approvalId: parsed.approvalId,
+            decision: parsed.decision,
+          },
+        }),
+      );
+      if (!result) {
+        chatLog.addSystem("plugin action failed: plugin session action returned no result");
+      } else if (!result.ok) {
+        const message = result.error;
+        chatLog.addSystem(`plugin action failed: ${sanitizeRenderableText(message)}`);
+      } else {
+        chatLog.addSystem(formatPluginActionReply(result.reply));
+      }
+    } catch (err) {
+      chatLog.addSystem(`plugin action failed: ${sanitizeRenderableText(String(err))}`);
+    }
+    return true;
   };
 
   const handleCommand = async (raw: string) => {
@@ -733,6 +870,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "abort":
         await abortActive();
         break;
+      case "approve":
+        if (!(await handleApproveCommand(args))) {
+          await sendMessage(raw);
+        }
+        break;
       case "stop":
         if (hasTrackedAbortTarget()) {
           await abortActive({ preferActive: true });
@@ -748,7 +890,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         requestExit();
         break;
       default:
-        await sendMessage(raw);
+        if (!(await handlePluginSessionApprovalCommand({ pluginId: name, args }))) {
+          await sendMessage(raw);
+        }
         break;
     }
     tui.requestRender();

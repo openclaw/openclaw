@@ -186,6 +186,75 @@ describe("plugin-sdk/approval-renderers", () => {
       },
     },
     {
+      name: "builds plugin pending payloads with external verification commands as text only",
+      payload: buildPluginApprovalPendingReplyPayload({
+        request: {
+          id: "plugin-approval-123",
+          request: {
+            title: "Sensitive action",
+            description: "Needs approval",
+            allowedDecisions: ["deny"],
+            externalResolution: {
+              label: "Verify with World",
+              commands: [
+                {
+                  decision: "allow-once",
+                  label: "Verify once",
+                  description: "Approve this blocked action only",
+                  command: "/agentkit approve plugin-approval-123 allow-once",
+                },
+                {
+                  decision: "allow-always",
+                  label: "Verify and trust for session",
+                  description: "Trust approvals for this session",
+                  command: "/agentkit approve plugin-approval-123 allow-always",
+                },
+              ],
+            },
+          },
+          createdAtMs: 1_000,
+          expiresAtMs: 61_000,
+        },
+        nowMs: 1_000,
+      }),
+      textExpected: (text: string) => {
+        expect(text).toContain("External verification: Verify with World");
+        expect(text).toContain("Verify once: Approve this blocked action only");
+        expect(text).toContain("/agentkit approve plugin-approval-123 allow-once");
+        expect(text).toContain("Deny: Reject this blocked action");
+        expect(text).toContain("/approve plugin-approval-123 deny");
+      },
+      presentationExpected: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Deny",
+                action: {
+                  type: "command",
+                  command: "/approve plugin-approval-123 deny",
+                },
+                value: "/approve plugin-approval-123 deny",
+                style: "danger",
+              },
+            ],
+          },
+        ],
+      },
+      channelDataExpected: {
+        execApproval: {
+          agentId: undefined,
+          approvalId: "plugin-approval-123",
+          approvalKind: "plugin",
+          approvalSlug: "plugin-a",
+          allowedDecisions: ["deny"],
+          sessionKey: undefined,
+          state: "pending",
+        },
+      },
+    },
+    {
       name: "builds generic resolved payloads with approval metadata",
       payload: buildApprovalResolvedReplyPayload({
         approvalId: "req-123",

@@ -71,6 +71,8 @@ function createHarness(params?: {
   patchSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
   runGoalCommand?: ReturnType<typeof vi.fn>;
+  runPluginSessionAction?: ReturnType<typeof vi.fn>;
+  resolveApproval?: ReturnType<typeof vi.fn>;
   runAuthFlow?: RunAuthFlow;
   setSession?: SetSessionMock;
   setEmptySession?: SetEmptySessionMock;
@@ -102,6 +104,10 @@ function createHarness(params?: {
   const patchSession = params?.patchSession ?? vi.fn().mockResolvedValue({});
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const runGoalCommand = params?.runGoalCommand ?? vi.fn().mockResolvedValue({ text: "Goal" });
+  const runPluginSessionAction =
+    params?.runPluginSessionAction ??
+    vi.fn().mockResolvedValue({ ok: true, reply: "Verify with World\nQR" });
+  const resolveApproval = params?.resolveApproval ?? vi.fn().mockResolvedValue({ ok: true });
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
   const setEmptySession =
     params?.setEmptySession ?? (vi.fn().mockResolvedValue(undefined) as SetEmptySessionMock);
@@ -155,6 +161,8 @@ function createHarness(params?: {
       patchSession,
       resetSession,
       runGoalCommand,
+      runPluginSessionAction,
+      resolveApproval,
     } as never,
     chatLog: {
       addUser,
@@ -204,6 +212,8 @@ function createHarness(params?: {
     patchSession,
     resetSession,
     runGoalCommand,
+    runPluginSessionAction,
+    resolveApproval,
     setSession,
     setEmptySession,
     addUser,
@@ -296,6 +306,56 @@ describe("tui command handlers", () => {
       message: "/unregistered-command",
     });
     expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("runs plugin approval session actions out-of-band while the agent is busy", async () => {
+    const runPluginSessionAction = vi.fn().mockResolvedValue({
+      ok: true,
+      reply: "Verify with World\nScan with World App",
+    });
+    const { handleCommand, sendChat, addPendingUser, addSystem, setActivityStatus } = createHarness(
+      {
+        activeChatRunId: "run-waiting-for-approval",
+        activityStatus: "streaming",
+        runPluginSessionAction,
+      },
+    );
+
+    await handleCommand("/agentkit approve plugin:approval-1 allow-once");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addPendingUser).not.toHaveBeenCalled();
+    expect(runPluginSessionAction).toHaveBeenCalledWith({
+      pluginId: "agentkit",
+      actionId: "approve",
+      sessionKey: "agent:main:main",
+      payload: {
+        approvalId: "plugin:approval-1",
+        decision: "allow-once",
+      },
+    });
+    expect(addSystem).toHaveBeenCalledWith("Verify with World\nScan with World App");
+    expect(setActivityStatus).toHaveBeenCalledWith("approval");
+    expect(setActivityStatus).toHaveBeenCalledWith("streaming");
+  });
+
+  it("resolves denied plugin approvals without sending a chat turn", async () => {
+    const resolveApproval = vi.fn().mockResolvedValue({ ok: true });
+    const { handleCommand, sendChat, addPendingUser, addSystem } = createHarness({
+      activeChatRunId: "run-waiting-for-approval",
+      activityStatus: "streaming",
+      resolveApproval,
+    });
+
+    await handleCommand("/approve plugin:approval-1 deny");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addPendingUser).not.toHaveBeenCalled();
+    expect(resolveApproval).toHaveBeenCalledWith({
+      id: "plugin:approval-1",
+      decision: "deny",
+    });
+    expect(addSystem).toHaveBeenCalledWith("approval deny. ID: plugin:approval-1");
   });
 
   it("re-keys the optimistic pending row to the gateway-accepted runId in place", async () => {

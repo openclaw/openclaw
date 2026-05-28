@@ -11,7 +11,11 @@ import type { GatewayClient, RespondFn } from "../../gateway/server-methods/type
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginHttpRouteRegistry,
+  setActivePluginRegistry,
+} from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
 
@@ -147,6 +151,7 @@ function registerActionFixture(params: {
 
 describe("plugin session actions", () => {
   afterEach(() => {
+    releasePinnedPluginHttpRouteRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetAgentEventsForTest();
   });
@@ -689,6 +694,47 @@ describe("plugin session actions", () => {
       "unknown plugin session action: failed-action-plugin/stale",
     );
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("dispatches session actions from the pinned gateway registry after active runtime swaps", async () => {
+    const handler = vi.fn(() => ({ ok: true as const, result: { accepted: true } }));
+    const gatewayRegistry = createEmptyPluginRegistry();
+    gatewayRegistry.sessionActions = [
+      {
+        pluginId: "gateway-action-plugin",
+        pluginName: "Gateway Action Plugin",
+        source: "test",
+        action: {
+          id: "approve",
+          requiredScopes: [APPROVALS_SCOPE],
+          handler,
+        },
+      },
+    ];
+    gatewayRegistry.plugins = [
+      createPluginRecord({
+        id: "gateway-action-plugin",
+        name: "Gateway Action Plugin",
+        status: "loaded",
+      }),
+    ];
+    setActivePluginRegistry(gatewayRegistry);
+    pinActivePluginHttpRouteRegistry(gatewayRegistry);
+
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    await expect(
+      callRegisteredSessionActionThroughGatewayForTest({
+        pluginId: "gateway-action-plugin",
+        actionId: "approve",
+        scopes: [APPROVALS_SCOPE],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      payload: { ok: true, result: { accepted: true } },
+      error: undefined,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it("emits plugin-attributed agent events through the plugin API", () => {

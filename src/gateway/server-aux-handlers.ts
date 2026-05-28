@@ -289,6 +289,10 @@ export function createGatewayAuxHandlers(params: {
         "plugin.approval.resolve",
         loadPluginApprovalHandlers,
       ),
+      "plugin.approval.resolveVerified": createLazyHandler(
+        "plugin.approval.resolveVerified",
+        loadPluginApprovalHandlers,
+      ),
       "secrets.reload": createLazyHandler("secrets.reload", loadSecretsHandlers),
       "secrets.resolve": createLazyHandler("secrets.resolve", loadSecretsHandlers),
     },

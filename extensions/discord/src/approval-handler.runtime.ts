@@ -72,8 +72,11 @@ class ExecApprovalContainer extends DiscordUiContainer {
     accountId: string;
     title: string;
     description?: string;
+    commandTitle?: string;
     commandPreview: string;
+    commandSecondaryTitle?: string;
     commandSecondaryPreview?: string | null;
+    extraSections?: Array<{ title: string; body: string }>;
     metadataLines?: string[];
     actionRow?: Row<Button>;
     footer?: string;
@@ -86,11 +89,22 @@ class ExecApprovalContainer extends DiscordUiContainer {
       components.push(new TextDisplay(params.description));
     }
     components.push(new Separator({ divider: true, spacing: "small" }));
-    components.push(new TextDisplay(`### Command\n\`\`\`\n${params.commandPreview}\n\`\`\``));
+    components.push(
+      new TextDisplay(
+        `### ${params.commandTitle ?? "Command"}\n\`\`\`\n${params.commandPreview}\n\`\`\``,
+      ),
+    );
     if (params.commandSecondaryPreview) {
       components.push(
-        new TextDisplay(`### Shell Preview\n\`\`\`\n${params.commandSecondaryPreview}\n\`\`\``),
+        new TextDisplay(
+          `### ${params.commandSecondaryTitle ?? "Shell Preview"}\n\`\`\`\n${
+            params.commandSecondaryPreview
+          }\n\`\`\``,
+        ),
       );
+    }
+    for (const section of params.extraSections ?? []) {
+      components.push(new TextDisplay(`### ${section.title}\n${section.body}`));
     }
     if (params.metadataLines?.length) {
       components.push(new TextDisplay(params.metadataLines.join("\n")));
@@ -215,6 +229,21 @@ function createExecApprovalRequestContainer(params: {
   });
 }
 
+function buildDiscordPluginExternalResolutionSections(
+  view: PluginApprovalPendingView,
+): Array<{ title: string; body: string }> | undefined {
+  const externalResolution = view.externalResolution;
+  if (!externalResolution) {
+    return undefined;
+  }
+  const lines = [externalResolution.label];
+  for (const command of externalResolution.commands) {
+    lines.push(`**${command.label}** - ${command.description}`);
+    lines.push(`\`\`\`\n${formatCommandPreview(command.command, 500)}\n\`\`\``);
+  }
+  return [{ title: "External Verification", body: lines.join("\n") }];
+}
+
 function createPluginApprovalRequestContainer(params: {
   view: PluginApprovalPendingView;
   cfg: OpenClawConfig;
@@ -230,8 +259,11 @@ function createPluginApprovalRequestContainer(params: {
     accountId: params.accountId,
     title: "Plugin Approval Required",
     description: "A plugin action needs your approval.",
+    commandTitle: "Request",
     commandPreview: formatCommandPreview(params.view.title, 700),
+    commandSecondaryTitle: "Description",
     commandSecondaryPreview: formatOptionalCommandPreview(params.view.description, 1000),
+    extraSections: buildDiscordPluginExternalResolutionSections(params.view),
     metadataLines: buildApprovalMetadataLines(params.view.metadata),
     actionRow: params.actionRow,
     footer: `Expires <t:${expiresAtSeconds}:R> · ID: ${params.view.approvalId}`,

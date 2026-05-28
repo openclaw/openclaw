@@ -54,6 +54,17 @@ interface ParsedApprovalAction {
   decision: ApprovalDecision;
 }
 
+type ExternalResolutionCommand = {
+  label?: unknown;
+  description?: unknown;
+  command?: unknown;
+};
+
+type ExternalResolution = {
+  label?: unknown;
+  commands?: unknown;
+};
+
 // ============ Text Builders ============
 
 export function buildExecApprovalText(request: ExecApprovalRequest): string {
@@ -71,6 +82,38 @@ export function buildExecApprovalText(request: ExecApprovalRequest): string {
   }
   lines.push("", `\u23f1\ufe0f \u8d85\u65f6: ${expiresIn} \u79d2`);
   return lines.join("\n");
+}
+
+function normalizeText(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function appendPluginExternalResolutionLines(lines: string[], externalResolution: unknown): void {
+  if (!externalResolution || typeof externalResolution !== "object") {
+    return;
+  }
+  const resolution = externalResolution as ExternalResolution;
+  const commands = Array.isArray(resolution.commands) ? resolution.commands : [];
+  const commandLines: string[] = [];
+  for (const entry of commands) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const command = entry as ExternalResolutionCommand;
+    const commandText = normalizeText(command.command);
+    if (!commandText) {
+      continue;
+    }
+    const label = normalizeText(command.label) ?? "\u9a8c\u8bc1";
+    const description = normalizeText(command.description);
+    commandLines.push(description ? `${label}: ${description}` : label);
+    commandLines.push(commandText);
+  }
+  if (commandLines.length === 0) {
+    return;
+  }
+  const label = normalizeText(resolution.label) ?? "\u5916\u90e8\u9a8c\u8bc1";
+  lines.push("", `\u{1f310} ${label}`, ...commandLines);
 }
 
 export function buildPluginApprovalText(request: PluginApprovalRequest): string {
@@ -96,6 +139,7 @@ export function buildPluginApprovalText(request: PluginApprovalRequest): string 
   if (request.request.agentId) {
     lines.push(`\u{1f916} Agent: ${request.request.agentId}`);
   }
+  appendPluginExternalResolutionLines(lines, request.request.externalResolution);
   lines.push("", `\u23f1\ufe0f \u8d85\u65f6: ${timeoutSec} \u79d2`);
   return lines.join("\n");
 }

@@ -19,6 +19,16 @@ export type ExecApprovalRequestPayload = {
 
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 
+export type PluginApprovalExternalResolution = {
+  label: string;
+  commands: readonly {
+    decision: Extract<ExecApprovalDecision, "allow-once" | "allow-always">;
+    label: string;
+    description: string;
+    command: string;
+  }[];
+};
+
 export type ExecApprovalRequest = {
   id: string;
   kind: "exec" | "plugin";
@@ -27,6 +37,7 @@ export type ExecApprovalRequest = {
   pluginDescription?: string | null;
   pluginSeverity?: string | null;
   pluginId?: string | null;
+  pluginExternalResolution?: PluginApprovalExternalResolution | null;
   createdAtMs: number;
   expiresAtMs: number;
 };
@@ -101,6 +112,43 @@ function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefin
       decision === "allow-once" || decision === "allow-always" || decision === "deny",
   );
   return decisions.length > 0 ? decisions : undefined;
+}
+
+function parsePluginExternalResolution(value: unknown): PluginApprovalExternalResolution | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const label = normalizeOptionalString(value.label);
+  const commandsRaw = value.commands;
+  if (!label || !Array.isArray(commandsRaw)) {
+    return null;
+  }
+  const commands = commandsRaw
+    .map((item) => {
+      if (!isRecord(item)) {
+        return null;
+      }
+      const decision = item.decision;
+      const commandLabel = normalizeOptionalString(item.label);
+      const description = normalizeOptionalString(item.description);
+      const command = normalizeOptionalString(item.command);
+      if (
+        (decision !== "allow-once" && decision !== "allow-always") ||
+        !commandLabel ||
+        !description ||
+        !command
+      ) {
+        return null;
+      }
+      return {
+        decision,
+        label: commandLabel,
+        description,
+        command,
+      };
+    })
+    .filter((item): item is PluginApprovalExternalResolution["commands"][number] => item !== null);
+  return commands.length > 0 ? { label, commands } : null;
 }
 
 export function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
@@ -179,6 +227,7 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
   const description = typeof request.description === "string" ? request.description : null;
   const severity = typeof request.severity === "string" ? request.severity : null;
   const pluginId = typeof request.pluginId === "string" ? request.pluginId : null;
+  const pluginExternalResolution = parsePluginExternalResolution(request.externalResolution);
 
   return {
     id,
@@ -193,6 +242,7 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
     pluginDescription: description,
     pluginSeverity: severity,
     pluginId,
+    pluginExternalResolution,
     createdAtMs,
     expiresAtMs,
   };

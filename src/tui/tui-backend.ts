@@ -2,6 +2,8 @@
 import type {
   CommandEntry,
   CommandsListParams,
+  PluginsSessionActionParams,
+  PluginsSessionActionResult,
   SessionsListParams,
   SessionsPatchParams,
   SessionsPatchResult,
@@ -33,6 +35,9 @@ export type TuiGoalCommandOptions = {
   agentId?: string;
   command: string;
 };
+
+/** Reviewer decision for one pending approval. */
+export type TuiApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 /** Event envelope delivered from Gateway or the embedded backend into the TUI. */
 export type TuiEvent = {
@@ -166,5 +171,12 @@ export type TuiBackend = {
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
+  runPluginSessionAction?: (
+    opts: PluginsSessionActionParams,
+  ) => Promise<PluginsSessionActionResult>;
+  resolveApproval?: (opts: {
+    id: string;
+    decision: TuiApprovalDecision;
+  }) => Promise<{ ok?: boolean }>;
   runGoalCommand?: (opts: TuiGoalCommandOptions) => Promise<{ text: string }>;
 };

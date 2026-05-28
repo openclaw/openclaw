@@ -193,6 +193,26 @@ function buildSlackExecPendingApprovalText(view: ExecApprovalPendingView): strin
   return lines.join("\n");
 }
 
+function buildSlackPluginExternalResolutionLines(view: PluginApprovalPendingView): string[] {
+  const externalResolution = view.externalResolution;
+  if (!externalResolution) {
+    return [];
+  }
+  const lines = ["", `*External verification:* ${externalResolution.label}`];
+  for (const command of externalResolution.commands) {
+    lines.push(`*${command.label}:* ${command.description}`);
+    lines.push(buildSlackCodeBlock(command.command));
+  }
+  return lines;
+}
+
+function buildSlackPluginExternalResolutionBlockText(
+  view: PluginApprovalPendingView,
+): string | null {
+  const lines = buildSlackPluginExternalResolutionLines(view);
+  return lines.length > 0 ? lines.join("\n").trim() : null;
+}
+
 function buildSlackPluginPendingApprovalText(view: PluginApprovalPendingView): string {
   const metadataLines = buildSlackMetadataLines(buildSlackPluginMetadata(view));
   const lines = [
@@ -202,6 +222,7 @@ function buildSlackPluginPendingApprovalText(view: PluginApprovalPendingView): s
     "*Request*",
     view.title,
     ...metadataLines,
+    ...buildSlackPluginExternalResolutionLines(view),
   ];
   return lines.join("\n");
 }
@@ -239,6 +260,7 @@ function buildSlackExecPendingApprovalBlocks(view: ExecApprovalPendingView): Sla
 }
 
 function buildSlackPluginPendingApprovalBlocks(view: PluginApprovalPendingView): SlackBlock[] {
+  const externalResolutionText = buildSlackPluginExternalResolutionBlockText(view);
   const interactiveBlocks =
     resolveSlackReplyBlocks({
       text: "",
@@ -256,6 +278,17 @@ function buildSlackPluginPendingApprovalBlocks(view: PluginApprovalPendingView):
       },
     },
     ...buildSlackPluginRequestBlocks(view),
+    ...(externalResolutionText
+      ? [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: truncateSlackMrkdwn(externalResolutionText, 2600),
+            },
+          } satisfies SlackBlock,
+        ]
+      : []),
     ...interactiveBlocks,
   ];
 }

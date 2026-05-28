@@ -8,6 +8,7 @@ import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
   ExecApprovalRequestPayload,
+  PluginApprovalExternalResolution,
 } from "../controllers/exec-approval.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
@@ -99,6 +100,21 @@ function renderExecBody(request: ExecApprovalRequestPayload) {
   `;
 }
 
+function renderPluginExternalResolution(external?: PluginApprovalExternalResolution | null) {
+  if (!external) {
+    return nothing;
+  }
+  return html`<div class="exec-approval-command" style="white-space:normal">
+    <div><strong>${external.label}</strong></div>
+    ${external.commands.map(
+      (command) => html`<div style="margin-top:8px">
+        <div>${command.label}: ${command.description}</div>
+        <div class="mono">${command.command}</div>
+      </div>`,
+    )}
+  </div>`;
+}
+
 function renderPluginBody(active: ExecApprovalRequest) {
   return html`
     ${active.pluginDescription
@@ -106,6 +122,7 @@ function renderPluginBody(active: ExecApprovalRequest) {
 ${active.pluginDescription}</pre
         >`
       : nothing}
+    ${renderPluginExternalResolution(active.pluginExternalResolution)}
     <div class="exec-approval-meta">
       ${renderMetaRow(t("execApproval.labels.severity"), active.pluginSeverity)}
       ${renderMetaRow(t("execApproval.labels.plugin"), active.pluginId)}

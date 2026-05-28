@@ -1471,6 +1471,40 @@ describe("before_tool_call requireApproval handling", () => {
     );
   });
 
+  it("forwards external resolution metadata to plugin approval requests", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Sensitive",
+        description: "Sensitive op",
+        pluginId: "agentkit",
+        allowedDecisions: ["deny"],
+        externalResolution: {
+          label: "Verify with World",
+          commandTemplate: "/agentkit approve {id} {decision}",
+          decisions: ["allow-once", "allow-always"],
+        },
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-ext", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-ext", decision: "deny" });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "rm -rf" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    const requestCall = requireGatewayCall(0);
+    expect(requestCall[0]).toBe("plugin.approval.request");
+    expect(requireRecord(requestCall[2], "approval request params").externalResolution).toEqual({
+      label: "Verify with World",
+      commandTemplate: "/agentkit approve {id} {decision}",
+      decisions: ["allow-once", "allow-always"],
+    });
+  });
+
   it("blocks on deny decision", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
