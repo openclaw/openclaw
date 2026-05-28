@@ -497,6 +497,7 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
     resolveDoctorMode(ctx.cfg),
     ctx.runtime,
     ctx.prompter,
+    { allowExecSecretRefs: ctx.options.allowExec === true },
   );
   await noteMacLaunchAgentOverrides();
   await noteMacStaleOpenClawUpdateLaunchdJobs();
