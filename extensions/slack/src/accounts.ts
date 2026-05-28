@@ -69,23 +69,30 @@ function resolveSlackAccountConfig(
   return resolveAccountEntry(cfg.channels?.slack?.accounts, accountId);
 }
 
-function asStreamingConfigObject(value: unknown): SlackAccountConfig["streaming"] | undefined {
+type SlackStreamingConfig = NonNullable<SlackAccountConfig["streaming"]>;
+type SlackStreamingConfigValue = SlackStreamingConfig | boolean | string;
+
+function asStreamingConfigObject(value: unknown): SlackStreamingConfig | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as SlackAccountConfig["streaming"])
+    ? (value as SlackStreamingConfig)
     : undefined;
+}
+
+function asLegacyStreamingScalar(value: unknown): boolean | string | undefined {
+  return typeof value === "boolean" || typeof value === "string" ? value : undefined;
 }
 
 function mergeSlackStreamingConfig(
   base: unknown,
   account: unknown,
-): SlackAccountConfig["streaming"] | unknown {
+): SlackStreamingConfigValue | undefined {
   const accountObject = asStreamingConfigObject(account);
   if (account !== undefined && !accountObject) {
-    return account;
+    return asLegacyStreamingScalar(account);
   }
   const baseObject = asStreamingConfigObject(base);
   if (base !== undefined && !baseObject) {
-    return accountObject ?? base;
+    return accountObject ?? asLegacyStreamingScalar(base);
   }
   const baseConfig = baseObject;
   const accountConfig = accountObject;
