@@ -480,6 +480,7 @@ type OllamaUsageFallback = {
 };
 
 const CHARS_PER_TOKEN_ESTIMATE = 4;
+const NDJSON_PARSE_YIELD_INTERVAL = 100;
 
 function buildUsageWithNoCost(params: {
   input?: number;
@@ -1018,11 +1019,28 @@ export function buildAssistantMessage(
   });
 }
 
+async function yieldToEventLoop(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
 export async function* parseNdjsonStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
+  options: { yieldEveryLines?: number } = {},
 ): AsyncGenerator<OllamaChatResponse> {
   const decoder = new TextDecoder();
   let buffer = "";
+  let parsedLines = 0;
+  const yieldEveryLines = Math.max(
+    1,
+    Math.floor(options.yieldEveryLines ?? NDJSON_PARSE_YIELD_INTERVAL),
+  );
+
+  const yieldAfterParsedLine = async () => {
+    parsedLines += 1;
+    if (parsedLines % yieldEveryLines === 0) {
+      await yieldToEventLoop();
+    }
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -1040,6 +1058,7 @@ export async function* parseNdjsonStream(
       }
       try {
         yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
+        await yieldAfterParsedLine();
       } catch {
         log.warn(`Skipping malformed NDJSON line: ${trimmed.slice(0, 120)}`);
       }
@@ -1049,6 +1068,7 @@ export async function* parseNdjsonStream(
   if (buffer.trim()) {
     try {
       yield parseJsonPreservingUnsafeIntegers(buffer.trim()) as OllamaChatResponse;
+      await yieldAfterParsedLine();
     } catch {
       log.warn(`Skipping malformed trailing data: ${buffer.trim().slice(0, 120)}`);
     }

@@ -568,15 +568,16 @@ export function handleMessageUpdate(
       ? (assistantRecord.partial as AssistantMessage)
       : msg;
   const deliveryPhase = resolveAssistantMessagePhase(partialAssistant);
-  const streamItemId = resolveAssistantStreamItemId({
-    contentIndex: assistantRecord?.contentIndex,
-    message: partialAssistant,
-  });
+  const isOpenAiResponsesPartial = isOpenAiResponsesAssistantMessage(partialAssistant);
+  const streamItemId =
+    deliveryPhase || isOpenAiResponsesPartial
+      ? resolveAssistantStreamItemId({
+          contentIndex: assistantRecord?.contentIndex,
+          message: partialAssistant,
+        })
+      : undefined;
   const isPhasePendingOpenAiResponsesTextItem =
-    evtType !== "text_end" &&
-    !deliveryPhase &&
-    Boolean(streamItemId) &&
-    isOpenAiResponsesAssistantMessage(partialAssistant);
+    evtType !== "text_end" && !deliveryPhase && Boolean(streamItemId) && isOpenAiResponsesPartial;
   if ((deliveryPhase || isPhasePendingOpenAiResponsesTextItem) && streamItemId) {
     const previousStreamItemId = ctx.state.lastAssistantStreamItemId;
     if (previousStreamItemId && previousStreamItemId !== streamItemId) {
@@ -593,6 +594,9 @@ export function handleMessageUpdate(
     return;
   }
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
+  const phaseAwareVisibleText = shouldUsePhaseAwareBlockReply
+    ? coerceChatContentText(extractAssistantVisibleText(partialAssistant)).trim()
+    : "";
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
