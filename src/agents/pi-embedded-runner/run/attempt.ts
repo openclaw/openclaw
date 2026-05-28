@@ -261,7 +261,11 @@ import {
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
 import { applySystemPromptOverrideToSession } from "../system-prompt.js";
-import { dropReasoningFromHistory, dropThinkingBlocks } from "../thinking.js";
+import {
+  dropReasoningFromHistory,
+  dropThinkingBlocks,
+  wrapAnthropicStreamWithRecovery,
+} from "../thinking.js";
 import {
   collectAllowedToolNames,
   collectCoreBuiltinToolNames,
@@ -2923,6 +2927,17 @@ export async function runEmbeddedAttempt(
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
+        );
+      }
+      // Anthropic rejects replay of persisted thinking blocks whose signatures
+      // are no longer accepted (e.g. server-side rotation, or any mutation of
+      // the thinking-text surface they bind to). Wrap the stream so a single
+      // recoverable rejection retries once with thinking blocks stripped from
+      // history, instead of letting the raw provider error reach the channel.
+      if (params.provider === "anthropic") {
+        activeSession.agent.streamFn = wrapAnthropicStreamWithRecovery(
+          activeSession.agent.streamFn,
+          { id: activeSession.sessionId },
         );
       }
       // Anthropic-compatible providers can add new stop reasons before pi-ai maps them.

@@ -8,7 +8,15 @@ type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type RecoveryAssessment = "valid" | "incomplete-thinking" | "incomplete-text";
 type RecoverySessionMeta = { id: string; recoveredAnthropicThinking?: boolean };
 
-const THINKING_BLOCK_ERROR_PATTERN = /thinking or redacted_thinking blocks?.* cannot be modified/i;
+// Matches either:
+//   - "thinking or redacted_thinking blocks ... cannot be modified" (Anthropic's
+//     older wording, kept for back-compat)
+//   - "invalid `signature` in `thinking` block" (Anthropic's current wording,
+//     same root cause: a persisted thinking-block signature failed replay)
+// Backticks around `signature`/`thinking` are optional and whitespace is lenient
+// to tolerate minor future wording drift.
+const THINKING_BLOCK_ERROR_PATTERN =
+  /thinking or redacted_thinking blocks?.* cannot be modified|invalid\s+`?signature`?\s+in\s+`?thinking`?\s+block/i;
 export const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
 export function isAssistantMessageWithContent(message: AgentMessage): message is AssistantMessage {

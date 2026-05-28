@@ -425,6 +425,45 @@ describe("wrapAnthropicStreamWithRecovery", () => {
   const anthropicThinkingError = new Error(
     "thinking or redacted_thinking blocks in the latest assistant message cannot be modified",
   );
+  const anthropicInvalidSignatureError = new Error(
+    "LLM request rejected: messages.3.content.19: Invalid `signature` in `thinking` block",
+  );
+
+  it("recovers from Anthropic's invalid-thinking-signature error wording", async () => {
+    let callCount = 0;
+    const contexts: Array<{ messages?: AgentMessage[] }> = [];
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      ((_model, context) => {
+        callCount += 1;
+        contexts.push(context as { messages?: AgentMessage[] });
+        return Promise.reject(anthropicInvalidSignatureError);
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session" },
+    );
+
+    await expect(
+      wrapped(
+        {} as never,
+        {
+          messages: castAgentMessages([
+            {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
+            },
+          ]),
+        } as never,
+        {} as never,
+      ),
+    ).rejects.toBe(anthropicInvalidSignatureError);
+    expect(callCount).toBe(2);
+    const retryMessage = contexts[1]?.messages?.[0];
+    if (!retryMessage || retryMessage.role !== "assistant") {
+      throw new Error("Expected Anthropic recovery retry to start with an assistant message");
+    }
+    expect(retryMessage.content).toEqual([
+      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+    ]);
+  });
 
   it("retries once with omitted-reasoning text when the request is rejected before streaming", async () => {
     let callCount = 0;
