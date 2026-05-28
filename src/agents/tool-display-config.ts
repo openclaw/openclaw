@@ -595,21 +595,6 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Yield",
       detailKeys: ["message"],
     },
-    transcripts: {
-      emoji: "📝",
-      title: "Transcripts",
-      detailKeys: [
-        "action",
-        "sessionId",
-        "title",
-        "providerId",
-        "accountId",
-        "guildId",
-        "channelId",
-        "meetingUrl",
-        "speakerLabel",
-      ],
-    },
     tts: {
       emoji: "🔊",
       title: "TTS",

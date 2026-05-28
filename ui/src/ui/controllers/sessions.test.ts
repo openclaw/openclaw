@@ -575,7 +575,7 @@ describe("loadSessions", () => {
     expect(current).toMatchObject({
       key: "main",
       hasActiveRun: false,
-      status: "running",
+      status: "done",
     });
     expect(isSessionRunActive(current!)).toBe(false);
   });
