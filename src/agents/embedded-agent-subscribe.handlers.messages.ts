@@ -161,6 +161,13 @@ function appendBlockReplyChunk(ctx: EmbeddedAgentSubscribeContext, chunk: string
   ctx.state.blockBuffer += chunk;
 }
 
+function resetBlockTagState(state: EmbeddedAgentSubscribeState["blockState"]) {
+  state.thinking = false;
+  state.final = false;
+  state.inlineCode = createInlineCodeState();
+  state.pendingTagFragment = undefined;
+}
+
 function replaceBlockReplyBuffer(ctx: EmbeddedAgentSubscribeContext, text: string) {
   if (ctx.blockChunker) {
     ctx.blockChunker.reset();
@@ -563,10 +570,10 @@ export function handleMessageUpdate(
     : "";
   const isUnphasedReplacementDelta = isReplacementDelta && !shouldUsePhaseAwareBlockReply;
 
+  if (isUnphasedReplacementDelta) {
+    ctx.resetAssistantTextStreamState();
+  }
   if (chunk) {
-    if (isUnphasedReplacementDelta) {
-      ctx.resetAssistantTextStreamState();
-    }
     ctx.state.deltaBuffer += chunk;
     if (!shouldUsePhaseAwareBlockReply) {
       appendBlockReplyChunk(ctx, chunk);
@@ -605,7 +612,7 @@ export function handleMessageUpdate(
   const next = shouldUsePhaseAwareBlockReply ? phaseAwareVisibleText : cleanedText;
   const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
   const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
-  if (next || hasMedia || hasAudio) {
+  if (next || hasMedia || hasAudio || isUnphasedReplacementDelta) {
     if (shouldUsePhaseAwareBlockReply) {
       recordPendingAssistantReplyDirectives(ctx.state, parsedStreamDirectives);
     }
@@ -613,7 +620,10 @@ export function handleMessageUpdate(
     let shouldEmit = false;
     let deltaText = "";
     let replace = false;
-    if (!hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice: hasAudio })) {
+    if (
+      !isUnphasedReplacementDelta &&
+      !hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice: hasAudio })
+    ) {
       shouldEmit = false;
     } else {
       replace =
@@ -621,7 +631,7 @@ export function handleMessageUpdate(
         Boolean(previousCleaned && !cleanedText.startsWith(previousCleaned));
       deltaText = replace ? "" : cleanedText.slice(previousCleaned.length);
       shouldEmit = replace
-        ? cleanedText !== previousCleaned || hasMedia || hasAudio
+        ? cleanedText !== previousCleaned || hasMedia || hasAudio || isUnphasedReplacementDelta
         : Boolean(deltaText || hasMedia || hasAudio);
     }
 
@@ -756,10 +766,7 @@ export function handleMessageEnd(
     ctx.state.deltaBuffer = "";
     ctx.state.blockBuffer = "";
     ctx.blockChunker?.reset();
-    ctx.state.blockState.thinking = false;
-    ctx.state.blockState.final = false;
-    ctx.state.blockState.inlineCode = createInlineCodeState();
-    ctx.state.blockState.pendingTagFragment = undefined;
+    resetBlockTagState(ctx.state.blockState);
     ctx.state.partialBlockState.pendingTagFragment = undefined;
     ctx.state.lastStreamedAssistant = undefined;
     ctx.state.lastStreamedAssistantCleaned = undefined;
@@ -776,6 +783,9 @@ export function handleMessageEnd(
   const finalStreamDelta = shouldReplaceFinalStream
     ? ""
     : cleanedText.slice(previousStreamedText.length);
+  const shouldEmitFinalDeltaAfterEmptyStream = Boolean(
+    ctx.state.emittedAssistantUpdate && !previousStreamedText && finalStreamDelta,
+  );
 
   if (
     !ctx.params.silentExpected &&
@@ -784,6 +794,7 @@ export function handleMessageEnd(
     (!ctx.state.emittedAssistantUpdate ||
       shouldReplaceFinalStream ||
       didTextChangeWithinCurrentMessage ||
+      shouldEmitFinalDeltaAfterEmptyStream ||
       hasMedia)
   ) {
     const data = buildAssistantStreamData({

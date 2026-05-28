@@ -225,6 +225,9 @@ function readChatProjection(event: OpenClawEvent): ChatProjection | undefined {
 }
 
 function readChatProjectionText(payload: Record<string, unknown>): string | undefined {
+  if (payload.replace === true && typeof payload.deltaText === "string") {
+    return payload.deltaText;
+  }
   const message = asRecord(payload.message);
   const content = message.content;
   if (typeof content === "string") {
