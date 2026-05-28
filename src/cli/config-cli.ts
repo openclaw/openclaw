@@ -347,6 +347,15 @@ function parseBracketPathSegment(raw: string, fullPath: string): string {
   return trimmed;
 }
 
+// A buffered key with characters that are all whitespace is stray text between a
+// "."/"]" and the next "."/"[" boundary (e.g. "agents.list[0] .id" or "agents.list[0] [1]").
+// Pushing it would silently collapse into a different key, so reject it like an empty segment.
+function assertNotWhitespaceSegment(current: string, raw: string): void {
+  if (current.length > 0 && !current.trim()) {
+    throw new Error(`Invalid path (empty segment): ${raw}`);
+  }
+}
+
 function parsePath(raw: string): PathSegment[] {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -370,6 +379,7 @@ function parsePath(raw: string): PathSegment[] {
       continue;
     }
     if (ch === ".") {
+      assertNotWhitespaceSegment(current, raw);
       if (!segmentEmitted && !current.trim()) {
         throw new Error(`Invalid path (empty segment): ${raw}`);
       }
@@ -385,6 +395,7 @@ function parsePath(raw: string): PathSegment[] {
       // A bracket may start the path ("[0]"), follow a key ("foo[0]"), or follow
       // another bracket ("foo[0][1]"), but a bracket right after a "." boundary with
       // no key (e.g. "gateway.[port]") is an empty segment, same as a double dot.
+      assertNotWhitespaceSegment(current, raw);
       if (!current.trim() && !segmentEmitted && parts.length > 0) {
         throw new Error(`Invalid path (empty segment): ${raw}`);
       }

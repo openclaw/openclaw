@@ -2890,6 +2890,38 @@ describe("config cli", () => {
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
+
+    it("rejects a whitespace-only segment after a bracket before a dot", async () => {
+      await expect(runConfigCommand(["config", "get", "agents.list[0] .id"])).rejects.toThrow(
+        "Invalid path (empty segment): agents.list[0] .id",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects a whitespace-only segment after a bracket before another bracket", async () => {
+      await expect(runConfigCommand(["config", "get", "agents.list[0] [1]"])).rejects.toThrow(
+        "Invalid path (empty segment): agents.list[0] [1]",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("preserves valid bracket path forms", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { list: [{ id: "main" }, { id: "other" }] },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "agents.list[1].id", "renamed"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig();
+      expect(written.agents?.list?.[1]?.id).toBe("renamed");
+      expect(written.agents?.list?.[0]?.id).toBe("main");
+    });
   });
 
   describe("config unset - issue #6070", () => {
