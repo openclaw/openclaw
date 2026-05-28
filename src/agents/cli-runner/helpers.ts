@@ -36,7 +36,8 @@ export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./relia
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 
 function isClaudeCliProvider(providerId: string): boolean {
-  return normalizeOptionalLowercaseString(providerId) === "claude-cli";
+  const p = normalizeOptionalLowercaseString(providerId);
+  return p === "claude-cli" || p === "claude-cli-interactive";
 }
 
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {

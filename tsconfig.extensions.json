@@ -16,6 +16,7 @@
     "**/*test-harness.ts",
     "**/*test-support.ts",
     "extensions/**/src/test-support/**",
+    "extensions/anthropic/interactive-proxy/**",
     "test/**"
   ]
 }

@@ -138,7 +138,10 @@ function encodeAuthProfileEpochPart(
 
 function getLocalCliCredentialFingerprint(provider: string): string | undefined {
   switch (provider) {
-    case "claude-cli": {
+    // claude-cli-interactive shares the same OAuth credentials as claude-cli
+    // (it spawns the same `claude` binary), so fingerprint off the same source.
+    case "claude-cli":
+    case "claude-cli-interactive": {
       const credential = cliAuthEpochDeps.readClaudeCliCredentialsCached({
         ttlMs: 5000,
         allowKeychainPrompt: false,

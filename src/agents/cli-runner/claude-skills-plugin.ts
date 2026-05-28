@@ -2,11 +2,10 @@ import { accessSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { isClaudeCliCompatibleBackend } from "@openclaw/model-catalog-core/provider-id";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { cliBackendLog } from "./log.js";
 
-const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 const OPENCLAW_CLAUDE_PLUGIN_NAME = "openclaw-skills";
 
 type MaterializedSkill = {
@@ -87,7 +86,11 @@ export async function prepareClaudeCliSkillsPlugin(params: {
   backendId: string;
   skillsSnapshot?: SkillSnapshot;
 }): Promise<{ args: string[]; cleanup: () => Promise<void>; pluginDir?: string }> {
-  if (normalizeLowercaseStringOrEmpty(params.backendId) !== CLAUDE_CLI_BACKEND_ID) {
+  // Accept every Claude-CLI-compatible backend, not just the headless
+  // `claude-cli`. The interactive proxy backend (`claude-cli-interactive`) runs
+  // the same Claude CLI and must materialize the same skills plugin, otherwise
+  // operator-selected skills are silently dropped on that backend.
+  if (!isClaudeCliCompatibleBackend(params.backendId)) {
     return { args: [], cleanup: async () => {} };
   }
 

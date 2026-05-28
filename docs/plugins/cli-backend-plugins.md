@@ -197,20 +197,60 @@ only for behavior that really belongs to the backend.
 
 `CliBackendPlugin` can also define:
 
-| Hook                               | Use                                                    |
-| ---------------------------------- | ------------------------------------------------------ |
-| `normalizeConfig(config, context)` | Rewrite legacy user config after merge                 |
-| `resolveExecutionArgs(ctx)`        | Add request-scoped flags such as thinking effort       |
-| `prepareExecution(ctx)`            | Create temporary auth or config bridges before launch  |
-| `transformSystemPrompt(ctx)`       | Apply a final CLI-specific system prompt transform     |
-| `textTransforms`                   | Bidirectional prompt/output replacements               |
-| `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                |
-| `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions |
-| `nativeToolMode`                   | Declare whether the CLI has always-on native tools     |
-| `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge           |
+| Hook                               | Use                                                      |
+| ---------------------------------- | -------------------------------------------------------- |
+| `normalizeConfig(config, context)` | Rewrite legacy user config after merge                   |
+| `resolveExecutionArgs(ctx)`        | Add request-scoped flags such as thinking effort         |
+| `prepareExecution(ctx)`            | Create temporary auth or config bridges before launch    |
+| `transformSystemPrompt(ctx)`       | Apply a final CLI-specific system prompt transform       |
+| `textTransforms`                   | Bidirectional prompt/output replacements                 |
+| `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                  |
+| `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions   |
+| `nativeToolMode`                   | Declare whether the CLI has always-on native tools       |
+| `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge             |
+| `modelProvider`                    | Canonical provider this backend executes (runtime alias) |
+| `inheritUserConfigFrom`            | Inherit a sibling backend's user override                |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when a
 backend hook can express the behavior.
+
+### `modelProvider` (runtime aliases)
+
+Set `modelProvider` to the canonical provider whose models the backend executes
+(e.g. `"anthropic"` for a Claude CLI backend). This marks the backend as a
+**runtime alias** of that provider: it becomes reachable through the canonical
+provider's runtime-alias and auth-profile selection paths, and is hidden from
+the model-provider picker (it does not own a distinct provider namespace).
+
+Omit it only for a **standalone** backend that owns its own refs such as
+`acme-cli/model` and should remain directly selectable. A backend that runs a
+canonical provider's models but omits `modelProvider` is invisible to that
+provider's selection paths.
+
+### `inheritUserConfigFrom` (variant backends)
+
+A **variant** backend can reuse the user override configured for a sibling so an
+operator keeps a single `agents.defaults.cliBackends.<sibling>` block instead of
+duplicating it per variant:
+
+```ts
+inheritUserConfigFrom: {
+  backendId: "claude-cli",
+  // Optional: sanitize the inherited args/resumeArgs for this variant's dialect
+  filterArgs: (args) => args.filter((a) => a !== "-p"),
+}
+```
+
+Resolution contract (`resolveCliBackendConfig`):
+
+- A **direct** override on the variant always wins.
+- Otherwise, if the sibling (`backendId`) has a user override, it is inherited.
+  The merge **replaces `args`/`resumeArgs` wholesale**, so `filterArgs` receives
+  the full inherited list and must return a complete one.
+- With no override on either, the backend's own defaults apply.
+
+Use `normalizeConfig` to re-assert variant invariants the inherited override may
+have clobbered (e.g. forcing `command` back to a wrapper binary).
 
 ## MCP tool bridge
 

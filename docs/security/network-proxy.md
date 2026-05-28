@@ -246,6 +246,27 @@ proxy:
     caFile: /etc/openclaw/proxy-ca.pem
 ```
 
+## Claude CLI interactive backend (local TLS inspection)
+
+The optional `claude-cli-interactive` backend runs the Claude CLI through a
+**local loopback TLS inspection proxy** so it can capture `thinking_delta` and
+`text_delta` events that the headless path does not expose. This is a distinct
+mechanism from the operator egress proxy above, with its own trust boundary:
+
+- **Scope.** The proxy binds on `127.0.0.1` (ephemeral ports) and is reachable
+  only by the spawned `claude` process via that process's `HTTPS_PROXY`. It is
+  not a general egress proxy and is not installed process-wide.
+- **What is decrypted.** Only `api.anthropic.com` is terminated and read (to
+  parse the SSE stream). The plaintext is forwarded upstream unmodified.
+- **Fail closed.** The CONNECT stage refuses any non-Anthropic target with
+  `403`. Other `*.anthropic.com` hosts tunnel through **without** decryption, so
+  the proxy never acts as an open forward proxy while alive.
+- **Signing material.** A local CA + leaf key are generated and cached under the
+  OpenClaw config dir, trusted by the spawned CLI via `NODE_EXTRA_CA_CERTS`. The
+  key files are permission-hardened on creation and generation fails closed if
+  hardening cannot be applied. The CA is only ever trusted by that child CLI.
+- **Opt in.** The backend is off by default; an operator selects it explicitly.
+
 ## Limits
 
 - The proxy improves coverage for process-local JavaScript HTTP and WebSocket clients, but it is not an OS-level network sandbox.

@@ -11,6 +11,19 @@ export function normalizeProviderIdForAuth(provider: string): string {
   return normalizeProviderId(provider);
 }
 
+// True for any provider id that maps to a Claude CLI subscription backend —
+// today the headless `claude-cli` and the interactive proxy `claude-cli-interactive`.
+// Both spawn the same `claude` binary against Anthropic's subscription auth,
+// so any "is this a Claude CLI run?" gate (model-capability resolution, OAuth
+// label lookup, credential fingerprinting, live-agent probe routing, etc.)
+// should treat them as the same family. Single helper so future variants get
+// recognised everywhere by extending this one function instead of grepping
+// for every `=== "claude-cli"` site.
+export function isClaudeCliCompatibleBackend(provider: string | undefined): boolean {
+  const normalized = normalizeProviderId(provider ?? "");
+  return normalized === "claude-cli" || normalized === "claude-cli-interactive";
+}
+
 export function findNormalizedProviderValue<T>(
   entries: Record<string, T> | undefined,
   provider: string,

@@ -10,6 +10,26 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "build": {
+      "staticAssets": [
+        {
+          "source": "./interactive-proxy/wrapper.ts",
+          "output": "interactive-proxy/wrapper.ts"
+        },
+        {
+          "source": "./interactive-proxy/mitm-server.ts",
+          "output": "interactive-proxy/mitm-server.ts"
+        },
+        {
+          "source": "./interactive-proxy/cert-manager.ts",
+          "output": "interactive-proxy/cert-manager.ts"
+        },
+        {
+          "source": "./interactive-proxy/tty-spoof.cjs",
+          "output": "interactive-proxy/tty-spoof.cjs"
+        }
+      ]
+    }
   }
 }
