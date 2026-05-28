@@ -6,9 +6,13 @@ import { TokenManager } from "./token.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-}));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  };
+});
 
 const UPLOAD_RESPONSE: UploadMediaResponse = {
   file_uuid: "uuid-1",
@@ -180,9 +184,6 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     "does not upload direct URLs rejected by the SSRF guard: %s",
     async (host) => {
       fetchWithSsrFGuardMock.mockReset();
-      fetchWithSsrFGuardMock.mockRejectedValueOnce(
-        new Error("Blocked hostname or private/internal/special-use IP address"),
-      );
       const client = mockApiClient();
       const tokenManager = mockTokenManager();
       const api = new MediaApi(client, tokenManager);
@@ -197,10 +198,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
         ),
       ).rejects.toThrow("Blocked hostname");
 
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-        url: `https://${host}/latest/meta-data/`,
-        policy: { allowRfc2544BenchmarkRange: true },
-      });
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
       expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
       expect(client.request).not.toHaveBeenCalled();
     },
@@ -231,9 +229,6 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
 
   it("rejects literal RFC 2544 special-use URL hosts through the guarded download", async () => {
     fetchWithSsrFGuardMock.mockReset();
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(
-      new Error("Blocked hostname or private/internal/special-use IP address"),
-    );
     const client = mockApiClient();
     const tokenManager = mockTokenManager();
     const api = new MediaApi(client, tokenManager);
@@ -248,8 +243,28 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       ),
     ).rejects.toThrow("Blocked hostname");
 
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
     expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("keeps public literal IP URLs on the default SSRF policy", async () => {
+    const client = mockApiClient();
+    const tokenManager = mockTokenManager();
+    const api = new MediaApi(client, tokenManager);
+
+    await api.uploadMedia(
+      "c2c",
+      "user-openid",
+      MediaFileType.IMAGE,
+      { appId: "app-id", clientSecret: "client-secret" },
+      { url: "http://93.184.216.34/assets/photo.png" },
+    );
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      url: "http://93.184.216.34/assets/photo.png",
+      policy: undefined,
+    });
   });
 
   it("allows fake-IP DNS only for the guarded local download, not the QQ upload body", async () => {

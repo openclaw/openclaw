@@ -12,8 +12,14 @@
  */
 
 import * as fs from "node:fs";
+import * as net from "node:net";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeHostname } from "openclaw/plugin-sdk/security-runtime";
+import {
+  fetchWithSsrFGuard,
+  isBlockedHostnameOrIp,
+  type SsrFPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   MediaFileType,
   type ChatScope,
@@ -53,6 +59,18 @@ interface MediaApiConfig {
   sanitizeFileName?: SanitizeFileNameFn;
 }
 
+function directUploadDownloadPolicy(hostname: string): SsrFPolicy | undefined {
+  if (isBlockedHostnameOrIp(hostname)) {
+    throw new Error("Blocked hostname or private/internal/special-use IP address");
+  }
+
+  // The local guarded download can support fake-IP DNS, but literal IP URLs
+  // must stay on the default SSRF policy so RFC 2544 literals remain blocked.
+  return net.isIP(normalizeHostname(hostname)) === 0
+    ? { allowRfc2544BenchmarkRange: true }
+    : undefined;
+}
+
 async function downloadDirectUploadUrl(url: string, fileType: MediaFileType): Promise<Buffer> {
   let parsed: URL;
   try {
@@ -67,7 +85,7 @@ async function downloadDirectUploadUrl(url: string, fileType: MediaFileType): Pr
 
   const { response, release } = await fetchWithSsrFGuard({
     url: parsed.toString(),
-    policy: { allowRfc2544BenchmarkRange: true },
+    policy: directUploadDownloadPolicy(parsed.hostname),
   });
   try {
     if (!response.ok) {
