@@ -379,7 +379,7 @@ describe("doctor command", () => {
 
     const gatewayAuthNote = requireTerminalNote({ title: "Gateway auth" });
     expect(String(gatewayAuthNote[0])).toContain(
-      "Gateway token is managed via SecretRef and is currently unavailable.",
+      "Gateway token SecretRef could not be resolved: gateway.auth.token SecretRef is unresolved",
     );
     expect(String(gatewayAuthNote[0])).toContain(
       "Doctor will not overwrite gateway.auth.token with a plaintext value.",
