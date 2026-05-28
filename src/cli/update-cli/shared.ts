@@ -8,7 +8,7 @@ import { readPackageName, readPackageVersion } from "../../infra/package-json.js
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
 import { trimLogTail } from "../../infra/restart-sentinel.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
-import { fetchNpmTagVersion } from "../../infra/update-check.js";
+import { fetchNpmPackageTargetStatus, fetchNpmTagVersion } from "../../infra/update-check.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
@@ -104,7 +104,8 @@ export async function resolveTargetVersion(
   }
   const direct = normalizeVersionTag(tag);
   if (direct) {
-    return direct;
+    const res = await fetchNpmPackageTargetStatus({ target: direct, timeoutMs });
+    return res.version ?? null;
   }
   const res = await fetchNpmTagVersion({ tag, timeoutMs });
   return res.version ?? null;
