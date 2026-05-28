@@ -662,7 +662,7 @@ function convertMessages(
                   contentBlocks.push({
                     reasoningContent: {
                       reasoningText: {
-                        text: sanitizeSurrogates(c.thinking),
+                        text: c.thinking,
                         signature: c.thinkingSignature,
                       },
                     },

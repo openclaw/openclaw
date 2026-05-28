@@ -80,6 +80,28 @@ function runProbe(baseUrl: string, env: Record<string, string> = {}, timeout = 3
 }
 
 describe("scripts/e2e/openwebui-probe.mjs", () => {
+  it("rejects loose numeric timeout env values instead of parsing prefixes", async () => {
+    const result = await runProbe("http://127.0.0.1:9", {
+      OPENWEBUI_CONTROL_TIMEOUT_MS: "25ms",
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "OPENWEBUI_CONTROL_TIMEOUT_MS must be a positive integer; got: 25ms",
+    );
+  });
+
+  it("rejects zero where positive retry counts are required", async () => {
+    const result = await runProbe("http://127.0.0.1:9", {
+      OPENWEBUI_MODEL_ATTEMPTS: "0",
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("OPENWEBUI_MODEL_ATTEMPTS must be a positive integer; got: 0");
+  });
+
   it("uses a short control-plane timeout for stalled sign-in requests", async () => {
     const sockets = new Set<Socket>();
     const server = createTcpServer((socket) => {

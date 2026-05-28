@@ -1119,9 +1119,13 @@ function convertMessages(
               text: sanitizeSurrogates(block.thinking),
             });
           } else {
+            const thinking =
+              block.thinkingSignature === "reasoning_content"
+                ? sanitizeSurrogates(block.thinking)
+                : block.thinking;
             blocks.push({
               type: "thinking",
-              thinking: sanitizeSurrogates(block.thinking),
+              thinking,
               signature: block.thinkingSignature,
             });
           }

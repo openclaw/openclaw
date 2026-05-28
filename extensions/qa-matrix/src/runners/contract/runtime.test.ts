@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderQaMarkdownReport } from "../../report.js";
 import { testing as liveTesting } from "./runtime.js";
 
 afterEach(() => {
