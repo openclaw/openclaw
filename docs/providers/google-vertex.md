@@ -239,13 +239,6 @@ automatically (e.g. `gemini-3.1-pro` resolves to `gemini-3.1-pro-preview`).
     ```
   </Accordion>
 
-  <Accordion title="Requests go to OpenAI instead of Vertex AI">
-    OpenClaw defaults the `google-vertex` provider to the correct Vertex AI
-    transport automatically for standard configurations. If you have a custom
-    provider config in `models.providers`, make sure it includes
-    `"api": "google-vertex"` so requests are routed to the Vertex AI endpoint
-    instead of the default OpenAI-compatible path.
-  </Accordion>
 </AccordionGroup>
 
 ## Related
