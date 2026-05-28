@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
 
@@ -56,12 +57,12 @@ export function renderChatQueue(props: ChatQueueProps) {
                       <button
                         class="btn chat-queue__retry"
                         type="button"
-                        title="Retry send"
-                        aria-label="Retry queued message"
+                        title=${t("chat.queue.retrySend")}
+                        aria-label=${t("chat.queue.retryQueuedMessage")}
                         @click=${() => props.onQueueRetry?.(item.id)}
                       >
                         ${icons.refresh}
-                        <span>Retry</span>
+                        <span>${t("chat.queue.retry")}</span>
                       </button>
                     `
                   : nothing}
