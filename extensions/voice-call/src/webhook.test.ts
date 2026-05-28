@@ -8,6 +8,7 @@ import {
 } from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { PlivoProvider } from "./providers/plivo.js";
 import { TwilioProvider } from "./providers/twilio.js";
 import type { CallRecord, NormalizedEvent } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
@@ -725,9 +726,69 @@ describe("VoiceCallWebhookServer replay handling", () => {
 
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("OK");
-      expect(parseWebhookEvent).not.toHaveBeenCalled();
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
       expect(processEvent).not.toHaveBeenCalled();
     } finally {
+      await server.stop();
+    }
+  });
+
+  it("returns Plivo XML for replayed answer callbacks while skipping event side effects", async () => {
+    const plivoProvider = new PlivoProvider(
+      {
+        authId: "MA000000000000000000",
+        authToken: "test-token",
+      },
+      { skipVerification: true },
+    );
+    const parseWebhookEvent = vi.spyOn(plivoProvider, "parseWebhookEvent");
+    const { manager, processEvent } = createManager([]);
+    const config = createConfig({
+      provider: "plivo",
+      skipSignatureVerification: true,
+      plivo: {
+        authId: "MA000000000000000000",
+        authToken: "test-token",
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, plivoProvider);
+
+    try {
+      const baseUrl = await server.start();
+      const requestUrl = requireBoundRequestUrl(server, baseUrl);
+      requestUrl.searchParams.set("provider", "plivo");
+      requestUrl.searchParams.set("flow", "answer");
+      requestUrl.searchParams.set("callId", "internal-call-id");
+      const body =
+        "CallUUID=plivo-replay-answer-callback&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp";
+
+      const first = await fetch(requestUrl.toString(), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body,
+      });
+      expect(first.status).toBe(200);
+      expect(first.headers.get("content-type")).toContain("text/xml");
+      expect(await first.text()).toContain("<Wait");
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
+      expect(processEvent).toHaveBeenCalledTimes(1);
+
+      parseWebhookEvent.mockClear();
+      processEvent.mockClear();
+
+      const replay = await fetch(requestUrl.toString(), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body,
+      });
+
+      expect(replay.status).toBe(200);
+      expect(replay.headers.get("content-type")).toContain("text/xml");
+      expect(await replay.text()).toContain("<Wait");
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
+      expect(processEvent).not.toHaveBeenCalled();
+    } finally {
+      parseWebhookEvent.mockRestore();
       await server.stop();
     }
   });

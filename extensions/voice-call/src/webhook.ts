@@ -716,8 +716,12 @@ export class VoiceCallWebhookServer {
         return { statusCode: 401, body: "Unauthorized" };
       }
 
-      if (verification.isReplay) {
+      const isReplay = Boolean(verification.isReplay);
+      if (isReplay) {
         console.warn("[voice-call] Replay detected; skipping event side effects");
+      }
+
+      if (isReplay && this.provider.name === "twilio") {
         return { statusCode: 200, body: "OK" };
       }
 
@@ -751,7 +755,9 @@ export class VoiceCallWebhookServer {
       const parsed = this.provider.parseWebhookEvent(ctx, {
         verifiedRequestKey: verification.verifiedRequestKey,
       });
-      this.processParsedEvents(parsed.events);
+      if (!isReplay) {
+        this.processParsedEvents(parsed.events);
+      }
 
       return normalizeWebhookResponse(parsed);
     } finally {
