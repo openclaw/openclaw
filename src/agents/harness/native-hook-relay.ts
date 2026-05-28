@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import {
   createServer,
   request as httpRequest,
@@ -700,6 +708,15 @@ function pruneExpiredNativeHookRelays(now = Date.now()): void {
   }
 }
 
+function isNativeHookRelayBridgePidDead(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH";
+  }
+}
+
 function registerNativeHookRelayBridge(registration: ActiveNativeHookRelayRegistration): void {
   // Prune actually stale bridge files from prior gateway processes. The bridge
   // directory is scoped by OS user (uid) and is shared across all OpenClaw
@@ -723,15 +740,9 @@ function registerNativeHookRelayBridge(registration: ActiveNativeHookRelayRegist
         if (!rec || typeof rec.pid !== "number" || rec.pid === process.pid) {
           continue;
         }
-        let pidAlive = false;
-        try {
-          process.kill(rec.pid, 0);
-          pidAlive = true;
-        } catch {
-          pidAlive = false;
-        }
         const expired = typeof rec.expiresAtMs === "number" && now > rec.expiresAtMs;
-        if (pidAlive && !expired) {
+        const deadPid = !expired && isNativeHookRelayBridgePidDead(rec.pid);
+        if (!expired && !deadPid) {
           // Live foreign record from another same-uid gateway/profile. Preserve it.
           continue;
         }
@@ -740,7 +751,7 @@ function registerNativeHookRelayBridge(registration: ActiveNativeHookRelayRegist
           file: name,
           stalePid: rec.pid,
           currentPid: process.pid,
-          reason: !pidAlive ? "dead-pid" : "expired",
+          reason: deadPid ? "dead-pid" : "expired",
         });
       } catch {
         // ignore unparseable / racing files

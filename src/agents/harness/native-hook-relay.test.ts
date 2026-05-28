@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { rmSync, statSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -24,6 +25,7 @@ import {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
   testing.clearNativeHookRelaysForTests();
@@ -104,6 +106,10 @@ async function writeForeignNativeHookRelayBridgeRecordForTests(
     { mode: 0o600 },
   );
   return registryPath;
+}
+
+function uniqueNativeHookRelayIdForTests(prefix: string): string {
+  return `${prefix}-${randomUUID()}`;
 }
 
 function openDeferredNativeHookRelayBridgeRequest(
@@ -880,7 +886,7 @@ describe("native hook relay registry", () => {
 
   it("prunes dead foreign direct bridge registry files during registration", async () => {
     const stalePath = await writeForeignNativeHookRelayBridgeRecordForTests(
-      "codex-dead-foreign-bridge",
+      uniqueNativeHookRelayIdForTests("codex-dead-foreign-bridge"),
       {
         pid: 9_999_991,
         expiresAtMs: Date.now() + 60_000,
@@ -907,7 +913,7 @@ describe("native hook relay registry", () => {
 
   it("prunes expired foreign direct bridge registry files even when their pid is alive", async () => {
     const stalePath = await writeForeignNativeHookRelayBridgeRecordForTests(
-      "codex-expired-foreign-bridge",
+      uniqueNativeHookRelayIdForTests("codex-expired-foreign-bridge"),
       {
         pid: 9_999_992,
         expiresAtMs: Date.now() - 1,
@@ -928,13 +934,13 @@ describe("native hook relay registry", () => {
       allowedEvents: ["pre_tool_use"],
     });
 
-    expect(kill).toHaveBeenCalledWith(9_999_992, 0);
+    expect(kill).not.toHaveBeenCalled();
     await expect(fs.stat(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("preserves live unexpired foreign direct bridge registry files during registration", async () => {
     const livePath = await writeForeignNativeHookRelayBridgeRecordForTests(
-      "codex-live-foreign-bridge",
+      uniqueNativeHookRelayIdForTests("codex-live-foreign-bridge"),
       {
         pid: 9_999_993,
         expiresAtMs: Date.now() + 60_000,
@@ -957,6 +963,37 @@ describe("native hook relay registry", () => {
       });
 
       expect(kill).toHaveBeenCalledWith(9_999_993, 0);
+      await expect(fs.stat(livePath)).resolves.toBeDefined();
+    } finally {
+      rmSync(livePath, { force: true });
+    }
+  });
+
+  it("preserves foreign direct bridge registry files when liveness is unknown", async () => {
+    const livePath = await writeForeignNativeHookRelayBridgeRecordForTests(
+      uniqueNativeHookRelayIdForTests("codex-unknown-liveness-foreign-bridge"),
+      {
+        pid: 9_999_994,
+        expiresAtMs: Date.now() + 60_000,
+      },
+    );
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid === 9_999_994) {
+        throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+      }
+      return true;
+    });
+
+    try {
+      registerNativeHookRelay({
+        provider: "codex",
+        relayId: "codex-preserve-unknown-liveness-foreign-bridge-session",
+        sessionId: "session-1",
+        runId: "run-1",
+        allowedEvents: ["pre_tool_use"],
+      });
+
+      expect(kill).toHaveBeenCalledWith(9_999_994, 0);
       await expect(fs.stat(livePath)).resolves.toBeDefined();
     } finally {
       rmSync(livePath, { force: true });
