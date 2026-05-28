@@ -9,19 +9,12 @@ read_when:
 
 The `google-vertex` provider routes Gemini model requests through Google Cloud's
 Vertex AI (now Gemini Enterprise Agent Platform) using Application Default
-Credentials (ADC). This lets you use GCP project billing, including free trial
-credits and startup credits, instead of a separate AI Studio prepay plan.
+Credentials (ADC).
 
 - Provider: `google-vertex`
 - Auth: Application Default Credentials (ADC)
 - Env vars: `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` (optional, defaults to `global`)
-- Models: same Gemini models as Google AI Studio, accessed via `google-vertex/*` prefix
-
-<Note>
-  GCP promotional credits (such as the $300 free trial) apply to Vertex AI but
-  **not** to Google AI Studio. If you have GCP credits and want to use them for
-  Gemini, use this provider instead of the `google` (AI Studio) provider.
-</Note>
+- Models: Gemini models accessed via `google-vertex/*` prefix
 
 ## Getting started
 
@@ -64,7 +57,7 @@ Choose the auth method that matches your environment.
     </Tip>
   </Tab>
 
-  <Tab title="Local development">
+  <Tab title="gcloud CLI">
     **Best for:** developing on your laptop or workstation with `gcloud` installed.
 
     <Steps>
@@ -245,8 +238,8 @@ automatically (e.g. `gemini-3.1-pro` resolves to `gemini-3.1-pro-preview`).
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Google (AI Studio)" href="/providers/google" icon="google">
-    Gemini models via API key (Google AI Studio).
+  <Card title="Google (Gemini)" href="/providers/google" icon="google">
+    Gemini models via API key in Google AI Studio.
   </Card>
   <Card title="Model providers" href="/concepts/model-providers" icon="layer-group">
     Provider configuration reference.
