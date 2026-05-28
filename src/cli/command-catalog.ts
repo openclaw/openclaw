@@ -15,6 +15,7 @@ type CliNetworkProxyPolicyResolver =
   | CliNetworkProxyPolicy
   | ((ctx: { argv: string[]; commandPath: string[] }) => CliNetworkProxyPolicy);
 type CliRoutedCommandId =
+  | "diagnose"
   | "health"
   | "status"
   | "gateway-status"
@@ -118,6 +119,17 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["migrate"],
     policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["diagnose"],
+    exact: true,
+    policy: {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
+    route: { id: "diagnose" },
   },
   {
     commandPath: ["status"],

@@ -172,6 +172,34 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
+  program
+    .command("diagnose")
+    .description("Emit a unified control-plane diagnosis payload")
+    .option("--json", "Output JSON instead of text", false)
+    .option("--timeout <ms>", "Probe timeout in milliseconds", "10000")
+    .option("--verbose", "Verbose logging", false)
+    .option("--debug", "Alias for --verbose", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw diagnose --json", "Emit a machine-readable control-plane report."],
+          ["openclaw diagnose --json --timeout 5000", "Tighten probe timeout."],
+        ])}`,
+    )
+    .action(async (opts) => {
+      await runWithVerboseAndTimeout(opts, async ({ timeoutMs }) => {
+        const { diagnoseCommand } = await import("../../commands/diagnose.js");
+        await diagnoseCommand(
+          {
+            json: Boolean(opts.json),
+            timeoutMs,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
   const sessionsCmd = addSessionsListOptions(
     program.command("sessions").description("List stored conversation sessions"),
   )

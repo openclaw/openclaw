@@ -501,10 +501,12 @@ export function createSessionsSendTool(opts?: {
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
       });
+      const handoffId = crypto.randomUUID();
       const inputProvenance = {
         kind: "inter_session" as const,
         sourceSessionKey: opts?.agentSessionKey,
         sourceChannel: opts?.agentChannel,
+        handoffId,
         sourceTool: "sessions_send",
       };
       const sendParams = {

@@ -39,11 +39,7 @@ describe("check-memory-fd-repro", () => {
   });
 
   it("preserves previous readiness once seen", () => {
-    const state = updateGatewayReadyOutputState(
-      { tail: "old", readySeen: true },
-      "new output",
-      8,
-    );
+    const state = updateGatewayReadyOutputState({ tail: "old", readySeen: true }, "new output", 8);
 
     expect(state.readySeen).toBe(true);
     expect(state.tail).toBe("w output");

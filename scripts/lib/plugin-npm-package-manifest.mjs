@@ -4,11 +4,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
 import { packageJsonForShrinkwrap, readShrinkwrapOverrides } from "../generate-npm-shrinkwrap.mjs";
+import { resolveNpmRunner } from "../npm-runner.mjs";
 import {
   listPluginNpmRuntimeBuildOutputs,
   resolvePluginNpmRuntimeBuildPlan,
 } from "./plugin-npm-runtime-build.mjs";
-import { resolveNpmRunner } from "../npm-runner.mjs";
 
 const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH =
   "src/config/bundled-channel-config-metadata.generated.ts";

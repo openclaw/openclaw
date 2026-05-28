@@ -90,18 +90,14 @@ export async function collectSourceFileContents(params) {
         normalizeRepoPath(params.repoRoot, left).localeCompare(
           normalizeRepoPath(params.repoRoot, right),
         ),
-    );
+      );
 
     const readFile = params.readFile ?? fs.readFile;
-    return await mapWithConcurrency(
-      files,
-      params.maxConcurrentReads,
-      async (filePath) => ({
-        filePath,
-        relativeFile: normalizeRepoPath(params.repoRoot, filePath),
-        content: await readFile(filePath, "utf8"),
-      }),
-    );
+    return await mapWithConcurrency(files, params.maxConcurrentReads, async (filePath) => ({
+      filePath,
+      relativeFile: normalizeRepoPath(params.repoRoot, filePath),
+      content: await readFile(filePath, "utf8"),
+    }));
   })();
 
   if (useCache) {

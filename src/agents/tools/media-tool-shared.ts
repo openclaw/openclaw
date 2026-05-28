@@ -2,12 +2,12 @@ import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import type { Model } from "../../llm/types.js";
-import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
-import { normalizeInboundPathRoots } from "../../media/inbound-path-policy.js";
 import {
   findCapabilityProviderById,
   resolveCapabilityModelRefForProviders,
 } from "../../media-generation/capability-model-ref.js";
+import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
+import { normalizeInboundPathRoots } from "../../media/inbound-path-policy.js";
 import { getDefaultLocalRoots } from "../../media/local-media-access.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";

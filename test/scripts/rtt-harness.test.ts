@@ -149,8 +149,8 @@ describe("RTT harness", () => {
     expect(script).toContain(
       '"$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
     );
-    expect(script).toContain('elif command -v gtimeout >/dev/null 2>&1; then');
-    expect(script).toContain("timeout_bin=\"gtimeout\"");
+    expect(script).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
+    expect(script).toContain('timeout_bin="gtimeout"');
     expect(script).toContain(
       'echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2',
     );
@@ -158,7 +158,9 @@ describe("RTT harness", () => {
     expect(script).toContain(
       '"$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
     );
-    expect(script).not.toContain("running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT");
+    expect(script).not.toContain(
+      "running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT",
+    );
     expect(script).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
     expect(script).not.toContain("run_logged docker run --rm");
     expect(heartbeatStartIndex).toBeGreaterThan(sourceIndex);

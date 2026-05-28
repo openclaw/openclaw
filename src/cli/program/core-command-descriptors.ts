@@ -97,6 +97,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
+    name: "diagnose",
+    description: "Emit a unified control-plane diagnosis payload",
+    hasSubcommands: false,
+  },
+  {
     name: "sessions",
     description: "List stored conversation sessions",
     hasSubcommands: true,

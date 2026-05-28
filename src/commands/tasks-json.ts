@@ -70,7 +70,7 @@ function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
   };
 }
 
-function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
+export function tasksAuditJsonPayloadForDiagnose(opts: TasksAuditJsonArgs) {
   const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
   const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
   const { allFindings, filteredFindings, taskFindings, summary } = toSystemAuditFindings({
@@ -113,5 +113,5 @@ export async function tasksAuditJsonCommand(
   opts: TasksAuditJsonArgs,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  writeRuntimeJson(runtime, buildTasksAuditJsonPayload(opts));
+  writeRuntimeJson(runtime, tasksAuditJsonPayloadForDiagnose(opts));
 }

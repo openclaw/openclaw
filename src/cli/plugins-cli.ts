@@ -40,6 +40,11 @@ export type PluginAuthoringBuildOptions = {
   check?: boolean;
 };
 
+export type PluginContractValidateOptions = {
+  json?: boolean;
+  strict?: boolean;
+};
+
 export type PluginAuthoringValidateOptions = {
   root?: string;
   entry?: string;
@@ -178,6 +183,41 @@ export function registerPluginsCli(program: Command) {
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
       await runPluginUpdateCommand({ id, opts });
+    });
+
+  const contracts = plugins.command("contracts").description("Validate plugin runtime contracts");
+
+  contracts
+    .command("validate")
+    .description("Validate plugin manifest contracts without loading plugin runtimes")
+    .option("--json", "Print JSON")
+    .option("--strict", "Treat missing tool contract metadata as strict validation findings", false)
+    .action(async (opts: PluginContractValidateOptions) => {
+      const { getRuntimeConfig } = await import("../config/config.js");
+      const { validatePluginContracts } = await import("../plugins/contract-validator.js");
+      const { defaultRuntime } = await import("../runtime.js");
+      const report = validatePluginContracts({
+        config: getRuntimeConfig(),
+        strict: opts.strict === true,
+      });
+      if (opts.json) {
+        defaultRuntime.writeJson(report);
+      } else if (report.ok && report.findings.length === 0) {
+        defaultRuntime.log(`Plugin contracts valid: ${report.pluginCount} plugins checked.`);
+      } else {
+        const header = report.ok
+          ? theme.warn("Plugin contract warnings:")
+          : theme.error("Plugin contract errors:");
+        defaultRuntime.log(header);
+        for (const finding of report.findings) {
+          const prefix = finding.level === "error" ? theme.error("error") : theme.warn("warn");
+          const target = finding.pluginId ? `${finding.pluginId}: ` : "";
+          defaultRuntime.log(`- [${prefix}] ${target}${finding.message}`);
+        }
+      }
+      if (!report.ok) {
+        defaultRuntime.exit(1);
+      }
     });
 
   plugins

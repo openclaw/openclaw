@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
 import {
@@ -13,6 +12,7 @@ import {
   retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: (params: {

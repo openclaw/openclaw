@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  parseRunWithEnvArgs,
-  resolveSpawnCommand,
-} from "../../scripts/run-with-env.mjs";
+import { parseRunWithEnvArgs, resolveSpawnCommand } from "../../scripts/run-with-env.mjs";
 
 describe("run-with-env", () => {
   it("parses leading env assignments before the command separator", () => {

@@ -18,6 +18,15 @@ describe("annotateInterSessionPromptText", () => {
     expect(text).toContain("sourceSession=agent:main:discord:source");
     expect(text).toContain("sourceChannel=discord");
     expect(text).toContain("sourceTool=sessions_send");
+    expect(
+      annotateInterSessionPromptText("reply with status", {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:telegram:source",
+        handoffId: "handoff-123",
+        replyTo: "agent:main:telegram:source",
+        sourceTool: "sessions_send",
+      }),
+    ).toContain("handoffId=handoff-123 replyTo=agent:main:telegram:source");
     expect(text).toContain("isUser=false");
     expect(text).toContain("do the thing");
   });

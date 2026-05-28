@@ -75,6 +75,17 @@ export function parseHealthRouteArgs(argv: string[]) {
   };
 }
 
+export function parseDiagnoseRouteArgs(argv: string[]) {
+  const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
+  if (timeoutMs === null) {
+    return null;
+  }
+  return {
+    json: hasFlag(argv, "--json"),
+    timeoutMs,
+  };
+}
+
 export function parseStatusRouteArgs(argv: string[]) {
   const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
   if (timeoutMs === null) {

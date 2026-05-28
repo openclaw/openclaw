@@ -185,9 +185,7 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
     append,
     read() {
       const output = chunks.join("");
-      return truncated
-        ? `[output truncated to last ${limit} bytes]\n${output}`
-        : output;
+      return truncated ? `[output truncated to last ${limit} bytes]\n${output}` : output;
     },
   };
 }

@@ -61,9 +61,7 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
     ]);
-    expect(payload.sources).toContain(
-      "extensions/diffs-language-pack/assets/viewer-runtime.js",
-    );
+    expect(payload.sources).toContain("extensions/diffs-language-pack/assets/viewer-runtime.js");
     expect(payload.sources).toContain("extensions/diffs/assets/viewer-runtime.js");
   });
 

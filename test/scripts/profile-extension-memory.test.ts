@@ -59,15 +59,7 @@ describe("scripts/profile-extension-memory", () => {
       );
 
       const result = runProfileExtensionMemory(
-        [
-          "--extension",
-          "noisy",
-          "--skip-combined",
-          "--concurrency",
-          "1",
-          "--json",
-          reportPath,
-        ],
+        ["--extension", "noisy", "--skip-combined", "--concurrency", "1", "--json", reportPath],
         root,
       );
 

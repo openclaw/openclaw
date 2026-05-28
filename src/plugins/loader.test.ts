@@ -14,7 +14,11 @@ import {
   getRegisteredEventKeys,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
-import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  emitDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import {
   clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
@@ -7469,7 +7473,7 @@ module.exports = {
     ).toBe("loaded");
   });
 
-  it("supports legacy plugins subscribing to diagnostic events from the root sdk", () => {
+  it("supports legacy plugins subscribing to diagnostic events from the root sdk", async () => {
     useNoBundledPlugins();
     const seenKey = "__openclawLegacyRootDiagnosticSeen";
     delete (globalThis as Record<string, unknown>)[seenKey];
@@ -7524,6 +7528,7 @@ module.exports = {
         sessionKey: "agent:main:test:dm:peer",
         usage: { total: 1 },
       });
+      await waitForDiagnosticEventsDrained();
 
       expect((globalThis as Record<string, unknown>)[seenKey]).toEqual([
         {
@@ -7533,6 +7538,7 @@ module.exports = {
       ]);
     } finally {
       delete (globalThis as Record<string, unknown>)[seenKey];
+      resetDiagnosticEventsForTest();
     }
   });
 
