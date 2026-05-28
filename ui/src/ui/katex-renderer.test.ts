@@ -72,6 +72,22 @@ describe("findInlineMathEnd", () => {
   it("handles escaped \\$ inside math content $x\\$y$", () => {
     expect(findInlineMathEnd("$x\\$y$", 0)).toBe(5);
   });
+
+  it("finds closing $ before fullwidth comma (U+FF0C)", () => {
+    expect(findInlineMathEnd("$E=mc^2$\uff0c", 0)).toBe(7);
+  });
+
+  it("finds closing $ before CJK ideograph", () => {
+    expect(findInlineMathEnd("$x^2$\u7684", 0)).toBe(4);
+  });
+
+  it("finds closing $ before CJK period (U+3002)", () => {
+    expect(findInlineMathEnd("$x^2$\u3002", 0)).toBe(4);
+  });
+
+  it("finds closing $ before fullwidth right paren (U+FF09)", () => {
+    expect(findInlineMathEnd("($x^2$\uff09", 1)).toBe(5);
+  });
 });
 
 // ── extractMathBlocks ──
@@ -186,6 +202,22 @@ describe("extractMathBlocks", () => {
     const ph0 = entries[0][0];
     const ph1 = entries[1][0];
     expect(protectedText).toBe(`${ph0} and ${ph1}`);
+  });
+
+  it("extracts inline math followed by fullwidth comma: $E=mc^2$\uff0c", () => {
+    const { mathBlocks } = extractMathBlocks(`\u8d28\u80fd\u65b9\u7a0b $E=mc^2$\uff0c\u4ee5\u53ca`);
+    expect(mathBlocks.size).toBe(1);
+    const [ph, info] = mathBlocks.entries().next().value!;
+    expect(info.tex).toBe("E=mc^2");
+    expect(info.displayMode).toBe(false);
+  });
+
+  it("extracts inline math followed by CJK ideograph: $x^2$\u7684\u503c", () => {
+    const { mathBlocks } = extractMathBlocks(`\u8ba1\u7b97 $x^2$ \u7684\u503c`);
+    expect(mathBlocks.size).toBe(1);
+    const [ph, info] = mathBlocks.entries().next().value!;
+    expect(info.tex).toBe("x^2");
+    expect(info.displayMode).toBe(false);
   });
 });
 
@@ -464,9 +496,16 @@ describe("maxSize option in KaTeX rendering", () => {
     });
 
     expect(renderToStringMock).toHaveBeenCalled();
-    const lastCall = renderToStringMock.mock.calls[renderToStringMock.mock.calls.length - 1]!;
-    const options = lastCall[1] as Record<string, unknown>;
-    expect(options.maxSize).toBe(100);
+    const calls = renderToStringMock.mock.calls;
+    const lastCall = calls[calls.length - 1];
+    if (!lastCall) {
+      throw new Error("no mock calls");
+    }
+    const opts = lastCall[1];
+    if (!opts) {
+      throw new Error("no options argument");
+    }
+    expect(opts.maxSize).toBe(100);
   });
 
   it("hostile LaTeX size is capped by maxSize", async () => {
@@ -479,9 +518,16 @@ describe("maxSize option in KaTeX rendering", () => {
 
     expect(html).toContain('class="katex"');
     expect(renderToStringMock).toHaveBeenCalled();
-    const lastCall = renderToStringMock.mock.calls[renderToStringMock.mock.calls.length - 1]!;
-    const options = lastCall[1] as Record<string, unknown>;
-    expect(options.maxSize).toBe(100);
+    const calls = renderToStringMock.mock.calls;
+    const lastCall = calls[calls.length - 1];
+    if (!lastCall) {
+      throw new Error("no mock calls");
+    }
+    const opts = lastCall[1];
+    if (!opts) {
+      throw new Error("no options argument");
+    }
+    expect(opts.maxSize).toBe(100);
   });
 
   it("normal formulas unaffected by maxSize", async () => {

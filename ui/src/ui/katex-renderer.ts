@@ -36,6 +36,43 @@ function isSingleLetterVariable(content: string): boolean {
   return (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122);
 }
 
+/**
+ * Check if a character following a closing `$` is a CJK punctuation
+ * or ideograph that should count as a valid boundary for inline math.
+ * This covers fullwidth punctuation (U+FF00–FFEF), CJK punctuation
+ * (U+3000–303F), and CJK ideographs (U+4E00–9FFF, U+3400–4DBF).
+ */
+function isCJKBoundary(nextChar: string): boolean {
+  const cp = nextChar.codePointAt(0);
+  if (cp === undefined) {
+    return false;
+  }
+  // Fullwidth punctuation: ，．！？）：；、
+  if (cp >= 0xff01 && cp <= 0xff60) {
+    return true;
+  }
+  // CJK punctuation: 。、「」【】
+  if (cp >= 0x3001 && cp <= 0x303f) {
+    return true;
+  }
+  // CJK ideographs — a closing $ before a CJK character is a valid boundary
+  if (cp >= 0x4e00 && cp <= 0x9fff) {
+    return true;
+  }
+  if (cp >= 0x3400 && cp <= 0x4dbf) {
+    return true;
+  }
+  // Korean Hangul
+  if (cp >= 0xac00 && cp <= 0xd7af) {
+    return true;
+  }
+  // Katakana / Hiragana
+  if (cp >= 0x3040 && cp <= 0x30ff) {
+    return true;
+  }
+  return false;
+}
+
 // ── findInlineMathEnd ──
 
 /**
@@ -70,7 +107,8 @@ export function findInlineMathEnd(text: string, start: number): number {
         nextChar === null ||
         /[\s.,;:!?)\]}"'`-]/.test(nextChar) ||
         nextChar === "$" ||
-        nextChar === "\n";
+        nextChar === "\n" ||
+        isCJKBoundary(nextChar);
 
       if (isBoundary) {
         if (content.length === 0) {

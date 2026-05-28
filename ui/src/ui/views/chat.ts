@@ -1072,7 +1072,7 @@ export function renderChat(props: ChatProps) {
   // Preload KaTeX when math rendering is enabled (one-shot guard to prevent infinite render loop)
   if (props.mathRendering === "katex" && !katexPreloadTriggered) {
     katexPreloadTriggered = true;
-    preloadKatex().then(() => {
+    void preloadKatex().then(() => {
       clearMarkdownCache();
       const requestUpdate = props.onRequestUpdate ?? (() => {});
       requestUpdate();
@@ -1251,6 +1251,7 @@ export function renderChat(props: ChatProps) {
                 assistantIdentity,
                 props.basePath,
                 props.assistantAttachmentAuthToken ?? null,
+                props.mathRendering,
               );
             }
             if (item.kind === "group") {

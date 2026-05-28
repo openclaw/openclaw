@@ -364,6 +364,7 @@ export function renderStreamingGroup(
   assistant?: AssistantIdentity,
   basePath?: string,
   authToken?: string | null,
+  mathRendering?: "off" | "katex",
 ) {
   const name = assistant?.name ?? "Assistant";
 
@@ -378,7 +379,7 @@ export function renderStreamingGroup(
             timestamp: startedAt,
           },
           `stream:${startedAt}`,
-          { isStreaming: true, showReasoning: false },
+          { isStreaming: true, showReasoning: false, mathRendering },
           onOpenSidebar,
         )}
         <div class="chat-group-footer">
