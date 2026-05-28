@@ -23,24 +23,28 @@ export const formatInternalVerbosePersistenceDeniedText = () =>
 export const formatInternalVerboseCurrentReplyOnlyText = () =>
   "Verbose logging set for the current reply only.";
 
-function canPersistInternalDirective(params: {
+export function canPersistSessionDirectiveDefaults(params: {
   messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
   commandAuthorized?: boolean;
   senderIsOwner?: boolean;
 }): boolean {
-  if (params.gatewayClientScopes === undefined) {
-    const hasChannelContext =
-      normalizeOptionalString(params.messageProvider) !== undefined ||
-      normalizeOptionalString(params.surface) !== undefined;
-    return !hasChannelContext || params.commandAuthorized === true || params.senderIsOwner === true;
-  }
-  return params.gatewayClientScopes.includes("operator.admin");
-}
+  const messageProvider = normalizeOptionalString(params.messageProvider);
+  const surface = normalizeOptionalString(params.surface);
+  const hasChannelContext = messageProvider !== undefined || surface !== undefined;
+  const isInternalGatewayCaller = messageProvider === "webchat" || surface === "webchat";
 
-export const canPersistInternalExecDirective = canPersistInternalDirective;
-export const canPersistInternalVerboseDirective = canPersistInternalDirective;
+  if (isInternalGatewayCaller) {
+    return params.gatewayClientScopes?.includes("operator.admin") === true;
+  }
+
+  if (hasChannelContext) {
+    return params.commandAuthorized === true || params.senderIsOwner === true;
+  }
+
+  return true;
+}
 
 const formatElevatedEvent = (level: ElevatedLevel) => {
   if (level === "full") {

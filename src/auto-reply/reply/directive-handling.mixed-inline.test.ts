@@ -196,7 +196,7 @@ describe("mixed inline directives", () => {
     expect(sessionEntry.reasoningLevel).toBe("off");
   });
 
-  it("uses provider metadata when acknowledging mixed exec persistence denial", async () => {
+  it("persists mixed exec defaults for authorized external senders with empty gateway scopes", async () => {
     const directives = parseInlineDirectives(
       "please reply\n/exec host=node security=allowlist ask=always node=worker-1",
     );
@@ -240,8 +240,8 @@ describe("mixed inline directives", () => {
       },
     });
 
-    expect(fastLane.directiveAck?.text).toContain("operator.admin");
-    expect(fastLane.directiveAck?.text).not.toContain("Exec defaults set");
+    expect(fastLane.directiveAck?.text).toContain("Exec defaults set");
+    expect(fastLane.directiveAck?.text).not.toContain("operator.admin");
 
     await persistInlineDirectives({
       directives,
@@ -263,12 +263,13 @@ describe("mixed inline directives", () => {
       agentCfg: cfg.agents?.defaults,
       messageProvider: "telegram",
       gatewayClientScopes: [],
+      commandAuthorized: true,
     });
 
-    expect(sessionEntry.execHost).toBeUndefined();
-    expect(sessionEntry.execSecurity).toBeUndefined();
-    expect(sessionEntry.execAsk).toBeUndefined();
-    expect(sessionEntry.execNode).toBeUndefined();
+    expect(sessionEntry.execHost).toBe("node");
+    expect(sessionEntry.execSecurity).toBe("allowlist");
+    expect(sessionEntry.execAsk).toBe("always");
+    expect(sessionEntry.execNode).toBe("worker-1");
   });
 
   it("does not persist trace directives for unauthorized mixed messages", async () => {
