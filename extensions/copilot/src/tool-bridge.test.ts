@@ -321,6 +321,26 @@ describe("createCopilotToolBridge", () => {
       expect(opts.onToolOutcome).toBe(onToolOutcome);
     });
 
+    it("prefers the unscoped toolAuthProfileStore when building OpenClaw tools", async () => {
+      const { createOpenClawCodingTools, getOpts } = captureCall();
+      const authProfileStore = { kind: "transport-scoped-store" } as never;
+      const toolAuthProfileStore = { kind: "tool-store" } as never;
+
+      await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {
+          authProfileStore,
+          toolAuthProfileStore,
+        } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+
+      expect(getOpts().authProfileStore).toBe(toolAuthProfileStore);
+    });
+
     it("derives sandboxSessionKey and runSessionKey from attemptParams (PI parity)", async () => {
       const { createOpenClawCodingTools, getOpts } = captureCall();
 

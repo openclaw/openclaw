@@ -346,7 +346,7 @@ function buildOpenClawCodingToolsOptions(
     forceMessageTool: a.forceMessageTool,
     enableHeartbeatTool: a.enableHeartbeatTool,
     forceHeartbeatTool: a.forceHeartbeatTool,
-    authProfileStore: a.authProfileStore,
+    authProfileStore: a.toolAuthProfileStore ?? a.authProfileStore,
     // recordToolPrepStage intentionally omitted: copilot does not
     // surface attempt-stage telemetry yet. Codex omits this too.
     onToolOutcome: a.onToolOutcome,

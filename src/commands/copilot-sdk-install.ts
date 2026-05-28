@@ -111,15 +111,32 @@ const COPILOT_SDK_PINNED_PACKAGE_KEYS = [
   "node_modules/@github/copilot",
 ] as const;
 
+function stableStringifyJson(value: unknown): string {
+  return JSON.stringify(sortJsonValue(value));
+}
+
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortJsonValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, sortJsonValue(entry)]),
+    );
+  }
+  return value;
+}
+
 /**
  * Confirms that the on-demand install at `fallbackDir` matches the
- * pinned `@github/copilot-sdk` + `@github/copilot` versions declared in
- * the shipped manifest at `manifestDir`. The directory check used to be
- * the only gate (`isCopilotSdkInstalled`), but that lets stale, partial,
- * or manually placed trees bypass the reviewed dependency graph (see
- * ClawSweeper round 5 P2). This verifier closes that hole by comparing
- * the shipped `package-lock.json` against the install's lock AND the
- * installed package.json files.
+ * pinned lock graph declared in the shipped manifest at `manifestDir`.
+ * The directory check used to be the only gate (`isCopilotSdkInstalled`),
+ * but that lets stale, partial, or manually placed trees bypass the
+ * reviewed dependency graph. This verifier closes that hole by comparing
+ * the shipped `package-lock.json` as a whole against the install's lock
+ * AND the installed package.json files for the runtime entry packages.
  *
  * Manifest-side errors (missing file, malformed JSON, missing pinned
  * version entry) are treated as fatal because a packaged openclaw install
@@ -209,6 +226,13 @@ export function verifyCopilotSdkInstall(
         }`,
       };
     }
+  }
+
+  if (stableStringifyJson(installedLock) !== stableStringifyJson(manifestLock)) {
+    return {
+      ok: false,
+      reason: "fallback package-lock drift: installed lock does not match pinned manifest",
+    };
   }
 
   return { ok: true };

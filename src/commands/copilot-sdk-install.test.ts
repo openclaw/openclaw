@@ -563,6 +563,35 @@ describe("verifyCopilotSdkInstall", () => {
     }
   });
 
+  it("reports drift when the fallback lock differs outside the entry package versions", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-verify-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
+    try {
+      writeFakePinnedManifest(manifestDir);
+      installFakeFallbackGraph(tmp, "1.0.0-beta.4", "1.0.48");
+      const fallbackLockPath = path.join(tmp, "package-lock.json");
+      fs.copyFileSync(path.join(manifestDir, "package-lock.json"), fallbackLockPath);
+      const fallbackLock = JSON.parse(fs.readFileSync(fallbackLockPath, "utf8")) as {
+        packages?: Record<string, { version?: string }>;
+      };
+      fallbackLock.packages = {
+        ...fallbackLock.packages,
+        "node_modules/drifted-transitive": { version: "9.9.9" },
+      };
+      fs.writeFileSync(fallbackLockPath, JSON.stringify(fallbackLock));
+
+      const result = verifyCopilotSdkInstall(tmp, manifestDir);
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain("package-lock drift");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
+    }
+  });
+
   it("reports missing installed package dir even when the lock is present", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
