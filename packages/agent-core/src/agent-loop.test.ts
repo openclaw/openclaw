@@ -82,6 +82,13 @@ function assistantToolName(message: AgentMessage | undefined): string {
   return message.content.find((part) => part.type === "toolCall")?.name ?? "";
 }
 
+function assistantToolArguments(message: AgentMessage | undefined): Record<string, unknown> {
+  if (!message || message.role !== "assistant") {
+    return {};
+  }
+  return message.content.find((part) => part.type === "toolCall")?.arguments ?? {};
+}
+
 async function collectEvents(stream: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   const events: AgentEvent[] = [];
   for await (const event of stream) {
@@ -190,6 +197,47 @@ describe("agentLoop EventStream failures", () => {
       "search",
       "search",
       "search",
+    ]);
+  });
+
+  it("uses updated tool-call partials when providers include them on deltas", async () => {
+    const startToolCall = {
+      type: "toolCall" as const,
+      id: "call-1",
+      name: "search",
+      arguments: {},
+    };
+    const updatedToolCall = {
+      type: "toolCall" as const,
+      id: "call-1",
+      name: "search",
+      arguments: { q: "openclaw" },
+    };
+    const finalMessage = assistantMessage([]);
+    const stream = agentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      { systemPrompt: "", messages: [] },
+      config,
+      undefined,
+      streamEvents([
+        { type: "start", partial: assistantMessage([]) },
+        { type: "toolcall_start", contentIndex: 0, partial: assistantMessage([startToolCall]) },
+        {
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: '{"q":"openclaw"}',
+          partial: assistantMessage([updatedToolCall]),
+        },
+        { type: "done", reason: "stop", message: finalMessage },
+      ]),
+    );
+
+    const events = await collectEvents(stream);
+    const updates = events.filter((event) => event.type === "message_update");
+
+    expect(updates.map((event) => assistantToolArguments(event.message))).toEqual([
+      {},
+      { q: "openclaw" },
     ]);
   });
 });
