@@ -750,7 +750,7 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
     ambiguousLocalAuthRefs
       ? credentialPlan.localToken.refPath
       : undefined,
-    credentialPlan.localPasswordCanWin ||
+    (credentialPlan.localPasswordCanWin && !credentialPlan.envPassword) ||
     remoteLocalPasswordFallbackActive ||
     ambiguousLocalAuthRefs
       ? credentialPlan.localPassword.refPath
