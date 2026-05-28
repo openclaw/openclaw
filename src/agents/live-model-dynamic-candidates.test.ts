@@ -40,6 +40,7 @@ describe("appendPrioritizedDynamicLiveModels", () => {
         : undefined,
     );
     const prepareDynamicModel: DynamicModelPreparer = vi.fn(async () => undefined);
+    const normalizeModel = vi.fn((entry: Model) => entry);
     const config = {
       models: {
         providers: {
@@ -59,6 +60,7 @@ describe("appendPrioritizedDynamicLiveModels", () => {
       modelRegistry: REGISTRY,
       resolveDynamicModel,
       prepareDynamicModel,
+      normalizeModel,
       refs: [
         { provider: "anthropic", id: "claude-sonnet-4-6" },
         { provider: DYNAMIC_PROVIDER, id: "glm-5" },
@@ -97,6 +99,13 @@ describe("appendPrioritizedDynamicLiveModels", () => {
           providerConfig: config.models?.providers?.[DYNAMIC_PROVIDER],
         }),
       }),
+    );
+    expect(normalizeModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "opencode-go",
+        id: "glm-5",
+      }),
+      "/tmp/openclaw-agent",
     );
   });
 
