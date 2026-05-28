@@ -181,6 +181,46 @@ describe("cleanupEmbeddedAttemptResources", () => {
     expect(runtimeDispose).toHaveBeenCalledTimes(1);
   });
 
+  it("disposes bundleMcpRuntime and bundleLspRuntime when provided", async () => {
+    const mcpDispose = vi.fn(async () => {});
+    const lspDispose = vi.fn(async () => {});
+    const release = vi.fn(async () => {});
+
+    await cleanupEmbeddedAttemptResources({
+      flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
+      session: {
+        agent: {},
+        dispose: vi.fn(),
+      },
+      sessionManager: {},
+      sessionLock: { release },
+      bundleMcpRuntime: { dispose: mcpDispose } as never,
+      bundleLspRuntime: { dispose: lspDispose } as never,
+    });
+
+    expect(mcpDispose).toHaveBeenCalledTimes(1);
+    expect(lspDispose).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles undefined bundleMcpRuntime and bundleLspRuntime gracefully", async () => {
+    const release = vi.fn(async () => {});
+
+    await cleanupEmbeddedAttemptResources({
+      flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
+      session: {
+        agent: {},
+        dispose: vi.fn(),
+      },
+      sessionManager: {},
+      sessionLock: { release },
+      bundleMcpRuntime: undefined,
+      bundleLspRuntime: undefined,
+    });
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("can skip stale session-manager flushing after session takeover", async () => {
     const flushPendingToolResultsAfterIdle = vi.fn(async () => {});
     const order: string[] = [];
