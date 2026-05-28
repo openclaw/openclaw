@@ -236,6 +236,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
       ) => Promise<ReplyPayload | null> | ReplyPayload | null;
       deliver: (payload: unknown, info: { kind: "block" | "final" }) => Promise<void> | void;
       transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
+      onSettled?: () => Promise<unknown> | unknown;
     };
     ctx?: unknown;
     replyOptions?: DispatchInboundParams["replyOptions"];
@@ -261,17 +262,25 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
       pendingDeliveries.push(delivery);
       return true;
     };
-    return await dispatchInboundMessage({
-      ctx: params.ctx,
-      replyOptions: params.replyOptions,
-      dispatcher: {
-        sendBlockReply: vi.fn((payload: ReplyPayload) => queueDelivery(payload, { kind: "block" })),
-        sendFinalReply: vi.fn((payload: ReplyPayload) => queueDelivery(payload, { kind: "final" })),
-        waitForIdle: vi.fn(async () => {
-          await Promise.all(pendingDeliveries);
-        }),
-      },
-    });
+    try {
+      return await dispatchInboundMessage({
+        ctx: params.ctx,
+        replyOptions: params.replyOptions,
+        dispatcher: {
+          sendBlockReply: vi.fn((payload: ReplyPayload) =>
+            queueDelivery(payload, { kind: "block" }),
+          ),
+          sendFinalReply: vi.fn((payload: ReplyPayload) =>
+            queueDelivery(payload, { kind: "final" }),
+          ),
+          waitForIdle: vi.fn(async () => {
+            await Promise.all(pendingDeliveries);
+          }),
+        },
+      });
+    } finally {
+      await params.dispatcherOptions.onSettled?.();
+    }
   },
   dispatchInboundMessage: (params: DispatchInboundParams) => dispatchInboundMessage(params),
   settleReplyDispatcher: async (params: {
@@ -2252,6 +2261,7 @@ describe("processDiscordMessage draft streaming", () => {
     const draftStream = createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "delivery survived" });
+      await params?.dispatcher.waitForIdle();
       await params?.dispatcher.sendFinalReply(createNonTerminalToolWarningPayload());
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
@@ -2273,6 +2283,7 @@ describe("processDiscordMessage draft streaming", () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply(createNonTerminalToolWarningPayload());
       await params?.dispatcher.sendFinalReply({ text: "delivery recovered" });
+      await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
@@ -2500,6 +2511,7 @@ describe("processDiscordMessage draft streaming", () => {
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
       await params?.dispatcher.sendFinalReply({ text: "delivery survived" });
+      await params?.dispatcher.waitForIdle();
       await params?.dispatcher.sendFinalReply(createNonTerminalToolWarningPayload());
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
