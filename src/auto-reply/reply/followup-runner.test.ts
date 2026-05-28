@@ -2637,6 +2637,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
+      providerOverride: "google",
+      modelOverride: "gemini-2.5-flash",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai-codex",
+      modelOverrideFallbackOriginModel: "gpt-5.5",
       fallbackNoticeSelectedModel: "openai-codex/gpt-5.5",
       fallbackNoticeActiveModel: "google/gemini-2.5-flash",
       fallbackNoticeReason: "fallback",
@@ -2685,6 +2690,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     ).resolves.toBeUndefined();
 
     expect(sessionStore[sessionKey]).toMatchObject({
+      providerOverride: "google",
+      modelOverride: "gemini-2.5-flash",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai-codex",
+      modelOverrideFallbackOriginModel: "gpt-5.5",
       fallbackNoticeSelectedModel: "openai-codex/gpt-5.5",
       fallbackNoticeActiveModel: "google/gemini-2.5-flash",
       fallbackNoticeReason: "fallback",

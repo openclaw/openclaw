@@ -1130,7 +1130,10 @@ export function createFollowupRunner(params: {
         runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
       const fallbackStateEntry =
         (replySessionKey ? sessionStore?.[replySessionKey] : undefined) ?? activeSessionEntry;
-      const autoFallbackSelectionToClear = snapshotAutoFallbackSelection(fallbackStateEntry);
+      const autoFallbackSelectionToClear =
+        !preserveUserFacingSessionState && fallbackStateEntry
+          ? snapshotAutoFallbackSelection(fallbackStateEntry)
+          : undefined;
       const selectedModel = resolveQueuedSelectedModel({
         run: queued.run,
         fallbackStateEntry,
