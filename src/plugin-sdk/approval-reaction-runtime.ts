@@ -297,9 +297,7 @@ function buildManualInstructionSection(params: {
 
 function buildCommandActionInstructionSection(actions: PendingApprovalView["actions"]): string[] {
   return actions.flatMap((action) =>
-    "kind" in action && action.kind === "command" && action.command.trim()
-      ? [`${action.label}: ${action.command}`]
-      : [],
+    action.command.trim() ? [`${action.label}: ${action.command}`] : [],
   );
 }
 
