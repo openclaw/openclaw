@@ -173,6 +173,14 @@ function buildRealtimeRejectedTwiML(): WebhookResponsePayload {
   };
 }
 
+function buildTwilioReplayTwiML(): WebhookResponsePayload {
+  return {
+    statusCode: 200,
+    headers: { "Content-Type": "text/xml" },
+    body: '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+  };
+}
+
 /**
  * HTTP server for receiving voice call webhooks from providers.
  * Supports WebSocket upgrades for media streams when streaming is enabled.
@@ -722,7 +730,7 @@ export class VoiceCallWebhookServer {
       }
 
       if (isReplay && this.provider.name === "twilio") {
-        return { statusCode: 200, body: "OK" };
+        return buildTwilioReplayTwiML();
       }
 
       const initialTwiML = this.provider.consumeInitialTwiML?.(ctx);

@@ -169,6 +169,12 @@ function expectNoTwilioStreamState(provider: TwilioProvider) {
   expect(state.activeStreamCalls.size).toBe(0);
 }
 
+async function expectTwilioReplayTwiML(response: Response) {
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toContain("text/xml");
+  expect(await response.text()).toBe('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+}
+
 function createTwilioVerificationProvider(
   overrides: Partial<TwilioProviderTestDouble> = {},
 ): VoiceCallProvider {
@@ -837,8 +843,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
         { "x-twilio-signature": "sig" },
       );
 
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("OK");
+      await expectTwilioReplayTwiML(response);
       expect(buildTwiMLPayload).not.toHaveBeenCalled();
       expect(parseWebhookEvent).not.toHaveBeenCalled();
       expect(processEvent).not.toHaveBeenCalled();
@@ -954,8 +959,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
           { "x-twilio-signature": "sig" },
         );
 
-        expect(response.status).toBe(200);
-        expect(await response.text()).toBe("OK");
+        await expectTwilioReplayTwiML(response);
         expect(buildTwiMLPayload).not.toHaveBeenCalled();
         expect(parseWebhookEvent).not.toHaveBeenCalled();
         expect(processEvent).not.toHaveBeenCalled();
@@ -1014,8 +1018,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
 
       expect(first.status).toBe(200);
       expect(await first.text()).toContain("server-token");
-      expect(replay.status).toBe(200);
-      expect(await replay.text()).toBe("OK");
+      await expectTwilioReplayTwiML(replay);
       expect(buildTwiMLPayload).toHaveBeenCalledTimes(1);
       expect(parseWebhookEvent).not.toHaveBeenCalled();
       expectNoTwilioStreamState(twilioProvider);
