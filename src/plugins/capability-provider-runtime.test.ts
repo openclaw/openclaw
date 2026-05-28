@@ -451,6 +451,27 @@ describe("resolvePluginCapabilityProviders", () => {
     expectInitialRuntimeRegistryLookup();
   });
 
+  it("skips unreadable speech provider config maps while resolving requested providers", () => {
+    const cfg = {
+      models: {
+        providers: new Proxy(
+          {
+            mockprovider: {},
+          },
+          {
+            ownKeys() {
+              throw new Error("fuzzplugin capability provider keys failed");
+            },
+          },
+        ),
+      },
+    } as OpenClawConfig;
+
+    expectNoResolvedCapabilityProviders(
+      resolvePluginCapabilityProviders({ key: "speechProviders", cfg }),
+    );
+  });
+
   it("targets enabled external capability plugins without bundled fallback capture", () => {
     const loaded = createEmptyPluginRegistry();
     loaded.imageGenerationProviders.push({
@@ -968,6 +989,33 @@ describe("resolvePluginCapabilityProviders", () => {
     expectResolvedCapabilityProviderIds(providers, ["microsoft"]);
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
     expectInitialRuntimeRegistryLookup();
+  });
+
+  it("skips hostile media model iterators while resolving requested providers", () => {
+    const active = createEmptyPluginRegistry();
+    active.mediaUnderstandingProviders.push({
+      pluginId: "openai",
+      pluginName: "openai",
+      source: "test",
+      provider: {
+        id: "openai",
+        label: "openai",
+        analyze: async () => ({ text: "" }),
+      },
+    } as never);
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(active);
+    const models = Object.assign([{ provider: "mockprovider" }], {
+      [Symbol.iterator]() {
+        throw new Error("mockplugin media model iterator failed");
+      },
+    });
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "mediaUnderstandingProviders",
+      cfg: { tools: { media: { models } } } as OpenClawConfig,
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["openai"]);
   });
 
   it("keeps active capability providers when cfg has no explicit plugin config", () => {

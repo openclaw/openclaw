@@ -19,6 +19,7 @@ import {
   listAvailableManifestContractValues,
 } from "./manifest-contract-eligibility.js";
 import {
+  createPluginCacheKey,
   resolveConfigScopedRuntimeCacheValue,
   type ConfigScopedRuntimeCache,
 } from "./plugin-cache-primitives.js";
@@ -59,6 +60,7 @@ type CapabilityPluginResolution = {
 
 const capabilityProviderSnapshotCache: ConfigScopedRuntimeCache<CapabilityProviderEntries> =
   new WeakMap();
+const MAX_CAPABILITY_PROVIDER_CONFIG_LIST_ENTRIES = 10_000;
 
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
   embeddingProviders: "embeddingProviders",
@@ -97,6 +99,43 @@ function shouldSkipCapabilityResolution(params: {
 
 function uniqueSorted(values: Iterable<string>): string[] {
   return sortUniqueStrings(values);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRecordValue(record: unknown, key: string): unknown {
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function copyArrayEntries(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const safeLength = Math.min(Math.max(0, length), MAX_CAPABILITY_PROVIDER_CONFIG_LIST_ENTRIES);
+  const entries: unknown[] = [];
+  for (let index = 0; index < safeLength; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      entries.push(undefined);
+    }
+  }
+  return entries;
 }
 
 export function loadCapabilityManifestSnapshot(params: {
@@ -211,10 +250,28 @@ function resolveCapabilityProviderSnapshotCacheKey(params: {
   key: CapabilityProviderRegistryKey;
   loadOptions: PluginLoadOptions;
 }): string {
-  return JSON.stringify({
-    key: params.key,
-    load: resolvePluginRegistryLoadCacheKey(params.loadOptions),
-  });
+  return createPluginCacheKey([
+    "capability-provider-snapshot",
+    params.key,
+    safeResolvePluginRegistryLoadCacheKey(params.loadOptions),
+  ]);
+}
+
+function safeResolvePluginRegistryLoadCacheKey(loadOptions: PluginLoadOptions): string {
+  try {
+    return resolvePluginRegistryLoadCacheKey(loadOptions);
+  } catch {
+    return createPluginCacheKey([
+      "unreadable-plugin-load-options",
+      {
+        activate: loadOptions.activate,
+        loadModules: loadOptions.loadModules,
+        onlyPluginIds: loadOptions.onlyPluginIds,
+        pluginSdkResolution: loadOptions.pluginSdkResolution,
+        workspaceDir: loadOptions.workspaceDir,
+      },
+    ]);
+  }
 }
 
 function findProviderById<K extends CapabilityProviderRegistryKey>(
@@ -281,10 +338,16 @@ function mergeCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>
 }
 
 function addObjectKeys(target: Set<string>, value: unknown): void {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return;
   }
-  for (const key of Object.keys(value)) {
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return;
+  }
+  for (const key of keys) {
     const normalized = key.trim().toLowerCase();
     if (normalized) {
       target.add(normalized);
@@ -313,32 +376,36 @@ function collectRequestedSpeechProviderIds(
   options: { includeVoiceModel: boolean },
 ): Set<string> {
   const requested = new Set<string>();
-  const tts =
-    typeof cfg?.messages?.tts === "object" && cfg.messages.tts !== null
-      ? (cfg.messages.tts as Record<string, unknown>)
-      : undefined;
-  addStringValue(requested, tts?.provider);
-  addObjectKeys(requested, tts?.providers);
+  const tts = readRecordValue(readRecordValue(cfg, "messages"), "tts");
+  addStringValue(requested, readRecordValue(tts, "provider"));
+  addObjectKeys(requested, readRecordValue(tts, "providers"));
   if (options.includeVoiceModel) {
-    addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);
+    addModelConfigProviderIds(
+      requested,
+      readRecordValue(readRecordValue(readRecordValue(cfg, "agents"), "defaults"), "voiceModel"),
+    );
   }
-  addObjectKeys(requested, cfg?.models?.providers);
+  addObjectKeys(requested, readRecordValue(readRecordValue(cfg, "models"), "providers"));
   return requested;
 }
 
 function collectRequestedVoiceModelProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
   const requested = new Set<string>();
-  addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);
+  addModelConfigProviderIds(
+    requested,
+    readRecordValue(readRecordValue(readRecordValue(cfg, "agents"), "defaults"), "voiceModel"),
+  );
   return requested;
 }
 
 function addMediaModelProviders(target: Set<string>, value: unknown): void {
-  if (!Array.isArray(value)) {
+  const entries = copyArrayEntries(value);
+  if (!entries) {
     return;
   }
-  for (const entry of value) {
-    if (typeof entry === "object" && entry !== null) {
-      addStringValue(target, (entry as { provider?: unknown }).provider);
+  for (const entry of entries) {
+    if (isRecord(entry)) {
+      addStringValue(target, readRecordValue(entry, "provider"));
     }
   }
 }
@@ -347,11 +414,11 @@ function collectRequestedMediaUnderstandingProviderIds(
   cfg: OpenClawConfig | undefined,
 ): Set<string> {
   const requested = new Set<string>();
-  const media = cfg?.tools?.media;
-  addMediaModelProviders(requested, media?.models);
-  addMediaModelProviders(requested, media?.image?.models);
-  addMediaModelProviders(requested, media?.audio?.models);
-  addMediaModelProviders(requested, media?.video?.models);
+  const media = readRecordValue(readRecordValue(cfg, "tools"), "media");
+  addMediaModelProviders(requested, readRecordValue(media, "models"));
+  addMediaModelProviders(requested, readRecordValue(readRecordValue(media, "image"), "models"));
+  addMediaModelProviders(requested, readRecordValue(readRecordValue(media, "audio"), "models"));
+  addMediaModelProviders(requested, readRecordValue(readRecordValue(media, "video"), "models"));
   return requested;
 }
 
@@ -393,15 +460,14 @@ function shouldScopeCapabilityLoadToRequestedProviders(
 
 function removeActiveProviderIds(requested: Set<string>, entries: readonly unknown[]): void {
   for (const entry of entries as Array<{ provider: { id?: unknown; aliases?: unknown } }>) {
-    const provider = entry.provider as { id?: unknown; aliases?: unknown };
-    if (typeof provider.id === "string") {
-      requested.delete(provider.id.toLowerCase());
+    const provider = readRecordValue(entry, "provider");
+    const id = readRecordValue(provider, "id");
+    if (typeof id === "string") {
+      requested.delete(id.toLowerCase());
     }
-    if (Array.isArray(provider.aliases)) {
-      for (const alias of provider.aliases) {
-        if (typeof alias === "string") {
-          requested.delete(alias.toLowerCase());
-        }
+    for (const alias of copyArrayEntries(readRecordValue(provider, "aliases")) ?? []) {
+      if (typeof alias === "string") {
+        requested.delete(alias.toLowerCase());
       }
     }
   }
@@ -424,14 +490,15 @@ function filterLoadedProvidersForRequestedConfig<K extends CapabilityProviderReg
     return [] as unknown as PluginRegistry[K];
   }
   return params.entries.filter((entry) => {
-    const provider = entry.provider as { id?: unknown; aliases?: unknown };
-    if (typeof provider.id === "string" && params.requested.has(provider.id.toLowerCase())) {
+    const provider = readRecordValue(entry, "provider");
+    const id = readRecordValue(provider, "id");
+    if (typeof id === "string" && params.requested.has(id.toLowerCase())) {
       return true;
     }
-    if (Array.isArray(provider.aliases)) {
-      return provider.aliases.some(
-        (alias) => typeof alias === "string" && params.requested.has(alias.toLowerCase()),
-      );
+    for (const alias of copyArrayEntries(readRecordValue(provider, "aliases")) ?? []) {
+      if (typeof alias === "string" && params.requested.has(alias.toLowerCase())) {
+        return true;
+      }
     }
     return false;
   }) as PluginRegistry[K];
