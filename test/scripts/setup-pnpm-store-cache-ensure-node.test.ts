@@ -253,7 +253,7 @@ exit 1
           [
             "set -euo pipefail",
             `source "${ensureNodeScript}"`,
-            `openclaw_find_toolcache_node "24.x"`,
+            `openclaw_find_toolcache_node "99.99.99"`,
           ].join("; "),
         ],
         {
