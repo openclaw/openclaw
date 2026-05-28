@@ -3,6 +3,7 @@
  * The server manages auth and proxies requests to LLM providers.
  */
 
+import { createAssistantStreamAccumulator } from "../../llm/assistant-stream-accumulator.js";
 // Internal import for JSON parsing utility
 import {
   type AssistantMessage,
@@ -132,24 +133,10 @@ export function streamProxy(
   const stream = new ProxyMessageEventStream();
 
   void (async () => {
-    // Initialize the partial message that we'll build up from events
-    const partial: AssistantMessage = {
-      role: "assistant",
-      stopReason: "stop",
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      timestamp: Date.now(),
-    };
+    const accumulator = createAssistantStreamAccumulator({
+      model: { api: model.api, provider: model.provider, model: model.id },
+      deltaPartialMode: "snapshot",
+    });
 
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
@@ -205,7 +192,7 @@ export function streamProxy(
           return;
         }
         const proxyEvent = JSON.parse(data) as ProxyAssistantMessageEvent;
-        const event = processProxyEvent(proxyEvent, partial);
+        const event = processProxyEvent(proxyEvent, accumulator);
         if (!event) {
           return;
         }
@@ -247,13 +234,7 @@ export function streamProxy(
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const reason = options.signal?.aborted ? "aborted" : "error";
-      partial.stopReason = reason;
-      partial.errorMessage = errorMessage;
-      stream.push({
-        type: "error",
-        reason,
-        error: partial,
-      });
+      stream.push(accumulator.error(reason, { errorMessage }));
       stream.end();
     } finally {
       if (options.signal) {
@@ -266,131 +247,71 @@ export function streamProxy(
 }
 
 /**
- * Process a proxy event and update the partial message.
+ * Process a proxy event and update the local assistant stream accumulator.
  */
 function processProxyEvent(
   proxyEvent: ProxyAssistantMessageEvent,
-  partial: AssistantMessage,
+  accumulator: ReturnType<typeof createAssistantStreamAccumulator>,
 ): AssistantMessageEvent | undefined {
   switch (proxyEvent.type) {
     case "start":
-      return { type: "start", partial };
+      return accumulator.start();
 
     case "text_start":
-      partial.content[proxyEvent.contentIndex] = { type: "text", text: "" };
-      return { type: "text_start", contentIndex: proxyEvent.contentIndex, partial };
+      return accumulator.startText(proxyEvent.contentIndex);
 
-    case "text_delta": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "text") {
-        content.text += proxyEvent.delta;
-        return {
-          type: "text_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
-      }
-      throw new Error("Received text_delta for non-text content");
-    }
+    case "text_delta":
+      return accumulator.appendTextDelta(proxyEvent.contentIndex, proxyEvent.delta);
 
-    case "text_end": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "text") {
-        content.textSignature = proxyEvent.contentSignature;
-        return {
-          type: "text_end",
-          contentIndex: proxyEvent.contentIndex,
-          content: content.text,
-          partial,
-        };
-      }
-      throw new Error("Received text_end for non-text content");
-    }
+    case "text_end":
+      return accumulator.endText(proxyEvent.contentIndex, {
+        textSignature: proxyEvent.contentSignature,
+      });
 
     case "thinking_start":
-      partial.content[proxyEvent.contentIndex] = { type: "thinking", thinking: "" };
-      return { type: "thinking_start", contentIndex: proxyEvent.contentIndex, partial };
+      return accumulator.startThinking(proxyEvent.contentIndex);
 
-    case "thinking_delta": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "thinking") {
-        content.thinking += proxyEvent.delta;
-        return {
-          type: "thinking_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
-      }
-      throw new Error("Received thinking_delta for non-thinking content");
-    }
+    case "thinking_delta":
+      return accumulator.appendThinkingDelta(proxyEvent.contentIndex, proxyEvent.delta);
 
-    case "thinking_end": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "thinking") {
-        content.thinkingSignature = proxyEvent.contentSignature;
-        return {
-          type: "thinking_end",
-          contentIndex: proxyEvent.contentIndex,
-          content: content.thinking,
-          partial,
-        };
-      }
-      throw new Error("Received thinking_end for non-thinking content");
-    }
+    case "thinking_end":
+      return accumulator.endThinking(proxyEvent.contentIndex, {
+        thinkingSignature: proxyEvent.contentSignature,
+      });
 
     case "toolcall_start":
-      partial.content[proxyEvent.contentIndex] = {
+      return accumulator.startToolCall(proxyEvent.contentIndex, {
         type: "toolCall",
         id: proxyEvent.id,
         name: proxyEvent.toolName,
         arguments: {},
         partialJson: "",
-      } satisfies ToolCall & { partialJson: string } as ToolCall;
-      return { type: "toolcall_start", contentIndex: proxyEvent.contentIndex, partial };
+      } satisfies ToolCall & { partialJson: string } as ToolCall);
 
-    case "toolcall_delta": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "toolCall") {
-        const streamingContent = content as StreamingToolCall;
-        streamingContent.partialJson = `${streamingContent.partialJson ?? ""}${proxyEvent.delta}`;
-        content.arguments = parseStreamingJson(streamingContent.partialJson) || {};
-        partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
-        return {
-          type: "toolcall_delta",
-          contentIndex: proxyEvent.contentIndex,
-          delta: proxyEvent.delta,
-          partial,
-        };
-      }
-      throw new Error("Received toolcall_delta for non-toolCall content");
-    }
+    case "toolcall_delta":
+      return accumulator.appendToolCallDelta(
+        proxyEvent.contentIndex,
+        proxyEvent.delta,
+        (toolCall) => {
+          const streamingContent = toolCall as StreamingToolCall;
+          streamingContent.partialJson = `${streamingContent.partialJson ?? ""}${proxyEvent.delta}`;
+          toolCall.arguments = parseStreamingJson(streamingContent.partialJson) || {};
+        },
+      );
 
-    case "toolcall_end": {
-      const content = partial.content[proxyEvent.contentIndex];
-      if (content?.type === "toolCall") {
-        delete (content as StreamingToolCall).partialJson;
-        return {
-          type: "toolcall_end",
-          contentIndex: proxyEvent.contentIndex,
-          toolCall: content,
-          partial,
-        };
-      }
-      return undefined;
-    }
+    case "toolcall_end":
+      return accumulator.endToolCall(proxyEvent.contentIndex, (toolCall) => {
+        delete (toolCall as StreamingToolCall).partialJson;
+      });
 
     case "done":
-      partial.stopReason = proxyEvent.reason;
-      partial.usage = proxyEvent.usage;
-      return { type: "done", reason: proxyEvent.reason, message: partial };
+      return accumulator.done(proxyEvent.reason, { usage: proxyEvent.usage });
 
     case "error":
-      partial.stopReason = proxyEvent.reason;
-      partial.errorMessage = proxyEvent.errorMessage;
-      partial.usage = proxyEvent.usage;
-      return { type: "error", reason: proxyEvent.reason, error: partial };
+      return accumulator.error(proxyEvent.reason, {
+        errorMessage: proxyEvent.errorMessage,
+        usage: proxyEvent.usage,
+      });
 
     default: {
       proxyEvent satisfies never;

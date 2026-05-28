@@ -115,6 +115,44 @@ describe("streamProxy", () => {
     });
   });
 
+  it("reconstructs proxy text deltas with compatibility partial snapshots", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        responseFromText(
+          [
+            { type: "start" },
+            { type: "text_start", contentIndex: 0 },
+            { type: "text_delta", contentIndex: 0, delta: "Hel" },
+            { type: "text_delta", contentIndex: 0, delta: "lo" },
+            { type: "text_end", contentIndex: 0 },
+            { type: "done", reason: "stop", usage },
+          ]
+            .map((event) => `data: ${JSON.stringify(event)}`)
+            .join("\n"),
+        ),
+      ),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    const deltas = events.filter((event) => event.type === "text_delta");
+    expect(deltas[0]?.partial.content).toEqual([{ type: "text", text: "Hel" }]);
+    expect(deltas[1]?.partial.content).toEqual([{ type: "text", text: "Hello" }]);
+
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "Hello" }],
+      stopReason: "stop",
+    });
+  });
+
   it("returns an error result when EOF arrives without a terminal event", async () => {
     vi.stubGlobal(
       "fetch",
