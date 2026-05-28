@@ -301,6 +301,22 @@ describe("qa cli runtime", () => {
     expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
   });
 
+  it("accepts legacy pi as a runtime-pair suite alias", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      scenarioIds: ["approval-turn-tool-followthrough"],
+      runtimePair: "pi,codex",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        runtimePair: ["openclaw", "codex"],
+      }),
+    );
+  });
+
   it("drops blank suite model refs so provider defaults apply", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -454,6 +470,17 @@ describe("qa cli runtime", () => {
       scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
       concurrency: 3,
     });
+  });
+
+  it("rejects fractional suite concurrency from programmatic callers", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        scenarioIds: ["channel-chat-baseline"],
+        concurrency: 1.5,
+      }),
+    ).rejects.toThrow("--concurrency must be a positive integer");
+    expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
   });
 
   it("sets a failing exit code when host suite scenarios fail", async () => {

@@ -503,6 +503,32 @@ describe("channel-streaming", () => {
     ).toBe("🛠️ Exec\n• Checking the app-server stream");
   });
 
+  it("preserves stable ids on named tool and command-output progress lines", () => {
+    const toolLine = buildChannelProgressDraftLine({
+      event: "tool",
+      itemId: "tool:item-1",
+      toolCallId: "call-1",
+      name: "bash",
+      phase: "start",
+    });
+    const commandLine = buildChannelProgressDraftLine({
+      event: "command-output",
+      itemId: "command:item-1",
+      toolCallId: "call-1",
+      name: "bash",
+      phase: "end",
+      exitCode: 0,
+    });
+
+    expect(toolLine).toMatchObject({ id: "tool:item-1", kind: "tool", toolName: "bash" });
+    expect(commandLine).toMatchObject({
+      id: "command:item-1",
+      kind: "command-output",
+      status: "completed",
+      toolName: "bash",
+    });
+  });
+
   it("starts progress drafts after five seconds or a second work event", async () => {
     vi.useFakeTimers();
     const onStart = vi.fn(async () => {});

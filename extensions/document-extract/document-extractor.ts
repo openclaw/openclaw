@@ -1,4 +1,4 @@
-import type { PdfEngine, PdfImage } from "clawpdf";
+import type { PdfDocument, PdfEngine, PdfImage } from "clawpdf";
 import type {
   DocumentExtractedImage,
   DocumentExtractionRequest,
@@ -33,11 +33,36 @@ function toDocumentImage(image: PdfImage): DocumentExtractedImage {
   };
 }
 
+function isPdfPasswordError(err: unknown): boolean {
+  return Boolean(err && typeof err === "object" && (err as { code?: unknown }).code === "password");
+}
+
+async function openPdfDocument(params: {
+  engine: PdfEngine;
+  input: Uint8Array;
+  password?: string;
+}): Promise<PdfDocument> {
+  try {
+    return params.password
+      ? await params.engine.open(params.input, { password: params.password })
+      : await params.engine.open(params.input);
+  } catch (err) {
+    if (isPdfPasswordError(err)) {
+      throw new Error("PDF requires a password or password is incorrect.", { cause: err });
+    }
+    throw err;
+  }
+}
+
 async function extractPdfContent(
   request: DocumentExtractionRequest,
 ): Promise<DocumentExtractionResult> {
   const engine = await loadPdfEngine();
-  const pdf = await engine.open(new Uint8Array(request.buffer));
+  const pdf = await openPdfDocument({
+    engine,
+    input: new Uint8Array(request.buffer),
+    ...(request.password ? { password: request.password } : {}),
+  });
   try {
     const pages = request.pageNumbers
       ? request.pageNumbers

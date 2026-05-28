@@ -178,6 +178,18 @@ describe("qa suite planning helpers", () => {
         OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "0",
       }),
     ).toBe(0);
+    expect(
+      resolveQaSuiteWorkerStartStaggerMs(4, {
+        OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "25",
+      }),
+    ).toBe(25);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        resolveQaSuiteWorkerStartStaggerMs(4, {
+          OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: value,
+        }),
+      ).toBe(1500);
+    }
   });
 
   it("keeps explicitly requested provider-specific scenarios", () => {

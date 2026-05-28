@@ -35,6 +35,7 @@ describe("process tree CPU helpers", () => {
     expect(parsePsRssBytes("")).toBeNull();
     expect(parsePsRssBytes("nope")).toBeNull();
     expect(parsePsRssBytes("-1")).toBeNull();
+    expect(parsePsRssBytes("0x10")).toBeNull();
   });
 
   it("parses Windows process CPU and RSS counters", () => {
@@ -45,6 +46,16 @@ describe("process tree CPU helpers", () => {
       }),
     ).toBe(5);
     expect(parseWindowsWorkingSetBytes("1048576")).toBe(1_048_576);
+  });
+
+  it("rejects non-decimal Windows process counters", () => {
+    expect(
+      parseWindowsProcessCpuTimeMs({
+        kernelModeTime: "0x10",
+        userModeTime: "30000",
+      }),
+    ).toBeNull();
+    expect(parseWindowsWorkingSetBytes("0x1000")).toBeNull();
   });
 
   it("builds Windows process tree snapshots from PowerShell JSON", () => {
@@ -73,5 +84,23 @@ describe("process tree CPU helpers", () => {
     expect(snapshot?.cpuByPid.get(101)).toBe(7);
     expect(snapshot?.rssByPid.get(100)).toBe(1000);
     expect(snapshot?.rssByPid.get(101)).toBe(2000);
+  });
+
+  it("skips Windows process entries with non-decimal process ids", () => {
+    const snapshot = parseWindowsProcessTreeSnapshot(
+      JSON.stringify([
+        {
+          ProcessId: "0x64",
+          ParentProcessId: 50,
+          KernelModeTime: "10000",
+          UserModeTime: "20000",
+          WorkingSetSize: "1000",
+        },
+      ]),
+    );
+
+    expect(snapshot?.childrenByParent.size).toBe(0);
+    expect(snapshot?.cpuByPid.size).toBe(0);
+    expect(snapshot?.rssByPid.size).toBe(0);
   });
 });

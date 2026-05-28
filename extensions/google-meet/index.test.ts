@@ -817,6 +817,18 @@ describe("google-meet plugin", () => {
     });
   });
 
+  it.each(["0x10", "1e3"])("ignores non-decimal env numeric fallbacks: %s", (expiresAt) => {
+    const config = resolveGoogleMeetConfigWithEnv(
+      {},
+      {
+        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN: "access-token",
+        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: expiresAt,
+      },
+    );
+
+    expect(config.oauth).toEqual({ accessToken: "access-token" });
+  });
+
   it("requires explicit Meet URLs", () => {
     expect(normalizeMeetUrl("https://meet.google.com/abc-defg-hij")).toBe(
       "https://meet.google.com/abc-defg-hij",

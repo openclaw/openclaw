@@ -149,7 +149,10 @@ function resolveDurationSeconds(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return 5;
   }
-  return Math.max(2, Math.min(MAX_DURATION_SECONDS, Math.round(value)));
+  if (!Number.isSafeInteger(value)) {
+    return 5;
+  }
+  return Math.max(2, Math.min(MAX_DURATION_SECONDS, value));
 }
 
 function resolveRunwayRatio(req: VideoGenerationRequest): string {

@@ -66,6 +66,32 @@ function requireRecords(value: unknown, label: string): Array<Record<string, unk
   return value as Array<Record<string, unknown>>;
 }
 
+function sumToolResultTextChars(messages: AgentMessage[]): number {
+  return messages.reduce((sum, message) => {
+    if (message.role !== "toolResult") {
+      return sum;
+    }
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) {
+      return sum;
+    }
+    return (
+      sum +
+      content.reduce((blockSum, block) => {
+        if (
+          block &&
+          typeof block === "object" &&
+          (block as { type?: unknown }).type === "text" &&
+          typeof (block as { text?: unknown }).text === "string"
+        ) {
+          return blockSum + (block as { text: string }).text.length;
+        }
+        return blockSum;
+      }, 0)
+    );
+  }, 0);
+}
+
 function findRecord(
   records: Array<Record<string, unknown>>,
   predicate: (record: Record<string, unknown>) => boolean,
@@ -2006,6 +2032,23 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(params.sessionKey).toBe(sessionKey);
   });
 
+  it("forwards the normalized message channel to the embedded subscription", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        messageChannel: "TELEGRAM",
+      },
+    });
+
+    const subscriptionParams = requireRecord(
+      hoisted.subscribeEmbeddedAgentSessionMock.mock.calls[0]?.[0],
+      "subscription params",
+    );
+    expect(subscriptionParams.messageChannel).toBe("telegram");
+  });
+
   it("skips maintenance when afterTurn fails", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const afterTurn = vi.fn(async () => {
@@ -2375,5 +2418,85 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       mockParams(hoisted.installToolResultContextGuardMock, 0, "tool-result guard params")
         .contextWindowTokens,
     ).toBe(1_000_000);
+  });
+
+  it("bounds aggregate tool-result prompt history without rewriting append results", async () => {
+    const toolText = "process output ".repeat(70);
+    const sessionMessages: AgentMessage[] = [{ role: "user", content: "seed", timestamp: 1 }];
+    for (let index = 0; index < 8; index += 1) {
+      const toolCallId = `call_${index}`;
+      sessionMessages.push({
+        role: "assistant",
+        content: [{ type: "toolCall", id: toolCallId, name: "process", input: {} }],
+        timestamp: 2 + index * 2,
+      } as unknown as AgentMessage);
+      sessionMessages.push({
+        role: "toolResult",
+        toolCallId,
+        toolName: "process",
+        content: [{ type: "text", text: `${index}: ${toolText}` }],
+        isError: false,
+        timestamp: 3 + index * 2,
+      } as AgentMessage);
+    }
+    let submittedMessages: AgentMessage[] = [];
+    let promptHandlerMessages: AgentMessage[] = [];
+    let afterTurnMessages: AgentMessage[] = [];
+    const afterTurn = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => {
+      afterTurnMessages = messages;
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        ...createContextEngineBootstrapAndAssemble(),
+        afterTurn,
+      },
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        contextTokenBudget: 128_000,
+        config: {
+          agents: {
+            defaults: {
+              contextLimits: {
+                toolResultMaxChars: 1_000,
+              },
+            },
+            list: [{ id: "main" }],
+          },
+        } as OpenClawConfig,
+      },
+      createSession: () => {
+        const session = createDefaultEmbeddedSession({ initialMessages: sessionMessages });
+        session.agent.streamFn = async (_model, context) => {
+          const providerMessages = (context as { messages?: AgentMessage[] } | undefined)?.messages;
+          submittedMessages = providerMessages ?? [];
+          return {
+            async result() {
+              return doneMessage;
+            },
+            [Symbol.asyncIterator]() {
+              return (async function* () {})();
+            },
+          };
+        };
+        session.prompt = async (_prompt, options) => {
+          promptHandlerMessages = session.messages.map((message) => message as AgentMessage);
+          options?.preflightResult?.(true);
+          await session.agent.streamFn?.({} as never, { messages: session.messages } as never, {});
+          session.messages = [...session.messages, doneMessage];
+        };
+        return session;
+      },
+    });
+
+    expect(sumToolResultTextChars(sessionMessages)).toBeGreaterThan(4_000);
+    expect(sumToolResultTextChars(promptHandlerMessages)).toBeGreaterThan(4_000);
+    expect(sumToolResultTextChars(submittedMessages)).toBeLessThanOrEqual(4_000);
+    expect(JSON.stringify(submittedMessages)).toContain("truncated");
+    expect(afterTurn).toHaveBeenCalledTimes(1);
+    expect(sumToolResultTextChars(afterTurnMessages)).toBeGreaterThan(4_000);
+    expect(JSON.stringify(afterTurnMessages)).not.toContain("truncated");
   });
 });

@@ -54,6 +54,7 @@ const VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
 const VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS = 10000;
 const VOICE_CALL_GATEWAY_POLL_INTERVAL_MS = 1000;
+const DECIMAL_INTEGER_RE = /^\d+$/;
 
 const voiceCallCliDeps = {
   callGatewayFromCli,
@@ -81,7 +82,8 @@ function parseVoiceCallIntOption(
   opts?: { min?: number },
 ): number {
   const min = opts?.min ?? 0;
-  const parsed = Number(raw);
+  const value = raw?.trim() ?? "";
+  const parsed = DECIMAL_INTEGER_RE.test(value) ? Number(value) : Number.NaN;
   if (!Number.isInteger(parsed) || parsed < min) {
     throw new Error(`Invalid numeric value for ${optionName}: ${raw ?? ""}`);
   }

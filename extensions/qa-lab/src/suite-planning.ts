@@ -198,11 +198,11 @@ function resolveQaSuiteWorkerStartStaggerMs(
   if (raw === undefined) {
     return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  const parsed = parseStrictNonNegativeInteger(raw);
+  if (parsed === undefined) {
     return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
   }
-  return Math.floor(parsed);
+  return parsed;
 }
 
 async function mapQaSuiteWithConcurrency<T, U>(
