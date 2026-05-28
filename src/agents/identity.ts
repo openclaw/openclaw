@@ -14,36 +14,48 @@ export function resolveAgentIdentity(
 export function resolveAckReaction(
   cfg: OpenClawConfig,
   agentId: string,
-  opts?: { channel?: string; accountId?: string },
+  opts?: { channel?: string; accountId?: string; scopedAckReaction?: string | null },
 ): string {
+  const scopedReaction = normalizeAckReactionOverride(opts?.scopedAckReaction);
+  if (scopedReaction !== undefined) {
+    return scopedReaction;
+  }
+
   // L1: Channel account level
   if (opts?.channel && opts?.accountId) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
     const accounts = channelCfg?.accounts as Record<string, Record<string, unknown>> | undefined;
-    const accountReaction = accounts?.[opts.accountId]?.ackReaction as string | undefined;
+    const accountReaction = normalizeAckReactionOverride(accounts?.[opts.accountId]?.ackReaction);
     if (accountReaction !== undefined) {
-      return accountReaction.trim();
+      return accountReaction;
     }
   }
 
   // L2: Channel level
   if (opts?.channel) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
-    const channelReaction = channelCfg?.ackReaction as string | undefined;
+    const channelReaction = normalizeAckReactionOverride(channelCfg?.ackReaction);
     if (channelReaction !== undefined) {
-      return channelReaction.trim();
+      return channelReaction;
     }
   }
 
   // L3: Global messages level
-  const configured = cfg.messages?.ackReaction;
+  const configured = normalizeAckReactionOverride(cfg.messages?.ackReaction);
   if (configured !== undefined) {
-    return configured.trim();
+    return configured;
   }
 
   // L4: Agent identity emoji fallback
   const emoji = resolveAgentIdentity(cfg, agentId)?.emoji?.trim();
   return emoji || DEFAULT_ACK_REACTION;
+}
+
+function normalizeAckReactionOverride(value: unknown): string | undefined {
+  if (value === null) {
+    return "";
+  }
+  return typeof value === "string" ? value.trim() : undefined;
 }
 
 export function resolveIdentityNamePrefix(

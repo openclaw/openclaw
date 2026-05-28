@@ -22,6 +22,35 @@ describe("resolveAckReaction", () => {
     );
   });
 
+  it("prefers scoped overrides and treats null as disabled", () => {
+    const cfg: OpenClawConfig = {
+      messages: { ackReaction: "👀" },
+      channels: {
+        telegram: {
+          ackReaction: "✅",
+          accounts: {
+            main: { ackReaction: "🔥" },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveAckReaction(cfg, "main", {
+        channel: "telegram",
+        accountId: "main",
+        scopedAckReaction: " 👋 ",
+      }),
+    ).toBe("👋");
+    expect(
+      resolveAckReaction(cfg, "main", {
+        channel: "telegram",
+        accountId: "main",
+        scopedAckReaction: null,
+      }),
+    ).toBe("");
+  });
+
   it("falls back to channel-level overrides", () => {
     const cfg: OpenClawConfig = {
       messages: { ackReaction: "👀" },

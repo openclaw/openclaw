@@ -223,6 +223,43 @@ describe("telegram topic agentId schema", () => {
     });
   });
 
+  it("accepts scoped Telegram UI overrides for groups and topics", () => {
+    const res = TelegramConfigSchema.safeParse({
+      groups: {
+        "-1001234567890": {
+          streaming: {
+            mode: "off",
+            progress: {
+              toolProgress: false,
+            },
+          },
+          ackReaction: null,
+          topics: {
+            "42": {
+              streaming: {
+                mode: "progress",
+                preview: {
+                  toolProgress: true,
+                },
+              },
+              ackReaction: "",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (!res.success) {
+      console.error(res.error.format());
+      return;
+    }
+    expect(res.data.groups?.["-1001234567890"]?.streaming?.mode).toBe("off");
+    expect(res.data.groups?.["-1001234567890"]?.ackReaction).toBeNull();
+    expect(res.data.groups?.["-1001234567890"]?.topics?.["42"]?.streaming?.mode).toBe("progress");
+    expect(res.data.groups?.["-1001234567890"]?.topics?.["42"]?.ackReaction).toBe("");
+  });
+
   it("accepts valid agentId in forum group topic config", () => {
     const res = TelegramConfigSchema.safeParse({
       groups: {

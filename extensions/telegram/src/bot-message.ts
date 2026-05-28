@@ -17,8 +17,9 @@ import type { TelegramMessageContextOptions } from "./bot-message-context.types.
 import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.types.js";
-import { buildTelegramThreadParams } from "./bot/helpers.js";
+import { buildTelegramThreadParams, resolveTelegramStreamMode } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+import { resolveTelegramEffectiveUiConfig } from "./group-config-helpers.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
@@ -71,7 +72,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     sendChatActionHandler,
     runtime,
     replyToMode,
-    streamMode,
     textLimit,
     telegramDeps,
     opts,
@@ -180,6 +180,12 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       }),
     );
     await lifecycle?.onDispatchStart?.();
+    const effectiveTelegramCfg = resolveTelegramEffectiveUiConfig({
+      accountConfig: telegramCfg,
+      groupConfig: context.groupConfig,
+      topicConfig: context.topicConfig,
+    });
+    const effectiveStreamMode = resolveTelegramStreamMode(effectiveTelegramCfg);
     try {
       await dispatchTelegramMessage({
         context,
@@ -187,9 +193,9 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         cfg,
         runtime,
         replyToMode,
-        streamMode,
+        streamMode: effectiveStreamMode,
         textLimit,
-        telegramCfg,
+        telegramCfg: effectiveTelegramCfg,
         telegramDeps,
         opts,
       });

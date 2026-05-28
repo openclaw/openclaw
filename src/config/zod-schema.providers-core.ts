@@ -152,6 +152,8 @@ export const TelegramTopicSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     agentId: z.string().optional(),
+    streaming: TelegramPreviewStreamingConfigSchema.optional(),
+    ackReaction: z.string().nullable().optional(),
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
   })
@@ -170,6 +172,8 @@ export const TelegramGroupSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+    streaming: TelegramPreviewStreamingConfigSchema.optional(),
+    ackReaction: z.string().nullable().optional(),
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
   })

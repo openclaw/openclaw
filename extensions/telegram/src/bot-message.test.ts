@@ -177,6 +177,60 @@ describe("telegram bot message processor", () => {
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
   });
 
+  it("applies scoped Telegram UI overrides before dispatch", async () => {
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        isGroup: true,
+        groupConfig: {
+          streaming: {
+            mode: "off",
+          },
+        },
+        topicConfig: {
+          streaming: {
+            progress: {
+              toolProgress: false,
+            },
+          },
+        },
+      }),
+    );
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          preview: {
+            toolProgress: true,
+          },
+          progress: {
+            toolProgress: true,
+            maxLines: 4,
+          },
+        },
+      },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await expect(processSampleMessage(processMessage)).resolves.toBe(true);
+
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(dispatchTelegramMessage.mock.calls[0]?.[0]).toMatchObject({
+      streamMode: "off",
+      telegramCfg: {
+        streaming: {
+          mode: "off",
+          preview: {
+            toolProgress: true,
+          },
+          progress: {
+            toolProgress: false,
+            maxLines: 4,
+          },
+        },
+      },
+    });
+  });
+
   it("does not send early typing cues for room events", async () => {
     const sendTyping = vi.fn().mockResolvedValue(undefined);
     buildTelegramMessageContext.mockResolvedValue(
