@@ -302,16 +302,18 @@ function resolveRetainedAuthorizationForRedirect(params: {
   nextUrl: URL;
   hostnameAllowlist?: string[];
 }): string | undefined {
-  if (!params.init?.headers || !params.hostnameAllowlist?.length) {
+  const init = params.init;
+  if (!init?.headers || !params.hostnameAllowlist?.length) {
     return undefined;
   }
   if (!matchesHostnameAllowlist(params.nextUrl.hostname, params.hostnameAllowlist)) {
     return undefined;
   }
-  return (
-    new Headers(normalizeRequestInitHeadersForFetch(params.init).headers).get("authorization") ??
-    undefined
-  );
+  const normalizedInit = normalizeRequestInitHeadersForFetch(init);
+  if (!normalizedInit?.headers) {
+    return undefined;
+  }
+  return new Headers(normalizedInit.headers).get("authorization") ?? undefined;
 }
 
 function restoreRedirectAuthorization(params: {
