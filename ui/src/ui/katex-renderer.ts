@@ -320,9 +320,9 @@ export function restoreMathBlocksSync(
  * is available synchronously via getKatexModule(). Safe to call
  * multiple times.
  */
-export function preloadKatex(): void {
-  if (katexModule) return;
-  if (katexLoading) return;
+export function preloadKatex(): Promise<typeof import("katex")> {
+  if (katexModule) return Promise.resolve(katexModule);
+  if (katexLoading) return katexLoading;
   katexLoading = import("katex").then((mod) => {
     katexModule = mod;
     return mod;
@@ -330,6 +330,7 @@ export function preloadKatex(): void {
   katexLoading.catch(() => {
     katexLoading = null;
   });
+  return katexLoading;
 }
 
 /**

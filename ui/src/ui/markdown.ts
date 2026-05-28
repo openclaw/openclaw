@@ -19,7 +19,7 @@ import markdownItTaskLists from "markdown-it-task-lists";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "./format.ts";
-import { extractMathBlocks, restoreMathBlocksSync } from "./katex-renderer.ts";
+import { extractMathBlocks, getKatexModule, restoreMathBlocksSync } from "./katex-renderer.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const allowedTags = [
@@ -750,7 +750,7 @@ export function toSanitizedMarkdownHtml(
 /**
  * KaTeX-enabled variant of toSanitizedMarkdownHtml.
  * When mathRendering === "katex", extracts math blocks before markdown-it rendering,
- * then restores them as KaTeX HTML after DOMPurify sanitization.
+ * restores them as KaTeX HTML, then sanitizes the final output through DOMPurify.
  * When mathRendering === "off" or undefined, behaves identically to toSanitizedMarkdownHtml.
  */
 export function toSanitizedMarkdownHtmlWithKatex(
@@ -797,12 +797,11 @@ export function toSanitizedMarkdownHtmlWithKatex(
     ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
     : "";
   if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
-    const html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
-    const sanitized = DOMPurify.sanitize(html, activeSanitizeOptions);
-    let result = sanitized;
+    let html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
     if (mathBlocks.size > 0) {
-      result = restoreMathBlocksSync(sanitized, mathBlocks);
+      html = restoreMathBlocksSync(html, mathBlocks);
     }
+    const result = DOMPurify.sanitize(html, activeSanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
       setCachedMarkdown(cacheKey, result);
     }
@@ -817,16 +816,27 @@ export function toSanitizedMarkdownHtmlWithKatex(
     const escaped = escapeHtml(`${truncated.text}${suffix}`);
     rendered = `<pre class="code-block">${escaped}</pre>`;
   }
-  let sanitized = DOMPurify.sanitize(rendered, activeSanitizeOptions);
+  // Restore math blocks BEFORE sanitizing so the KaTeX HTML
+  // passes through DOMPurify with the conditional allowlists.
   if (mathBlocks.size > 0) {
-    sanitized = restoreMathBlocksSync(sanitized, mathBlocks);
+    rendered = restoreMathBlocksSync(rendered, mathBlocks);
   }
+  const sanitized = DOMPurify.sanitize(rendered, activeSanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-    setCachedMarkdown(cacheKey, sanitized);
+    // Skip caching when KaTeX is not yet loaded — the fallback result
+    // (raw LaTeX text) would be cached permanently, preventing proper
+    // rendering once KaTeX finishes loading.
+    if (!(mathMode === "katex" && getKatexModule() === null)) {
+      setCachedMarkdown(cacheKey, sanitized);
+    }
   }
   return sanitized;
 }
 
 function renderEscapedPlainTextHtml(value: string): string {
   return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
+}
+
+export function clearMarkdownCache(): void {
+  markdownCache.clear();
 }

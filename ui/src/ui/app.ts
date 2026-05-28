@@ -215,6 +215,7 @@ export class OpenClawApp extends LitElement {
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "scripts";
   @state() allowExternalEmbedUrls = false;
   @state() chatMessageMaxWidth: string | null = null;
+  @state() mathRendering: "off" | "katex" = "off";
   @state() serverVersion: string | null = null;
 
   @state() sessionKey = this.settings.sessionKey;

@@ -135,6 +135,7 @@ export async function loadControlUiBootstrapConfig(
       typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
         ? parsed.chatMessageMaxWidth
         : null;
+    state.mathRendering = parsed.mathRendering === "katex" ? "katex" : "off";
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }
