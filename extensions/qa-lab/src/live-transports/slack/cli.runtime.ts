@@ -1,8 +1,6 @@
+import { printLiveTransportQaArtifacts } from "openclaw/plugin-sdk/qa-runtime";
 import type { LiveTransportQaCommandOptions } from "../shared/live-transport-cli.js";
-import {
-  printLiveTransportQaArtifacts,
-  resolveLiveTransportQaRunOptions,
-} from "../shared/live-transport-cli.runtime.js";
+import { resolveLiveTransportQaRunOptions } from "../shared/live-transport-cli.runtime.js";
 import { runSlackQaLive } from "./slack-live.runtime.js";
 
 export async function runQaSlackCommand(opts: LiveTransportQaCommandOptions) {

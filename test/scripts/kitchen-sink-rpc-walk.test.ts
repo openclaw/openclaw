@@ -22,6 +22,7 @@ import {
   findErrorLogFindings,
   findDistCallGatewayModuleFiles,
   makeEnv,
+  readPositiveInt,
   runCommand,
   sampleProcess,
   sampleWindowsProcessByPort,
@@ -39,6 +40,15 @@ afterEach(() => {
 });
 
 describe("kitchen-sink RPC isolated state", () => {
+  it("keeps loose numeric env values from corrupting runtime guardrails", () => {
+    expect(readPositiveInt(undefined, 60_000)).toBe(60_000);
+    expect(readPositiveInt("1000", 60_000)).toBe(1000);
+    expect(readPositiveInt(" 1000 ", 60_000)).toBe(1000);
+    expect(readPositiveInt("1e3", 60_000)).toBe(60_000);
+    expect(readPositiveInt("1000ms", 60_000)).toBe(60_000);
+    expect(readPositiveInt("0", 60_000)).toBe(60_000);
+  });
+
   it("cleans up the generated temporary home tree", async () => {
     const { root, env } = makeEnv();
 

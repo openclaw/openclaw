@@ -55,6 +55,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "openclaw/plugin-sdk/qa-channel-protocol": [
     "../dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
   ],
+  "openclaw/plugin-sdk/qa-runtime": ["../dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts"],
   "@openclaw/plugin-sdk/*": ["../dist/plugin-sdk/*.d.ts"],
 } as const;
 

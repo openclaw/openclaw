@@ -55,8 +55,12 @@ const ERROR_LOG_ALLOW_PATTERNS = [
 
 let callGatewayModulePromise;
 
-function readPositiveInt(raw, fallback) {
-  const parsed = Number.parseInt(String(raw || ""), 10);
+export function readPositiveInt(raw, fallback) {
+  const text = String(raw || "").trim();
+  if (!/^\d+$/u.test(text)) {
+    return fallback;
+  }
+  const parsed = Number(text);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
