@@ -17,6 +17,7 @@ import {
 } from "./dynamic-tool-build.js";
 import {
   filterCodexDynamicTools,
+  isCodexDynamicToolsWildcardExcluded,
   resolveCodexDynamicToolsLoading,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -161,6 +162,17 @@ describe("Codex app-server dynamic tool build", () => {
         codexDynamicToolsExclude: ["custom_tool"],
       }).map((tool) => tool.name),
     ).toEqual(["message"]);
+  });
+
+  it("treats wildcard Codex dynamic tool excludes as exclude-all", () => {
+    const tools = ["read", "exec", "message", "custom_tool"].map((name) => ({ name }));
+
+    expect(
+      filterCodexDynamicTools(tools, {
+        codexDynamicToolsExclude: ["*"],
+      }).map((tool) => tool.name),
+    ).toEqual([]);
+    expect(isCodexDynamicToolsWildcardExcluded({ codexDynamicToolsExclude: [" * "] })).toBe(true);
   });
 
   it("exposes app-server-owned tools directly for forced private QA Codex runtime", () => {
@@ -404,6 +416,73 @@ describe("Codex app-server dynamic tool build", () => {
 
       expect(tools.map((tool) => tool.name)).toEqual(["message"]);
     }
+  });
+
+  it("skips Codex dynamic tool construction when all dynamic tools are excluded", async () => {
+    const createTools = vi.fn(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    setOpenClawCodingToolsFactoryForTests(createTools);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      pluginConfig: { codexDynamicToolsExclude: ["*"] },
+    });
+
+    expect(tools).toEqual([]);
+    expect(createTools).not.toHaveBeenCalled();
+  });
+
+  it("limits wildcard-excluded forced message turns to the forced message tool", async () => {
+    const createTools = vi.fn(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("heartbeat_respond"),
+    ]);
+    setOpenClawCodingToolsFactoryForTests(createTools);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      pluginConfig: { codexDynamicToolsExclude: ["*"] },
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(createTools).toHaveBeenCalledTimes(1);
+  });
+
+  it("limits wildcard-excluded heartbeat turns to the forced heartbeat tool", async () => {
+    const createTools = vi.fn(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("heartbeat_respond"),
+    ]);
+    setOpenClawCodingToolsFactoryForTests(createTools);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.trigger = "heartbeat";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      forceHeartbeatTool: true,
+      pluginConfig: { codexDynamicToolsExclude: ["*"] },
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["heartbeat_respond"]);
+    expect(createTools).toHaveBeenCalledTimes(1);
   });
 
   it("points yielded sandbox_exec follow-up guidance at sandbox_process", async () => {

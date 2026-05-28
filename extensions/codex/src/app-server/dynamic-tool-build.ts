@@ -15,6 +15,7 @@ import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import {
   filterCodexDynamicTools,
+  isCodexDynamicToolsWildcardExcluded,
   isForcedPrivateQaCodexRuntime,
   normalizeCodexDynamicToolName,
 } from "./dynamic-tool-profile.js";
@@ -170,6 +171,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   if (params.disableTools || !supportsModelTools(params.model)) {
     return [];
   }
+  if (shouldSkipCodexDynamicToolBuild(input)) {
+    return [];
+  }
   // Dynamic tool construction is on the reply hot path, so per-stage
   // Date.now/span bookkeeping runs only when the Codex profiler flag is set.
   const toolBuildStages = createCodexDynamicToolBuildStageTracker({
@@ -264,14 +268,13 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     },
   });
   toolBuildStages.mark("create-openclaw-coding-tools");
+  const baseCodexFilteredTools = isCodexDynamicToolsWildcardExcluded(input.pluginConfig)
+    ? filterCodexDynamicToolsForAllowlist(allTools, getForcedCodexDynamicToolNames(params, input))
+    : isCodexMemoryFlushRun(params)
+      ? filterCodexMemoryFlushDynamicTools(allTools)
+      : filterCodexDynamicTools(allTools, input.pluginConfig);
   const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(
-    addSandboxShellDynamicToolsIfAvailable(
-      isCodexMemoryFlushRun(params)
-        ? filterCodexMemoryFlushDynamicTools(allTools)
-        : filterCodexDynamicTools(allTools, input.pluginConfig),
-      allTools,
-      input,
-    ),
+    addSandboxShellDynamicToolsIfAvailable(baseCodexFilteredTools, allTools, input),
     allTools,
     input,
   );
@@ -281,7 +284,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
   toolBuildStages.mark("vision-filtering");
-  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
+  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params, input);
   const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
   toolBuildStages.mark("allowlist-filter");
   const normalizedTools = normalizeAgentRuntimeTools({
@@ -321,14 +324,25 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   return normalizedTools;
 }
 
+function shouldSkipCodexDynamicToolBuild(input: DynamicToolBuildParams): boolean {
+  if (isCodexMemoryFlushRun(input.params)) {
+    return false;
+  }
+  if (getForcedCodexDynamicToolNames(input.params, input).length > 0) {
+    return false;
+  }
+  return isCodexDynamicToolsWildcardExcluded(input.pluginConfig);
+}
+
 export function includeForcedCodexDynamicToolAllow(
   toolsAllow: string[] | undefined,
   params: EmbeddedRunAttemptParams,
+  input: Pick<DynamicToolBuildParams, "forceHeartbeatTool"> = {},
 ): string[] | undefined {
   if (toolsAllow === undefined || hasWildcardCodexToolsAllow(toolsAllow)) {
     return toolsAllow;
   }
-  const forcedToolNames = shouldForceMessageTool(params) ? ["message"] : [];
+  const forcedToolNames = getForcedCodexDynamicToolNames(params, input);
   if (forcedToolNames.length === 0) {
     return toolsAllow;
   }
@@ -340,6 +354,18 @@ export function includeForcedCodexDynamicToolAllow(
     (toolName) => !normalized.has(normalizeCodexDynamicToolName(toolName)),
   );
   return missingToolNames.length === 0 ? toolsAllow : [...toolsAllow, ...missingToolNames];
+}
+
+function getForcedCodexDynamicToolNames(
+  params: EmbeddedRunAttemptParams,
+  input: Pick<DynamicToolBuildParams, "forceHeartbeatTool">,
+): string[] {
+  return [
+    ...(shouldForceMessageTool(params) ? ["message"] : []),
+    ...(params.trigger === "heartbeat" || input.forceHeartbeatTool === true
+      ? ["heartbeat_respond"]
+      : []),
+  ];
 }
 
 export function shouldEnableCodexAppServerNativeToolSurface(

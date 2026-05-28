@@ -52,6 +52,9 @@ export function filterCodexDynamicTools<T extends { name: string }>(
   config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
   env: CodexDynamicToolProfileEnv = process.env,
 ): T[] {
+  if (isCodexDynamicToolsWildcardExcluded(config)) {
+    return [];
+  }
   const excludes = new Set<string>();
   if (!isForcedPrivateQaCodexRuntime(env)) {
     for (const name of CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES) {
@@ -67,4 +70,12 @@ export function filterCodexDynamicTools<T extends { name: string }>(
   return excludes.size === 0
     ? tools
     : tools.filter((tool) => !excludes.has(normalizeCodexDynamicToolName(tool.name)));
+}
+
+export function isCodexDynamicToolsWildcardExcluded(
+  config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
+): boolean {
+  return (config.codexDynamicToolsExclude ?? []).some(
+    (name) => normalizeCodexDynamicToolName(name) === "*",
+  );
 }
