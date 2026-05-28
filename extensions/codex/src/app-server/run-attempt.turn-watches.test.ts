@@ -1124,7 +1124,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
-  it("times out post-tool raw assistant progress after the assistant idle timeout", async () => {
+  it("releases post-tool raw assistant progress after the assistant idle timeout", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let handleRequest:
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
@@ -1199,11 +1199,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
-      "codex app-server turn idle timed out waiting for turn/completed",
-    );
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(result.assistantTexts).toEqual(["I'm writing the report now."]);
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith(
@@ -1218,7 +1217,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
   });
 
-  it("uses configured post-tool raw assistant completion timeout instead of assistant release timeout", async () => {
+  it("uses configured post-tool raw assistant release timeout instead of default assistant timeout", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let handleRequest:
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
@@ -1261,7 +1260,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     let settled = false;
     const run = runCodexAppServerAttempt(params, {
-      turnCompletionIdleTimeoutMs: 500,
+      turnCompletionIdleTimeoutMs: 5,
       turnAssistantCompletionIdleTimeoutMs: 5,
       postToolRawAssistantCompletionIdleTimeoutMs: 100,
       turnTerminalIdleTimeoutMs: 500,
@@ -1301,11 +1300,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(settled).toBe(false);
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
-      "codex app-server turn idle timed out waiting for turn/completed",
-    );
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(result.assistantTexts).toEqual(["I'm writing the report now."]);
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith(
@@ -1318,20 +1316,22 @@ describe("runCodexAppServerAttempt turn watches", () => {
         ),
       { interval: 1 },
     );
-    const completionWarnCall = warn.mock.calls.find(
-      ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+    const releaseWarnCall = warn.mock.calls.find(
+      ([message]) =>
+        message ===
+        "codex app-server turn released after completed assistant item without terminal event",
     );
-    const completionWarnData = completionWarnCall?.[1] as
+    const releaseWarnData = releaseWarnCall?.[1] as
       | {
-          lastActivityReason?: string;
+          lastNotificationMethod?: string;
           timeoutMs?: number;
         }
       | undefined;
-    expect(completionWarnData?.timeoutMs).toBe(100);
-    expect(completionWarnData?.lastActivityReason).toBe("notification:rawResponseItem/completed");
+    expect(releaseWarnData?.timeoutMs).toBe(100);
+    expect(releaseWarnData?.lastNotificationMethod).toBe("rawResponseItem/completed");
   });
 
-  it("times out post-native-tool raw assistant progress after the assistant idle timeout", async () => {
+  it("releases post-native-tool raw assistant progress after the assistant idle timeout", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -1400,11 +1400,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
-      "codex app-server turn idle timed out waiting for turn/completed",
-    );
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(result.assistantTexts).toEqual(["I'm summarizing command output."]);
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith(
@@ -1594,7 +1593,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     })) as { success?: boolean };
     expect(toolResult.success).toBe(false);
     // Send a rawResponseItem/completed with type "reasoning" — this does NOT
-    // qualify as postToolRawAssistantCompletionNeedsTerminalGuard (which
+    // qualify as postToolRawAssistantCompletionNeedsReleaseGuard (which
     // requires type=message + role=assistant + text preview).  Before the fix,
     // this would disarm the completion idle watch via the catch-all disarm
     // block, leaving only the 30-minute terminal timeout.  After the fix,

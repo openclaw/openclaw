@@ -133,7 +133,8 @@ export function applyCodexTurnNotificationState(params: {
     notification,
     turnCrossedToolHandoff,
   );
-  const postToolRawAssistantCompletionNeedsTerminalGuard =
+  // Release post-tool assistant-only silent turns.
+  const postToolRawAssistantCompletionNeedsReleaseGuard =
     isCurrentTurnNotification &&
     turnCrossedToolHandoff &&
     isRawAssistantCompletionNotification(notification) &&
@@ -144,7 +145,7 @@ export function applyCodexTurnNotificationState(params: {
     params.activeTurnItemIds.size === 0 &&
     params.activeAppServerTurnRequests === 0 &&
     !assistantCompletionCanRelease &&
-    !postToolRawAssistantCompletionNeedsTerminalGuard;
+    !postToolRawAssistantCompletionNeedsReleaseGuard;
   const shouldArmPostReasoningSourceReplyWatch =
     isCurrentTurnNotification &&
     isReasoningItemCompletionNotification(notification) &&
@@ -173,8 +174,9 @@ export function applyCodexTurnNotificationState(params: {
     turnWatches.disarmAssistantCompletionIdleWatch();
   } else if (isCurrentTurnNotification && assistantCompletionCanRelease) {
     turnWatches.armAssistantCompletionIdleWatch(describeNotificationActivity(notification));
-  } else if (postToolRawAssistantCompletionNeedsTerminalGuard) {
-    turnWatches.armCompletionIdleWatch({
+  } else if (postToolRawAssistantCompletionNeedsReleaseGuard) {
+    turnWatches.disarmCompletionIdleWatch();
+    turnWatches.armAssistantCompletionIdleWatch(describeNotificationActivity(notification), {
       timeoutMs: params.postToolRawAssistantCompletionIdleTimeoutMs,
     });
   } else if (shouldArmPostReasoningSourceReplyWatch || shouldArmPostRawReasoningSourceReplyWatch) {
@@ -205,7 +207,7 @@ export function applyCodexTurnNotificationState(params: {
     isCurrentTurnNotification &&
     !trackedDynamicToolCompletion &&
     !rawToolOutputCompletion &&
-    !postToolRawAssistantCompletionNeedsTerminalGuard &&
+    !postToolRawAssistantCompletionNeedsReleaseGuard &&
     !rawResponseItemCompletedWithNoActiveItems &&
     !shouldArmPostReasoningSourceReplyWatch &&
     !shouldArmPostRawReasoningSourceReplyWatch &&
