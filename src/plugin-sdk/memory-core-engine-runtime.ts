@@ -88,7 +88,7 @@ export type ShortTermAuditSummary = {
 export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
-  removedOverflowEntries: number;
+  removedOverflowEntries?: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;
 };

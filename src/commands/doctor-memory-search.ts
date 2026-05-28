@@ -307,13 +307,12 @@ export async function maybeRepairMemoryRecallHealth(params: {
       if (approved) {
         const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
         if (repair.changed) {
+          const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
           const details = [
             repair.removedInvalidEntries > 0
               ? `-${repair.removedInvalidEntries} invalid entries`
               : null,
-            repair.removedOverflowEntries > 0
-              ? `-${repair.removedOverflowEntries} overflow entries`
-              : null,
+            removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow entries` : null,
           ]
             .filter(Boolean)
             .join(", ");

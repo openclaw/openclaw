@@ -234,9 +234,10 @@ function formatAuditCounts(audit: ShortTermAuditSummary): string {
 function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): string {
   const actions: string[] = [];
   if (repair.rewroteStore) {
+    const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
     const details = [
       repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
-      repair.removedOverflowEntries > 0 ? `-${repair.removedOverflowEntries} overflow` : null,
+      removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
     ]
       .filter(Boolean)
       .join(", ");

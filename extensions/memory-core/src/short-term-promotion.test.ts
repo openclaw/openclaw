@@ -97,6 +97,10 @@ describe("short-term promotion", () => {
     return store.entries ?? {};
   }
 
+  function readEntrySnippet(entry: { snippet?: unknown }): string {
+    return typeof entry.snippet === "string" ? entry.snippet : "";
+  }
+
   async function expectEnoent(promise: Promise<unknown>): Promise<void> {
     await expect(promise).rejects.toHaveProperty("code", "ENOENT");
   }
@@ -189,8 +193,8 @@ describe("short-term promotion", () => {
 
   it("caps short-term recall store entries and snippets during normal recording", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      const maxEntries = __testing.SHORT_TERM_RECALL_MAX_ENTRIES as number;
-      const maxSnippetChars = __testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS as number;
+      const maxEntries = __testing.SHORT_TERM_RECALL_MAX_ENTRIES;
+      const maxSnippetChars = __testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
       await recordShortTermRecalls({
         workspaceDir,
         query: "bounded recall",
@@ -206,15 +210,15 @@ describe("short-term promotion", () => {
 
       const entries = Object.values(await readRecallStoreEntries(workspaceDir));
       expect(entries).toHaveLength(maxEntries);
-      expect(entries.every((entry) => String(entry.snippet ?? "").length <= maxSnippetChars)).toBe(
+      expect(entries.every((entry) => readEntrySnippet(entry).length <= maxSnippetChars)).toBe(
         true,
       );
-      expect(
-        entries.some((entry) => String(entry.snippet ?? "").startsWith("Recall entry 0 ")),
-      ).toBe(false);
+      expect(entries.some((entry) => readEntrySnippet(entry).startsWith("Recall entry 0 "))).toBe(
+        false,
+      );
       expect(
         entries.some((entry) =>
-          String(entry.snippet ?? "").startsWith(`Recall entry ${maxEntries + 4} `),
+          readEntrySnippet(entry).startsWith(`Recall entry ${maxEntries + 4} `),
         ),
       ).toBe(true);
     });
@@ -1927,8 +1931,8 @@ describe("short-term promotion", () => {
 
   it("audits and repairs oversized recall stores", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      const maxEntries = __testing.SHORT_TERM_RECALL_MAX_ENTRIES as number;
-      const maxSnippetChars = __testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS as number;
+      const maxEntries = __testing.SHORT_TERM_RECALL_MAX_ENTRIES;
+      const maxSnippetChars = __testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
       await fs.writeFile(
         storePath,
@@ -1980,11 +1984,11 @@ describe("short-term promotion", () => {
 
       const entries = Object.values(await readRecallStoreEntries(workspaceDir));
       expect(entries).toHaveLength(maxEntries);
-      expect(entries.every((entry) => String(entry.snippet ?? "").length <= maxSnippetChars)).toBe(
+      expect(entries.every((entry) => readEntrySnippet(entry).length <= maxSnippetChars)).toBe(
         true,
       );
       expect(
-        entries.some((entry) => String(entry.snippet ?? "").startsWith("Oversized recall 0 ")),
+        entries.some((entry) => readEntrySnippet(entry).startsWith("Oversized recall 0 ")),
       ).toBe(false);
     });
   });
