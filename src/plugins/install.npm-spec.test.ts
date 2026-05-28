@@ -1014,7 +1014,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(
       JSON.parse(
         fs.readFileSync(
-          path.join(npmRoot, "node_modules", "@openclaw", "whatsapp", "package.json"),
+          path.join(resolveTestPluginPackageDir(npmRoot, "@openclaw/whatsapp"), "package.json"),
           "utf8",
         ),
       ).version,
@@ -1024,10 +1024,14 @@ describe("installPluginFromNpmSpec", () => {
   it("preserves an existing npm plugin by resolving update metadata to a compatible version", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
+    const npmProjectRoot = resolvePluginNpmProjectDir({
+      npmDir: npmRoot,
+      packageName: "@openclaw/whatsapp",
+    });
     const warnings: string[] = [];
-    fs.mkdirSync(npmRoot, { recursive: true });
+    fs.mkdirSync(npmProjectRoot, { recursive: true });
     fs.writeFileSync(
-      path.join(npmRoot, "package.json"),
+      path.join(npmProjectRoot, "package.json"),
       JSON.stringify({
         private: true,
         dependencies: {
@@ -1040,7 +1044,7 @@ describe("installPluginFromNpmSpec", () => {
       packageName: "@openclaw/whatsapp",
       version: "2026.5.26",
       pluginId: "whatsapp",
-      npmRoot,
+      npmRoot: npmProjectRoot,
       openclaw: {
         extensions: ["./dist/index.js"],
         install: { minHostVersion: ">=2026.4.25" },
@@ -1093,13 +1097,13 @@ describe("installPluginFromNpmSpec", () => {
     expect(
       JSON.parse(
         fs.readFileSync(
-          path.join(npmRoot, "node_modules", "@openclaw", "whatsapp", "package.json"),
+          path.join(resolveTestPluginPackageDir(npmRoot, "@openclaw/whatsapp"), "package.json"),
           "utf8",
         ),
       ).version,
     ).toBe("2026.5.26");
     const managedManifest = JSON.parse(
-      fs.readFileSync(path.join(npmRoot, "package.json"), "utf8"),
+      fs.readFileSync(path.join(npmProjectRoot, "package.json"), "utf8"),
     ) as { dependencies?: Record<string, string> };
     expect(managedManifest.dependencies?.["@openclaw/whatsapp"]).toBe("2026.5.26");
     expect(
