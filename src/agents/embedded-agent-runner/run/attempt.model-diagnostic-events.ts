@@ -106,6 +106,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function responseStreamChunkByteLength(chunk: unknown): number | undefined {
+  if (!isRecord(chunk)) {
+    return utf8JsonByteLength(chunk);
+  }
+  if (
+    (chunk.type === "text_delta" ||
+      chunk.type === "thinking_delta" ||
+      chunk.type === "toolcall_delta") &&
+    typeof chunk.delta === "string"
+  ) {
+    return utf8JsonByteLength({
+      type: chunk.type,
+      ...(typeof chunk.contentIndex === "number" ? { contentIndex: chunk.contentIndex } : {}),
+      delta: chunk.delta,
+    });
+  }
+  return utf8JsonByteLength(chunk);
+}
+
 function cloneDiagnosticContentValue(value: unknown): unknown {
   try {
     return structuredClone(value);
@@ -157,7 +176,7 @@ function observeResponseChunk(
 ): void {
   state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
   observeOutputMessageContent(state, chunk);
-  const bytes = utf8JsonByteLength(chunk);
+  const bytes = responseStreamChunkByteLength(chunk);
   if (bytes !== undefined) {
     state.responseStreamBytes += bytes;
   }
