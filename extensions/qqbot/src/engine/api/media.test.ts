@@ -143,6 +143,41 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects URL bodies that keep trickling under the idle timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchWithSsrFGuardMock.mockReset();
+      const { release } = mockGuardedResponse();
+      readResponseWithLimitMock.mockReset();
+      readResponseWithLimitMock.mockImplementationOnce(() => new Promise<Buffer>(() => {}));
+      const client = mockApiClient();
+      const tokenManager = mockTokenManager();
+      const api = new MediaApi(client, tokenManager);
+
+      const uploadPromise = api.uploadMedia(
+        "c2c",
+        "user-openid",
+        MediaFileType.IMAGE,
+        { appId: "app-id", clientSecret: "client-secret" },
+        { url: "https://cdn.example.com/assets/slow.bin" },
+      );
+
+      for (let i = 0; i < 5 && readResponseWithLimitMock.mock.calls.length === 0; i += 1) {
+        await Promise.resolve();
+      }
+      expect(readResponseWithLimitMock).toHaveBeenCalledOnce();
+
+      const rejection = expect(uploadPromise).rejects.toThrow(
+        "Direct-upload media URL body timed out",
+      );
+      await vi.advanceTimersByTimeAsync(8 * 60_000);
+      await rejection;
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("dedupes downloaded URL media through the base64 upload cache", async () => {
     const cache = {
       computeHash: vi.fn(() => "hash-1"),

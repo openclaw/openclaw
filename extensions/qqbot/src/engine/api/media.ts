@@ -55,6 +55,9 @@ interface MediaApiConfig {
 
 const DIRECT_UPLOAD_DOWNLOAD_TIMEOUT_MS = 30_000;
 const DIRECT_UPLOAD_READ_IDLE_TIMEOUT_MS = 10_000;
+const DIRECT_UPLOAD_BODY_GRACE_TIMEOUT_MS = 30_000;
+const DIRECT_UPLOAD_MIN_DOWNLOAD_BYTES_PER_SECOND = 256 * 1024;
+const DIRECT_UPLOAD_MAX_BODY_TIMEOUT_MS = 8 * 60_000;
 
 function assertDirectUploadDownloadHostAllowed(hostname: string): void {
   if (isBlockedHostnameOrIp(hostname)) {
@@ -67,9 +70,7 @@ async function fetchDirectUploadDownload(url: string) {
   const timeout = setTimeout(() => {
     controller.abort(new Error("Direct-upload media URL fetch timed out"));
   }, DIRECT_UPLOAD_DOWNLOAD_TIMEOUT_MS);
-  if (typeof timeout === "object" && "unref" in timeout) {
-    (timeout as { unref: () => void }).unref();
-  }
+  unrefTimer(timeout);
   try {
     return await fetchWithSsrFGuard({
       url,
@@ -78,6 +79,48 @@ async function fetchDirectUploadDownload(url: string) {
     });
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+function unrefTimer(timeout: ReturnType<typeof setTimeout>): void {
+  if (typeof timeout === "object" && "unref" in timeout) {
+    (timeout as { unref: () => void }).unref();
+  }
+}
+
+function resolveDirectUploadBodyTimeoutMs(maxBytes: number): number {
+  const transferTimeoutMs = Math.ceil(
+    (maxBytes / DIRECT_UPLOAD_MIN_DOWNLOAD_BYTES_PER_SECOND) * 1000,
+  );
+  return Math.min(
+    DIRECT_UPLOAD_BODY_GRACE_TIMEOUT_MS + transferTimeoutMs,
+    DIRECT_UPLOAD_MAX_BODY_TIMEOUT_MS,
+  );
+}
+
+async function readDirectUploadResponse(response: Response, maxBytes: number): Promise<Buffer> {
+  const timeoutMs = resolveDirectUploadBodyTimeoutMs(maxBytes);
+  const timeoutError = new Error(`Direct-upload media URL body timed out after ${timeoutMs}ms`);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      void response.body?.cancel(timeoutError).catch(() => undefined);
+      reject(timeoutError);
+    }, timeoutMs);
+    unrefTimer(timeout);
+  });
+
+  try {
+    return await Promise.race([
+      readResponseWithLimit(response, maxBytes, {
+        chunkTimeoutMs: DIRECT_UPLOAD_READ_IDLE_TIMEOUT_MS,
+      }),
+      timeoutPromise,
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -102,9 +145,7 @@ export async function downloadDirectUploadUrl(
     if (!response.ok) {
       throw new Error(`Direct-upload media URL returned HTTP ${response.status}`);
     }
-    return await readResponseWithLimit(response, opts.maxBytes ?? MAX_UPLOAD_SIZE, {
-      chunkTimeoutMs: DIRECT_UPLOAD_READ_IDLE_TIMEOUT_MS,
-    });
+    return await readDirectUploadResponse(response, opts.maxBytes ?? MAX_UPLOAD_SIZE);
   } finally {
     await release?.();
   }
