@@ -128,4 +128,43 @@ describe("whatsappChannelOutbound", () => {
       preserveLeadingWhitespace: true,
     });
   });
+
+  // Regression tests for Gemini reasoning tag leak (#87712 / related to #6328).
+  // Gemini 2.5 Pro with reasoning:true emits <think>/<final> tags that must be
+  // stripped before delivery. These tests ensure the WhatsApp delivery pipeline
+  // strips them consistently across all outbound paths.
+  it("strips Gemini <think>/<final> reasoning tags from payload text", () => {
+    const raw = "<think>\nThis is internal reasoning.\n</think>\n<final>\nUser-visible answer.\n</final>";
+    expect(whatsappChannelOutbound.normalizePayload?.({ payload: { text: raw } })).toEqual({
+      text: "User-visible answer.",
+    });
+  });
+
+  it("strips standalone <think> block with no <final> wrapper", () => {
+    const raw = "<think>\nInternal reasoning only.\n</think>\n\nActual reply here.";
+    expect(whatsappChannelOutbound.normalizePayload?.({ payload: { text: raw } })).toEqual({
+      text: "Actual reply here.",
+    });
+  });
+
+  it("preserves user-visible text when no reasoning tags are present", () => {
+    const raw = "Hello! How can I help you today?";
+    expect(whatsappChannelOutbound.normalizePayload?.({ payload: { text: raw } })).toEqual({
+      text: raw,
+    });
+  });
+
+  it("strips reasoning tags from live text sends", async () => {
+    await whatsappChannelOutbound.sendText!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: "<think>\nreasoning\n</think>\n<final>\nfinal answer\n</final>",
+    });
+
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+      "5511999999999@c.us",
+      "final answer",
+      expect.objectContaining({ preserveLeadingWhitespace: true }),
+    );
+  });
 });

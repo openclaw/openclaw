@@ -62,6 +62,10 @@ function finalizeWhatsAppVisibleText(text: string): string {
   return sanitizeForPlainText(stripWhatsAppPluralToolXml(text));
 }
 
+// Uses the "delivery" profile which includes reasoningMode:"strict" to strip
+// <think>/<final> tags emitted by Gemini and other reasoning-capable models.
+// See: extensions/whatsapp/src/channel-outbound.ts for the channel path which
+// uses normalizeWhatsAppPayloadTextPreservingIndentation ("history" profile).
 export function normalizeWhatsAppPayloadText(text: string | undefined): string {
   return finalizeWhatsAppVisibleText(sanitizeAssistantVisibleText(text ?? "")).trimStart();
 }
