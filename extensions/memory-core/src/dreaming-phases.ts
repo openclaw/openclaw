@@ -755,6 +755,52 @@ async function appendSessionCorpusLines(params: {
   });
 }
 
+const SESSION_CORPUS_RETENTION_DAYS = 30;
+
+async function cleanupStaleSessionCorpusFiles(params: {
+  workspaceDir: string;
+  nowMs: number;
+  logger?: Logger;
+}): Promise<number> {
+  const corpusDir = path.join(params.workspaceDir, SESSION_CORPUS_RELATIVE_DIR);
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(corpusDir, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return 0;
+    }
+    throw err;
+  }
+  const cutoffMs = params.nowMs - SESSION_CORPUS_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const dayMatch = entry.name.match(/^(\d{4}-\d{2}-\d{2})\.(?:txt|md)$/);
+    if (!dayMatch) {
+      continue;
+    }
+    const dayMs = Date.parse(`${dayMatch[1]}T23:59:59.999Z`);
+    if (!Number.isFinite(dayMs) || dayMs >= cutoffMs) {
+      continue;
+    }
+    try {
+      await fs.unlink(path.join(corpusDir, entry.name));
+      removed += 1;
+    } catch {
+      // best-effort cleanup
+    }
+  }
+  if (removed > 0 && params.logger) {
+    params.logger.info(
+      `memory-core: cleaned up ${removed} stale session corpus file${removed === 1 ? "" : "s"}.`,
+    );
+  }
+  return removed;
+}
+
 async function collectSessionIngestionBatches(params: {
   workspaceDir: string;
   cfg?: DreamingHostConfig;
@@ -1064,6 +1110,7 @@ async function ingestSessionTranscriptSignals(params: {
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
+  logger?: Logger;
 }): Promise<void> {
   const state = await readSessionIngestionState(params.workspaceDir);
   const collected = await collectSessionIngestionBatches({
@@ -1091,6 +1138,11 @@ async function ingestSessionTranscriptSignals(params: {
   if (collected.changed) {
     await writeSessionIngestionState(params.workspaceDir, collected.nextState);
   }
+  await cleanupStaleSessionCorpusFiles({
+    workspaceDir: params.workspaceDir,
+    nowMs: params.nowMs,
+    logger: params.logger,
+  });
 }
 
 type DailyIngestionCollectionResult = {
@@ -1596,6 +1648,7 @@ async function runLightDreaming(params: {
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
+    logger: params.logger,
   });
   const recentEntries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
@@ -1695,6 +1748,7 @@ async function runRemDreaming(params: {
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
+    logger: params.logger,
   });
   const allEntries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
