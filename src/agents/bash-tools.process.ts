@@ -6,6 +6,7 @@
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
+import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
@@ -20,6 +21,7 @@ import {
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
+import { deriveRedactedProcessSessionName } from "./bash-tools.process-redaction.js";
 import {
   handleProcessSendKeys,
   type WritableStdin,
@@ -28,7 +30,6 @@ import {
 import { processSchema } from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
-  deriveSessionName,
   pad,
   readEnvInt,
   sliceLogLines,
@@ -72,6 +73,15 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
 }
 
 const MAX_POLL_WAIT_MS = 30_000;
+const INTEGER_STRING_PATTERN = /^[+-]?\d+$/u;
+
+function redactProcessToolDetails<T>(details: T): T {
+  return redactSecrets(details);
+}
+
+function redactProcessSessionName(command: string): string | undefined {
+  return deriveRedactedProcessSessionName(command);
+}
 
 type RunningSessionRuntime = {
   stdinWritable: boolean;
@@ -107,8 +117,12 @@ function resolvePollWaitMs(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.max(0, Math.min(MAX_POLL_WAIT_MS, Math.floor(value)));
   }
-  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
-    const parsed = Number(value.trim());
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!INTEGER_STRING_PATTERN.test(trimmed)) {
+      return 0;
+    }
+    const parsed = Number(trimmed);
     if (Number.isSafeInteger(parsed)) {
       return Math.max(0, Math.min(MAX_POLL_WAIT_MS, parsed));
     }
@@ -274,7 +288,7 @@ export function createProcessTool(
           .filter((s) => isInScope(s))
           .map((s) => {
             const runtime = describeRunningSession(s);
-            return {
+            return redactProcessToolDetails({
               sessionId: s.id,
               status: "running",
               pid: s.pid ?? undefined,
@@ -282,31 +296,33 @@ export function createProcessTool(
               runtimeMs: Date.now() - s.startedAt,
               cwd: s.cwd,
               command: s.command,
-              name: deriveSessionName(s.command),
+              name: redactProcessSessionName(s.command),
               tail: s.tail,
               truncated: s.truncated,
               stdinWritable: runtime.stdinWritable,
               waitingForInput: runtime.waitingForInput,
               idleMs: runtime.idleMs,
               lastOutputAt: runtime.lastOutputAt,
-            };
+            });
           });
         const finished = listFinishedSessions()
           .filter((s) => isInScope(s))
-          .map((s) => ({
-            sessionId: s.id,
-            status: s.status,
-            startedAt: s.startedAt,
-            endedAt: s.endedAt,
-            runtimeMs: s.endedAt - s.startedAt,
-            cwd: s.cwd,
-            command: s.command,
-            name: deriveSessionName(s.command),
-            tail: s.tail,
-            truncated: s.truncated,
-            exitCode: s.exitCode ?? undefined,
-            exitSignal: s.exitSignal ?? undefined,
-          }));
+          .map((s) =>
+            redactProcessToolDetails({
+              sessionId: s.id,
+              status: s.status,
+              startedAt: s.startedAt,
+              endedAt: s.endedAt,
+              runtimeMs: s.endedAt - s.startedAt,
+              cwd: s.cwd,
+              command: s.command,
+              name: redactProcessSessionName(s.command),
+              tail: s.tail,
+              truncated: s.truncated,
+              exitCode: s.exitCode ?? undefined,
+              exitSignal: s.exitSignal ?? undefined,
+            }),
+          );
         const lines = [...running, ...finished]
           .toSorted((a, b) => b.startedAt - a.startedAt)
           .map((s) => {
@@ -323,7 +339,10 @@ export function createProcessTool(
               text: lines.join("\n") || "No running or recent sessions.",
             },
           ],
-          details: { status: "completed", sessions: [...running, ...finished] },
+          details: redactProcessToolDetails({
+            status: "completed",
+            sessions: [...running, ...finished],
+          }),
         };
       }
 
@@ -372,11 +391,11 @@ export function createProcessTool(
         text: string,
       ): AgentToolResult<unknown> => ({
         content: [{ type: "text", text }],
-        details: {
+        details: redactProcessToolDetails({
           status: "running",
           sessionId: params.sessionId,
-          name: deriveSessionName(sessionLocal.command),
-        },
+          name: redactProcessSessionName(sessionLocal.command),
+        }),
       });
 
       switch (params.action) {
@@ -389,10 +408,12 @@ export function createProcessTool(
                   {
                     type: "text",
                     text:
-                      (scopedFinished.tail ||
-                        `(no output recorded${
-                          scopedFinished.truncated ? " — truncated to cap" : ""
-                        })`) +
+                      redactToolPayloadText(
+                        scopedFinished.tail ||
+                          `(no output recorded${
+                            scopedFinished.truncated ? " — truncated to cap" : ""
+                          })`,
+                      ) +
                       `\n\nProcess exited with ${
                         scopedFinished.exitSignal
                           ? `signal ${scopedFinished.exitSignal}`
@@ -400,7 +421,7 @@ export function createProcessTool(
                       }.`,
                   },
                 ],
-                details: {
+                details: redactProcessToolDetails({
                   status: scopedFinished.status === "completed" ? "completed" : "failed",
                   sessionId: params.sessionId,
                   exitCode: scopedFinished.exitCode ?? undefined,
@@ -419,8 +440,8 @@ export function createProcessTool(
                     ? { noOutputTimedOut: scopedFinished.noOutputTimedOut }
                     : {}),
                   aggregated: scopedFinished.aggregated,
-                  name: deriveSessionName(scopedFinished.command),
-                },
+                  name: redactProcessSessionName(scopedFinished.command),
+                }),
               };
             }
             resetPollRetrySuggestion(params.sessionId);
@@ -470,7 +491,7 @@ export function createProcessTool(
               {
                 type: "text",
                 text:
-                  (output || "(no new output)") +
+                  redactToolPayloadText(output || "(no new output)") +
                   (exited
                     ? `\n\nProcess exited with ${
                         exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
@@ -478,7 +499,7 @@ export function createProcessTool(
                     : buildInputWaitHint(runtime) || "\n\nProcess still running."),
               },
             ],
-            details: {
+            details: redactProcessToolDetails({
               status,
               sessionId: params.sessionId,
               exitCode: exited ? exitCode : undefined,
@@ -497,10 +518,10 @@ export function createProcessTool(
                 ? { noOutputTimedOut: scopedSession.noOutputTimedOut }
                 : {}),
               aggregated: scopedSession.aggregated,
-              name: deriveSessionName(scopedSession.command),
+              name: redactProcessSessionName(scopedSession.command),
               ...(runtime ? runningSessionInputDetails(runtime) : {}),
               ...(typeof retryInMs === "number" ? { retryInMs } : {}),
-            },
+            }),
           };
         }
 
@@ -530,19 +551,21 @@ export function createProcessTool(
                 {
                   type: "text",
                   text:
-                    (slice || "(no output yet)") + logDefaultTailNote + buildInputWaitHint(runtime),
+                    redactToolPayloadText(slice || "(no output yet)") +
+                    logDefaultTailNote +
+                    buildInputWaitHint(runtime),
                 },
               ],
-              details: {
+              details: redactProcessToolDetails({
                 status: scopedSession.exited ? "completed" : "running",
                 sessionId: params.sessionId,
                 total: totalLines,
                 totalLines,
                 totalChars,
                 truncated: scopedSession.truncated,
-                name: deriveSessionName(scopedSession.command),
+                name: redactProcessSessionName(scopedSession.command),
                 ...runningSessionInputDetails(runtime),
-              },
+              }),
             };
           }
           if (scopedFinished) {
@@ -556,9 +579,12 @@ export function createProcessTool(
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
               content: [
-                { type: "text", text: (slice || "(no output recorded)") + logDefaultTailNote },
+                {
+                  type: "text",
+                  text: redactToolPayloadText(slice || "(no output recorded)") + logDefaultTailNote,
+                },
               ],
-              details: {
+              details: redactProcessToolDetails({
                 status,
                 sessionId: params.sessionId,
                 total: totalLines,
@@ -567,8 +593,8 @@ export function createProcessTool(
                 truncated: scopedFinished.truncated,
                 exitCode: scopedFinished.exitCode ?? undefined,
                 exitSignal: scopedFinished.exitSignal ?? undefined,
-                name: deriveSessionName(scopedFinished.command),
-              },
+                name: redactProcessSessionName(scopedFinished.command),
+              }),
             };
           }
           return {
@@ -677,10 +703,10 @@ export function createProcessTool(
                   : `Killed session ${params.sessionId}.`,
               },
             ],
-            details: {
+            details: redactProcessToolDetails({
               status: "failed",
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
-            },
+              name: scopedSession ? redactProcessSessionName(scopedSession.command) : undefined,
+            }),
           };
         }
 
@@ -731,10 +757,10 @@ export function createProcessTool(
                     : `Removed session ${params.sessionId}.`,
                 },
               ],
-              details: {
+              details: redactProcessToolDetails({
                 status: "failed",
-                name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
-              },
+                name: scopedSession ? redactProcessSessionName(scopedSession.command) : undefined,
+              }),
             };
           }
           if (scopedFinished) {
