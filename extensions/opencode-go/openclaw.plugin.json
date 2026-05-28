@@ -69,13 +69,8 @@
       "opencode-go": "refreshable"
     }
   },
-  "setup": {
-    "providers": [
-      {
-        "id": "opencode-go",
-        "envVars": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
-      }
-    ]
+  "providerAuthEnvVars": {
+    "opencode-go": ["OPENCODE_GO_API_KEY", "OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
   },
   "providerAuthChoices": [
     {
@@ -85,11 +80,11 @@
       "choiceLabel": "OpenCode Go catalog",
       "groupId": "opencode",
       "groupLabel": "OpenCode",
-      "groupHint": "Shared API key for Zen + Go catalogs",
+      "groupHint": "Prefers OPENCODE_GO_API_KEY; falls back to shared OPENCODE_API_KEY",
       "optionKey": "opencodeGoApiKey",
       "cliFlag": "--opencode-go-api-key",
       "cliOption": "--opencode-go-api-key <key>",
-      "cliDescription": "OpenCode API key (Go catalog)"
+      "cliDescription": "OpenCode Go API key"
     }
   ],
   "contracts": {

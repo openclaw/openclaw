@@ -13,9 +13,9 @@ OpenCode exposes two hosted catalogs in OpenClaw:
 | **Zen** | `opencode/...`    | `opencode`       |
 | **Go**  | `opencode-go/...` | `opencode-go`    |
 
-Both catalogs use the same OpenCode API key. OpenClaw keeps the runtime provider ids
-split so upstream per-model routing stays correct, but onboarding and docs treat them
-as one OpenCode setup.
+OpenClaw keeps the runtime provider ids split so upstream per-model routing stays
+correct. Zen prefers `OPENCODE_ZEN_API_KEY`, Go prefers `OPENCODE_GO_API_KEY`, and
+both can still fall back to `OPENCODE_API_KEY` when you want one shared key.
 
 ## Getting started
 
@@ -32,7 +32,7 @@ as one OpenCode setup.
         Or pass the key directly:
 
         ```bash
-        openclaw onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
+        openclaw onboard --opencode-zen-api-key "$OPENCODE_ZEN_API_KEY"
         ```
       </Step>
       <Step title="Set a Zen model as the default">
@@ -61,7 +61,7 @@ as one OpenCode setup.
         Or pass the key directly:
 
         ```bash
-        openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
+        openclaw onboard --opencode-go-api-key "$OPENCODE_GO_API_KEY"
         ```
       </Step>
       <Step title="Set a Go model as the default">
@@ -83,7 +83,10 @@ as one OpenCode setup.
 
 ```json5
 {
-  env: { OPENCODE_API_KEY: "sk-..." },
+  env: {
+    OPENCODE_ZEN_API_KEY: "sk-zen-...",
+    OPENCODE_GO_API_KEY: "sk-go-...",
+  },
   agents: { defaults: { model: { primary: "opencode/claude-opus-4-6" } } },
 }
 ```
@@ -108,12 +111,13 @@ as one OpenCode setup.
 
 <AccordionGroup>
   <Accordion title="API key aliases">
-    `OPENCODE_ZEN_API_KEY` is also supported as an alias for `OPENCODE_API_KEY`.
+    Zen prefers `OPENCODE_ZEN_API_KEY`. Go prefers `OPENCODE_GO_API_KEY`. Both
+    providers still accept `OPENCODE_API_KEY` as a shared fallback.
   </Accordion>
 
   <Accordion title="Shared credentials">
-    Entering one OpenCode key during setup stores credentials for both runtime
-    providers. You do not need to onboard each catalog separately.
+    If you want one shared key, set `OPENCODE_API_KEY`. If you want split
+    credentials, onboard Zen and Go separately with their provider-specific keys.
   </Accordion>
 
   <Accordion title="Billing and dashboard">
@@ -133,8 +137,8 @@ as one OpenCode setup.
 </AccordionGroup>
 
 <Tip>
-Entering one OpenCode key during setup stores credentials for both the Zen and
-Go runtime providers, so you only need to onboard once.
+If you set only `OPENCODE_API_KEY`, both Zen and Go can reuse it. If you need
+separate credentials, use `OPENCODE_ZEN_API_KEY` and `OPENCODE_GO_API_KEY`.
 </Tip>
 
 ## Related

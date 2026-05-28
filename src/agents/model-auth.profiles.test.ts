@@ -1192,6 +1192,35 @@ describe("getApiKeyForModel", () => {
     );
   });
 
+  it("resolveEnvApiKey('opencode-go') prefers OPENCODE_GO_API_KEY over shared aliases", async () => {
+    await withEnvAsync(
+      {
+        OPENCODE_GO_API_KEY: "sk-opencode-go-primary", // pragma: allowlist secret
+        OPENCODE_API_KEY: "sk-opencode-shared-fallback", // pragma: allowlist secret
+        OPENCODE_ZEN_API_KEY: "sk-opencode-zen-fallback", // pragma: allowlist secret
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("opencode-go");
+        expect(resolved?.apiKey).toBe("sk-opencode-go-primary");
+        expect(resolved?.source).toContain("OPENCODE_GO_API_KEY");
+      },
+    );
+  });
+
+  it("resolveEnvApiKey('opencode') prefers OPENCODE_ZEN_API_KEY over OPENCODE_API_KEY", async () => {
+    await withEnvAsync(
+      {
+        OPENCODE_API_KEY: "sk-opencode-shared-fallback", // pragma: allowlist secret
+        OPENCODE_ZEN_API_KEY: "sk-opencode-zen-primary", // pragma: allowlist secret
+      },
+      async () => {
+        const resolved = resolveEnvApiKey("opencode");
+        expect(resolved?.apiKey).toBe("sk-opencode-zen-primary");
+        expect(resolved?.source).toContain("OPENCODE_ZEN_API_KEY");
+      },
+    );
+  });
+
   it("resolveEnvApiKey('minimax-portal') accepts MINIMAX_OAUTH_TOKEN", async () => {
     await withEnvAsync(
       {

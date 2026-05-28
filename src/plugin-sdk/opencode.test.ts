@@ -8,16 +8,19 @@ describe("createOpencodeCatalogApiKeyAuthMethod", () => {
       label: "OpenCode Go catalog",
       optionKey: "opencodeGoApiKey",
       flagName: "--opencode-go-api-key",
+      envVar: "OPENCODE_GO_API_KEY",
       defaultModel: "opencode-go/kimi-k2.6",
       applyConfig: (cfg) => cfg,
-      noteMessage: "OpenCode uses one API key across the Zen and Go catalogs.",
+      noteMessage: "OpenCode Go prefers OPENCODE_GO_API_KEY.",
       choiceId: "opencode-go",
       choiceLabel: "OpenCode Go catalog",
     });
 
     expect(method.id).toBe("api-key");
     expect(method.label).toBe("OpenCode Go catalog");
-    expect(method.hint).toBe("Shared API key for Zen + Go catalogs");
+    expect(method.hint).toBe(
+      "Prefers a provider-specific OpenCode key; falls back to OPENCODE_API_KEY",
+    );
     expect(method.kind).toBe("api_key");
     if (!method.wizard) {
       throw new Error("expected OpenCode auth method to include wizard metadata");
@@ -26,6 +29,8 @@ describe("createOpencodeCatalogApiKeyAuthMethod", () => {
     expect(method.wizard.choiceLabel).toBe("OpenCode Go catalog");
     expect(method.wizard.groupId).toBe("opencode");
     expect(method.wizard.groupLabel).toBe("OpenCode");
-    expect(method.wizard.groupHint).toBe("Shared API key for Zen + Go catalogs");
+    expect(method.wizard.groupHint).toBe(
+      "Prefers a provider-specific OpenCode key; falls back to OPENCODE_API_KEY",
+    );
   });
 });

@@ -2,8 +2,8 @@ import { createProviderApiKeyAuthMethod, type OpenClawConfig } from "./provider-
 
 export { applyOpencodeZenModelDefault, OPENCODE_ZEN_DEFAULT_MODEL } from "./provider-onboard.js";
 
-const OPENCODE_SHARED_PROFILE_IDS = ["opencode:default", "opencode-go:default"] as const;
-const OPENCODE_SHARED_HINT = "Shared API key for Zen + Go catalogs";
+const OPENCODE_SHARED_HINT =
+  "Prefers a provider-specific OpenCode key; falls back to OPENCODE_API_KEY";
 const OPENCODE_SHARED_WIZARD_GROUP = {
   groupId: "opencode",
   groupLabel: "OpenCode",
@@ -15,6 +15,7 @@ export function createOpencodeCatalogApiKeyAuthMethod(params: {
   label: string;
   optionKey: string;
   flagName: `--${string}`;
+  envVar: string;
   defaultModel: string;
   applyConfig: (cfg: OpenClawConfig) => OpenClawConfig;
   noteMessage: string;
@@ -28,11 +29,10 @@ export function createOpencodeCatalogApiKeyAuthMethod(params: {
     hint: OPENCODE_SHARED_HINT,
     optionKey: params.optionKey,
     flagName: params.flagName,
-    envVar: "OPENCODE_API_KEY",
+    envVar: params.envVar,
     promptMessage: "Enter OpenCode API key",
-    profileIds: [...OPENCODE_SHARED_PROFILE_IDS],
     defaultModel: params.defaultModel,
-    expectedProviders: ["opencode", "opencode-go"],
+    expectedProviders: [params.providerId],
     applyConfig: params.applyConfig,
     noteMessage: params.noteMessage,
     noteTitle: "OpenCode",

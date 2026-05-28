@@ -12,8 +12,7 @@ import {
 import { createOpencodeGoWrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
-const OPENCODE_SHARED_PROFILE_IDS = ["opencode:default", "opencode-go:default"] as const;
-const OPENCODE_SHARED_HINT = "Shared API key for Zen + Go catalogs";
+const OPENCODE_SHARED_HINT = "Prefers OPENCODE_GO_API_KEY; falls back to shared OPENCODE_API_KEY";
 const OPENCODE_SHARED_WIZARD_GROUP = {
   groupId: "opencode",
   groupLabel: "OpenCode",
@@ -29,7 +28,7 @@ export default definePluginEntry({
       id: PROVIDER_ID,
       label: "OpenCode Go",
       docsPath: "/providers/models",
-      envVars: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
+      envVars: ["OPENCODE_GO_API_KEY", "OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
       auth: [
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
@@ -38,14 +37,13 @@ export default definePluginEntry({
           hint: OPENCODE_SHARED_HINT,
           optionKey: "opencodeGoApiKey",
           flagName: "--opencode-go-api-key",
-          envVar: "OPENCODE_API_KEY",
-          promptMessage: "Enter OpenCode API key",
-          profileIds: [...OPENCODE_SHARED_PROFILE_IDS],
+          envVar: "OPENCODE_GO_API_KEY",
+          promptMessage: "Enter OpenCode Go API key",
           defaultModel: OPENCODE_GO_DEFAULT_MODEL_REF,
           applyConfig: (cfg) => applyOpencodeGoConfig(cfg),
-          expectedProviders: ["opencode", "opencode-go"],
           noteMessage: [
-            "OpenCode uses one API key across the Zen and Go catalogs.",
+            "OpenCode Go prefers OPENCODE_GO_API_KEY.",
+            "If you use a shared OpenCode key instead, OPENCODE_API_KEY still works.",
             "Go focuses on Kimi, GLM, and MiniMax coding models.",
             "Get your API key at: https://opencode.ai/auth",
           ].join("\n"),

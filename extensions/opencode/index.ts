@@ -11,8 +11,7 @@ import { opencodeMediaUnderstandingProvider } from "./media-understanding-provid
 
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
-const OPENCODE_SHARED_PROFILE_IDS = ["opencode:default", "opencode-go:default"] as const;
-const OPENCODE_SHARED_HINT = "Shared API key for Zen + Go catalogs";
+const OPENCODE_SHARED_HINT = "Prefers OPENCODE_ZEN_API_KEY; falls back to shared OPENCODE_API_KEY";
 const OPENCODE_SHARED_WIZARD_GROUP = {
   groupId: "opencode",
   groupLabel: "OpenCode",
@@ -36,7 +35,7 @@ export default definePluginEntry({
       id: PROVIDER_ID,
       label: "OpenCode Zen",
       docsPath: "/providers/models",
-      envVars: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
+      envVars: ["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"],
       auth: [
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
@@ -45,14 +44,13 @@ export default definePluginEntry({
           hint: OPENCODE_SHARED_HINT,
           optionKey: "opencodeZenApiKey",
           flagName: "--opencode-zen-api-key",
-          envVar: "OPENCODE_API_KEY",
-          promptMessage: "Enter OpenCode API key",
-          profileIds: [...OPENCODE_SHARED_PROFILE_IDS],
+          envVar: "OPENCODE_ZEN_API_KEY",
+          promptMessage: "Enter OpenCode Zen API key",
           defaultModel: OPENCODE_ZEN_DEFAULT_MODEL,
           applyConfig: (cfg) => applyOpencodeZenConfig(cfg),
-          expectedProviders: ["opencode", "opencode-go"],
           noteMessage: [
-            "OpenCode uses one API key across the Zen and Go catalogs.",
+            "OpenCode Zen prefers OPENCODE_ZEN_API_KEY.",
+            "If you use a shared OpenCode key instead, OPENCODE_API_KEY still works.",
             "Zen provides access to Claude, GPT, Gemini, and more models.",
             "Get your API key at: https://opencode.ai/auth",
             "Choose the Zen catalog when you want the curated multi-model proxy.",
