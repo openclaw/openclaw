@@ -1199,7 +1199,7 @@ Important examples:
 | `openclaw.install.minHostVersion`                                                          | Minimum supported OpenClaw host version, using a semver floor like `>=2026.3.22` or `>=2026.5.1-beta.1`.                                                                             |
 | `openclaw.install.expectedIntegrity`                                                       | Expected npm dist integrity string such as `sha512-...`; install and update flows verify the fetched artifact against it.                                                            |
 | `openclaw.install.allowInvalidConfigRecovery`                                              | Allows a narrow bundled-plugin reinstall recovery path when config is invalid.                                                                                                       |
-| `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen`                          | Lets setup-only channel surfaces load before the full channel plugin during startup.                                                                                                 |
+| `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen`                          | Lets setup-runtime channel surfaces load before listen, then defers the full configured channel plugin until post-listen activation.                                                 |
 
 Manifest metadata decides which provider/channel/setup choices appear in
 onboarding before runtime loads. `package.json#openclaw.install` tells

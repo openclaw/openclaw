@@ -19,7 +19,7 @@ describe("slack bundled entries", () => {
     setupEntry,
   });
 
-  it("registers webhook routes without loading the Slack HTTP route sidecar", async () => {
+  it("registers webhook routes through the full channel entry", async () => {
     const registerHttpRoute = vi.fn();
     entry.register({
       registrationMode: "tool-discovery",
@@ -68,6 +68,30 @@ describe("slack bundled entries", () => {
     expect(registerHttpRoute.mock.calls.map((call) => call[0].path)).toEqual([
       "/hooks/ops",
       "/slack/root",
+    ]);
+  });
+
+  it("registers webhook routes through the setup-runtime entry", () => {
+    const registerHttpRoute = vi.fn();
+    setupEntry.registerSetupRuntime?.({
+      registrationMode: "setup-runtime",
+      config: {
+        channels: {
+          slack: {
+            webhookPath: "/slack/root",
+            accounts: {
+              default: { webhookPath: "/slack/default" },
+              ops: { webhookPath: "hooks/ops" },
+            },
+          },
+        },
+      },
+      registerHttpRoute,
+    } as never);
+
+    expect(registerHttpRoute.mock.calls.map((call) => call[0].path)).toEqual([
+      "/hooks/ops",
+      "/slack/default",
     ]);
   });
 });
