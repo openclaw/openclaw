@@ -139,6 +139,28 @@ function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
   return undefined;
 }
 
+function resolveFallbackNoticeActiveModelRef(params: {
+  entry?: SessionEntry;
+  selectedModelRef: string;
+  defaultProvider: string;
+}): { provider: string; model: string } | undefined {
+  const noticeSelectedModel = normalizeOptionalString(params.entry?.fallbackNoticeSelectedModel);
+  const noticeActiveModel = normalizeOptionalString(params.entry?.fallbackNoticeActiveModel);
+  if (
+    !noticeSelectedModel ||
+    !noticeActiveModel ||
+    !areRuntimeModelRefsEquivalent(noticeSelectedModel, params.selectedModelRef) ||
+    areRuntimeModelRefsEquivalent(noticeSelectedModel, noticeActiveModel)
+  ) {
+    return undefined;
+  }
+  return resolveModelRefFromString({
+    raw: noticeActiveModel,
+    defaultProvider: params.defaultProvider,
+    allowPluginNormalization: false,
+  })?.ref;
+}
+
 function resolveConfiguredTextVerbosity(params: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -582,14 +604,32 @@ export function buildStatusMessage(args: StatusArgs): string {
     selectedModel,
     sessionEntry: entry,
   });
+  const fallbackNoticeActiveModelRef = resolveFallbackNoticeActiveModelRef({
+    entry,
+    selectedModelRef: modelRefs.selected.label || "unknown",
+    defaultProvider: selectedProvider,
+  });
+  const fallbackNoticeActiveModelLabel = fallbackNoticeActiveModelRef
+    ? formatProviderModelRef(
+        fallbackNoticeActiveModelRef.provider,
+        fallbackNoticeActiveModelRef.model,
+      )
+    : undefined;
+  const fallbackNoticeOverridesRuntimeModel = Boolean(
+    fallbackNoticeActiveModelLabel &&
+    !areRuntimeModelRefsEquivalent(
+      modelRefs.active.label || "unknown",
+      fallbackNoticeActiveModelLabel,
+    ),
+  );
   const initialFallbackState = resolveActiveFallbackState({
     selectedModelRef: modelRefs.selected.label || "unknown",
-    activeModelRef: modelRefs.active.label || "unknown",
+    activeModelRef: fallbackNoticeActiveModelLabel ?? modelRefs.active.label ?? "unknown",
     config: args.config,
     state: entry,
   });
-  let activeProvider = modelRefs.active.provider;
-  let activeModel = modelRefs.active.model;
+  let activeProvider = fallbackNoticeActiveModelRef?.provider ?? modelRefs.active.provider;
+  let activeModel = fallbackNoticeActiveModelRef?.model ?? modelRefs.active.model;
   let contextLookupProvider: string | undefined = activeProvider;
   let contextLookupModel = activeModel;
   const runtimeModelRaw = normalizeOptionalString(entry?.model) ?? "";
@@ -702,7 +742,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     allowAsyncLoad: false,
   });
   const explicitRuntimeContextTokens =
-    typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
+    !fallbackNoticeOverridesRuntimeModel &&
+    typeof args.runtimeContextTokens === "number" &&
+    args.runtimeContextTokens > 0
       ? args.runtimeContextTokens
       : undefined;
   const resolvedActiveContextTokens = resolveContextTokensForModel({
@@ -924,11 +966,15 @@ export function buildStatusMessage(args: StatusArgs): string {
     selectedAuthMode && selectedAuthMode !== "unknown"
       ? (args.modelAuth ?? selectedAuthMode)
       : undefined;
+  const activeModelAuthOverride =
+    fallbackNoticeOverridesRuntimeModel && args.activeModelAuth === args.modelAuth
+      ? undefined
+      : args.activeModelAuth;
   const activeAuthMode =
-    normalizeAuthMode(args.activeModelAuth) ?? resolveModelAuthMode(activeProvider, args.config);
+    normalizeAuthMode(activeModelAuthOverride) ?? resolveModelAuthMode(activeProvider, args.config);
   const activeAuthLabelValue =
     activeAuthMode && activeAuthMode !== "unknown"
-      ? (args.activeModelAuth ?? activeAuthMode)
+      ? (activeModelAuthOverride ?? activeAuthMode)
       : undefined;
   const preferActiveAuthLabel = shouldPreferActiveRuntimeAliasAuthLabel({
     runtimeAliasModelEquivalent,
