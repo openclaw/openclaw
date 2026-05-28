@@ -1801,7 +1801,7 @@ export function createConfigIO(
   }): Promise<ReadConfigFileSnapshotInternalResult> {
     const finalizeSnapshotReadResult = opts?.skipFinalize
       ? (result: ReadConfigFileSnapshotInternalResult) => result
-      : (result: ReadConfigFileSnapshotInternalResult) => finalizeSnapshotReadResult(result);
+      : (result: ReadConfigFileSnapshotInternalResult) => finalizeReadConfigSnapshotInternalResult(deps, result);
     maybeLoadDotEnvForConfig(deps.env);
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
