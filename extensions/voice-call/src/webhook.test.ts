@@ -720,8 +720,13 @@ describe("VoiceCallWebhookServer replay handling", () => {
     }
   });
 
-  it("returns realtime TwiML for replayed inbound twilio webhooks", async () => {
+  it("does not return realtime TwiML for replayed inbound twilio webhooks", async () => {
     const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
+    const buildTwiMLPayload = vi.fn(() => ({
+      statusCode: 200,
+      headers: { "Content-Type": "text/xml" },
+      body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
+    }));
     const twilioProvider: VoiceCallProvider = {
       ...provider,
       name: "twilio",
@@ -743,11 +748,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
     });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
     server.setRealtimeHandler({
-      buildTwiMLPayload: () => ({
-        statusCode: 200,
-        headers: { "Content-Type": "text/xml" },
-        body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
-      }),
+      buildTwiMLPayload,
       getStreamPathPattern: () => "/voice/stream/realtime",
       handleWebSocketUpgrade: () => {},
       registerToolHandler: () => {},
@@ -764,8 +765,9 @@ describe("VoiceCallWebhookServer replay handling", () => {
       );
 
       expect(response.status).toBe(200);
-      expect(await response.text()).toContain("<Connect><Stream");
-      expect(parseWebhookEvent).not.toHaveBeenCalled();
+      expect(await response.text()).toBe("OK");
+      expect(buildTwiMLPayload).not.toHaveBeenCalled();
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
       expect(processEvent).not.toHaveBeenCalled();
     } finally {
       await server.stop();
@@ -822,6 +824,67 @@ describe("VoiceCallWebhookServer replay handling", () => {
         expect(await response.text()).toContain("<Connect><Stream");
         expect(buildTwiMLPayload).toHaveBeenCalledTimes(1);
         expect(parseWebhookEvent).not.toHaveBeenCalled();
+        expect(processEvent).not.toHaveBeenCalled();
+      } finally {
+        await server.stop();
+      }
+    },
+  );
+
+  it.each(["outbound-api", "outbound-dial"])(
+    "does not return realtime TwiML for replayed %s twilio TwiML fetches",
+    async (direction) => {
+      const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
+      const buildTwiMLPayload = vi.fn(() => ({
+        statusCode: 200,
+        headers: { "Content-Type": "text/xml" },
+        body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
+      }));
+      const twilioProvider: VoiceCallProvider = {
+        ...provider,
+        name: "twilio",
+        verifyWebhook: () => ({
+          ok: true,
+          isReplay: true,
+          verifiedRequestKey: "twilio:req:rt-outbound-replay",
+        }),
+        parseWebhookEvent,
+      };
+      const { manager, processEvent } = createManager([]);
+      const config = createConfig({
+        provider: "twilio",
+        inboundPolicy: "disabled",
+        realtime: {
+          enabled: true,
+          streamPath: "/voice/stream/realtime",
+          instructions: "Be helpful.",
+          toolPolicy: "safe-read-only",
+          tools: [],
+          providers: {},
+        },
+      });
+      const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+      server.setRealtimeHandler({
+        buildTwiMLPayload,
+        getStreamPathPattern: () => "/voice/stream/realtime",
+        handleWebSocketUpgrade: () => {},
+        registerToolHandler: () => {},
+        setPublicUrl: () => {},
+      } as unknown as RealtimeCallHandler);
+
+      try {
+        const baseUrl = await server.start();
+        const response = await postWebhookFormWithHeaders(
+          server,
+          baseUrl,
+          `CallSid=CA123&Direction=${direction}&CallStatus=in-progress&From=%2B15550001111&To=%2B15550002222`,
+          { "x-twilio-signature": "sig" },
+        );
+
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe("OK");
+        expect(buildTwiMLPayload).not.toHaveBeenCalled();
+        expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
         expect(processEvent).not.toHaveBeenCalled();
       } finally {
         await server.stop();
