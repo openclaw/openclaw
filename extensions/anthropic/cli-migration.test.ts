@@ -55,6 +55,28 @@ describe("anthropic Claude model refs", () => {
     expect(resolveKnownAnthropicModelRef("anthropic/claude-sonnet-4-7")).toBe(
       "anthropic/claude-sonnet-4-7",
     );
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-haiku-4-5")).toBe(
+      "anthropic/claude-haiku-4-5",
+    );
+  });
+
+  it("preserves the current claude-haiku-4-5 model and its bare alias", () => {
+    // claude-haiku-4-5 is a current production model (not retired), so neither
+    // its full ref, its dotted variant, nor the bare "haiku" family alias must
+    // be rewritten to sonnet.
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-haiku-4-5")).toBe(
+      "anthropic/claude-haiku-4-5",
+    );
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-haiku-4.5")).toBe(
+      "anthropic/claude-haiku-4.5",
+    );
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-haiku-4-5@anthropic:work")).toBe(
+      "anthropic/claude-haiku-4-5@anthropic:work",
+    );
+    // Genuinely retired Claude 3 Haiku still upgrades to the current sonnet.
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-3-5-haiku-20241022")).toBe(
+      "anthropic/claude-sonnet-4-6",
+    );
   });
 });
 

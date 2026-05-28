@@ -1,7 +1,12 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import * as agentEvents from "../infra/agent-events.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { parseLogLine } from "../logging/parse-log-line.js";
 import {
   THINKING_TAG_CASES,
   createSubscribedSessionHarness,
@@ -114,6 +119,45 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   }
 
+  async function captureToolLifecycleLogSubsystems(messageChannel?: string): Promise<string[]> {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-log-attribution-"));
+    const logFile = path.join(tempDir, "openclaw.log");
+    try {
+      setLoggerOverride({
+        level: "debug",
+        consoleLevel: "silent",
+        file: logFile,
+      });
+      const { emit } = createSubscribedHarness({
+        runId: "run-log-attribution",
+        messageChannel,
+      });
+
+      emitToolRun({
+        emit,
+        toolName: "exec",
+        toolCallId: "tool-log-attribution",
+        args: { command: "echo ok" },
+        isError: false,
+        result: { ok: true },
+      });
+
+      const logText = await fs.readFile(logFile, "utf8");
+      const subsystems: string[] = [];
+      for (const line of logText.trim().split(/\n+/)) {
+        const parsed = parseLogLine(line);
+        if (parsed?.message.includes("embedded run tool")) {
+          subsystems.push(parsed.subsystem ?? "");
+        }
+      }
+      return subsystems;
+    } finally {
+      resetLogger();
+      setLoggerOverride(null);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }
+
   function findBlockReplyPayload(
     onBlockReply: { mock: { calls: unknown[][] } },
     text: string,
@@ -194,6 +238,21 @@ describe("subscribeEmbeddedAgentSession", () => {
       total: 30_868,
     });
   });
+
+  it.each([
+    ["telegram", "gateway/channels/telegram"],
+    [undefined, "agent/embedded"],
+    ["openclaw", "agent/embedded"],
+    ["not a channel", "agent/embedded"],
+  ] as const)(
+    "attributes tool lifecycle logs for channel=%s",
+    async (messageChannel, subsystem) => {
+      await expect(captureToolLifecycleLogSubsystems(messageChannel)).resolves.toEqual([
+        subsystem,
+        subsystem,
+      ]);
+    },
+  );
 
   it("does not double-count usage when done and message_end carry the same snapshot", () => {
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });

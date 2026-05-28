@@ -127,10 +127,13 @@ export function shouldRunOxlintShardsSerial({
   if (localCheckMode === "throttled" || localCheckMode === "low-memory") {
     return true;
   }
-  if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
-    return false;
-  }
   const resources = resolveHostResources(hostResources);
+  if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
+    return (
+      resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
+      resources.logicalCpuCount < FAST_LOCAL_CHECK_MIN_CPUS
+    );
+  }
   return (
     resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
     resources.logicalCpuCount < FAST_LOCAL_CHECK_MIN_CPUS

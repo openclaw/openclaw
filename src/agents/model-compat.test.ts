@@ -14,12 +14,17 @@ vi.mock("../plugins/provider-runtime.js", () => {
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
+  DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isModernModelRef,
   isPrioritizedHighSignalLiveModelRef,
+  isPrioritizedSmallLiveModelRef,
+  isSmallLiveModelRef,
   listPrioritizedHighSignalLiveModelRefs,
+  listPrioritizedSmallLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
+  selectSmallLiveItems,
 } from "./live-model-filter.js";
 
 const baseModel = (): Model =>
@@ -678,6 +683,33 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
   });
 });
 
+describe("isSmallLiveModelRef", () => {
+  it("matches the small-model live matrix without requiring provider modern hooks", () => {
+    expect(isSmallLiveModelRef({ provider: "lmstudio", id: "Qwen/Qwen3.5-9B" })).toBe(true);
+    expect(isSmallLiveModelRef({ provider: "openrouter", id: "qwen/qwen3.5-9b" })).toBe(true);
+    expect(isSmallLiveModelRef({ provider: "openrouter", id: "z-ai/glm-5.1" })).toBe(true);
+    expect(isSmallLiveModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(false);
+    expect(providerRuntimeMocks.resolveProviderModernModelRef).not.toHaveBeenCalled();
+  });
+});
+
+describe("isPrioritizedSmallLiveModelRef", () => {
+  it("lists priority refs as provider/id pairs", () => {
+    expect(isPrioritizedSmallLiveModelRef({ provider: "lmstudio", id: "qwen/qwen3.5-9b" })).toBe(
+      true,
+    );
+    expect(listPrioritizedSmallLiveModelRefs()).toStrictEqual([
+      { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
+      { provider: "vllm", id: "qwen/qwen3-8b" },
+      { provider: "sglang", id: "qwen/qwen3-8b" },
+      { provider: "openrouter", id: "qwen/qwen3.5-9b" },
+      { provider: "openrouter", id: "z-ai/glm-5.1" },
+      { provider: "openrouter", id: "z-ai/glm-5" },
+      { provider: "zai", id: "glm-5.1" },
+    ]);
+  });
+});
+
 describe("selectHighSignalLiveItems", () => {
   it("prefers curated Google replacements before fallback provider spread", () => {
     const items = [
@@ -748,6 +780,31 @@ describe("selectHighSignalLiveItems", () => {
   });
 });
 
+describe("selectSmallLiveItems", () => {
+  it("prefers constrained local and hosted small-model routes before fallback spread", () => {
+    const items = [
+      { provider: "openrouter", id: "z-ai/glm-5" },
+      { provider: "openai", id: "gpt-5.5" },
+      { provider: "vllm", id: "qwen/qwen3-8b" },
+      { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
+      { provider: "openrouter", id: "qwen/qwen3.5-9b" },
+    ];
+
+    expect(
+      selectSmallLiveItems(
+        items,
+        3,
+        (item) => item,
+        (item) => item.provider,
+      ),
+    ).toEqual([
+      { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
+      { provider: "vllm", id: "qwen/qwen3-8b" },
+      { provider: "openrouter", id: "qwen/qwen3.5-9b" },
+    ]);
+  });
+});
+
 describe("resolveHighSignalLiveModelLimit", () => {
   it("defaults modern live sweeps to the curated high-signal cap", () => {
     expect(
@@ -755,6 +812,15 @@ describe("resolveHighSignalLiveModelLimit", () => {
         useExplicitModels: false,
       }),
     ).toBe(DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT);
+  });
+
+  it("can default small live sweeps to the curated small-model cap", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        useExplicitModels: false,
+        defaultLimit: DEFAULT_SMALL_LIVE_MODEL_LIMIT,
+      }),
+    ).toBe(DEFAULT_SMALL_LIVE_MODEL_LIMIT);
   });
 
   it("leaves explicit model lists uncapped unless a cap is provided", () => {

@@ -313,7 +313,12 @@ function configure() {
 function findDependencyPackageJson(packageName) {
   const installPath = pluginInstallPath();
   const npmRoot = path.join(stateDir(), "npm");
+  const pluginName = requireEnv("PLUGIN_NAME");
+  const packageRoot = pluginName.split("/").reduce((current) => path.dirname(current), installPath);
+  const projectRoot =
+    path.basename(packageRoot) === "node_modules" ? path.dirname(packageRoot) : npmRoot;
   return [
+    path.join(projectRoot, "node_modules", packageName, "package.json"),
     path.join(installPath, "node_modules", packageName, "package.json"),
     path.join(npmRoot, "node_modules", packageName, "package.json"),
   ].find((candidate) => fs.existsSync(candidate));

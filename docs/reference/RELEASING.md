@@ -141,6 +141,12 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
   exports, and plugin SDK API baseline. `pnpm release:check` re-runs those
   guards in check mode and reports every generated drift failure it finds in one
   pass before running package release checks.
+- Plugin version sync updates official plugin package versions and existing
+  `openclaw.compat.pluginApi` floors to the OpenClaw release version by
+  default. Treat that field as the plugin SDK/runtime API floor, not just a copy
+  of the package version: for plugin-only releases that intentionally remain
+  compatible with older OpenClaw hosts, keep the floor at the oldest supported
+  host API and document that choice in the plugin release proof.
 - Run the manual `Full Release Validation` workflow before release approval to
   kick off all pre-release test boxes from one entrypoint. It accepts a branch,
   tag, or full commit SHA, dispatches manual `CI`, and dispatches

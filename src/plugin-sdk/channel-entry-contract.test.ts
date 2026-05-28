@@ -8,7 +8,11 @@ import type { PluginModuleLoaderFactory } from "../plugins/plugin-module-loader-
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi, PluginRegistrationMode } from "../plugins/types.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
-import { defineBundledChannelEntry, loadBundledEntryExportSync } from "./channel-entry-contract.js";
+import {
+  defineBundledChannelEntry,
+  defineBundledChannelSetupEntry,
+  loadBundledEntryExportSync,
+} from "./channel-entry-contract.js";
 
 const tempDirs: string[] = [];
 const pluginModuleLoaderJitiFactoryOverrideKey = Symbol.for(
@@ -207,6 +211,35 @@ describe("defineBundledChannelEntry", () => {
     expect(fs.existsSync(runtimeMarker)).toBe(true);
     expect(registerCliMetadata).toHaveBeenCalledWith(fullApi);
     expect(registerFull).toHaveBeenCalledWith(fullApi);
+  });
+});
+
+describe("defineBundledChannelSetupEntry", () => {
+  it("exposes setup-runtime registrations without loading the full channel entry", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-setup-entry-"));
+    tempDirs.push(tempRoot);
+    const runtimeMarker = path.join(tempRoot, "runtime-loaded");
+    const setupRuntimeRegister = vi.fn<(api: OpenClawPluginApi) => void>();
+    const pluginId = "bundled-setup-runtime";
+    const { importerPath } = writeBundledChannelFixture({
+      pluginRoot: path.join(tempRoot, "dist", "extensions", pluginId),
+      pluginId,
+      runtimeMarker,
+    });
+    const entry = defineBundledChannelSetupEntry({
+      importMetaUrl: pathToFileURL(importerPath).href,
+      plugin: { specifier: "./plugin.cjs", exportName: "channelPlugin" },
+      runtime: { specifier: "./runtime.cjs", exportName: "setRuntime" },
+      registerSetupRuntime: setupRuntimeRegister,
+    });
+
+    const api = createApi("setup-runtime");
+    expect(entry.loadSetupPlugin().id).toBe(pluginId);
+    entry.setChannelRuntime?.(api.runtime);
+    entry.registerSetupRuntime?.(api);
+
+    expect(fs.existsSync(runtimeMarker)).toBe(true);
+    expect(setupRuntimeRegister).toHaveBeenCalledWith(api);
   });
 });
 

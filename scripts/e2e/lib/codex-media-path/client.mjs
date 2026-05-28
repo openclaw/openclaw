@@ -70,7 +70,6 @@ async function connectGateway() {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   await waitForWebSocketOpen(ws, 45_000, "gateway ws open timeout");
 
-  const events = [];
   const pending = new Map();
   ws.on("message", (data) => {
     let frame;
@@ -80,10 +79,6 @@ async function connectGateway() {
       return;
     }
     if (frame?.type === "event" && typeof frame.event === "string") {
-      events.push({
-        event: frame.event,
-        payload: frame.payload && typeof frame.payload === "object" ? frame.payload : {},
-      });
       return;
     }
     if (frame?.type !== "res" || typeof frame.id !== "string") {
@@ -153,7 +148,6 @@ async function connectGateway() {
   await request("sessions.subscribe", {}, { timeoutMs: 60_000 });
 
   return {
-    events,
     request,
     async close() {
       if (ws.readyState === WebSocket.CLOSED) {
