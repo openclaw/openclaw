@@ -252,7 +252,7 @@ function shouldCloseSmartQuotedValueAt(raw: string, quoteIndex: number, valueKey
 function decodeSmartQuotedJsonStringEscapes(value: string): string {
   return value.replace(/\\(?:(["\\/bfnrt])|u([0-9a-fA-F]{4}))/g, (_match, escaped, hex) =>
     typeof hex === "string"
-      ? String.fromCharCode(parseInt(hex, 16))
+      ? String.fromCharCode(Number.parseInt(hex, 16))
       : TOOLCALL_REPAIR_JSON_STRING_ESCAPES[escaped as string],
   );
 }
