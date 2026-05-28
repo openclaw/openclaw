@@ -407,10 +407,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       deliveredStreamTextAfterStop !== undefined &&
       deliveredStreamTextAfterStop !== firstChunk.trimEnd()
     ) {
-      if (
-        isDeliveredPrefix({ deliveredText: deliveredStreamTextAfterStop, finalText }) &&
-        deliveredStreamTextAfterStop.length > firstChunk.trimEnd().length
-      ) {
+      // The preview ended at a different boundary than the lane chunker
+      // chose. If it's still a prefix of the final text, hand off from the
+      // preview's boundary so we cover the gap without re-sending content
+      // already visible in retained overflow pages. Without this, falling
+      // through to `sendPayload(finalText)` re-emits every chunk while the
+      // retained preview pages stay visible, duplicating the reply.
+      if (isDeliveredPrefix({ deliveredText: deliveredStreamTextAfterStop, finalText })) {
         return await finalizeDeliveredPrefix(deliveredStreamTextAfterStop, messageId);
       }
       return undefined;
