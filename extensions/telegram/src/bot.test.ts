@@ -2237,6 +2237,100 @@ describe("createTelegramBot", () => {
     expect(mediaFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("uses cached media paths for recent Telegram photo context", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    const mediaFetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const ssrfMock = mockPinnedHostnameResolution();
+    let recentMediaPath: string | undefined;
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: {
+          fetch: mediaFetch as typeof fetch,
+          sourceFetch: mediaFetch as typeof fetch,
+          close: async () => {},
+        },
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          message_id: 201,
+          date: 1736380700,
+          from: { id: 1, is_bot: false, first_name: "Ada" },
+          photo: [{ file_id: "recent-photo-1" }],
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "media/recent-photo.jpg" }),
+      });
+
+      const firstPayload = mockMsgContextArg(
+        replySpy as unknown as MockCallSource,
+        0,
+        0,
+        "first replySpy call",
+      ) as {
+        MediaPaths?: string[];
+      };
+      recentMediaPath = firstPayload.MediaPaths?.[0];
+      expect(recentMediaPath).toBeTypeOf("string");
+
+      replySpy.mockClear();
+      mediaFetch.mockClear();
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          message_id: 202,
+          date: 1736380800,
+          from: { id: 2, is_bot: false, first_name: "Grace" },
+          text: "what did I send earlier?",
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+    } finally {
+      ssrfMock.mockRestore();
+    }
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(
+      replySpy as unknown as MockCallSource,
+      0,
+      0,
+      "second replySpy call",
+    ) as {
+      UntrustedStructuredContext?: unknown[];
+    };
+    const [conversationContext] = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    );
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    const messagesById = new Map(messages.map((message) => [message.message_id, message]));
+    expect(messagesById.get("201")).toMatchObject({
+      sender: "Ada",
+      body: "<media:image>",
+      media_ref: recentMediaPath,
+    });
+    expect(messagesById.get("201")?.media_ref).not.toBe("telegram:file/recent-photo-1");
+    expect(mediaFetch).not.toHaveBeenCalled();
+  });
+
   it("does not fetch reply media for unauthorized DM replies", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
