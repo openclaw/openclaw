@@ -22,9 +22,12 @@ function emptyAcc(): ProjectorAccumulator {
   };
 }
 
-function makeParams(): EmbeddedRunAttemptParams {
+function makeParams(
+  onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void,
+): EmbeddedRunAttemptParams {
   return {
     runId: "run_test",
+    onAgentEvent,
   } as unknown as EmbeddedRunAttemptParams;
 }
 
@@ -36,6 +39,24 @@ function makeProjector(acc: ProjectorAccumulator): ClaudeAppServerEventProjector
     sessionKey: "agent:tank:test",
     channelId: "discord",
   });
+}
+
+function makeProjectorWithCapture(acc: ProjectorAccumulator): {
+  projector: ClaudeAppServerEventProjector;
+  events: Array<{ stream: string; data: Record<string, unknown> }>;
+} {
+  const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
+  const params = makeParams((event) => {
+    events.push(event);
+  });
+  const projector = new ClaudeAppServerEventProjector(TURN_ID, acc, params, {
+    runId: "run_test",
+    agentId: "tank",
+    sessionId: "s_1",
+    sessionKey: "agent:tank:test",
+    channelId: "discord",
+  });
+  return { projector, events };
 }
 
 function notif(method: string, params: Record<string, unknown>): RpcNotification {
@@ -273,14 +294,17 @@ describe("processNotification (accumulator)", () => {
 // ── finalize: deltas folded into accumulator ────────────────────────────────
 
 describe("finalize", () => {
-  it("folds streamed text deltas into acc.assistantTexts", () => {
+  it("folds streamed text deltas into acc.assistantTexts when no item/completed arrives", () => {
+    // Abnormal-settle salvage path: deltas arrive but the turn doesn't
+    // formally complete (e.g. idle timeout). finalize() should still
+    // recover the streamed text from textPartsByItemId.
     const acc = emptyAcc();
     const projector = makeProjector(acc);
     projector.processNotification(
-      notif("item/agentMessage/delta", { turnId: TURN_ID, delta: "hello " }),
+      notif("item/agentMessage/delta", { turnId: TURN_ID, itemId: "msg_1", delta: "hello " }),
     );
     projector.processNotification(
-      notif("item/agentMessage/delta", { turnId: TURN_ID, delta: "world" }),
+      notif("item/agentMessage/delta", { turnId: TURN_ID, itemId: "msg_1", delta: "world" }),
     );
     projector.finalize();
     expect(acc.assistantTexts).toEqual(["hello world"]);
@@ -322,5 +346,161 @@ describe("finalize", () => {
     projector.finalize();
     expect(acc.assistantTexts).toEqual([]);
     expect(acc.reasoning).toBe("");
+  });
+});
+
+// ── commentary-vs-final split ───────────────────────────────────────────────
+
+describe("commentary vs final agentMessage split", () => {
+  it("emits intermediate agentMessages as preamble and reserves the last for lastAssistant", () => {
+    const acc = emptyAcc();
+    const { projector, events } = makeProjectorWithCapture(acc);
+
+    // 1. Intermediate prose: "Let me check..."
+    projector.processNotification(
+      notif("item/started", {
+        turnId: TURN_ID,
+        item: { type: "agentMessage", id: "msg_1" },
+      }),
+    );
+    projector.processNotification(
+      notif("item/agentMessage/delta", {
+        turnId: TURN_ID,
+        itemId: "msg_1",
+        delta: "Let me check.",
+      }),
+    );
+    projector.processNotification(
+      notif("item/completed", {
+        turnId: TURN_ID,
+        item: { type: "agentMessage", id: "msg_1", text: "Let me check." },
+      }),
+    );
+
+    // 2. Tool runs — this confirms msg_1 was intermediate, so it flushes
+    //    as a preamble before tool start is emitted.
+    projector.processNotification(
+      notif("item/started", {
+        turnId: TURN_ID,
+        item: { type: "toolCall", id: "call_1", name: "Bash", arguments: { cmd: "ls" } },
+      }),
+    );
+    projector.processNotification(
+      notif("item/completed", {
+        turnId: TURN_ID,
+        item: { type: "toolCall", id: "call_1", name: "Bash", status: "completed" },
+      }),
+    );
+
+    // 3. Final answer
+    projector.processNotification(
+      notif("item/started", {
+        turnId: TURN_ID,
+        item: { type: "agentMessage", id: "msg_2" },
+      }),
+    );
+    projector.processNotification(
+      notif("item/agentMessage/delta", {
+        turnId: TURN_ID,
+        itemId: "msg_2",
+        delta: "The answer is foo.",
+      }),
+    );
+    projector.processNotification(
+      notif("item/completed", {
+        turnId: TURN_ID,
+        item: { type: "agentMessage", id: "msg_2", text: "The answer is foo." },
+      }),
+    );
+
+    // 4. Turn completes — msg_2 is the final, no preamble for it.
+    projector.processNotification(
+      notif("turn/completed", {
+        turnId: TURN_ID,
+        turn: {
+          id: TURN_ID,
+          status: "completed",
+          items: [
+            { type: "agentMessage", id: "msg_1", text: "Let me check." },
+            { type: "toolCall", id: "call_1", name: "Bash" },
+            { type: "agentMessage", id: "msg_2", text: "The answer is foo." },
+          ],
+        },
+      }),
+    );
+    projector.finalize();
+
+    const preambleEvents = events.filter((e) => e.stream === "item" && e.data.kind === "preamble");
+    expect(preambleEvents).toHaveLength(1);
+    expect(preambleEvents[0]?.data.progressText).toBe("Let me check.");
+    expect(preambleEvents[0]?.data.itemId).toBe("msg_1");
+
+    // Final goes to assistantTexts/lastAssistant ONLY, never as preamble.
+    expect(acc.assistantTexts).toEqual(["The answer is foo."]);
+  });
+
+  it("emits no preamble when the turn contains a single (final) agentMessage", () => {
+    const acc = emptyAcc();
+    const { projector, events } = makeProjectorWithCapture(acc);
+    projector.processNotification(
+      notif("item/started", {
+        turnId: TURN_ID,
+        item: { type: "agentMessage", id: "msg_only" },
+      }),
+    );
+    projector.processNotification(
+      notif("item/agentMessage/delta", { turnId: TURN_ID, itemId: "msg_only", delta: "hi" }),
+    );
+    projector.processNotification(
+      notif("item/completed", {
+        turnId: TURN_ID,
+        item: { type: "agentMessage", id: "msg_only", text: "hi" },
+      }),
+    );
+    projector.processNotification(
+      notif("turn/completed", {
+        turnId: TURN_ID,
+        turn: { id: TURN_ID, status: "completed", items: [] },
+      }),
+    );
+    projector.finalize();
+
+    expect(events.filter((e) => e.stream === "item" && e.data.kind === "preamble")).toHaveLength(0);
+    expect(acc.assistantTexts).toEqual(["hi"]);
+  });
+
+  it("flushes the held agentMessage when a second agentMessage starts (back-to-back commentary)", () => {
+    const acc = emptyAcc();
+    const { projector, events } = makeProjectorWithCapture(acc);
+    projector.processNotification(
+      notif("item/started", { turnId: TURN_ID, item: { type: "agentMessage", id: "a" } }),
+    );
+    projector.processNotification(
+      notif("item/completed", {
+        turnId: TURN_ID,
+        item: { type: "agentMessage", id: "a", text: "First note." },
+      }),
+    );
+    projector.processNotification(
+      notif("item/started", { turnId: TURN_ID, item: { type: "agentMessage", id: "b" } }),
+    );
+    projector.processNotification(
+      notif("item/completed", {
+        turnId: TURN_ID,
+        item: { type: "agentMessage", id: "b", text: "Final answer." },
+      }),
+    );
+    projector.processNotification(
+      notif("turn/completed", {
+        turnId: TURN_ID,
+        turn: { id: TURN_ID, status: "completed", items: [] },
+      }),
+    );
+    projector.finalize();
+
+    const preambles = events.filter((e) => e.stream === "item" && e.data.kind === "preamble");
+    expect(preambles).toHaveLength(1);
+    expect(preambles[0]?.data.progressText).toBe("First note.");
+    expect(acc.assistantTexts).toEqual(["Final answer."]);
   });
 });

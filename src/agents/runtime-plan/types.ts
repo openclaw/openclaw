@@ -220,6 +220,7 @@ export type AgentRuntimeReplyPayload = {
   isFallbackNotice?: boolean;
   isStatusNotice?: boolean;
   channelData?: Record<string, unknown>;
+  preserveDraftPreview?: boolean;
 };
 
 export type AgentRuntimeSystemPromptSectionId =

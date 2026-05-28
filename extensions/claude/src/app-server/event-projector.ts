@@ -104,6 +104,13 @@ export class ClaudeAppServerEventProjector {
   // emit a preamble bullet with the block's text even when the completed
   // item payload omits the text field.
   private readonly textPartsByItemId = new Map<string, string[]>();
+  // Holds the most recent completed agentMessage. If another item starts
+  // afterward, the held item is intermediate prose — flush as preamble.
+  // The item still held at turn completion is the final reply — its text
+  // becomes textParts (→ lastAssistant) instead of a preamble emission.
+  // This mirrors codex's commentary-vs-final split without requiring the
+  // server to tag items.
+  private pendingAgentMessage: { itemId: string | undefined; text: string } | undefined;
   private settled = false;
 
   constructor(
@@ -182,6 +189,24 @@ export class ClaudeAppServerEventProjector {
 
   /** Fold streamed deltas into the accumulator. Call once after settle. */
   finalize(): void {
+    // Abnormal-settle salvage: when settle happens before turn/completed
+    // (idle timeout, abort), pendingAgentMessage and per-item buffers may
+    // still hold uncommitted text. Drain them so lastAssistant reflects
+    // whatever did arrive instead of silently dropping it. Order matters:
+    // pendingAgentMessage was the most-recently-completed block; the
+    // per-item buffers may hold deltas from an item that never completed.
+    if (this.textParts.length === 0) {
+      if (this.pendingAgentMessage) {
+        this.textParts.push(this.pendingAgentMessage.text);
+        this.pendingAgentMessage = undefined;
+      } else if (this.textPartsByItemId.size > 0) {
+        const latest = Array.from(this.textPartsByItemId.values()).pop();
+        const text = latest?.join("").trim();
+        if (text) {
+          this.textParts.push(text);
+        }
+      }
+    }
     if (this.textParts.length > 0) {
       this.acc.assistantTexts = [this.textParts.join("")];
     }
@@ -205,6 +230,11 @@ export class ClaudeAppServerEventProjector {
     }
     const isTool = isToolItem(item);
     if (method === "item/started") {
+      // Any new item arriving confirms that the held agentMessage (if any)
+      // is intermediate prose, not the final reply. Flush it as a preamble
+      // now so M_draft surfaces it alongside the upcoming tool/reasoning
+      // line.
+      this.flushPendingAgentMessageAsPreamble();
       if (isTool) {
         this.recordToolStart(item);
         // Tools: emit the durable item event so codex/Discord renderers
@@ -213,10 +243,11 @@ export class ClaudeAppServerEventProjector {
       }
       // Non-tool items (agentMessage, reasoning, SDK lifecycle blocks like
       // session-status / mcp-session) are intentionally not emitted on
-      // start. AgentMessage emits a preamble at item/completed with the
-      // accumulated text; SDK lifecycle items aren't user-visible in codex
-      // and shouldn't be surfaced for claude either (they appeared as
-      // 🧩 / 📊 noise bullets when emitItemEvent fired generically).
+      // start. AgentMessage's preamble is deferred until we know whether
+      // it is intermediate (flushed above on the next item/started) or
+      // final (consumed by handleTurnCompleted into textParts). SDK
+      // lifecycle items aren't user-visible in codex and shouldn't be
+      // surfaced for claude either.
       return;
     }
     // item/completed
@@ -231,24 +262,21 @@ export class ClaudeAppServerEventProjector {
       // Prefer the completed item's text field when populated; fall back
       // to the per-item delta accumulator from handleAgentMessageDelta.
       const inlineText = typeof item.text === "string" ? item.text : "";
-      const accumulatedText = itemId
-        ? (this.textPartsByItemId.get(itemId)?.join("") ?? "")
-        : "";
+      const accumulatedText = itemId ? (this.textPartsByItemId.get(itemId)?.join("") ?? "") : "";
       const text = (inlineText || accumulatedText).trim();
       if (itemId) {
         this.textPartsByItemId.delete(itemId);
       }
       if (text) {
-        emitProjectedAgentEvent(this.params, {
-          stream: "item",
-          data: {
-            ...(itemId ? { itemId } : {}),
-            kind: "preamble",
-            title: "Preamble",
-            phase: "update",
-            progressText: text,
-          },
-        });
+        // Hold the item. If the next event is another item/started, this
+        // block is intermediate prose and gets flushed as a preamble; if
+        // the next event is turn/completed, this is the final reply and
+        // its text is moved into textParts → lastAssistant by
+        // handleTurnCompleted (with no preamble emission).
+        if (this.pendingAgentMessage) {
+          this.flushPendingAgentMessageAsPreamble();
+        }
+        this.pendingAgentMessage = { itemId, text };
       }
       return;
     }
@@ -345,11 +373,12 @@ export class ClaudeAppServerEventProjector {
     if (typeof p.delta !== "string") {
       return;
     }
-    this.textParts.push(p.delta);
-    // Also accumulate per-item so item/completed can emit a preamble
-    // bullet with this block's text even when the completed item payload
-    // doesn't carry the full text inline (matches codex's commentary
-    // bullet rendering).
+    // Accumulate only per-item; the global textParts is populated at
+    // turn completion from the *final* agentMessage block (the one still
+    // held in pendingAgentMessage). Intermediate blocks go to M_draft as
+    // preamble (via flushPendingAgentMessageAsPreamble) and must not
+    // contribute to lastAssistant, or the final reply would re-deliver
+    // the intermediate prose and clobber the in-channel transcript.
     const itemId = typeof p.itemId === "string" ? p.itemId : undefined;
     if (itemId) {
       let buf = this.textPartsByItemId.get(itemId);
@@ -363,6 +392,24 @@ export class ClaudeAppServerEventProjector {
     // handleItemLifecycle. Codex never emits this stream either; renderers
     // treat it as a final-reply replace and overwrite the tool/preamble
     // draft preview. Final text is delivered via messagesSnapshot.
+  }
+
+  private flushPendingAgentMessageAsPreamble(): void {
+    if (!this.pendingAgentMessage) {
+      return;
+    }
+    const { itemId, text } = this.pendingAgentMessage;
+    this.pendingAgentMessage = undefined;
+    emitProjectedAgentEvent(this.params, {
+      stream: "item",
+      data: {
+        ...(itemId ? { itemId } : {}),
+        kind: "preamble",
+        title: "Preamble",
+        phase: "update",
+        progressText: text,
+      },
+    });
   }
 
   private handleReasoningDelta(p: Record<string, unknown>): void {
@@ -392,15 +439,25 @@ export class ClaudeAppServerEventProjector {
         error: new Error(`Claude turn failed: ${turn.error?.message ?? "unknown"}`),
       };
     }
-    // Pick up any item text we didn't see via deltas.
-    if (turn?.items) {
-      for (const item of turn.items) {
-        if (
-          item.type === "agentMessage" &&
-          this.textParts.length === 0 &&
-          typeof item.text === "string"
-        ) {
+    // The agentMessage still held at turn completion is the final reply.
+    // Move its text into textParts (consumed by finalize() →
+    // acc.assistantTexts → lastAssistant) and do NOT emit a preamble for
+    // it — the channel renderer will deliver this text as the final reply,
+    // separately from the M_draft transcript.
+    if (this.pendingAgentMessage) {
+      this.textParts.push(this.pendingAgentMessage.text);
+      this.pendingAgentMessage = undefined;
+    } else if (turn?.items && this.textParts.length === 0) {
+      // Fallback for the case where we never observed item/completed for
+      // the trailing agentMessage (event loss / abrupt settlement): take
+      // the last agentMessage from the authoritative turn.items snapshot.
+      // Only pick the LAST one — picking all would re-merge intermediate
+      // blocks that already went to M_draft as preambles.
+      for (let i = turn.items.length - 1; i >= 0; i -= 1) {
+        const item = turn.items[i];
+        if (item.type === "agentMessage" && typeof item.text === "string" && item.text) {
           this.textParts.push(item.text);
+          break;
         }
       }
     }

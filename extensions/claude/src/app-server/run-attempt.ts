@@ -390,6 +390,14 @@ export async function runClaudeAppServerAttempt(
       completedCount: accumulated.itemCount,
       activeCount: 0,
     };
+    // Claude's projector emits intermediate agentMessage blocks as preamble
+    // bullets (see ClaudeAppServerEventProjector — commentary/final split)
+    // so channels render a live transcript of tools + thinking. Opt the
+    // final-reply payload into the centrally-honored
+    // ReplyPayload.preserveDraftPreview path so channel renderers post the
+    // final answer as a NEW message below the transcript instead of
+    // editing the transcript in place.
+    result.preserveDraftPreviewOnFinalReply = true;
     // Copy telemetry from the bridge — messaging-tool sends, media artifacts,
     // audio-as-voice flag, heartbeat response. The bridge mutates these as
     // each tool call lands.
