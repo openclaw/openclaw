@@ -30,6 +30,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
   "diagnostics.memoryPressureSnapshot":
     "Whether critical memory pressure automatically captures a redacted stability snapshot. Default: false. Enable only when this host can tolerate the extra file-system scan and snapshot write during critical memory pressure.",
+  "diagnostics.memoryPressureThresholds":
+    "Memory pressure threshold overrides for gateway health diagnostics: rssWarningBytes (default 1.5GB), rssCriticalBytes (default 3GB), heapUsedWarningBytes (default 1GB), heapUsedCriticalBytes (default 2GB). Use these to tune pressure alerts to your host's actual memory capacity.",
   "diagnostics.otel":
     "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",
   "diagnostics.cacheTrace":

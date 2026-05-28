@@ -271,6 +271,62 @@ describe("diagnostic memory", () => {
     }
   });
 
+  it("applies heap threshold overrides for memory pressure", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+
+    emitDiagnosticMemorySample({
+      now: 1000,
+      uptimeMs: 0,
+      memoryUsage: memoryUsage({ rss: 100, heapUsed: 1500 }),
+      thresholds: {
+        rssWarningBytes: 2000,
+        rssCriticalBytes: 4000,
+        heapUsedWarningBytes: 1200,
+        heapUsedCriticalBytes: 3000,
+        pressureRepeatMs: 60_000,
+      },
+    });
+    stop();
+
+    const pressureEvents = events.filter((e) => e.type === "diagnostic.memory.pressure");
+    expect(pressureEvents).toEqual([
+      expect.objectContaining({
+        reason: "heap_threshold",
+        level: "warning",
+        thresholdBytes: 1200,
+      }),
+    ]);
+  });
+
+  it("applies rss threshold overrides for memory pressure", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+
+    emitDiagnosticMemorySample({
+      now: 1000,
+      uptimeMs: 0,
+      memoryUsage: memoryUsage({ rss: 2500, heapUsed: 100 }),
+      thresholds: {
+        rssWarningBytes: 2000,
+        rssCriticalBytes: 4000,
+        heapUsedWarningBytes: 5000,
+        heapUsedCriticalBytes: 8000,
+        pressureRepeatMs: 60_000,
+      },
+    });
+    stop();
+
+    const pressureEvents = events.filter((e) => e.type === "diagnostic.memory.pressure");
+    expect(pressureEvents).toEqual([
+      expect.objectContaining({
+        reason: "rss_threshold",
+        level: "warning",
+        thresholdBytes: 2000,
+      }),
+    ]);
+  });
+
   it("can disable critical pressure bundle writes", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-pressure-disabled-"));
     const resolveSessionStorePaths = vi.fn(() => []);

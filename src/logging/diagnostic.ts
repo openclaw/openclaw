@@ -1202,6 +1202,7 @@ export function startDiagnosticHeartbeat(
         emitSample: shouldRecordMemorySample,
         writeCriticalBundle: shouldWriteCriticalMemoryPressureBundle(heartbeatConfig),
         resolveSessionStorePaths: () => resolveDiagnosticSessionStorePaths(heartbeatConfig),
+        thresholds: heartbeatConfig?.diagnostics?.memoryPressureThresholds,
       });
     }
 

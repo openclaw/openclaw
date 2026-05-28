@@ -43,6 +43,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.stuckSessionWarnMs": "Session Liveness Threshold (ms)",
   "diagnostics.stuckSessionAbortMs": "Session Abort Threshold (ms)",
   "diagnostics.memoryPressureSnapshot": "Memory Pressure Snapshot Enabled",
+  "diagnostics.memoryPressureThresholds.rssWarningBytes": "Memory Pressure RSS Warning (bytes)",
+  "diagnostics.memoryPressureThresholds.rssCriticalBytes": "Memory Pressure RSS Critical (bytes)",
+  "diagnostics.memoryPressureThresholds.heapUsedWarningBytes":
+    "Memory Pressure Heap Warning (bytes)",
+  "diagnostics.memoryPressureThresholds.heapUsedCriticalBytes":
+    "Memory Pressure Heap Critical (bytes)",
   "diagnostics.otel.enabled": "OpenTelemetry Enabled",
   "diagnostics.otel.endpoint": "OpenTelemetry Endpoint",
   "diagnostics.otel.tracesEndpoint": "OpenTelemetry Traces Endpoint",
