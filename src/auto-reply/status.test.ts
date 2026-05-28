@@ -1035,6 +1035,8 @@ describe("buildStatusMessage", () => {
   });
 
   it("prefers active CLI OAuth over selected env API-key labels for runtime aliases", () => {
+    registerAnthropicCliBackendForTest();
+
     const text = buildStatusMessage({
       config: {
         models: {
