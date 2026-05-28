@@ -103,9 +103,13 @@ function normalizeRefForDedupe(raw: string): string {
 }
 
 function isOpenClawCliImageCachePath(filePath: string): boolean {
-  const normalized = filePath.replaceAll("\\", "/");
-  return normalized.split("/").some((part) => {
-    return part === ".openclaw-cli-images" || part === "openclaw-cli-images";
+  const parts = filePath.replaceAll("\\", "/").split("/");
+  return parts.some((part, index) => {
+    if (part === ".openclaw-cli-images") {
+      return true;
+    }
+    const parent = parts[index - 1] ?? "";
+    return part === "openclaw-cli-images" && /^openclaw(?:-\d+)?$/.test(parent);
   });
 }
 

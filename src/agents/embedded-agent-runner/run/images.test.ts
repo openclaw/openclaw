@@ -100,14 +100,24 @@ describe("detectImageReferences", () => {
 
   it("ignores temporary OpenClaw CLI image cache paths", () => {
     expectNoImageReferences(
-      `Prior turn wrote ${path.join(os.tmpdir(), "openclaw-cli-images", "stale.jpg")}`,
+      `Prior turn wrote ${path.join(os.tmpdir(), "openclaw", "openclaw-cli-images", "stale.jpg")}`,
     );
   });
 
   it("ignores file URLs into the OpenClaw CLI image cache", () => {
-    const stalePath = path.join(os.tmpdir(), "openclaw-cli-images", "stale.png");
+    const stalePath = path.join(os.tmpdir(), "openclaw", "openclaw-cli-images", "stale.png");
 
     expectNoImageReferences(`Prior turn wrote ${pathToFileURL(stalePath).href}`);
+  });
+
+  it("detects normal user image paths in similarly named directories", () => {
+    expect(detectImageReferences("/workspace/openclaw-cli-images/current.png")).toStrictEqual([
+      {
+        raw: "/workspace/openclaw-cli-images/current.png",
+        type: "path",
+        resolved: "/workspace/openclaw-cli-images/current.png",
+      },
+    ]);
   });
 
   it("detects multiple image references in a prompt", () => {
