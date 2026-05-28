@@ -716,49 +716,42 @@ export class VoiceCallWebhookServer {
         return { statusCode: 401, body: "Unauthorized" };
       }
 
-      // Verified Twilio retries are acknowledged through provider parsing instead
-      // of TwiML shortcuts, so replays cannot mint fresh realtime stream tokens.
-      if (!verification.isReplay) {
-        const initialTwiML = this.provider.consumeInitialTwiML?.(ctx);
-        if (initialTwiML !== undefined && initialTwiML !== null) {
-          const params = new URLSearchParams(ctx.rawBody);
-          console.log(
-            `[voice-call] Serving provider initial TwiML before realtime handling (callSid=${params.get("CallSid") ?? "unknown"}, direction=${params.get("Direction") ?? "unknown"})`,
-          );
-          return {
-            statusCode: 200,
-            headers: { "Content-Type": "application/xml" },
-            body: initialTwiML,
-          };
-        }
+      if (verification.isReplay) {
+        console.warn("[voice-call] Replay detected; skipping event side effects");
+        return { statusCode: 200, body: "OK" };
+      }
 
-        const realtimeParams = this.getRealtimeTwimlParams(ctx);
-        if (realtimeParams) {
-          const direction = realtimeParams.get("Direction");
-          const isInboundRealtimeRequest = !direction || direction === "inbound";
-          if (
-            isInboundRealtimeRequest &&
-            !this.shouldAcceptRealtimeInboundRequest(realtimeParams)
-          ) {
-            console.log("[voice-call] Realtime inbound call rejected before stream setup");
-            return buildRealtimeRejectedTwiML();
-          }
-          console.log(
-            `[voice-call] Serving realtime TwiML for Twilio call ${realtimeParams.get("CallSid") ?? "unknown"} (direction=${direction ?? "unknown"})`,
-          );
-          return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams);
+      const initialTwiML = this.provider.consumeInitialTwiML?.(ctx);
+      if (initialTwiML !== undefined && initialTwiML !== null) {
+        const params = new URLSearchParams(ctx.rawBody);
+        console.log(
+          `[voice-call] Serving provider initial TwiML before realtime handling (callSid=${params.get("CallSid") ?? "unknown"}, direction=${params.get("Direction") ?? "unknown"})`,
+        );
+        return {
+          statusCode: 200,
+          headers: { "Content-Type": "application/xml" },
+          body: initialTwiML,
+        };
+      }
+
+      const realtimeParams = this.getRealtimeTwimlParams(ctx);
+      if (realtimeParams) {
+        const direction = realtimeParams.get("Direction");
+        const isInboundRealtimeRequest = !direction || direction === "inbound";
+        if (isInboundRealtimeRequest && !this.shouldAcceptRealtimeInboundRequest(realtimeParams)) {
+          console.log("[voice-call] Realtime inbound call rejected before stream setup");
+          return buildRealtimeRejectedTwiML();
         }
+        console.log(
+          `[voice-call] Serving realtime TwiML for Twilio call ${realtimeParams.get("CallSid") ?? "unknown"} (direction=${direction ?? "unknown"})`,
+        );
+        return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams);
       }
 
       const parsed = this.provider.parseWebhookEvent(ctx, {
         verifiedRequestKey: verification.verifiedRequestKey,
       });
-
-      if (verification.isReplay) {
-        console.warn("[voice-call] Replay detected; skipping event side effects");
-      } else {
-        this.processParsedEvents(parsed.events);
-      }
+      this.processParsedEvents(parsed.events);
 
       return normalizeWebhookResponse(parsed);
     } finally {
