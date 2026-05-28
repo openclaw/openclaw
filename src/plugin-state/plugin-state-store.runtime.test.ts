@@ -55,28 +55,32 @@ afterEach(() => {
 describe("plugin runtime state proxy", () => {
   it("binds openKeyedStore to the bundled plugin id and keeps resolveStateDir", async () => {
     await withOpenClawTestState({ label: "plugin-state-runtime" }, async (state) => {
-      const registry = createTestPluginRegistry();
-      const record = createPluginRecord("discord", "bundled");
-      registry.registry.plugins.push(record);
-      const api = registry.createApi(record, { config: {} });
+      try {
+        const registry = createTestPluginRegistry();
+        const record = createPluginRecord("discord", "bundled");
+        registry.registry.plugins.push(record);
+        const api = registry.createApi(record, { config: {} });
 
-      expect(api.runtime.state.resolveStateDir()).toBe(state.stateDir);
-      const store = api.runtime.state.openKeyedStore<{ plugin: string }>({
-        namespace: "runtime",
-        maxEntries: 10,
-      });
-      await expect(store.registerIfAbsent("k", { plugin: "discord" })).resolves.toBe(true);
-      await expect(store.registerIfAbsent("k", { plugin: "duplicate" })).resolves.toBe(false);
+        expect(api.runtime.state.resolveStateDir()).toBe(state.stateDir);
+        const store = api.runtime.state.openKeyedStore<{ plugin: string }>({
+          namespace: "runtime",
+          maxEntries: 10,
+        });
+        await expect(store.registerIfAbsent("k", { plugin: "discord" })).resolves.toBe(true);
+        await expect(store.registerIfAbsent("k", { plugin: "duplicate" })).resolves.toBe(false);
 
-      const telegram = createPluginRecord("telegram", "bundled");
-      registry.registry.plugins.push(telegram);
-      const telegramApi = registry.createApi(telegram, { config: {} });
-      const telegramStore = telegramApi.runtime.state.openKeyedStore<{ plugin: string }>({
-        namespace: "runtime",
-        maxEntries: 10,
-      });
-      await expect(telegramStore.lookup("k")).resolves.toBeUndefined();
-      await expect(store.lookup("k")).resolves.toEqual({ plugin: "discord" });
+        const telegram = createPluginRecord("telegram", "bundled");
+        registry.registry.plugins.push(telegram);
+        const telegramApi = registry.createApi(telegram, { config: {} });
+        const telegramStore = telegramApi.runtime.state.openKeyedStore<{ plugin: string }>({
+          namespace: "runtime",
+          maxEntries: 10,
+        });
+        await expect(telegramStore.lookup("k")).resolves.toBeUndefined();
+        await expect(store.lookup("k")).resolves.toEqual({ plugin: "discord" });
+      } finally {
+        resetPluginStateStoreForTests();
+      }
     });
   });
 

@@ -57,10 +57,15 @@ describe("config.openFile", () => {
   });
 
   it("opens the configured file without shell interpolation", async () => {
-    process.env.OPENCLAW_CONFIG_PATH = "/tmp/config $(touch pwned).json";
+    const configPath =
+      process.platform === "win32"
+        ? String.raw`D:\tmp\config $(touch pwned).json`
+        : "/tmp/config $(touch pwned).json";
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    const expectedCommand = resolveConfigOpenCommand(configPath);
     execFileMock.mockImplementation((...args: unknown[]) => {
-      expect(["open", "xdg-open", "powershell.exe"]).toContain(args[0]);
-      expect(args[1]).toEqual(["/tmp/config $(touch pwned).json"]);
+      expect(args[0]).toBe(expectedCommand.command);
+      expect(args[1]).toEqual(expectedCommand.args);
       invokeExecFileCallback(args, null);
       return {} as never;
     });
@@ -72,14 +77,16 @@ describe("config.openFile", () => {
       true,
       {
         ok: true,
-        path: "/tmp/config $(touch pwned).json",
+        path: configPath,
       },
       undefined,
     );
   });
 
   it("returns a generic error and logs details when the opener fails", async () => {
-    process.env.OPENCLAW_CONFIG_PATH = "/tmp/config.json";
+    const configPath =
+      process.platform === "win32" ? String.raw`D:\tmp\config.json` : "/tmp/config.json";
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
     execFileMock.mockImplementation((...args: unknown[]) => {
       invokeExecFileCallback(
         args,
@@ -97,7 +104,7 @@ describe("config.openFile", () => {
       true,
       {
         ok: false,
-        path: "/tmp/config.json",
+        path: configPath,
         error: "failed to open config file",
       },
       undefined,

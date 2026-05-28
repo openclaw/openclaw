@@ -1040,7 +1040,7 @@ describe("gateway session utils", () => {
     const result = listAgentsForGateway(cfg);
     expect(result.agents[0]).toMatchObject({
       id: "main",
-      workspace: "/tmp/default-workspace",
+      workspace: path.resolve("/tmp/default-workspace"),
       model: {
         primary: "openai/gpt-5.4",
         fallbacks: ["openai-codex/gpt-5.4"],

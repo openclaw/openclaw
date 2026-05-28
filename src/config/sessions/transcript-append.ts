@@ -4,6 +4,7 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import {
   acquireSessionWriteLock,
+  assertSessionWriteLockCurrent,
   type SessionWriteLockAcquireTimeoutConfig,
   resolveSessionWriteLockAcquireTimeoutMs,
 } from "../../agents/session-write-lock.js";
@@ -260,6 +261,7 @@ async function appendSessionTranscriptMessageLocked(params: {
   try {
     const now = params.now ?? Date.now();
     const messageId = randomUUID();
+    await assertSessionWriteLockCurrent(lock);
     await ensureTranscriptHeader(params.transcriptPath, {
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       ...(params.cwd ? { cwd: params.cwd } : {}),
@@ -278,6 +280,7 @@ async function appendSessionTranscriptMessageLocked(params: {
       hasLinearEntries &&
       (stat?.size ?? 0) > SESSION_MANAGER_APPEND_MAX_BYTES;
     if (hasLinearEntries && !shouldRawAppend) {
+      await assertSessionWriteLockCurrent(lock);
       const migrated = await migrateLinearTranscriptToParentLinked(params.transcriptPath);
       leafInfo = {
         ...(migrated.leafId ? { leafId: migrated.leafId } : {}),
@@ -292,6 +295,7 @@ async function appendSessionTranscriptMessageLocked(params: {
       timestamp: new Date(now).toISOString(),
       message: params.message,
     };
+    await assertSessionWriteLockCurrent(lock);
     await fs.appendFile(params.transcriptPath, `${JSON.stringify(entry)}\n`, "utf-8");
     return { messageId };
   } finally {

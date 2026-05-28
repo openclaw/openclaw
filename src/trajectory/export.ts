@@ -516,7 +516,7 @@ function redactWorkspacePathString(value: string, redaction: TrajectoryExportRed
     const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
     next = next.replace(new RegExp(`${escaped}(?=$|[\\\\/])`, "gu"), "$WORKSPACE_DIR");
   }
-  return next;
+  return next.replaceAll("$WORKSPACE_DIR\\", "$WORKSPACE_DIR/");
 }
 
 function maybeRedactPathString(value: string, redaction: TrajectoryExportRedaction): string {

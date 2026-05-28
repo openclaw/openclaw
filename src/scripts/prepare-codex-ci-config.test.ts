@@ -46,7 +46,7 @@ describe("prepare-codex-ci-config", () => {
         `model_reasoning_effort = "low"`,
       );
       await expect(fs.readFile(outputPath, "utf-8")).resolves.toContain(
-        `[projects."${projectPath}"]`,
+        `[projects.${JSON.stringify(path.resolve(projectPath))}]`,
       );
     });
   });

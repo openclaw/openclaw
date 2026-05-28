@@ -136,6 +136,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     createSubscriptionMock(),
   );
   const acquireSessionWriteLockMock = vi.fn<AcquireSessionWriteLockFn>(async (_params) => ({
+    fencingToken: "test-fencing-token",
+    assertCurrent: async () => {},
     release: async () => {},
   }));
   const resolveBootstrapContextForRunMock = vi.fn<() => Promise<BootstrapContext>>(async () => ({
@@ -828,6 +830,8 @@ export function resetEmbeddedAttemptHarness(
     .mockReset()
     .mockImplementation(() => createSubscriptionMock());
   hoisted.acquireSessionWriteLockMock.mockReset().mockResolvedValue({
+    fencingToken: "test-fencing-token",
+    assertCurrent: async () => {},
     release: async () => {},
   });
   hoisted.installToolResultContextGuardMock.mockReset().mockReturnValue(() => {});

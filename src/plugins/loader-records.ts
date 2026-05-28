@@ -3,6 +3,14 @@ import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
 import type { PluginBundleFormat, PluginFormat } from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
+import {
+  createPluginCircuitBreakerState,
+  normalizePluginCriticality,
+  recordPluginCircuitBreakerFailure,
+  recordPluginCircuitBreakerSuccess,
+  type PluginCircuitBreakerFailureReason,
+  type PluginCircuitBreakerState,
+} from "./plugin-circuit-breaker.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import type { PluginLogger } from "./types.js";
 
@@ -20,6 +28,7 @@ export function createPluginRecord(params: {
   origin: PluginRecord["origin"];
   workspaceDir?: string;
   trustedOfficialInstall?: boolean;
+  criticality?: unknown;
   enabled: boolean;
   compat?: readonly PluginCompatCode[];
   activationState?: PluginActivationState;
@@ -29,6 +38,7 @@ export function createPluginRecord(params: {
   configSchema: boolean;
   contracts?: PluginManifestContracts;
 }): PluginRecord {
+  const criticality = normalizePluginCriticality(params.criticality);
   return {
     id: params.id,
     name: params.name ?? params.id,
@@ -43,6 +53,7 @@ export function createPluginRecord(params: {
     origin: params.origin,
     workspaceDir: params.workspaceDir,
     trustedOfficialInstall: params.trustedOfficialInstall,
+    criticality,
     enabled: params.enabled,
     compat: params.compat,
     explicitlyEnabled: params.activationState?.explicitlyEnabled,
@@ -80,7 +91,59 @@ export function createPluginRecord(params: {
     configUiHints: undefined,
     configJsonSchema: undefined,
     contracts: params.contracts,
+    circuitBreaker: createPluginCircuitBreakerState({
+      pluginId: params.id,
+      criticality,
+    }),
   };
+}
+
+export function ensurePluginCircuitBreakerState(
+  record: PluginRecord,
+  nowMs?: number,
+): PluginCircuitBreakerState {
+  const criticality = normalizePluginCriticality(record.criticality);
+  record.criticality = criticality;
+  if (record.circuitBreaker) {
+    if (record.circuitBreaker.criticality !== criticality) {
+      record.circuitBreaker = { ...record.circuitBreaker, criticality };
+    }
+    return record.circuitBreaker;
+  }
+  record.circuitBreaker = createPluginCircuitBreakerState({
+    pluginId: record.id,
+    criticality,
+    nowMs,
+  });
+  return record.circuitBreaker;
+}
+
+export function markPluginCircuitBreakerFailure(params: {
+  record: PluginRecord;
+  reason: PluginCircuitBreakerFailureReason;
+  nowMs?: number;
+}): PluginCircuitBreakerState {
+  const state = ensurePluginCircuitBreakerState(params.record, params.nowMs);
+  params.record.circuitBreaker = recordPluginCircuitBreakerFailure({
+    state,
+    reason: params.reason,
+    nowMs: params.nowMs,
+  });
+  params.record.criticality = params.record.circuitBreaker.criticality;
+  return params.record.circuitBreaker;
+}
+
+export function markPluginCircuitBreakerSuccess(params: {
+  record: PluginRecord;
+  nowMs?: number;
+}): PluginCircuitBreakerState {
+  const state = ensurePluginCircuitBreakerState(params.record, params.nowMs);
+  params.record.circuitBreaker = recordPluginCircuitBreakerSuccess({
+    state,
+    nowMs: params.nowMs,
+  });
+  params.record.criticality = params.record.circuitBreaker.criticality;
+  return params.record.circuitBreaker;
 }
 
 export function markPluginActivationDisabled(record: PluginRecord, reason?: string): void {
@@ -126,6 +189,10 @@ export function recordPluginError(params: {
   params.record.error = displayError;
   params.record.failedAt = new Date();
   params.record.failurePhase = params.phase;
+  markPluginCircuitBreakerFailure({
+    record: params.record,
+    reason: "load_error",
+  });
   params.registry.plugins.push(params.record);
   params.seenIds.set(params.pluginId, params.origin);
   params.registry.diagnostics.push({

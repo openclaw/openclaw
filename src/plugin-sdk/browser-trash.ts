@@ -9,7 +9,7 @@ export type MovePathToTrashOptions = {
   allowedRoots?: string[];
 };
 
-type PathApi = typeof path.posix | typeof path.win32;
+type PathApi = typeof path.posix;
 
 function getFsErrorCode(error: unknown): string | undefined {
   if (!error || typeof error !== "object" || !("code" in error)) {

@@ -271,6 +271,38 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       }
       assignReasonCode(record, event.outcomeReason ?? event.reason);
       break;
+    case "session_lock.acquire.started":
+      record.mode = event.backend;
+      record.action = "acquire";
+      break;
+    case "session_lock.acquire.completed":
+      record.mode = event.backend;
+      record.action = "acquire";
+      record.outcome = event.outcome;
+      record.waitMs = event.waitMs;
+      break;
+    case "session_lock.acquire.timeout":
+      record.mode = event.backend;
+      record.action = "acquire";
+      record.outcome = "timeout";
+      record.durationMs = event.timeoutMs;
+      record.waitMs = event.waitMs;
+      assignReasonCode(record, event.reason);
+      break;
+    case "session_lock.reclaimed":
+      record.mode = event.backend;
+      record.action = "reclaim";
+      record.outcome = "reclaimed";
+      record.durationMs = event.lockAgeMs;
+      assignReasonCode(record, event.reason);
+      break;
+    case "session_lock.watchdog.released":
+      record.mode = event.backend;
+      record.action = "watchdog.release";
+      record.outcome = "released";
+      record.durationMs = event.heldMs;
+      assignReasonCode(record, event.reason);
+      break;
     case "queue.lane.enqueue":
       record.source = event.lane;
       record.queueSize = event.queueSize;

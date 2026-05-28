@@ -7,6 +7,7 @@ import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 const PREFLIGHT_CACHE_TTL_MS = 5 * 60_000;
 const PREFLIGHT_TIMEOUT_MS = 2_500;
+const PREFLIGHT_RETRY_TIMEOUT_MS = 7_500;
 
 type PreflightApi = "ollama" | "openai-completions";
 
@@ -156,12 +157,13 @@ function buildUnavailableResult(params: {
 async function probeLocalProviderEndpoint(params: {
   api: PreflightApi;
   baseUrl: string;
+  timeoutMs: number;
 }): Promise<void> {
   const { response, release } = await fetchWithSsrFGuard({
     url: buildProbeUrl(params.api, params.baseUrl),
     init: { method: "GET" },
     policy: buildLocalProviderSsrFPolicy(params.baseUrl),
-    timeoutMs: PREFLIGHT_TIMEOUT_MS,
+    timeoutMs: params.timeoutMs,
     auditContext: "cron-model-provider-preflight",
   });
   try {
@@ -172,6 +174,32 @@ async function probeLocalProviderEndpoint(params: {
   } finally {
     await release();
   }
+}
+
+function isTimeoutLikeError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const toText = (value: unknown): string => {
+    if (typeof value === "string") {
+      return value;
+    }
+    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+      return String(value);
+    }
+    return "";
+  };
+  const errorRecord = error as { name?: unknown; code?: unknown; message?: unknown };
+  const name = toText(errorRecord.name);
+  const code = toText(errorRecord.code);
+  const message = toText(errorRecord.message);
+  return (
+    name === "TimeoutError" ||
+    code === "ETIMEDOUT" ||
+    code === "UND_ERR_CONNECT_TIMEOUT" ||
+    code === "UND_ERR_HEADERS_TIMEOUT" ||
+    message.toLowerCase().includes("timed out")
+  );
 }
 
 export async function preflightCronModelProvider(params: {
@@ -207,10 +235,23 @@ export async function preflightCronModelProvider(params: {
 
   let result: EndpointPreflightResult;
   try {
-    await probeLocalProviderEndpoint({ api, baseUrl });
+    await probeLocalProviderEndpoint({ api, baseUrl, timeoutMs: PREFLIGHT_TIMEOUT_MS });
     result = { status: "available" };
   } catch (error) {
-    result = { status: "unavailable", error };
+    if (isTimeoutLikeError(error)) {
+      try {
+        await probeLocalProviderEndpoint({
+          api,
+          baseUrl,
+          timeoutMs: PREFLIGHT_RETRY_TIMEOUT_MS,
+        });
+        result = { status: "available" };
+      } catch (retryError) {
+        result = { status: "unavailable", error: retryError };
+      }
+    } else {
+      result = { status: "unavailable", error };
+    }
   }
   preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
   if (result.status === "available") {

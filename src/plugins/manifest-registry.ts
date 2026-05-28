@@ -50,6 +50,7 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
+import type { PluginCriticality } from "./plugin-circuit-breaker.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginDependencySpecMap } from "./status-dependencies.js";
@@ -143,6 +144,7 @@ export type PluginManifestRecord = {
   packageChannel?: PluginPackageChannel;
   packageInstall?: PluginPackageInstall;
   trustedOfficialInstall?: boolean;
+  criticality?: PluginCriticality;
   qaRunners?: PluginManifestQaRunner[];
   skills: string[];
   settingsFiles?: string[];
@@ -439,6 +441,7 @@ function buildRecord(params: {
     packageChannel: params.candidate.packageManifest?.channel,
     packageInstall: params.candidate.packageManifest?.install,
     trustedOfficialInstall: params.trustedOfficialInstall === true ? true : undefined,
+    criticality: params.manifest.metadata?.openclaw?.criticality,
     qaRunners: params.manifest.qaRunners,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],

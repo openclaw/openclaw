@@ -16,6 +16,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import { createPluginRecord } from "./loader-records.js";
 import { startPluginServices } from "./services.js";
 
 function createRegistry(
@@ -25,6 +26,16 @@ function createRegistry(
   trustedOfficialInstall = false,
 ) {
   const registry = createEmptyPluginRegistry();
+  registry.plugins.push(
+    createPluginRecord({
+      id: pluginId,
+      source: "test",
+      origin,
+      enabled: true,
+      criticality: "experimental",
+      configSchema: true,
+    }),
+  );
   registry.services = services.map((service) => ({
     pluginId,
     service,
@@ -181,6 +192,27 @@ describe("startPluginServices", () => {
     );
     expect(stopOk).toHaveBeenCalledOnce();
     expect(stopThrows).toHaveBeenCalledOnce();
+  });
+
+  it("records plugin service start failures in circuit breaker state", async () => {
+    const registry = createRegistry([
+      createTrackingService("service-start-fail", {
+        failOnStart: true,
+      }),
+    ]);
+
+    await startPluginServices({
+      registry,
+      config: createServiceConfig(),
+    });
+
+    expect(registry.plugins[0]?.circuitBreaker).toMatchObject({
+      pluginId: "plugin:test",
+      criticality: "experimental",
+      status: "open",
+      consecutiveFailures: 1,
+      lastFailureReason: "runtime_error",
+    });
   });
 
   it("grants internal diagnostics only to trusted diagnostics exporter services", async () => {

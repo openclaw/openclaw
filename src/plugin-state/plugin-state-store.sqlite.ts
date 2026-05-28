@@ -330,9 +330,11 @@ function openPluginStateDatabase(
     });
   }
 
+  let db: DatabaseSync | null = null;
+  let walMaintenance: SqliteWalMaintenance | null = null;
   try {
-    const db = new sqlite.DatabaseSync(pathname);
-    const walMaintenance = configureSqliteWalMaintenance(db);
+    db = new sqlite.DatabaseSync(pathname);
+    walMaintenance = configureSqliteWalMaintenance(db);
     db.exec("PRAGMA synchronous = NORMAL;");
     db.exec("PRAGMA busy_timeout = 5000;");
     ensureSchema(db, pathname);
@@ -345,6 +347,16 @@ function openPluginStateDatabase(
     };
     return cachedDatabase;
   } catch (error) {
+    try {
+      walMaintenance?.close();
+    } catch {
+      // Preserve the schema/open error; cleanup failures are secondary here.
+    }
+    try {
+      db?.close();
+    } catch {
+      // Preserve the schema/open error; cleanup failures are secondary here.
+    }
     throw wrapPluginStateError(
       error,
       operation,

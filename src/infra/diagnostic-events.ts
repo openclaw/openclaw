@@ -196,6 +196,60 @@ export type DiagnosticSessionRecoveryCompletedEvent = DiagnosticSessionRecoveryB
   stale?: boolean;
 };
 
+export type DiagnosticSessionLockBackend =
+  | "file"
+  | "redis"
+  | "etcd"
+  | "postgres-advisory"
+  | "unknown";
+
+export type DiagnosticSessionLockQueueWaitBucket =
+  | "none"
+  | "under_100ms"
+  | "under_1s"
+  | "under_5s"
+  | "under_30s"
+  | "over_30s"
+  | "unknown";
+
+type DiagnosticSessionLockBaseEvent = DiagnosticBaseEvent & {
+  runId: string;
+  backend: DiagnosticSessionLockBackend;
+  ownerIdHash?: string;
+  queueWaitBucket?: DiagnosticSessionLockQueueWaitBucket;
+};
+
+export type DiagnosticSessionLockAcquireStartedEvent = DiagnosticSessionLockBaseEvent & {
+  type: "session_lock.acquire.started";
+};
+
+export type DiagnosticSessionLockAcquireCompletedEvent = DiagnosticSessionLockBaseEvent & {
+  type: "session_lock.acquire.completed";
+  outcome: "acquired" | "reentrant";
+  waitMs: number;
+  fencingToken?: number | string;
+};
+
+export type DiagnosticSessionLockAcquireTimeoutEvent = DiagnosticSessionLockBaseEvent & {
+  type: "session_lock.acquire.timeout";
+  reason: string;
+  timeoutMs: number;
+  waitMs: number;
+};
+
+export type DiagnosticSessionLockReclaimedEvent = DiagnosticSessionLockBaseEvent & {
+  type: "session_lock.reclaimed";
+  reason: string;
+  lockAgeMs: number;
+  staleReasons?: string[];
+};
+
+export type DiagnosticSessionLockWatchdogReleasedEvent = DiagnosticSessionLockBaseEvent & {
+  type: "session_lock.watchdog.released";
+  reason: string;
+  heldMs: number;
+};
+
 export type DiagnosticLaneEnqueueEvent = DiagnosticBaseEvent & {
   type: "queue.lane.enqueue";
   lane: string;
@@ -554,6 +608,11 @@ export type DiagnosticEventPayload =
   | DiagnosticSessionStuckEvent
   | DiagnosticSessionRecoveryRequestedEvent
   | DiagnosticSessionRecoveryCompletedEvent
+  | DiagnosticSessionLockAcquireStartedEvent
+  | DiagnosticSessionLockAcquireCompletedEvent
+  | DiagnosticSessionLockAcquireTimeoutEvent
+  | DiagnosticSessionLockReclaimedEvent
+  | DiagnosticSessionLockWatchdogReleasedEvent
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
@@ -623,6 +682,11 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "message.delivery.started",
   "message.delivery.completed",
   "message.delivery.error",
+  "session_lock.acquire.started",
+  "session_lock.acquire.completed",
+  "session_lock.acquire.timeout",
+  "session_lock.reclaimed",
+  "session_lock.watchdog.released",
   "model.call.started",
   "model.call.completed",
   "model.call.error",

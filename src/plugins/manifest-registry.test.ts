@@ -346,6 +346,29 @@ describe("loadPluginManifestRegistry", () => {
     expect(second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("After");
   });
 
+  it("projects manifest openclaw criticality metadata into records", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "critical-plugin",
+      configSchema: { type: "object" },
+      metadata: {
+        openclaw: {
+          criticality: "critical",
+        },
+      },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "critical-plugin",
+        rootDir: dir,
+        origin: "workspace",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.criticality).toBe("critical");
+  });
+
   it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();

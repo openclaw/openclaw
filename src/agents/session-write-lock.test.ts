@@ -193,6 +193,25 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("rejects stale owner writes when the fencing token no longer matches", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const raw = await fs.readFile(lockPath, "utf8");
+      const payload = JSON.parse(raw) as { fencingToken?: string };
+
+      expect(payload.fencingToken).toBe(lock.fencingToken);
+      await expect(lock.assertCurrent()).resolves.toBeUndefined();
+
+      await writeCurrentProcessLock(lockPath, {
+        starttime: FAKE_STARTTIME,
+        fencingToken: "replacement-owner-token",
+      });
+
+      await expect(lock.assertCurrent()).rejects.toThrow(/stale session write lock owner/);
+      await lock.release();
+    });
+  });
+
   it("does not reenter locks by default in the same process", async () => {
     await withTempSessionLockFile(async ({ sessionFile }) => {
       const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });

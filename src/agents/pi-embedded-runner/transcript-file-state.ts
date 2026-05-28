@@ -305,10 +305,12 @@ export async function persistTranscriptStateMutation(params: {
   sessionFile: string;
   state: TranscriptFileState;
   appendedEntries: SessionEntry[];
+  assertLockCurrent?: () => Promise<void>;
 }): Promise<void> {
   if (params.appendedEntries.length === 0 && !params.state.migrated) {
     return;
   }
+  await params.assertLockCurrent?.();
   if (params.state.migrated) {
     await writeTranscriptFileAtomic(params.sessionFile, [
       ...(params.state.header ? [params.state.header] : []),

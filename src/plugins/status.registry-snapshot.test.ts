@@ -173,6 +173,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
       name: "Indexed Demo",
       description: "Manifest-backed list metadata",
       version: "9.8.7",
+      criticality: "important",
       format: "openclaw",
       providerIds: ["indexed-provider"],
       speechProviderIds: ["indexed-speech-provider"],
@@ -181,6 +182,13 @@ describe("buildPluginRegistrySnapshotReport", () => {
       commands: ["indexed-demo"],
       source: fs.realpathSync(fixture.runtimeSource),
       status: "loaded",
+      circuitBreaker: {
+        pluginId: "indexed-demo",
+        criticality: "important",
+        status: "closed",
+        consecutiveFailures: 0,
+        consecutiveSuccesses: 0,
+      },
     });
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
   });

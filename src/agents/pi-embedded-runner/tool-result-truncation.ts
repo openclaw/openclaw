@@ -687,6 +687,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
   sessionId?: string;
   sessionKey?: string;
   config?: SessionWriteLockAcquireTimeoutConfig;
+  assertLockCurrent?: () => Promise<void>;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { state, contextWindowTokens } = params;
   const maxChars = Math.max(
@@ -725,6 +726,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
       sessionFile: params.sessionFile,
       state,
       appendedEntries: rewriteResult.appendedEntries,
+      assertLockCurrent: params.assertLockCurrent,
     });
     emitSessionTranscriptUpdate({
       sessionFile: params.sessionFile,
@@ -787,6 +789,7 @@ export async function truncateOversizedToolResultsInSession(params: {
       sessionFile,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      assertLockCurrent: sessionLock.assertCurrent,
     });
   } catch (err) {
     const errMsg = formatErrorMessage(err);

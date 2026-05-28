@@ -4,9 +4,11 @@ import { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { assertDebugProxyDirectUpstreamAllowed, startDebugProxyServer } from "./proxy-server.js";
 
 let testRoot: string | undefined;
+const opensslAvailable = resolveSystemBin("openssl") !== null;
 
 async function cleanupTestDirs(): Promise<void> {
   if (!testRoot) {
@@ -154,34 +156,40 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
     expect(() => assertDebugProxyDirectUpstreamAllowed()).not.toThrow();
   });
 
-  it("rejects CONNECT upstreams before opening direct sockets while managed proxy mode is active", async () => {
-    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
-    const server = await startDebugProxyServer({ settings: await makeSettings() });
-    try {
-      const response = await connectThroughProxy(server.proxyUrl);
+  it.skipIf(!opensslAvailable)(
+    "rejects CONNECT upstreams before opening direct sockets while managed proxy mode is active",
+    async () => {
+      process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+      const server = await startDebugProxyServer({ settings: await makeSettings() });
+      try {
+        const response = await connectThroughProxy(server.proxyUrl);
 
-      expect(response).toContain("403 Forbidden");
-      expect(response).toContain("Connection: close");
-      expect(response).toContain("Debug proxy direct upstream forwarding is disabled");
-    } finally {
-      await server.stop();
-    }
-  });
+        expect(response).toContain("403 Forbidden");
+        expect(response).toContain("Connection: close");
+        expect(response).toContain("Debug proxy direct upstream forwarding is disabled");
+      } finally {
+        await server.stop();
+      }
+    },
+  );
 
-  it("rejects absolute-form HTTP proxy requests before opening direct upstreams while managed proxy mode is active", async () => {
-    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
-    const origin = await startCanaryOrigin();
-    const server = await startDebugProxyServer({ settings: await makeSettings() });
-    try {
-      const response = await requestThroughProxy(server.proxyUrl, origin.url);
+  it.skipIf(!opensslAvailable)(
+    "rejects absolute-form HTTP proxy requests before opening direct upstreams while managed proxy mode is active",
+    async () => {
+      process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+      const origin = await startCanaryOrigin();
+      const server = await startDebugProxyServer({ settings: await makeSettings() });
+      try {
+        const response = await requestThroughProxy(server.proxyUrl, origin.url);
 
-      expect(response).toContain("403 Forbidden");
-      expect(response).toContain("Connection: close");
-      expect(response).toContain("Debug proxy direct upstream forwarding is disabled");
-      expect(origin.requestCount()).toBe(0);
-    } finally {
-      await server.stop();
-      await origin.stop();
-    }
-  });
+        expect(response).toContain("403 Forbidden");
+        expect(response).toContain("Connection: close");
+        expect(response).toContain("Debug proxy direct upstream forwarding is disabled");
+        expect(origin.requestCount()).toBe(0);
+      } finally {
+        await server.stop();
+        await origin.stop();
+      }
+    },
+  );
 });

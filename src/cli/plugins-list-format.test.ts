@@ -43,4 +43,30 @@ describe("formatPluginLine", () => {
     expect(output).not.toContain("\u001B[31m");
     expect(output.match(/activation reason:/g)).toHaveLength(1);
   });
+
+  it("shows circuit breaker state in verbose output", () => {
+    const output = formatPluginLine(
+      createPluginRecord({
+        id: "cb-plugin",
+        name: "Circuit Plugin",
+        criticality: "critical",
+        circuitBreaker: {
+          pluginId: "cb-plugin",
+          criticality: "critical",
+          status: "open",
+          consecutiveFailures: 3,
+          consecutiveSuccesses: 0,
+          updatedAtMs: 1700000000000,
+          openedAtMs: 1700000000000,
+          nextProbeAtMs: 1700000010000,
+          lastFailureAtMs: 1700000000000,
+          lastFailureReason: "runtime_error",
+        },
+      }),
+      true,
+    );
+
+    expect(output).toContain("circuit breaker: open (failures:3, successes:0)");
+    expect(output).toContain("circuit breaker last failure reason: runtime_error");
+  });
 });

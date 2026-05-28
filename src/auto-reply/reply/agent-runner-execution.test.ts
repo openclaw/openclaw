@@ -26,6 +26,22 @@ const state = vi.hoisted(() => ({
 
 const GENERIC_RUN_FAILURE_TEXT =
   "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+const TELEGRAM_GENERIC_RUN_FAILURE_TEXT_ZH_TW =
+  "⚠️ 處理你的請求時發生錯誤。請再試一次，或輸入 /new 開啟新對話。";
+const TELEGRAM_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW =
+  "⚠️ 找不到可執行命令：`pnpm autonomous:controlled:next-safe`。請先確認任務設定與 package.json scripts，再重試。";
+const TELEGRAM_COMMAND_NOT_FOUND_FALLBACK_TEXT_ZH_TW =
+  "⚠️ 找不到可執行命令。請先確認任務設定與 package.json scripts，再重試。";
+const TELEGRAM_UNIX_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW =
+  "⚠️ 找不到可執行命令：`pnpm`。請先確認任務設定與 package.json scripts，再重試。";
+const TELEGRAM_UNIX_CMD_EXT_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW =
+  "⚠️ 找不到可執行命令：`pnpm.cmd`。請先確認任務設定與 package.json scripts，再重試。";
+const TELEGRAM_UNIX_PATH_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW =
+  "⚠️ 找不到可執行命令：`./pnpm`。請先確認任務設定與 package.json scripts，再重試。";
+const TELEGRAM_QUOTED_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW =
+  "⚠️ 找不到可執行命令：`pnpm run next-safe`。請先確認任務設定與 package.json scripts，再重試。";
+const DISCORD_COMMAND_NOT_FOUND_FAILURE_TEXT_EN =
+  "⚠️ Command not found: `pnpm autonomous:controlled:next-safe`. Check task configuration and package.json scripts, then retry.";
 
 function makeTestModel(id: string, contextTokens: number): ModelDefinitionConfig {
   return {
@@ -2499,6 +2515,336 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
+  });
+
+  it("uses Chinese generic copy for raw runner failures in Telegram direct chats", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("openai-codex/gpt-5.5 ended with an incomplete terminal response"),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(TELEGRAM_GENERIC_RUN_FAILURE_TEXT_ZH_TW);
+    }
+  });
+
+  it("uses Chinese command-not-found copy for Telegram direct chats", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "The command pnpm autonomous:controlled:next-safe was not found. Please check the task configuration and ensure that the package script is correctly defined.",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(TELEGRAM_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW);
+    }
+  });
+
+  it("uses Chinese generic command-not-found fallback for Telegram direct chats", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("unknown command: next-safe task"),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(TELEGRAM_COMMAND_NOT_FOUND_FALLBACK_TEXT_ZH_TW);
+    }
+  });
+
+  it("uses Chinese command-not-found copy with extracted command for Telegram direct chats on Windows not-recognized errors", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "'pnpm' is not recognized as an internal or external command, operable program or batch file.",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(TELEGRAM_UNIX_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW);
+    }
+  });
+
+  it("uses Chinese command-not-found copy with extracted command for Telegram direct chats on Windows cmd not-recognized errors", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "'pnpm.cmd' is not recognized as an internal or external command, operable program or batch file.",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(TELEGRAM_UNIX_CMD_EXT_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW);
+    }
+  });
+
+  it("uses Chinese command-not-found copy with extracted command for Telegram direct chats on Unix-style errors", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("pnpm: command not found"));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(TELEGRAM_UNIX_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW);
+    }
+  });
+
+  it("uses Chinese command-not-found copy with extracted command for Telegram direct chats on cmd extension Unix-style errors", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("pnpm.cmd: command not found"));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(TELEGRAM_UNIX_CMD_EXT_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW);
+    }
+  });
+
+  it("uses Chinese command-not-found copy with extracted command for Telegram direct chats on prefixed Unix-style errors", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("bash: pnpm: command not found"));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(TELEGRAM_UNIX_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW);
+    }
+  });
+
+  it("uses Chinese command-not-found copy with extracted path-like command for Telegram direct chats", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("./pnpm: command not found"));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(TELEGRAM_UNIX_PATH_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW);
+    }
+  });
+
+  it("uses Chinese command-not-found copy with extracted command for Telegram direct chats on quoted-command errors", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        'The command "pnpm run next-safe" was not found. Please check the task configuration.',
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(TELEGRAM_QUOTED_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW);
+    }
+  });
+
+  it("uses Chinese command-not-found copy with extracted command for Telegram direct chats on single-quoted command errors", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "The command 'pnpm run next-safe' was not found. Please check the task configuration.",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(TELEGRAM_QUOTED_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW);
+    }
+  });
+
+  it("uses Chinese command-not-found copy with extracted command for Telegram direct chats on backtick-quoted command errors", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "The command `pnpm run next-safe` was not found. Please check the task configuration.",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(TELEGRAM_QUOTED_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW);
+    }
+  });
+
+  it("uses Chinese command-not-found copy for Telegram direct chats with mixed-case not-found errors", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "The Command pnpm autonomous:controlled:next-safe Was Not Found. Please check the task configuration.",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(TELEGRAM_COMMAND_NOT_FOUND_FAILURE_TEXT_ZH_TW);
+    }
+  });
+
+  it("keeps English command-not-found copy for Discord direct chats", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "The command pnpm autonomous:controlled:next-safe was not found. Please check the task configuration and ensure that the package script is correctly defined.",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(DISCORD_COMMAND_NOT_FOUND_FAILURE_TEXT_EN);
     }
   });
 

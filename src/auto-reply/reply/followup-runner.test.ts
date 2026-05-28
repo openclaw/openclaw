@@ -251,6 +251,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
   );
   vi.doMock("../../agents/session-write-lock.js", () => ({
     acquireSessionWriteLock: vi.fn(async () => ({
+      fencingToken: "test-fencing-token",
+      assertCurrent: async () => {},
       release: async () => {},
     })),
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),

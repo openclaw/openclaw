@@ -231,6 +231,10 @@ function matchPathPrefix(file: string, prefix: PathRedactionPrefix): string | un
   return next === "/" || next === "\\" ? file.slice(prefix.prefix.length) : undefined;
 }
 
+function normalizeRedactedPathSeparators(value: string): string {
+  return value.replaceAll("\\", "/");
+}
+
 function isSupportAbsolutePath(value: string): boolean {
   return path.isAbsolute(value) || isWindowsAbsolutePath(value);
 }
@@ -244,7 +248,7 @@ export function redactPathForSupport(file: string, options: SupportRedactionCont
     for (const prefix of pathRedactionPrefixes(options)) {
       const suffix = matchPathPrefix(next, prefix);
       if (suffix !== undefined) {
-        return `${prefix.label}${suffix}`;
+        return normalizeRedactedPathSeparators(`${prefix.label}${suffix}`);
       }
     }
   }
@@ -277,7 +281,7 @@ function redactKnownPathPrefixesForSupport(
   for (const prefix of pathRedactionPrefixes(redaction)) {
     next = replaceKnownPathPrefix(next, prefix);
   }
-  return next;
+  return normalizeRedactedPathSeparators(next);
 }
 
 export function redactTextForSupport(value: string): string {

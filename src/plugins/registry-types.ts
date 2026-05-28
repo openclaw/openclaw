@@ -28,6 +28,7 @@ import type {
 } from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
+import type { PluginCircuitBreakerState, PluginCriticality } from "./plugin-circuit-breaker.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { PluginDependencyStatus } from "./status-dependencies.js";
@@ -339,6 +340,7 @@ export type PluginRecord = {
   origin: PluginOrigin;
   workspaceDir?: string;
   trustedOfficialInstall?: boolean;
+  criticality?: PluginCriticality;
   enabled: boolean;
   explicitlyEnabled?: boolean;
   activated?: boolean;
@@ -382,6 +384,7 @@ export type PluginRecord = {
   contracts?: PluginManifestContracts;
   memorySlotSelected?: boolean;
   dependencyStatus?: PluginDependencyStatus;
+  circuitBreaker?: PluginCircuitBreakerState;
 };
 
 export type PluginRegistry = {

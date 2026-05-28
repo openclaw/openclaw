@@ -404,6 +404,11 @@ const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
 const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
   "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+const GENERIC_EXTERNAL_RUN_FAILURE_TEXT_TELEGRAM_ZH_TW =
+  "⚠️ 處理你的請求時發生錯誤。請再試一次，或輸入 /new 開啟新對話。";
+const COMMAND_NOT_FOUND_THE_COMMAND_RE = /\bThe command\s+(.+?)\s+was not found\b/iu;
+const COMMAND_NOT_FOUND_SIGNATURE_RE =
+  /\b(command not found|unknown command|not recognized as an internal or external command)\b/iu;
 
 type ExternalRunFailureReply = {
   text: string;
@@ -415,8 +420,78 @@ function isNonDirectConversationContext(ctx: TemplateContext): boolean {
   return chatType === "group" || chatType === "channel";
 }
 
+function isTelegramConversationContext(ctx: TemplateContext): boolean {
+  const provider = normalizeLowercaseStringOrEmpty(ctx.Provider);
+  const surface = normalizeLowercaseStringOrEmpty(ctx.Surface);
+  const originatingChannel = normalizeLowercaseStringOrEmpty(ctx.OriginatingChannel);
+  return provider === "telegram" || surface === "telegram" || originatingChannel === "telegram";
+}
+
 function isVerboseFailureDetailEnabled(level: VerboseLevel | undefined): boolean {
   return level === "on" || level === "full";
+}
+
+function normalizeMissingCommand(value: string): string | undefined {
+  const trimmed = value.trim().replace(/^[`'"]+|[`'"]+$/gu, "");
+  if (!trimmed || trimmed.length > 120) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function extractMissingCommand(message: string): string | undefined {
+  const commandFromFormattedText = normalizeMissingCommand(
+    message.match(/\bCommand not found:\s*`([^`]+)`/iu)?.[1] ?? "",
+  );
+  if (commandFromFormattedText) {
+    return commandFromFormattedText;
+  }
+  const commandFromTheCommand = normalizeMissingCommand(
+    message.match(COMMAND_NOT_FOUND_THE_COMMAND_RE)?.[1] ?? "",
+  );
+  if (commandFromTheCommand) {
+    return commandFromTheCommand;
+  }
+  const commandFromWindowsNotRecognized = normalizeMissingCommand(
+    message.match(
+      /^(?:\S+:\s*)?["'`]?([^"'`\r\n]+?)["'`]?\s+is not recognized as an internal or external command\b/iu,
+    )?.[1] ?? "",
+  );
+  if (commandFromWindowsNotRecognized) {
+    return commandFromWindowsNotRecognized;
+  }
+  const commandFromUnixStyle = normalizeMissingCommand(
+    message.match(/^(?:\S+: )?([^:\r\n]+):\s+command not found\b/iu)?.[1] ?? "",
+  );
+  if (commandFromUnixStyle) {
+    return commandFromUnixStyle;
+  }
+  return undefined;
+}
+
+function isCommandNotFoundFailureText(message: string): boolean {
+  return (
+    COMMAND_NOT_FOUND_SIGNATURE_RE.test(message) || COMMAND_NOT_FOUND_THE_COMMAND_RE.test(message)
+  );
+}
+
+function buildCommandNotFoundFailureText(message: string): string | null {
+  if (!isCommandNotFoundFailureText(message)) {
+    return null;
+  }
+  const command = extractMissingCommand(message);
+  if (command) {
+    return `⚠️ Command not found: \`${command}\`. Check task configuration and package.json scripts, then retry.`;
+  }
+  return "⚠️ Command not found. Check task configuration and package.json scripts, then retry.";
+}
+
+function buildTelegramCommandNotFoundFailureText(message: string): string {
+  const command = extractMissingCommand(message);
+  if (command) {
+    return `⚠️ 找不到可執行命令：\`${command}\`。請先確認任務設定與 package.json scripts，再重試。`;
+  }
+  return "⚠️ 找不到可執行命令。請先確認任務設定與 package.json scripts，再重試。";
 }
 
 function resolveExternalRunFailureTextForConversation(params: {
@@ -425,6 +500,15 @@ function resolveExternalRunFailureTextForConversation(params: {
   isGenericRunnerFailure: boolean;
 }): string {
   if (!isNonDirectConversationContext(params.sessionCtx)) {
+    if (
+      isTelegramConversationContext(params.sessionCtx) &&
+      isCommandNotFoundFailureText(params.text)
+    ) {
+      return buildTelegramCommandNotFoundFailureText(params.text);
+    }
+    if (params.isGenericRunnerFailure && isTelegramConversationContext(params.sessionCtx)) {
+      return GENERIC_EXTERNAL_RUN_FAILURE_TEXT_TELEGRAM_ZH_TW;
+    }
     return params.text;
   }
   if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
@@ -499,6 +583,10 @@ function buildExternalRunFailureReply(
       text: "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
       isGenericRunnerFailure: false,
     };
+  }
+  const commandNotFoundFailure = buildCommandNotFoundFailureText(normalizedMessage);
+  if (commandNotFoundFailure) {
+    return { text: commandNotFoundFailure, isGenericRunnerFailure: false };
   }
   const missingApiKeyFailure = buildMissingApiKeyFailureText(normalizedMessage);
   if (missingApiKeyFailure) {

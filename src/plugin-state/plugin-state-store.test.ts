@@ -1,7 +1,11 @@
 import { mkdirSync, statSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  type OpenClawTestState,
+  type OpenClawTestStateOptions,
+  withOpenClawTestState as withRawOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   closePluginStateSqliteStore,
   createCorePluginStateKeyedStore,
@@ -13,6 +17,19 @@ import {
 } from "./plugin-state-store.js";
 import { resolvePluginStateDir, resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
+
+async function withOpenClawTestState<T>(
+  options: OpenClawTestStateOptions,
+  fn: (state: OpenClawTestState) => Promise<T>,
+): Promise<T> {
+  return await withRawOpenClawTestState(options, async (state) => {
+    try {
+      return await fn(state);
+    } finally {
+      resetPluginStateStoreForTests();
+    }
+  });
+}
 
 afterEach(() => {
   vi.useRealTimers();

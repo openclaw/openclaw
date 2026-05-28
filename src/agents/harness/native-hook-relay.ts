@@ -801,7 +801,8 @@ function ensureNativeHookRelayBridgeDir(): string {
   if (expectedUid !== undefined && stats.uid !== expectedUid) {
     throw new Error("unsafe native hook relay bridge directory owner");
   }
-  if ((stats.mode & 0o077) !== 0) {
+  // Windows ACLs do not map cleanly to POSIX permission bits.
+  if (process.platform !== "win32" && (stats.mode & 0o077) !== 0) {
     chmodSync(bridgeDir, 0o700);
     const repaired = lstatSync(bridgeDir);
     if ((repaired.mode & 0o077) !== 0) {

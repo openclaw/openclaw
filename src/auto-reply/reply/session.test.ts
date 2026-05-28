@@ -94,7 +94,11 @@ vi.mock("../../agents/session-write-lock.js", async () => {
   );
   return {
     ...actual,
-    acquireSessionWriteLock: vi.fn(async () => ({ release: async () => {} })),
+    acquireSessionWriteLock: vi.fn(async () => ({
+      fencingToken: "test-fencing-token",
+      assertCurrent: async () => {},
+      release: async () => {},
+    })),
     resolveSessionLockMaxHoldFromTimeout: vi.fn(
       ({
         timeoutMs,

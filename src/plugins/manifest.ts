@@ -29,6 +29,7 @@ import {
 } from "./manifest-command-aliases.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
+import { PLUGIN_CRITICALITY_LEVELS, type PluginCriticality } from "./plugin-circuit-breaker.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
@@ -288,9 +289,18 @@ export type PluginManifestConfigContracts = {
   secretInputs?: PluginManifestSecretInputContracts;
 };
 
+export type PluginManifestOpenClawMetadata = {
+  criticality?: PluginCriticality;
+};
+
+export type PluginManifestMetadata = {
+  openclaw?: PluginManifestOpenClawMetadata;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
+  metadata?: PluginManifestMetadata;
   enabledByDefault?: boolean;
   enabledByDefaultOnPlatforms?: PluginManifestDefaultPlatform[];
   /** Legacy plugin ids that should normalize to this plugin id. */
@@ -775,6 +785,18 @@ function normalizePluginToolMetadata(
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestMetadata(value: unknown): PluginManifestMetadata | undefined {
+  if (!isRecord(value) || !isRecord(value.openclaw)) {
+    return undefined;
+  }
+  const criticality =
+    typeof value.openclaw.criticality === "string" &&
+    PLUGIN_CRITICALITY_LEVELS.includes(value.openclaw.criticality as PluginCriticality)
+      ? (value.openclaw.criticality as PluginCriticality)
+      : undefined;
+  return criticality ? { openclaw: { criticality } } : undefined;
 }
 
 function normalizeManifestContracts(value: unknown): PluginManifestContracts | undefined {
@@ -1576,6 +1598,7 @@ export function loadPluginManifest(
   }
 
   const kind = parsePluginKind(raw.kind);
+  const metadata = normalizeManifestMetadata(raw.metadata);
   const enabledByDefault = raw.enabledByDefault === true;
   const enabledByDefaultOnPlatforms = normalizeManifestDefaultPlatforms(
     raw.enabledByDefaultOnPlatforms,
@@ -1643,6 +1666,7 @@ export function loadPluginManifest(
     manifest: {
       id,
       configSchema,
+      metadata,
       ...(enabledByDefault ? { enabledByDefault } : {}),
       ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),
       ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),

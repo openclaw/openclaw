@@ -378,6 +378,7 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
         sessionFile: params.sessionFile,
         state,
         appendedEntries: result.appendedEntries,
+        assertLockCurrent: sessionLock.assertCurrent,
       });
       emitSessionTranscriptUpdate({
         sessionFile: params.sessionFile,

@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
+const { resolveVitestNodeArgs } = (await import("../../scripts/run-vitest.mjs")) as unknown as {
+  resolveVitestNodeArgs: (env?: NodeJS.ProcessEnv, platform?: NodeJS.Platform) => string[];
+};
+
 const {
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
@@ -100,7 +104,7 @@ const {
 const VITEST_NODE_PREFIX = [
   "exec",
   "node",
-  "--no-maglev",
+  ...resolveVitestNodeArgs(),
   expect.stringMatching(/(?:^|[\\/])node_modules[\\/]vitest[\\/]vitest\.mjs$/),
 ];
 

@@ -37,17 +37,21 @@ describe("plugin state permission hardening", () => {
 
     try {
       await withOpenClawTestState({ label: "plugin-state-post-commit-chmod" }, async () => {
-        const store = createPluginStateKeyedStore<{ value: number }>("fixture-plugin", {
-          namespace: "post-commit",
-          maxEntries: 10,
-        });
-        await store.register("first", { value: 1 });
+        try {
+          const store = createPluginStateKeyedStore<{ value: number }>("fixture-plugin", {
+            namespace: "post-commit",
+            maxEntries: 10,
+          });
+          await store.register("first", { value: 1 });
 
-        chmodCalls = 0;
-        throwAfter = 2;
+          chmodCalls = 0;
+          throwAfter = 2;
 
-        await expect(store.register("second", { value: 2 })).resolves.toBeUndefined();
-        await expect(store.lookup("second")).resolves.toEqual({ value: 2 });
+          await expect(store.register("second", { value: 2 })).resolves.toBeUndefined();
+          await expect(store.lookup("second")).resolves.toEqual({ value: 2 });
+        } finally {
+          resetPluginStateStoreForTests();
+        }
       });
     } finally {
       resetPluginStateStoreForTests();

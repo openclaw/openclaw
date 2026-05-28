@@ -62,6 +62,15 @@ export function formatPluginLine(plugin: PluginRecord, verbose = false): string 
         : (plugin.activationSource ?? (plugin.activated ? "active" : "inactive"));
     parts.push(`  activation: ${activationSummary}`);
   }
+  if (plugin.circuitBreaker) {
+    const breaker = plugin.circuitBreaker;
+    parts.push(
+      `  circuit breaker: ${breaker.status} (failures:${breaker.consecutiveFailures}, successes:${breaker.consecutiveSuccesses})`,
+    );
+    if (breaker.lastFailureReason) {
+      parts.push(`  circuit breaker last failure reason: ${breaker.lastFailureReason}`);
+    }
+  }
   if (plugin.error) {
     parts.push(theme.error(`  error: ${plugin.error}`));
   }

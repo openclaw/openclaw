@@ -7,8 +7,13 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSessionWriteLockModuleMock } from "../../test-utils/session-write-lock-module-mock.js";
 
 const acquireSessionWriteLockReleaseMock = vi.hoisted(() => vi.fn(async () => {}));
+const acquireSessionWriteLockAssertCurrentMock = vi.hoisted(() => vi.fn(async () => {}));
 const acquireSessionWriteLockMock = vi.hoisted(() =>
-  vi.fn(async (_params?: unknown) => ({ release: acquireSessionWriteLockReleaseMock })),
+  vi.fn(async (_params?: unknown) => ({
+    fencingToken: "test-fencing-token",
+    assertCurrent: acquireSessionWriteLockAssertCurrentMock,
+    release: acquireSessionWriteLockReleaseMock,
+  })),
 );
 
 vi.mock("../session-write-lock.js", () =>
@@ -142,6 +147,7 @@ beforeAll(async () => {
 beforeEach(() => {
   acquireSessionWriteLockMock.mockClear();
   acquireSessionWriteLockReleaseMock.mockClear();
+  acquireSessionWriteLockAssertCurrentMock.mockClear();
 });
 
 describe("rewriteTranscriptEntriesInSessionManager", () => {

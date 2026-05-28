@@ -160,4 +160,50 @@ describe("preflightCronModelProvider", () => {
     expect(second).toEqual({ status: "available" });
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
   });
+
+  it("retries once with a longer timeout when the first probe times out", async () => {
+    fetchWithSsrFGuardMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error("request timed out"), {
+          name: "TimeoutError",
+        }),
+      )
+      .mockResolvedValueOnce({
+        response: { status: 200 },
+        release: vi.fn(async () => {}),
+      });
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      model: "qwen3:14b",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        url: "http://127.0.0.1:11434/api/tags",
+        timeoutMs: 2500,
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://127.0.0.1:11434/api/tags",
+        timeoutMs: 7500,
+      }),
+    );
+  });
 });

@@ -5,6 +5,10 @@ import {
   onInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  markPluginCircuitBreakerFailure,
+  markPluginCircuitBreakerSuccess,
+} from "./loader-records.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
 import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
@@ -63,6 +67,7 @@ export async function startPluginServices(params: {
   }> = [];
   for (const entry of params.registry.services) {
     const service = entry.service;
+    const pluginRecord = params.registry.plugins.find((plugin) => plugin.id === entry.pluginId);
     const serviceContext = createServiceContext({
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -70,11 +75,17 @@ export async function startPluginServices(params: {
     });
     try {
       await service.start(serviceContext);
+      if (pluginRecord) {
+        markPluginCircuitBreakerSuccess({ record: pluginRecord });
+      }
       running.push({
         id: service.id,
         stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
       });
     } catch (err) {
+      if (pluginRecord) {
+        markPluginCircuitBreakerFailure({ record: pluginRecord, reason: "runtime_error" });
+      }
       const error = err as Error;
       log.error(
         `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}`,

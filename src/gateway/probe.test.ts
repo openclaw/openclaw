@@ -1,4 +1,6 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveStateDir } from "../config/paths.js";
 
 const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
@@ -279,6 +281,7 @@ describe("probeGateway", () => {
       ...process.env,
       OPENCLAW_STATE_DIR: "/tmp/openclaw-probe-service-state",
     } as NodeJS.ProcessEnv;
+    const expectedIdentityPath = path.join(resolveStateDir(env), "identity", "device.json");
 
     await probeGateway({
       url: "ws://127.0.0.1:18789",
@@ -287,9 +290,7 @@ describe("probeGateway", () => {
       env,
     });
 
-    expect(deviceIdentityState.identityPaths).toEqual([
-      "/tmp/openclaw-probe-service-state/identity/device.json",
-    ]);
+    expect(deviceIdentityState.identityPaths).toEqual([expectedIdentityPath]);
     expect(deviceIdentityState.tokenParams).toEqual([
       {
         deviceId: "test-device-identity",

@@ -590,6 +590,8 @@ describe("detectChangedScope", () => {
     const scriptPath = path.resolve("scripts/ci-changed-scope.mjs");
 
     execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
+    execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: repoDir });
+    execFileSync("git", ["config", "core.eol", "lf"], { cwd: repoDir });
     execFileSync("git", ["config", "user.email", "ci@example.invalid"], { cwd: repoDir });
     execFileSync("git", ["config", "user.name", "CI"], { cwd: repoDir });
     fs.writeFileSync(path.join(repoDir, "README.md"), "test\n", "utf8");

@@ -11,9 +11,13 @@ import {
 } from "./store.sqlite.js";
 
 const cleanupDirs: string[] = [];
+const cleanupStores: DebugProxyCaptureStore[] = [];
 
 afterEach(() => {
   closeDebugProxyCaptureStore();
+  while (cleanupStores.length > 0) {
+    cleanupStores.pop()?.close();
+  }
   while (cleanupDirs.length > 0) {
     const dir = cleanupDirs.pop();
     if (dir) {
@@ -25,7 +29,12 @@ afterEach(() => {
 function makeStore() {
   const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-"));
   cleanupDirs.push(root);
-  return new DebugProxyCaptureStore(path.join(root, "capture.sqlite"), path.join(root, "blobs"));
+  const store = new DebugProxyCaptureStore(
+    path.join(root, "capture.sqlite"),
+    path.join(root, "blobs"),
+  );
+  cleanupStores.push(store);
+  return store;
 }
 
 describe("DebugProxyCaptureStore", () => {

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
-const packageJsonPath = join(repoRoot, "package.json");
+const pnpmWorkspacePath = join(repoRoot, "pnpm-workspace.yaml");
 
 function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
@@ -137,11 +137,15 @@ describe("Dockerfile", () => {
 
   it("keeps package manager patch files in runtime images", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
-      pnpm?: { patchedDependencies?: Record<string, string> };
-    };
+    const pnpmWorkspace = await readFile(pnpmWorkspacePath, "utf8");
 
-    expect(Object.keys(packageJson.pnpm?.patchedDependencies ?? {})).not.toHaveLength(0);
+    expect(pnpmWorkspace).toContain("patchedDependencies:");
+    expect(pnpmWorkspace).toContain(
+      '"@agentclientprotocol/claude-agent-acp@0.32.0": "patches/@agentclientprotocol__claude-agent-acp@0.32.0.patch"',
+    );
+    expect(pnpmWorkspace).toContain(
+      '"@whiskeysockets/baileys@7.0.0-rc.9": "patches/@whiskeysockets__baileys@7.0.0-rc.9.patch"',
+    );
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );

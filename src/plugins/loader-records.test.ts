@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { createPluginRecord } from "./loader-records.js";
+import { describe, expect, it, vi } from "vitest";
+import { createPluginRecord, recordPluginError } from "./loader-records.js";
+import { createEmptyPluginRegistry } from "./registry.js";
 
 describe("plugin loader records", () => {
   it("preserves manifest-declared channel ids before runtime registration", () => {
@@ -28,6 +29,63 @@ describe("plugin loader records", () => {
     });
 
     expect(record.providerIds).toEqual(["kitchen-sink-provider"]);
+  });
+
+  it("initializes circuit breaker state from manifest criticality", () => {
+    const record = createPluginRecord({
+      id: "experimental-plugin",
+      source: "/tmp/experimental-plugin/index.js",
+      origin: "workspace",
+      enabled: true,
+      criticality: "experimental",
+      configSchema: true,
+    });
+
+    expect(record.criticality).toBe("experimental");
+    expect(record.circuitBreaker).toMatchObject({
+      pluginId: "experimental-plugin",
+      criticality: "experimental",
+      status: "closed",
+      consecutiveFailures: 0,
+    });
+  });
+
+  it("records loader failures into plugin circuit breaker state", () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({
+      id: "unstable-plugin",
+      source: "/tmp/unstable-plugin/index.js",
+      origin: "workspace",
+      enabled: true,
+      criticality: "experimental",
+      configSchema: true,
+    });
+
+    recordPluginError({
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      registry,
+      record,
+      seenIds: new Map(),
+      pluginId: record.id,
+      origin: record.origin,
+      phase: "load",
+      error: new Error("boom"),
+      logPrefix: "[plugins] unstable-plugin failed to load: ",
+      diagnosticMessagePrefix: "failed to load plugin: ",
+    });
+
+    expect(registry.plugins[0]?.circuitBreaker).toMatchObject({
+      pluginId: "unstable-plugin",
+      criticality: "experimental",
+      status: "open",
+      consecutiveFailures: 1,
+      lastFailureReason: "load_error",
+    });
   });
 
   it("preserves manifest-declared capability provider ids before runtime registration", () => {

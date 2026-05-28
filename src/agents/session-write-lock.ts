@@ -4,13 +4,22 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createFileLockManager } from "../infra/file-lock-manager.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
-import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
+import {
+  resolveSessionLockBackendId,
+  type SessionLockBackendConfig,
+  type SessionLockBackendId,
+} from "./session-lock-backend.js";
+import {
+  SessionWriteLockStaleOwnerError,
+  SessionWriteLockTimeoutError,
+} from "./session-write-lock-error.js";
 
 type LockFilePayload = {
   pid?: number;
   createdAt?: string;
   /** Process start time in clock ticks (from /proc/pid/stat field 22). */
   starttime?: number;
+  fencingToken?: string;
 };
 
 function isValidLockNumber(value: unknown): value is number {
@@ -32,6 +41,7 @@ const CLEANUP_SIGNALS = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
 type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
 const CLEANUP_STATE_KEY = Symbol.for("openclaw.sessionWriteLockCleanupState");
 const WATCHDOG_STATE_KEY = Symbol.for("openclaw.sessionWriteLockWatchdogState");
+const FENCING_STATE_KEY = Symbol.for("openclaw.sessionWriteLockFencingState");
 
 const DEFAULT_STALE_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_HOLD_MS = 5 * 60 * 1000;
@@ -55,12 +65,22 @@ type WatchdogState = {
   timer?: NodeJS.Timeout;
 };
 
+type FencingState = {
+  seq: number;
+};
+
 type LockInspectionDetails = Pick<
   SessionLockInspection,
   "pid" | "pidAlive" | "createdAt" | "ageMs" | "stale" | "staleReasons"
 >;
 
 const SESSION_LOCKS = createFileLockManager("openclaw.session-write-lock");
+
+export type SessionWriteLockLease = {
+  release: () => Promise<void>;
+  fencingToken: string;
+  assertCurrent: () => Promise<void>;
+};
 
 export type SessionWriteLockAcquireTimeoutConfig = {
   session?: {
@@ -70,6 +90,8 @@ export type SessionWriteLockAcquireTimeoutConfig = {
   };
 };
 
+export type SessionWriteLockBackendConfig = SessionLockBackendConfig;
+
 export function resolveSessionWriteLockAcquireTimeoutMs(
   config?: SessionWriteLockAcquireTimeoutConfig,
 ): number {
@@ -78,6 +100,12 @@ export function resolveSessionWriteLockAcquireTimeoutMs(
     DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS,
     { allowInfinity: true },
   );
+}
+
+export function resolveSessionWriteLockBackendId(
+  config?: SessionWriteLockBackendConfig,
+): SessionLockBackendId {
+  return resolveSessionLockBackendId(config);
 }
 
 function resolveCleanupState(): CleanupState {
@@ -105,6 +133,22 @@ function resolveWatchdogState(): WatchdogState {
     };
   }
   return proc[WATCHDOG_STATE_KEY];
+}
+
+function resolveFencingState(): FencingState {
+  const proc = process as NodeJS.Process & {
+    [FENCING_STATE_KEY]?: FencingState;
+  };
+  if (!proc[FENCING_STATE_KEY]) {
+    proc[FENCING_STATE_KEY] = { seq: 0 };
+  }
+  return proc[FENCING_STATE_KEY];
+}
+
+function nextSessionWriteLockFencingToken(): string {
+  const state = resolveFencingState();
+  state.seq += 1;
+  return `${process.pid}:${Date.now()}:${state.seq}`;
 }
 
 function resolvePositiveMs(
@@ -273,10 +317,29 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
     if (isValidLockNumber(parsed.starttime)) {
       payload.starttime = parsed.starttime;
     }
+    if (typeof parsed.fencingToken === "string" && parsed.fencingToken.trim()) {
+      payload.fencingToken = parsed.fencingToken;
+    }
     return payload;
   } catch {
     return null;
   }
+}
+
+async function assertSessionWriteLockPayloadCurrent(params: {
+  lockPath: string;
+  fencingToken: string;
+}): Promise<void> {
+  const payload = await readLockPayload(params.lockPath);
+  if (payload?.fencingToken !== params.fencingToken) {
+    throw new SessionWriteLockStaleOwnerError({ lockPath: params.lockPath });
+  }
+}
+
+export async function assertSessionWriteLockCurrent(lock: {
+  assertCurrent?: () => Promise<void>;
+}): Promise<void> {
+  await lock.assertCurrent?.();
 }
 
 async function resolveNormalizedSessionFile(sessionFile: string): Promise<string> {
@@ -487,9 +550,7 @@ export async function acquireSessionWriteLock(params: {
   staleMs?: number;
   maxHoldMs?: number;
   allowReentrant?: boolean;
-}): Promise<{
-  release: () => Promise<void>;
-}> {
+}): Promise<SessionWriteLockLease> {
   registerCleanupHandlers();
   const allowReentrant = params.allowReentrant ?? false;
   const timeoutMs = resolvePositiveMs(params.timeoutMs, resolveSessionWriteLockAcquireTimeoutMs(), {
@@ -501,6 +562,7 @@ export async function acquireSessionWriteLock(params: {
   const sessionDir = path.dirname(sessionFile);
   const normalizedSessionFile = await resolveNormalizedSessionFile(sessionFile);
   const lockPath = `${normalizedSessionFile}.lock`;
+  const fencingToken = nextSessionWriteLockFencingToken();
   await fs.mkdir(sessionDir, { recursive: true });
   try {
     const lock = await SESSION_LOCKS.acquire(sessionFile, {
@@ -516,6 +578,7 @@ export async function acquireSessionWriteLock(params: {
         if (starttime !== null) {
           lockPayload.starttime = starttime;
         }
+        lockPayload.fencingToken = fencingToken;
         return lockPayload as Record<string, unknown>;
       },
       shouldReclaim: async ({ payload, nowMs, heldByThisProcess }) => {
@@ -529,7 +592,11 @@ export async function acquireSessionWriteLock(params: {
         return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
       },
     });
-    return { release: lock.release };
+    return {
+      release: lock.release,
+      fencingToken,
+      assertCurrent: () => assertSessionWriteLockPayloadCurrent({ lockPath, fencingToken }),
+    };
   } catch (err) {
     if ((err as { code?: unknown }).code !== "file_lock_timeout") {
       throw err;
@@ -558,4 +625,5 @@ export function resetSessionWriteLockStateForTest(): void {
   releaseAllLocksSync();
   stopWatchdogTimer();
   unregisterCleanupHandlers();
+  resolveFencingState().seq = 0;
 }

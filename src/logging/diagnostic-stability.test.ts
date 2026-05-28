@@ -97,6 +97,53 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[1]).not.toHaveProperty("reason");
   });
 
+  it("summarizes session lock diagnostics without lock identities", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "session_lock.acquire.timeout",
+      runId: "run-secret",
+      backend: "codex-cli",
+      ownerIdHash: "owner-hash",
+      reason: "lock_wait_timeout",
+      timeoutMs: 30_000,
+      waitMs: 30_001,
+    });
+    emitDiagnosticEvent({
+      type: "session_lock.reclaimed",
+      runId: "run-secret",
+      backend: "codex-cli",
+      ownerIdHash: "owner-hash",
+      reason: "stale_owner",
+      lockAgeMs: 60_000,
+      staleReasons: ["private detail"],
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.events[0]).toMatchObject({
+      type: "session_lock.acquire.timeout",
+      mode: "codex-cli",
+      action: "acquire",
+      outcome: "timeout",
+      durationMs: 30_000,
+      waitMs: 30_001,
+      reason: "lock_wait_timeout",
+    });
+    expect(snapshot.events[1]).toMatchObject({
+      type: "session_lock.reclaimed",
+      mode: "codex-cli",
+      action: "reclaim",
+      outcome: "reclaimed",
+      durationMs: 60_000,
+      reason: "stale_owner",
+    });
+    expect(JSON.stringify(snapshot.events)).not.toContain("run-secret");
+    expect(JSON.stringify(snapshot.events)).not.toContain("owner-hash");
+    expect(JSON.stringify(snapshot.events)).not.toContain("private detail");
+  });
+
   it("summarizes assembled context diagnostics without prompt text", async () => {
     startDiagnosticStabilityRecorder();
 

@@ -43,7 +43,7 @@ export async function resolveFileWithinRoot(
     }
   } catch (err) {
     if (err instanceof FsSafeError) {
-      return null;
+      return (await tryOpen(rel)) ?? (await tryOpen(path.posix.join(rel, "index.html")));
     }
     throw err;
   }

@@ -645,7 +645,7 @@ export function resolveMemoryDreamingWorkspaces(
       }
       return;
     }
-    byWorkspace.set(key, { workspaceDir, agentIds: [agentId] });
+    byWorkspace.set(key, { workspaceDir: path.resolve(workspaceDir), agentIds: [agentId] });
   };
 
   for (const agentId of agentIds) {

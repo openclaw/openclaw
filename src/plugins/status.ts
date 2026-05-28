@@ -22,6 +22,10 @@ import {
 import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import {
+  createPluginCircuitBreakerState,
+  normalizePluginCriticality,
+} from "./plugin-circuit-breaker.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {
@@ -170,6 +174,7 @@ function buildPluginRecordFromInstalledIndex(
 ): PluginRecord {
   const format = plugin.format ?? manifest?.format ?? "openclaw";
   const bundleFormat = plugin.bundleFormat ?? manifest?.bundleFormat;
+  const criticality = normalizePluginCriticality(manifest?.criticality);
   return {
     id: plugin.pluginId,
     name: manifest?.name ?? plugin.packageName ?? plugin.pluginId,
@@ -184,6 +189,7 @@ function buildPluginRecordFromInstalledIndex(
     rootDir: plugin.rootDir,
     origin: plugin.origin,
     enabled: plugin.enabled,
+    criticality,
     compat: plugin.compat,
     syntheticAuthRefs: [...(plugin.syntheticAuthRefs ?? manifest?.syntheticAuthRefs ?? [])],
     status: plugin.enabled ? "loaded" : "disabled",
@@ -215,6 +221,10 @@ function buildPluginRecordFromInstalledIndex(
     hookCount: 0,
     configSchema: false,
     contracts: {},
+    circuitBreaker: createPluginCircuitBreakerState({
+      pluginId: plugin.pluginId,
+      criticality,
+    }),
     dependencyStatus: buildPluginDependencyStatus({
       rootDir: plugin.rootDir,
       dependencies: manifest?.packageDependencies,

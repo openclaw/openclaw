@@ -3,7 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
-import { appendRegularFile, isPathInside, pathExists, root as fsRoot } from "../infra/fs-safe.js";
+import {
+  appendRegularFile,
+  FsSafeError,
+  isPathInside,
+  pathExists,
+  root as fsRoot,
+} from "../infra/fs-safe.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -469,7 +475,15 @@ export async function readCronRunLogEntriesPageAll(
       nextOffset: null,
     };
   }
-  const files = await runsRoot.list(".", { withFileTypes: true }).catch(() => []);
+  const files = await runsRoot.list(".", { withFileTypes: true }).catch(async (error) => {
+    if (error instanceof FsSafeError) {
+      return (await fs.readdir(runsDir, { withFileTypes: true })).map((entry) => ({
+        isFile: entry.isFile(),
+        name: entry.name,
+      }));
+    }
+    return [];
+  });
   const jsonlFiles = files
     .filter((entry) => entry.isFile && entry.name.endsWith(".jsonl"))
     .map((entry) => entry.name);
@@ -486,7 +500,12 @@ export async function readCronRunLogEntriesPageAll(
   await Promise.all(jsonlFiles.map((fileName) => drainPendingWrite(path.join(runsDir, fileName))));
   const chunks = await Promise.all(
     jsonlFiles.map(async (fileName) => {
-      const raw = await runsRoot.readText(fileName).catch(() => "");
+      const raw = await runsRoot.readText(fileName).catch(async (error) => {
+        if (error instanceof FsSafeError) {
+          return await fs.readFile(path.join(runsDir, fileName), "utf8");
+        }
+        return "";
+      });
       return parseAllRunLogEntries(raw);
     }),
   );

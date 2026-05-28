@@ -400,6 +400,73 @@ describe("diagnostic-events", () => {
     expect(events).toEqual(["tool.execution.started", "model.call.started"]);
   });
 
+  it("dispatches session lock lifecycle events asynchronously with bounded fields", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    onInternalDiagnosticEvent((event) => {
+      if (event.type.startsWith("session_lock.")) {
+        events.push(event as unknown as Record<string, unknown>);
+      }
+    });
+
+    emitTrustedDiagnosticEvent({
+      type: "session_lock.acquire.completed",
+      runId: "run-1",
+      backend: "file",
+      ownerIdHash: "owner_hash_1",
+      queueWaitBucket: "under_1s",
+      outcome: "acquired",
+      waitMs: 42,
+      fencingToken: "generation-7",
+    });
+
+    expect(events).toEqual([]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(events).toMatchObject([
+      {
+        type: "session_lock.acquire.completed",
+        runId: "run-1",
+        backend: "file",
+        ownerIdHash: "owner_hash_1",
+        queueWaitBucket: "under_1s",
+        outcome: "acquired",
+        waitMs: 42,
+        fencingToken: "generation-7",
+      },
+    ]);
+    expect(events[0]).not.toHaveProperty("sessionKey");
+    expect(events[0]).not.toHaveProperty("lockPath");
+  });
+
+  it("isolates session lock stale reasons from listener mutation", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const seen: Array<readonly string[] | undefined> = [];
+    onInternalDiagnosticEvent((event) => {
+      if (event.type === "session_lock.reclaimed") {
+        event.staleReasons?.push("mutated");
+      }
+    });
+    onInternalDiagnosticEvent((event) => {
+      if (event.type === "session_lock.reclaimed") {
+        seen.push(event.staleReasons);
+      }
+    });
+
+    emitTrustedDiagnosticEvent({
+      type: "session_lock.reclaimed",
+      runId: "run-1",
+      backend: "file",
+      reason: "dead-pid",
+      lockAgeMs: 60_000,
+      staleReasons: ["dead-pid"],
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(seen).toEqual([["dead-pid"]]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("listener error type=session_lock.reclaimed seq=1: TypeError"),
+    );
+  });
+
   it("keeps log records off the public diagnostic event stream", async () => {
     const publicEvents: string[] = [];
     const internalEvents: string[] = [];

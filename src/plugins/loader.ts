@@ -79,6 +79,7 @@ import {
   formatMissingPluginRegisterError,
   formatPluginFailureSummary,
   markPluginActivationDisabled,
+  markPluginCircuitBreakerFailure,
   recordPluginError,
 } from "./loader-records.js";
 import {
@@ -1737,6 +1738,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           origin: candidate.origin,
           workspaceDir: candidate.workspaceDir,
           trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
+          criticality: manifestRecord.criticality,
           enabled: false,
           compat: collectPluginManifestCompatCodes(manifestRecord),
           activationState,
@@ -1776,6 +1778,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
         trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
+        criticality: manifestRecord.criticality,
         enabled: enableState.enabled,
         compat: collectPluginManifestCompatCodes(manifestRecord),
         activationState,
@@ -1793,6 +1796,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         record.error = message;
         record.failedAt = new Date();
         record.failurePhase = "validation";
+        markPluginCircuitBreakerFailure({ record, reason: "load_error" });
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
         registry.diagnostics.push({
@@ -2563,6 +2567,7 @@ export async function loadOpenClawPluginCliRegistry(
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
         trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
+        criticality: manifestRecord.criticality,
         enabled: false,
         compat: collectPluginManifestCompatCodes(manifestRecord),
         activationState,
@@ -2602,6 +2607,7 @@ export async function loadOpenClawPluginCliRegistry(
       origin: candidate.origin,
       workspaceDir: candidate.workspaceDir,
       trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
+      criticality: manifestRecord.criticality,
       enabled: enableState.enabled,
       compat: collectPluginManifestCompatCodes(manifestRecord),
       activationState,
@@ -2619,6 +2625,7 @@ export async function loadOpenClawPluginCliRegistry(
       record.error = message;
       record.failedAt = new Date();
       record.failurePhase = "validation";
+      markPluginCircuitBreakerFailure({ record, reason: "load_error" });
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       registry.diagnostics.push({
