@@ -2223,9 +2223,10 @@ describe("createTelegramBot", () => {
     expect(messagesById.get("101")).toMatchObject({
       sender: "OpenClaw",
       body: "Done, here is the image",
-      media_ref: "telegram:file/generated-photo-1",
+      media_ref: payload.ReplyChain?.[1]?.mediaPath,
       is_reply_target: true,
     });
+    expect(messagesById.get("101")?.media_ref).not.toBe("telegram:file/generated-photo-1");
     expect(messagesById.get("102")).toMatchObject({
       sender: "UserB",
       body: "Why is there a 4th person?",

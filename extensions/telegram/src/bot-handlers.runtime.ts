@@ -1020,7 +1020,7 @@ export const registerTelegramHandlers = ({
 
   const toPromptContextMessage = (
     node: TelegramCachedMessageNode,
-    flags?: { replyTarget?: boolean },
+    flags?: { replyTarget?: boolean; mediaRef?: string },
   ) => ({
     message_id: node.messageId,
     thread_id: node.threadId,
@@ -1030,14 +1030,26 @@ export const registerTelegramHandlers = ({
     timestamp_ms: node.timestamp,
     body: node.body,
     media_type: node.mediaType,
-    media_ref: node.mediaRef,
+    media_ref: flags?.mediaRef ?? node.mediaRef,
     reply_to_id: node.replyToId,
     is_reply_target: flags?.replyTarget === true ? true : undefined,
   });
 
+  const buildPromptContextMediaRefs = (replyChain: TelegramReplyChainEntry[]) => {
+    const refs = new Map<string, string>();
+    for (const entry of replyChain) {
+      const mediaPath = entry.mediaPath?.trim();
+      if (entry.messageId && mediaPath) {
+        refs.set(entry.messageId, mediaPath);
+      }
+    }
+    return refs;
+  };
+
   const buildPromptContextForMessage = async (
     msg: Message,
     replyChainNodes: TelegramCachedMessageNode[],
+    mediaRefsByMessageId: ReadonlyMap<string, string>,
     options?: TelegramMessageContextOptions,
   ): Promise<TelegramPromptContextEntry[]> => {
     const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
@@ -1070,7 +1082,12 @@ export const registerTelegramHandlers = ({
               order: "chronological",
               relation: "selected_for_current_message",
               messages: conversationContext.map((entry) =>
-                toPromptContextMessage(entry.node, { replyTarget: entry.isReplyTarget }),
+                toPromptContextMessage(entry.node, {
+                  replyTarget: entry.isReplyTarget,
+                  mediaRef: entry.node.messageId
+                    ? mediaRefsByMessageId.get(entry.node.messageId)
+                    : undefined,
+                }),
               ),
             },
           },
@@ -1138,6 +1155,7 @@ export const registerTelegramHandlers = ({
       const promptContext = await buildPromptContextForMessage(
         params.msg,
         replyChainNodes,
+        buildPromptContextMediaRefs(replyChain),
         params.options,
       );
       const dispatched = await processMessage(
