@@ -1,5 +1,5 @@
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { startNostrGatewayAccount } from "./gateway.js";
 import { setNostrRuntime } from "./runtime.js";
@@ -24,6 +24,10 @@ vi.mock("./nostr-key-utils.js", () => ({
   getPublicKeyFromPrivate: vi.fn(() => "bot-pubkey"),
   normalizePubkey: mocks.normalizePubkey,
 }));
+
+beforeAll(async () => {
+  await import("./inbound-direct-dm-runtime.js");
+});
 
 function createMockBus() {
   return {

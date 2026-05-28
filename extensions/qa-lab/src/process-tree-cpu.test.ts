@@ -10,13 +10,19 @@ import {
 describe("process tree CPU helpers", () => {
   it("parses ps CPU time strings", () => {
     expect(parsePsCpuTimeMs("00:01")).toBe(1_000);
+    expect(parsePsCpuTimeMs("00:00.12")).toBe(120);
     expect(parsePsCpuTimeMs("01:02")).toBe(62_000);
-    expect(parsePsCpuTimeMs("01:02:03")).toBe(3_723_000);
+    expect(parsePsCpuTimeMs("01:02:03.45")).toBe(3_723_450);
+    expect(parsePsCpuTimeMs("1-02:03:04.5")).toBe(93_784_500);
   });
 
   it("rejects malformed ps CPU time strings", () => {
     expect(parsePsCpuTimeMs("")).toBeNull();
     expect(parsePsCpuTimeMs("nope")).toBeNull();
+    expect(parsePsCpuTimeMs("1::02")).toBeNull();
+    expect(parsePsCpuTimeMs("1-02:03")).toBeNull();
+    expect(parsePsCpuTimeMs("01:60")).toBeNull();
+    expect(parsePsCpuTimeMs("01:02:60")).toBeNull();
     expect(parsePsCpuTimeMs("1:2:3:4")).toBeNull();
   });
 

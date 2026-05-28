@@ -499,7 +499,7 @@ vi.mock("./reply-media-paths.runtime.js", () => ({
   createReplyMediaPathNormalizer: (params: unknown) =>
     replyMediaPathMocks.createReplyMediaPathNormalizer(params),
 }));
-vi.mock("./runtime-plugins.runtime.js", () => ({
+vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
 }));
 vi.mock("./conversation-binding-input.js", () => ({
@@ -4632,6 +4632,83 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
+  it("routes native-command-redirect replies using the redirect target sessionKey for outbound delivery", async () => {
+    // Regression test for the native redirect session-key contract:
+    // when a native command targets a different session via
+    // `CommandTargetSessionKey`, the agent runtime resolves its
+    // `params.sessionKey` as `CommandTargetSessionKey ?? SessionKey`
+    // (see `get-reply.ts`). Routed reply delivery must mirror that so
+    // `agent_end` (fired with the runtime sessionKey) and the outbound
+    // `message_sending` hook (fired with `OutboundSessionContext.key`)
+    // see the same canonical key. Without this alignment, plugins
+    // correlating per-turn state across `agent_end` and `message_sending`
+    // would receive divergent keys on every native redirect.
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      AccountId: "acc-1",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      CommandSource: "native",
+      SessionKey: "agent:main:slack:channel:CHAN1",
+      CommandTargetSessionKey: "agent:main:telegram:direct:999",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:999",
+        sessionKey: "agent:main:telegram:direct:999",
+        policySessionKey: "agent:main:telegram:direct:999",
+      }),
+    );
+  });
+
+  it("routes non-native (text) command replies using the inbound sessionKey for outbound delivery", async () => {
+    // Companion regression test: for non-native commands the routed
+    // reply must keep the inbound `SessionKey` as both the canonical
+    // session key and the policy key, even if `CommandTargetSessionKey`
+    // happens to be set on the context. This guards against accidental
+    // generalization of the native-redirect branch.
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      AccountId: "acc-1",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      CommandSource: "text",
+      SessionKey: "agent:main:slack:channel:CHAN1",
+      CommandTargetSessionKey: "agent:main:telegram:direct:999",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:999",
+        sessionKey: "agent:main:slack:channel:CHAN1",
+        policySessionKey: "agent:main:slack:channel:CHAN1",
+      }),
+    );
+  });
+
   it("emits diagnostics when enabled", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
@@ -6735,7 +6812,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       To: "telegram:-1001234567890",
       AccountId: "default",
       MessageThreadId: 11,
-      SessionKey: "agent:main:telegram:group:-1001234567890:topic:11",
       ChatType: "group",
       GroupSubject: "Dev",
       Body: "observed message",
@@ -6757,17 +6833,18 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-message-tool-only");
-    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
-      "openclaw-codex-app-server",
-      expect.objectContaining({
-        channel: "telegram",
-        content: "observed message",
-        threadId: 11,
-      }),
-      expect.objectContaining({
-        pluginBinding: expect.objectContaining({ bindingId: "binding-message-tool-only" }),
-      }),
+    const claimCall = firstMockCall(
+      hookMocks.runner.runInboundClaimForPluginOutcome,
+      "plugin inbound claim",
     );
+    expect(claimCall[0]).toBe("openclaw-codex-app-server");
+    expect(claimCall[1]).toMatchObject({
+      channel: "telegram",
+      content: "observed message",
+      threadId: 11,
+    });
+    const claimContext = claimCall[2] as { pluginBinding?: { bindingId?: string } };
+    expect(claimContext.pluginBinding).toMatchObject({ bindingId: "binding-message-tool-only" });
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -6816,7 +6893,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       To: "telegram:-1001234567890",
       AccountId: "default",
       MessageThreadId: 11,
-      SessionKey: "agent:main:telegram:group:-1001234567890:topic:11",
       ChatType: "group",
       GroupSubject: "Dev",
       Body: "observed message",
@@ -6838,17 +6914,20 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       counts: { tool: 0, block: 0, final: 0 },
       sourceReplyDeliveryMode: "message_tool_only",
     });
-    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
-      "openclaw-codex-app-server",
-      expect.objectContaining({
-        channel: "telegram",
-        content: "observed message",
-        threadId: 11,
-      }),
-      expect.objectContaining({
-        pluginBinding: expect.objectContaining({ bindingId: "binding-message-tool-fallback" }),
-      }),
+    const claimCall = firstMockCall(
+      hookMocks.runner.runInboundClaimForPluginOutcome,
+      "plugin inbound claim",
     );
+    expect(claimCall[0]).toBe("openclaw-codex-app-server");
+    expect(claimCall[1]).toMatchObject({
+      channel: "telegram",
+      content: "observed message",
+      threadId: 11,
+    });
+    const claimContext = claimCall[2] as { pluginBinding?: { bindingId?: string } };
+    expect(claimContext.pluginBinding).toMatchObject({
+      bindingId: "binding-message-tool-fallback",
+    });
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -6899,7 +6978,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       To: "telegram:-1001234567890",
       AccountId: "default",
       MessageThreadId: 11,
-      SessionKey: "agent:main:telegram:group:-1001234567890:topic:11",
       ChatType: "group",
       GroupSubject: "Dev",
       Body: "/reset@openclaw",
@@ -6968,7 +7046,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       To: "telegram:-1001234567890",
       AccountId: "default",
       MessageThreadId: 11,
-      SessionKey: "agent:main:telegram:group:-1001234567890:topic:11",
       ChatType: "group",
       GroupSubject: "Dev",
       Body: "/status",
@@ -6986,16 +7063,17 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
     });
 
-    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
-      "openclaw-codex-app-server",
-      expect.objectContaining({
-        channel: "telegram",
-        content: "/status",
-      }),
-      expect.objectContaining({
-        pluginBinding: expect.objectContaining({ bindingId: "binding-native-unauthorized" }),
-      }),
+    const claimCall = firstMockCall(
+      hookMocks.runner.runInboundClaimForPluginOutcome,
+      "plugin inbound claim",
     );
+    expect(claimCall[0]).toBe("openclaw-codex-app-server");
+    expect(claimCall[1]).toMatchObject({
+      channel: "telegram",
+      content: "/status",
+    });
+    const claimContext = claimCall[2] as { pluginBinding?: { bindingId?: string } };
+    expect(claimContext.pluginBinding).toMatchObject({ bindingId: "binding-native-unauthorized" });
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
@@ -7044,7 +7122,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       To: "telegram:-1001234567890",
       AccountId: "default",
       MessageThreadId: 11,
-      SessionKey: "agent:main:telegram:group:-1001234567890:topic:11",
       ChatType: "group",
       GroupSubject: "Dev",
       Body: "through this",
@@ -7067,16 +7144,19 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
     });
 
-    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
-      "openclaw-codex-app-server",
-      expect.objectContaining({
-        channel: "telegram",
-        content: "/think high through this",
-      }),
-      expect.objectContaining({
-        pluginBinding: expect.objectContaining({ bindingId: "binding-structured-normal-turn" }),
-      }),
+    const claimCall = firstMockCall(
+      hookMocks.runner.runInboundClaimForPluginOutcome,
+      "plugin inbound claim",
     );
+    expect(claimCall[0]).toBe("openclaw-codex-app-server");
+    expect(claimCall[1]).toMatchObject({
+      channel: "telegram",
+      content: "/think high through this",
+    });
+    const claimContext = claimCall[2] as { pluginBinding?: { bindingId?: string } };
+    expect(claimContext.pluginBinding).toMatchObject({
+      bindingId: "binding-structured-normal-turn",
+    });
     expect(replyResolver).not.toHaveBeenCalled();
   });
 

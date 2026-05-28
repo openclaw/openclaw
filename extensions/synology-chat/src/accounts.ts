@@ -10,6 +10,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   SynologyChatChannelConfig,
@@ -73,7 +74,7 @@ function parseRateLimitPerMinute(raw: string | undefined): number {
   if (!/^-?\d+$/.test(trimmed)) {
     return 30;
   }
-  return Number.parseInt(trimmed, 10);
+  return parseStrictInteger(trimmed) ?? 30;
 }
 
 /**

@@ -134,8 +134,15 @@ const DEFAULT_SKILL_DIR = "~/.codex/skills/custom/telegram-e2e-bot-to-bot";
 const DEFAULT_CONVEX_ENV_FILE = `${DEFAULT_SKILL_DIR}/convex.local.env`;
 const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
+export const COMMAND_STDOUT_MAX_CHARS = 1024 * 1024;
+export const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
+export const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
 const CREDENTIAL_SCRIPT = fileURLToPath(new URL("./telegram-user-credential.ts", import.meta.url));
+const LOG_READY_TAIL_BYTES = readPositiveInt(
+  process.env.OPENCLAW_TELEGRAM_USER_PROOF_LOG_TAIL_BYTES,
+  256 * 1024,
+);
 const TELEGRAM_PROOF_WINDOW = {
   height: 1000,
   width: 650,
@@ -408,6 +415,11 @@ function readJsonFile(filePath: string): JsonObject {
   }
 }
 
+function readPositiveInt(raw: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function requireString(source: JsonObject, key: string) {
   const value = source[key];
   if (typeof value === "number") {
@@ -473,15 +485,60 @@ function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+type AppendCommandStdoutResult = { ok: true; value: string } | { ok: false; message: string };
+
+function appendCommandText(current: string, chunk: Buffer): string {
+  return current + chunk.toString("utf8");
+}
+
+export function appendCommandTextTail(current: string, chunk: Buffer, maxChars: number): string {
+  const next = appendCommandText(current, chunk);
+  return next.length > maxChars ? next.slice(-maxChars) : next;
+}
+
+export function appendCommandStdout(
+  current: string,
+  chunk: Buffer,
+  maxChars = COMMAND_STDOUT_MAX_CHARS,
+): AppendCommandStdoutResult {
+  const next = appendCommandText(current, chunk);
+  if (next.length > maxChars) {
+    return { ok: false, message: `command stdout exceeded ${maxChars} characters` };
+  }
+  return { ok: true, value: next };
+}
+
+export function appendCommandStderrTail(
+  current: string,
+  chunk: Buffer,
+  maxChars = COMMAND_STDERR_TAIL_CHARS,
+): string {
+  return appendCommandTextTail(current, chunk, maxChars);
+}
+
+function commandFailureOutput(stdout: string, stderr: string): string {
+  const stdoutTail =
+    stdout.length > COMMAND_FAILURE_STDOUT_TAIL_CHARS
+      ? `\n[stdout truncated to last ${COMMAND_FAILURE_STDOUT_TAIL_CHARS} characters]\n${stdout.slice(
+          -COMMAND_FAILURE_STDOUT_TAIL_CHARS,
+        )}`
+      : stdout;
+  return `${stdoutTail}${stderr}`;
+}
+
 function runCommand(params: {
   args: string[];
   command: string;
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  outputFile?: string;
   stdio?: "inherit" | "pipe";
   stdin?: string;
 }) {
   return new Promise<CommandResult>((resolve, reject) => {
+    if (params.outputFile) {
+      fs.writeFileSync(params.outputFile, "");
+    }
     const child = spawn(params.command, params.args, {
       cwd: params.cwd,
       env: params.env ?? process.env,
@@ -489,22 +546,43 @@ function runCommand(params: {
     });
     let stdout = "";
     let stderr = "";
+    let stdoutLimitError: string | null = null;
     child.stdout.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
-      stdout += text;
+      if (params.outputFile) {
+        fs.appendFileSync(params.outputFile, text);
+        stdout = appendCommandTextTail(stdout, chunk, COMMAND_FAILURE_STDOUT_TAIL_CHARS);
+      } else if (params.stdio === "inherit") {
+        stdout = appendCommandTextTail(stdout, chunk, COMMAND_FAILURE_STDOUT_TAIL_CHARS);
+      } else {
+        const appended = appendCommandStdout(stdout, chunk);
+        if (!appended.ok) {
+          stdoutLimitError = appended.message;
+          child.kill("SIGKILL");
+        } else {
+          stdout = appended.value;
+        }
+      }
       if (params.stdio === "inherit") {
         process.stdout.write(text);
       }
     });
     child.stderr.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
-      stderr += text;
+      if (params.outputFile) {
+        fs.appendFileSync(params.outputFile, text);
+      }
+      stderr = appendCommandStderrTail(stderr, chunk);
       if (params.stdio === "inherit") {
         process.stderr.write(text);
       }
     });
     child.on("error", reject);
     child.on("close", (code, signal) => {
+      if (stdoutLimitError) {
+        reject(new Error(`${params.command} ${params.args.join(" ")} failed: ${stdoutLimitError}`));
+        return;
+      }
       if (code === 0) {
         resolve({ stdout, stderr });
         return;
@@ -512,7 +590,10 @@ function runCommand(params: {
       const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
       reject(
         new Error(
-          `${params.command} ${params.args.join(" ")} failed with ${detail}\n${stdout}${stderr}`,
+          `${params.command} ${params.args.join(" ")} failed with ${detail}\n${commandFailureOutput(
+            stdout,
+            stderr,
+          )}`,
         ),
       );
     });
@@ -634,16 +715,43 @@ function spawnDaemon(params: {
   return child.pid;
 }
 
-async function waitForLog(logPath: string, pattern: RegExp, label: string, timeoutMs: number) {
+export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): string {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(logPath);
+  } catch {
+    return "";
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return "";
+  }
+  const bytesToRead = Math.min(Math.max(1, maxBytes), stat.size);
+  const buffer = Buffer.alloc(bytesToRead);
+  const fd = fs.openSync(logPath, "r");
+  let bytesRead = 0;
+  try {
+    bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, stat.size - bytesToRead);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return buffer.subarray(0, bytesRead).toString("utf8");
+}
+
+export async function waitForLog(
+  logPath: string,
+  pattern: RegExp,
+  label: string,
+  timeoutMs: number,
+) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const text = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
+    const text = readLogTail(logPath);
     if (pattern.test(text)) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  const text = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
+  const text = readLogTail(logPath);
   throw new Error(`${label} did not become ready within ${timeoutMs}ms\n${text.slice(-4000)}`);
 }
 
@@ -1057,6 +1165,7 @@ async function runRemoteCommand(params: {
   args: string[];
   command: string;
   cwd: string;
+  outputFile?: string;
   stdio?: "inherit" | "pipe";
 }) {
   let lastError: unknown;
@@ -1094,12 +1203,18 @@ async function scpFromRemote(root: string, inspect: CrabboxInspect, remote: stri
   });
 }
 
-async function sshRun(root: string, inspect: CrabboxInspect, remoteCommand: string) {
+async function sshRun(
+  root: string,
+  inspect: CrabboxInspect,
+  remoteCommand: string,
+  options: { outputFile?: string } = {},
+) {
   const ssh = sshArgs(inspect);
   return await runRemoteCommand({
     command: "ssh",
     args: [...ssh.base, ssh.target, remoteCommand],
     cwd: root,
+    outputFile: options.outputFile,
     stdio: "inherit",
   });
 }
@@ -1774,12 +1889,11 @@ async function sendSessionProbe(root: string, opts: Options, outputDir: string) 
 async function runSessionCommand(root: string, opts: Options, outputDir: string) {
   const { session } = readSession(root, opts, outputDir);
   const command = opts.remoteCommand.map(shellQuote).join(" ");
-  const result = await sshRun(root, session.crabbox.inspect, command);
   const logPath = path.join(
     session.outputDir,
     `remote-command-${new Date().toISOString().replace(/[:.]/gu, "-")}.log`,
   );
-  fs.writeFileSync(logPath, `${result.stdout}${result.stderr}`);
+  await sshRun(root, session.crabbox.inspect, command, { outputFile: logPath });
   return { command: opts.remoteCommand, log: path.relative(root, logPath), status: "pass" };
 }
 
@@ -1861,12 +1975,13 @@ async function viewSession(root: string, opts: Options, outputDir: string) {
     throw new Error("view requires --message-id.");
   }
   const link = telegramPrivatePostLink(session.credential.groupId, messageId);
-  const result = await sshRun(root, session.crabbox.inspect, renderProofViewCommand(link));
   const logPath = path.join(
     session.outputDir,
     `proof-view-${new Date().toISOString().replace(/[:.]/gu, "-")}.log`,
   );
-  fs.writeFileSync(logPath, `${result.stdout}${result.stderr}`);
+  await sshRun(root, session.crabbox.inspect, renderProofViewCommand(link), {
+    outputFile: logPath,
+  });
   return {
     crop: TELEGRAM_PROOF_CROP,
     geometry: TELEGRAM_PROOF_WINDOW,
@@ -2386,7 +2501,15 @@ async function main() {
   }
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+function isMainModule(): boolean {
+  return Boolean(
+    process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url),
+  );
+}
+
+if (isMainModule()) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

@@ -304,7 +304,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     ).rejects.toThrow(/EADDRINUSE/);
   });
 
-  it("runs JWT validation before JSON body parsing", async () => {
+  it("parses bounded JSON after the Bearer gate and binds serviceUrl during JWT validation", async () => {
     const abort = new AbortController();
     const task = monitorMSTeamsProvider({
       cfg: createConfig(0),
@@ -322,23 +322,41 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     if (!app) {
       throw new Error("expected Express app to be created");
     }
+    // This test intentionally locks auth middleware ordering: the cheap Bearer
+    // gate must run before bounded JSON parsing, and JWT validation must run
+    // after parsing so it can bind the token to Activity.serviceUrl.
     expect(app.use).toHaveBeenCalledTimes(4);
 
     const jsonMiddleware = vi.mocked((await import("express")).json).mock.results[0]?.value;
     if (typeof jsonMiddleware !== "function") {
       throw new Error("expected Express JSON middleware");
     }
-    expect(readMockCallArg(app.use, 1, 0)).not.toBe(jsonMiddleware);
-    expect(readMockCallArg(app.use, 2, 0)).toBe(jsonMiddleware);
+    expect(readMockCallArg(app.use, 1, 0)).toBe(jsonMiddleware);
 
-    const jwtMiddleware = readMockCallArg(app.use, 1, 0) as (
+    const authGate = readMockCallArg(app.use, 0, 0) as (
+      req: Request,
+      res: Response,
+      next: (err?: unknown) => void,
+    ) => void;
+    const authNext = vi.fn();
+    const unauthorizedResponse = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as unknown as Response;
+    authGate({ headers: {} } as Request, unauthorizedResponse, authNext);
+    expect(authNext).not.toHaveBeenCalled();
+
+    const jwtMiddleware = readMockCallArg(app.use, 3, 0) as (
       req: Request,
       res: Response,
       next: (err?: unknown) => void,
     ) => void;
     const next = vi.fn();
     jwtMiddleware(
-      { headers: { authorization: "Bearer token" } } as Request,
+      {
+        headers: { authorization: "Bearer token" },
+        body: { serviceUrl: "https://smba.trafficmanager.net/amer/" },
+      } as Request,
       {
         status: vi.fn().mockReturnThis(),
         json: vi.fn(),
@@ -347,8 +365,32 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     );
 
     await vi.waitFor(() => {
-      expect(jwtValidate).toHaveBeenCalledWith("Bearer token");
+      expect(jwtValidate).toHaveBeenCalledWith(
+        "Bearer token",
+        "https://smba.trafficmanager.net/amer/",
+      );
       expect(next).toHaveBeenCalledTimes(1);
+    });
+
+    jwtValidate.mockReset().mockResolvedValueOnce(false);
+    const missingServiceUrlNext = vi.fn();
+    const missingServiceUrlResponse = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as unknown as Response;
+    jwtMiddleware(
+      {
+        headers: { authorization: "Bearer token-no-service-url" },
+        body: { type: "message" },
+      } as Request,
+      missingServiceUrlResponse,
+      missingServiceUrlNext,
+    );
+
+    await vi.waitFor(() => {
+      expect(jwtValidate).toHaveBeenCalledWith("Bearer token-no-service-url", undefined);
+      expect(missingServiceUrlResponse.status).toHaveBeenCalledWith(401);
+      expect(missingServiceUrlNext).not.toHaveBeenCalled();
     });
 
     abort.abort();

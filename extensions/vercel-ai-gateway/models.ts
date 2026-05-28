@@ -1,3 +1,4 @@
+import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -99,9 +100,9 @@ function toPerMillionCost(value: number | string | undefined): number {
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseFloat(value)
-        : Number.NaN;
-  if (!Number.isFinite(numeric) || numeric < 0) {
+        ? parseStrictFiniteNumber(value)
+        : undefined;
+  if (numeric === undefined || numeric < 0) {
     return 0;
   }
   return numeric * 1_000_000;

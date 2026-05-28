@@ -26,7 +26,6 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "openrouter/ai21/jamba-large-1.7",
   "xai/grok-4.3",
   "zai/glm-5.1",
-  "fireworks/accounts/fireworks/models/glm-5",
   "fireworks/accounts/fireworks/models/glm-5p1",
   "minimax-portal/minimax-m2.7",
 ] as const;
@@ -353,8 +352,8 @@ export function resolveHighSignalLiveModelLimit(params: {
 }): number {
   const trimmed = params.rawMaxModels?.trim();
   if (trimmed) {
-    const parsed = Number.parseInt(trimmed, 10);
-    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    return Number.isSafeInteger(parsed) ? Math.max(0, parsed) : 0;
   }
   if (params.useExplicitModels) {
     return 0;

@@ -14,15 +14,11 @@ describe("createPluginRuntimeMock", () => {
     expect(vi.isMockFunction(debouncer.cancelKey)).toBe(true);
   });
 
-  it("keeps deprecated turn runtime aliases aligned with inbound mocks", async () => {
+  it("exposes channel inbound helpers without the removed turn aliases", async () => {
     const runtime = createPluginRuntimeMock();
     const channel = "test";
 
-    expect(runtime.channel.turn.run).toBe(runtime.channel.inbound.run);
-    expect(runtime.channel.turn.runAssembled).toBe(runtime.channel.inbound.dispatchReply);
-    expect(runtime.channel.turn.buildContext).toBe(runtime.channel.inbound.buildContext);
-    expect(runtime.channel.turn.runPrepared).toBe(runtime.channel.inbound.runPreparedReply);
-    expect(runtime.channel.turn.dispatchAssembled).toBe(runtime.channel.inbound.dispatchReply);
+    expect("turn" in runtime.channel).toBe(false);
 
     const input = vi.fn((raw: { id: string }) => ({
       id: raw.id,
@@ -45,11 +41,13 @@ describe("createPluginRuntimeMock", () => {
       runDispatch,
     }));
 
-    const result = await runtime.channel.turn.runResolved({
+    const result = await runtime.channel.inbound.run({
       channel,
       raw: { id: "m1" },
-      input,
-      resolveTurn,
+      adapter: {
+        ingest: input,
+        resolveTurn,
+      },
     });
 
     expect(input).toHaveBeenCalledWith({ id: "m1" });
@@ -76,7 +74,7 @@ describe("createPluginRuntimeMock", () => {
   it("routes untrusted group prompt facts into untrusted structured context", () => {
     const runtime = createPluginRuntimeMock();
 
-    const ctx = runtime.channel.turn.buildContext({
+    const ctx = runtime.channel.inbound.buildContext({
       channel: "test",
       from: "test:user:u1",
       sender: { id: "u1" },

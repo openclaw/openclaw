@@ -5,6 +5,7 @@ import {
   filterOxlintShards,
   parseShardRunnerArgs,
   createWindowsExtensionShards,
+  resolveShardHeartbeatMs,
   resolveWindowsExtensionChunkSize,
   shouldRunOxlintShardsSerial,
 } from "../../scripts/run-oxlint-shards.mjs";
@@ -120,6 +121,13 @@ describe("run-oxlint", () => {
         hostResources: roomyHost,
       }),
     ).toBe(false);
+  });
+
+  it("uses a bounded oxlint shard heartbeat by default", () => {
+    expect(resolveShardHeartbeatMs({})).toBe(30_000);
+    expect(resolveShardHeartbeatMs({ OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0" })).toBe(0);
+    expect(resolveShardHeartbeatMs({ OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "5000" })).toBe(5000);
+    expect(resolveShardHeartbeatMs({ OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "bad" })).toBe(30_000);
   });
 
   it("chunks extension oxlint shards on Windows", () => {

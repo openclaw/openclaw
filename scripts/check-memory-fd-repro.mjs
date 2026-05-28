@@ -6,6 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
 const ISSUE_FILE_COUNTS = [
   ["memory/transcripts", 9394],
@@ -23,6 +24,7 @@ const ISSUE_FILE_COUNTS = [
 const ISSUE_MEMORY_FILE_COUNT = ISSUE_FILE_COUNTS.reduce((sum, [, count]) => sum + count, 0);
 const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
+export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
 
 const SKIP_GATEWAY_ENV = {
   NODE_ENV: "test",
@@ -261,6 +263,19 @@ function writeConfig({ homeDir, workspaceDir, port, token }) {
   return configPath;
 }
 
+export function updateGatewayReadyOutputState(
+  state,
+  chunk,
+  maxChars = GATEWAY_READY_OUTPUT_MAX_CHARS,
+) {
+  const text = String(chunk);
+  const combined = `${state.tail ?? ""}${text}`;
+  return {
+    tail: combined.length > maxChars ? combined.slice(-maxChars) : combined,
+    readySeen: Boolean(state.readySeen || combined.includes("[gateway] ready")),
+  };
+}
+
 function runLsofForPid(pid) {
   const result = spawnSync("lsof", ["-nP", "-p", String(pid)], {
     encoding: "utf8",
@@ -327,22 +342,26 @@ function sampleFds({ label, pid, workspaceRealPath }) {
   return sample;
 }
 
-async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
+export function hasChildExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+export async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
   const startedAt = Date.now();
-  let output = "";
+  let outputState = { tail: "", readySeen: false };
   const append = (chunk) => {
     const text = chunk.toString();
-    output += text;
+    outputState = updateGatewayReadyOutputState(outputState, text);
     fs.appendFileSync(logPath, text);
   };
   child.stdout.on("data", append);
   child.stderr.on("data", append);
 
   while (Date.now() - startedAt < timeoutMs) {
-    if (output.includes("[gateway] ready") && findGatewayPid(port)) {
+    if (outputState.readySeen && findGatewayPid(port)) {
       return;
     }
-    if (child.exitCode !== null) {
+    if (hasChildExited(child)) {
       throw new Error(`gateway exited before ready; see ${logPath}`);
     }
     await sleep(100);
@@ -350,26 +369,41 @@ async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
   throw new Error(`gateway did not become ready within ${timeoutMs}ms; see ${logPath}`);
 }
 
-async function stopGateway({ child, port }) {
-  if (child.exitCode === null) {
+export async function stopGateway({ child, port }) {
+  return stopGatewayWithRuntime({
+    child,
+    port,
+    findGatewayPidFn: findGatewayPid,
+    killProcess: (pid, signal) => process.kill(pid, signal),
+  });
+}
+
+export async function stopGatewayWithRuntime({
+  child,
+  port,
+  findGatewayPidFn,
+  killProcess,
+  listenerSettleDelayMs = 500,
+}) {
+  if (!hasChildExited(child)) {
     child.kill("SIGINT");
     for (let i = 0; i < 50; i += 1) {
-      if (child.exitCode !== null) {
+      if (hasChildExited(child)) {
         break;
       }
       await sleep(100);
     }
   }
-  const listenerPid = findGatewayPid(port);
+  const listenerPid = findGatewayPidFn(port);
   if (listenerPid) {
     try {
-      process.kill(listenerPid, "SIGTERM");
+      killProcess(listenerPid, "SIGTERM");
     } catch {}
-    await sleep(500);
-    const stillListening = findGatewayPid(port);
+    await sleep(listenerSettleDelayMs);
+    const stillListening = findGatewayPidFn(port);
     if (stillListening) {
       try {
-        process.kill(stillListening, "SIGKILL");
+        killProcess(stillListening, "SIGKILL");
       } catch {}
     }
   }
@@ -545,9 +579,16 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(
-    `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,
-  );
-  process.exit(1);
-});
+function isMainModule() {
+  const entrypoint = process.argv[1];
+  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
+}
+
+if (isMainModule()) {
+  main().catch((error) => {
+    console.error(
+      `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  });
+}

@@ -1,4 +1,4 @@
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
@@ -708,6 +708,156 @@ describe("anthropic transport stream", () => {
     expect(result.usage.output).toBe(9);
   });
 
+  it("preserves provider-signed Anthropic thinking text on ingest", async () => {
+    const highSurrogate = String.fromCharCode(0xd83d);
+    const signedThinking = `keep${highSurrogate}signed`;
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "thinking", thinking: signedThinking, signature: "sig_1" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "sig_2" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "sig_3" },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 6, output_tokens: 9 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "think" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.content[0]).toMatchObject({
+      type: "thinking",
+      thinking: signedThinking,
+      thinkingSignature: "sig_2sig_3",
+    });
+  });
+
+  it("preserves provider-seeded thinking signatures when no signature_delta follows", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "thinking", thinking: "seeded", signature: "seed_signature" },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 6, output_tokens: 5 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "think" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.content[0]).toMatchObject({
+      type: "thinking",
+      thinking: "seeded",
+      thinkingSignature: "seed_signature",
+    });
+  });
+
+  it("concatenates multiple signature_delta events instead of overwriting", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "thinking", thinking: "step by step", signature: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "chunk1" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "chunk2" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "chunk3" },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 6, output_tokens: 5 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "think" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.content[0]).toMatchObject({
+      type: "thinking",
+      thinking: "step by step",
+      thinkingSignature: "chunk1chunk2chunk3",
+    });
+  });
+
   it("captures OpenAI-style reasoning_content deltas from Anthropic-compatible streams", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
@@ -1090,6 +1240,7 @@ describe("anthropic transport stream", () => {
   });
 
   it("replays reasoning_content from compatible Anthropic thinking blocks", async () => {
+    const highSurrogate = String.fromCharCode(0xd83d);
     await runTransportStream(
       makeAnthropicTransportModel({
         id: "mimo-v2.6-pro",
@@ -1110,7 +1261,7 @@ describe("anthropic transport stream", () => {
             content: [
               {
                 type: "thinking",
-                thinking: "Need to answer politely.",
+                thinking: `Need${highSurrogate} to answer politely.`,
                 thinkingSignature: "reasoning_content",
               },
               { type: "text", text: "Hello!" },
@@ -1150,6 +1301,51 @@ describe("anthropic transport stream", () => {
         type: "thinking",
         thinking: "Then ask a follow-up.",
         signature: "reasoning_content",
+      },
+    ]);
+  });
+
+  it("preserves provider-signed Anthropic thinking text on replay", async () => {
+    const highSurrogate = String.fromCharCode(0xd83d);
+    const signedThinking = `keep${highSurrogate}signed`;
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: signedThinking,
+                thinkingSignature: "sig_1",
+              },
+            ],
+          },
+          { role: "user", content: "again" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    const assistantMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "assistant",
+    );
+    expect(assistantMessage.content).toEqual([
+      {
+        type: "thinking",
+        thinking: signedThinking,
+        signature: "sig_1",
       },
     ]);
   });

@@ -562,8 +562,14 @@ terminal summary, and sanitized error text.
   - `sessionKey` is required.
   - The gateway derives trusted runtime context from the session server-side instead of accepting
     caller-supplied auth or delivery context.
-  - The response is session-scoped and reflects what the active conversation can use right now,
-    including core, plugin, and channel tools.
+  - The response is a session-scoped server-derived projection of the active inventory,
+    including core, plugin, channel, and already-discovered MCP server tools.
+  - `tools.effective` is read-only for MCP: it may project a warm session MCP catalog through the
+    final tool policy, but it does not create MCP runtimes, connect transports, or issue
+    `tools/list`. If no matching warm catalog exists, the response may include a notice such as
+    `mcp-not-yet-connected`, `mcp-not-yet-listed`, or `mcp-stale-catalog`.
+  - Effective tool entries use `source="core"`, `source="plugin"`, `source="channel"`, or
+    `source="mcp"`.
 - Operators may call `tools.invoke` (`operator.write`) to invoke one available tool through the
   same gateway policy path as `/tools/invoke`.
   - `name` is required. `args`, `sessionKey`, `agentId`, `confirm`, and
@@ -719,7 +725,8 @@ rather than the pre-handshake defaults.
   caller-requested scope set remains authoritative; cached scopes are only
   reused when the client is reusing the stored per-device token.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
-  `device.token.revoke` (requires `operator.pairing` scope).
+  `device.token.revoke` (requires `operator.pairing` scope). Rotating or
+  revoking a node or other non-operator role also requires `operator.admin`.
 - `device.token.rotate` returns rotation metadata. It echoes the replacement
   bearer token only for same-device calls that are already authenticated with
   that device token, so token-only clients can persist their replacement before
@@ -728,8 +735,9 @@ rather than the pre-handshake defaults.
   recorded in that device's pairing entry; token mutation cannot expand or
   target a device role that pairing approval never granted.
 - For paired-device token sessions, device management is self-scoped unless the
-  caller also has `operator.admin`: non-admin callers can remove/revoke/rotate
-  only their **own** device entry.
+  caller also has `operator.admin`: non-admin callers can manage only the
+  operator token for their **own** device entry. Node and other non-operator
+  token management is admin-only, even for the caller's own device.
 - `device.token.rotate` and `device.token.revoke` also check the target operator
   token scope set against the caller's current session scopes. Non-admin callers
   cannot rotate or revoke a broader operator token than they already hold.

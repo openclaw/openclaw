@@ -22,6 +22,7 @@ import {
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
   resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
+  retryQueuedChatMessage as retryQueuedChatMessageInternal,
   steerQueuedChatMessage as steerQueuedChatMessageInternal,
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
@@ -103,6 +104,7 @@ import {
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type {
   ClawHubSearchResult,
+  ClawHubSkillSecurityVerdict,
   ClawHubSkillDetail,
   SkillMessage,
 } from "./controllers/skills.ts";
@@ -576,6 +578,7 @@ export class OpenClawApp extends LitElement {
   @state() skillsBusyKey: string | null = null;
   @state() skillMessages: Record<string, SkillMessage> = {};
   @state() skillsDetailKey: string | null = null;
+  @state() skillsDetailTab: "overview" | "card" = "overview";
   @state() clawhubSearchQuery = "";
   @state() clawhubSearchResults: ClawHubSearchResult[] | null = null;
   @state() clawhubSearchLoading = false;
@@ -586,6 +589,13 @@ export class OpenClawApp extends LitElement {
   @state() clawhubDetailError: string | null = null;
   @state() clawhubInstallSlug: string | null = null;
   @state() clawhubInstallMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict> = {};
+  @state() clawhubVerdictsLoading = false;
+  @state() clawhubVerdictsError: string | null = null;
+  @state() skillCardContents: Record<string, string> = {};
+  @state() skillCardContentKeys: Record<string, string> = {};
+  @state() skillCardLoadingKey: string | null = null;
+  @state() skillCardErrors: Record<string, string> = {};
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
@@ -1048,6 +1058,13 @@ export class OpenClawApp extends LitElement {
   removeQueuedMessage(id: string) {
     removeQueuedMessageInternal(
       this as unknown as Parameters<typeof removeQueuedMessageInternal>[0],
+      id,
+    );
+  }
+
+  async retryQueuedChatMessage(id: string) {
+    await retryQueuedChatMessageInternal(
+      this as unknown as Parameters<typeof retryQueuedChatMessageInternal>[0],
       id,
     );
   }

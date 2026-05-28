@@ -7,6 +7,7 @@ import { setTimeout as sleepTimeout } from "node:timers/promises";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -122,6 +123,18 @@ const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
 let chromeMcpProcessCleanupDepsForTest: ChromeMcpProcessCleanupDeps | null = null;
 
+export function decodeChromeMcpStderrTail(buffer: Buffer): string {
+  if (buffer.length <= CHROME_MCP_STDERR_MAX_BYTES) {
+    return buffer.toString("utf8").trim();
+  }
+
+  let start = buffer.length - CHROME_MCP_STDERR_MAX_BYTES;
+  while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) {
+    start++;
+  }
+  return buffer.subarray(start).toString("utf8").trim();
+}
+
 function asPages(value: unknown): ChromeMcpStructuredPage[] {
   if (!Array.isArray(value)) {
     return [];
@@ -142,8 +155,8 @@ function asPages(value: unknown): ChromeMcpStructuredPage[] {
 }
 
 function parsePageId(targetId: string): number {
-  const parsed = Number.parseInt(targetId.trim(), 10);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseStrictPositiveInteger(targetId);
+  if (parsed === undefined) {
     throw new BrowserTabNotFoundError();
   }
   return parsed;
@@ -407,7 +420,7 @@ function drainStderr(transport: StdioClientTransport): () => string {
     }
   });
   stream.on("error", () => {});
-  return () => Buffer.concat(chunks).toString("utf8").trim().slice(-CHROME_MCP_STDERR_MAX_BYTES);
+  return () => decodeChromeMcpStderrTail(Buffer.concat(chunks));
 }
 
 function redactChromeMcpDiagnosticText(text: string): string {

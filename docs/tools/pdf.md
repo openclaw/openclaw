@@ -113,8 +113,8 @@ Fallback details:
   text-only model, OpenClaw drops the rendered images and continues with the
   extracted text.
 - Extraction fallback uses the bundled `document-extract` plugin. The plugin owns
-  `pdfjs-dist`; `@napi-rs/canvas` is used only when image rendering fallback is
-  available.
+  `clawpdf`, which provides text extraction and image rendering through PDFium
+  WebAssembly.
 
 ## Config
 

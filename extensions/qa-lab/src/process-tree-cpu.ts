@@ -41,17 +41,35 @@ function parseNonNegativeNumber(value: unknown): number | null {
 }
 
 export function parsePsCpuTimeMs(raw: string): number | null {
-  const parts = raw.trim().split(":").map(Number);
-  if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
+  const match = raw.trim().match(/^(?:(\d+)-)?(\d+):(\d{2}(?:\.\d+)?)(?::(\d{2}(?:\.\d+)?))?$/u);
+  if (!match) {
     return null;
   }
-  if (parts.length === 2) {
-    return Math.round((parts[0] * 60 + parts[1]) * 1000);
+  const [, daysRaw, firstRaw, secondRaw, thirdRaw] = match;
+  if (daysRaw !== undefined && thirdRaw === undefined) {
+    return null;
   }
-  if (parts.length === 3) {
-    return Math.round((parts[0] * 60 * 60 + parts[1] * 60 + parts[2]) * 1000);
+  const days = daysRaw === undefined ? 0 : Number(daysRaw);
+  const first = Number(firstRaw);
+  const second = Number(secondRaw);
+  const third = thirdRaw === undefined ? 0 : Number(thirdRaw);
+  const values = [days, first, second, third];
+  if (values.some((part) => !Number.isFinite(part) || part < 0)) {
+    return null;
   }
-  return null;
+  if (thirdRaw !== undefined && !Number.isInteger(second)) {
+    return null;
+  }
+  if (second >= 60 || (thirdRaw !== undefined && third >= 60)) {
+    return null;
+  }
+  if (daysRaw !== undefined && thirdRaw !== undefined) {
+    return Math.round((days * 24 * 60 * 60 + first * 60 * 60 + second * 60 + third) * 1000);
+  }
+  if (thirdRaw !== undefined) {
+    return Math.round((first * 60 * 60 + second * 60 + third) * 1000);
+  }
+  return Math.round((first * 60 + second) * 1000);
 }
 
 export function parsePsRssBytes(raw: string): number | null {

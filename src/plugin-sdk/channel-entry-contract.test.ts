@@ -404,6 +404,54 @@ describe("loadBundledEntryExportSync", () => {
     });
   });
 
+  it("reuses resolved bundled sidecar paths before cached module exports", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
+    tempDirs.push(tempRoot);
+
+    const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+
+    const importerPath = path.join(pluginRoot, "index.js");
+    const helperPath = path.join(pluginRoot, "helper.cjs");
+    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+    fs.writeFileSync(helperPath, "module.exports = { sentinel: 42 };\n", "utf8");
+
+    const openRootFileSync = vi.fn(() => ({
+      ok: true,
+      path: helperPath,
+      fd: fs.openSync(helperPath, "r"),
+    }));
+    vi.doMock("../infra/boundary-file-read.js", () => ({
+      openRootFileSync,
+    }));
+
+    try {
+      const channelEntryContract = await importFreshModule<
+        typeof import("./channel-entry-contract.js")
+      >(import.meta.url, "./channel-entry-contract.js?scope=resolved-sidecar-cache");
+
+      const ref = {
+        specifier: "./helper.cjs",
+        exportName: "sentinel",
+      };
+      expect(
+        channelEntryContract.loadBundledEntryExportSync<number>(
+          pathToFileURL(importerPath).href,
+          ref,
+        ),
+      ).toBe(42);
+      expect(
+        channelEntryContract.loadBundledEntryExportSync<number>(
+          pathToFileURL(importerPath).href,
+          ref,
+        ),
+      ).toBe(42);
+      expect(openRootFileSync).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock("../infra/boundary-file-read.js");
+    }
+  });
+
   it("emits non-negative source-loader sub-step timings on the built-artifact load path", async () => {
     // Built artifacts prefer `nodeRequire`, but Node can still reject a sidecar
     // and fall back through jiti. The profile line must never report negative
