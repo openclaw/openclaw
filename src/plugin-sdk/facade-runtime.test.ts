@@ -148,7 +148,7 @@ describe("plugin-sdk facade runtime", () => {
 
     expect(resolved?.boundaryRoot).not.toBe(overrideDir);
     expect(resolved?.modulePath).toMatch(
-      /(?:^|\/)(?:extensions|dist-runtime\/extensions)\/browser\/browser-maintenance\.(?:ts|js)$/u,
+      /(?:^|[\\/])(?:extensions|dist-runtime[\\/]extensions)[\\/]browser[\\/]browser-maintenance\.(?:ts|js)$/u,
     );
   });
 
