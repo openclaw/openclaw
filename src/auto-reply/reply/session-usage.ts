@@ -152,7 +152,7 @@ export async function persistSessionUsageUpdate(params: {
           const useCompactionSnapshot =
             !preserveUserFacingRunState &&
             compactionTokensAfter !== undefined &&
-            (compactionTokensAfter === 0 || !hasPositiveUsageTotal);
+            !hasPositiveUsageTotal;
           const totalTokens = useCompactionSnapshot ? compactionTokensAfter : usageTotalTokens;
           const runEstimatedCostUsd = preserveUserFacingRunState
             ? undefined

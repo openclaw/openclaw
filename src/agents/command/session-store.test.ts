@@ -976,7 +976,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("prefers zero compaction tokensAfter over CLI cache usage", async () => {
+  it("prefers fresh CLI usage over zero compaction tokensAfter", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-zero-compaction-with-usage";
@@ -1029,12 +1029,12 @@ describe("updateSessionStoreAfterAgentRun", () => {
         } as EmbeddedAgentRunResult,
       });
 
-      expect(sessionStore[sessionKey]?.totalTokens).toBe(0);
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(1_794_391);
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
-      expect(sessionStore[sessionKey]?.inputTokens).toBeUndefined();
-      expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
-      expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
-      expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
+      expect(sessionStore[sessionKey]?.inputTokens).toBe(20);
+      expect(sessionStore[sessionKey]?.outputTokens).toBe(10_855);
+      expect(sessionStore[sessionKey]?.cacheRead).toBe(1_761_324);
+      expect(sessionStore[sessionKey]?.cacheWrite).toBe(33_047);
     });
   });
 

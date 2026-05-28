@@ -216,8 +216,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     next.outputTokens = output;
     const hasUsageTotalTokens =
       typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0;
-    const useCompactionSnapshot =
-      compactionTokensAfter !== undefined && (compactionTokensAfter === 0 || !hasUsageTotalTokens);
+    const useCompactionSnapshot = compactionTokensAfter !== undefined && !hasUsageTotalTokens;
     if (useCompactionSnapshot) {
       next.totalTokens = compactionTokensAfter;
       next.totalTokensFresh = true;

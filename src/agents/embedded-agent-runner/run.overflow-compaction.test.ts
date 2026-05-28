@@ -1873,7 +1873,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expect(result.meta.error).toBeUndefined();
-      expect(result.meta.agentMeta?.compactionTokensAfter).toBe(0);
+      expect(result.meta.agentMeta?.compactionTokensAfter).toBeUndefined();
       const stored = JSON.parse(await fs.readFile(storePath, "utf8"))["test-key"];
       expect(stored.totalTokens).toBe(0);
       expect(stored.totalTokensFresh).toBe(true);

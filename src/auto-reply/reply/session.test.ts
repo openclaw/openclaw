@@ -3236,7 +3236,7 @@ describe("persistSessionUsageUpdate", () => {
     });
   });
 
-  it("prefers zero compactionTokensAfter over CLI cache usage", async () => {
+  it("prefers fresh final usage over zero compactionTokensAfter", async () => {
     const storePath = await createStorePath("openclaw-usage-compaction-reset-");
     const sessionKey = "main";
     await seedSessionStore({
@@ -3251,25 +3251,6 @@ describe("persistSessionUsageUpdate", () => {
         outputTokens: 10_855,
         cacheRead: 1_761_324,
         cacheWrite: 33_047,
-        contextBudgetStatus: {
-          schemaVersion: 1,
-          source: "pre-prompt-estimate",
-          updatedAt: 1,
-          provider: "claude-cli",
-          model: "claude-opus-4-7",
-          route: "compact_only",
-          shouldCompact: true,
-          estimatedPromptTokens: 1_794_391,
-          contextTokenBudget: 1_048_576,
-          promptBudgetBeforeReserve: 1_044_480,
-          reserveTokens: 4_096,
-          effectiveReserveTokens: 4_096,
-          remainingPromptBudgetTokens: 0,
-          overflowTokens: 749_911,
-          toolResultReducibleChars: 0,
-          messageCount: 0,
-          unwindowedMessageCount: 0,
-        },
       },
     });
 
@@ -3285,13 +3266,12 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(0);
+    expect(stored[sessionKey].totalTokens).toBe(1_794_391);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].inputTokens).toBeUndefined();
-    expect(stored[sessionKey].outputTokens).toBeUndefined();
-    expect(stored[sessionKey].cacheRead).toBeUndefined();
-    expect(stored[sessionKey].cacheWrite).toBeUndefined();
-    expect(stored[sessionKey].contextBudgetStatus).toBeUndefined();
+    expect(stored[sessionKey].inputTokens).toBe(20);
+    expect(stored[sessionKey].outputTokens).toBe(10_855);
+    expect(stored[sessionKey].cacheRead).toBe(1_761_324);
+    expect(stored[sessionKey].cacheWrite).toBe(33_047);
   });
 
   it("prefers fresh lastCallUsage over positive compactionTokensAfter", async () => {
