@@ -69,6 +69,11 @@ type NativeHarnessCliCompactionOutcome = {
   compacted: boolean;
   result?: EmbeddedAgentCompactResult;
   fallbackToContextEngine?: boolean;
+  // Native harness reported a successful no-op because it owns automatic
+  // compaction itself (e.g. the Codex app-server on non-manual/budget triggers).
+  // Not a failure: the caller must skip the throw and let the harness compact
+  // during the turn, otherwise the agent run errors and the session lane jams.
+  ownedByNativeHarness?: boolean;
   failureReason?: string;
 };
 type CliTranscriptCompactionOutcome = {
@@ -403,12 +408,16 @@ async function compactNativeHarnessCliTranscript(params: {
     const fallbackToContextEngine =
       isUnsupportedNativeHarnessCompaction(result) ||
       isRecoverableNativeHarnessBindingFailure(result);
+    // ok:true with no compaction is a successful no-op (the harness owns
+    // automatic compaction), not a failure — do not throw on it downstream.
+    const ownedByNativeHarness = result?.ok === true;
     log.warn(
       `CLI native harness compaction did not reduce context for ${params.provider}/${params.model}: ${result?.reason ?? "nothing to compact"}`,
     );
     return {
       compacted: false,
       fallbackToContextEngine,
+      ownedByNativeHarness,
       failureReason: result?.reason ?? "native harness compaction did not reduce context",
     };
   }
@@ -519,6 +528,11 @@ export async function runCliTurnCompactionLifecycle(params: {
     if (nativeOutcome.compacted) {
       compacted = true;
       nativeCompactionResult = nativeOutcome.result;
+      useContextEngineCompaction = false;
+    } else if (nativeOutcome.ownedByNativeHarness) {
+      // Harness owns automatic compaction and returned a successful no-op. Skip
+      // both the throw and the context-engine fallback so the turn proceeds and
+      // the harness compacts itself; throwing here jams the session lane.
       useContextEngineCompaction = false;
     } else if (!nativeOutcome.fallbackToContextEngine) {
       throw new Error(

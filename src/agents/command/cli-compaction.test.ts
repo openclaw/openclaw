@@ -502,6 +502,83 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactCalls).toHaveLength(0);
   });
 
+  it("does not throw when the native harness owns automatic compaction (ok:true no-op)", async () => {
+    // Regression: Codex app-server returns a successful no-op (ok:true,
+    // compacted:false) for budget-triggered compaction because it owns
+    // automatic compaction. The lifecycle must treat that as benign and let the
+    // turn proceed, not throw "CLI native harness compaction failed" — throwing
+    // fails the agent run and jams the session lane (endless Discord "typing").
+    const sessionKey = "agent:main:codex-owned-skip";
+    const sessionId = "session-codex-owned-skip";
+    const sessionFile = path.join(tmpDir, "session-codex-owned-skip.jsonl");
+    const storePath = path.join(tmpDir, "sessions-codex-owned-skip.json");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+      agentHarnessId: "codex",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const compactAgentHarnessSession = vi.fn(async () => ({
+      ok: true,
+      compacted: false,
+      reason: "codex app-server owns automatic compaction",
+    }));
+    const recordCliCompactionInStore = vi.fn(async () => ({
+      ...sessionEntry,
+      compactionCount: 1,
+    }));
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => buildContextEngine({ compactCalls }),
+      ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+      maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      recordCliCompactionInStore,
+    });
+
+    const updatedEntry = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "codex",
+      model: "gpt-5.5",
+    });
+
+    expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
+    // No context-engine fallback, no store rotation: the harness self-compacts.
+    expect(compactCalls).toHaveLength(0);
+    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
+    expect(updatedEntry).toBe(sessionEntry);
+  });
+
   it("passes owning context engines into native harness CLI compaction", async () => {
     const sessionKey = "agent:main:codex-owned-engine";
     const sessionId = "session-codex-owned-engine";
