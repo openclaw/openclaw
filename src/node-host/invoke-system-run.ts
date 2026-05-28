@@ -148,6 +148,15 @@ type LayeredExecPolicy = {
   ask: ExecAsk;
 };
 
+type EffectiveSystemRunExecPolicy = {
+  agentExec: ExecToolConfig | undefined;
+  globalExec: ExecToolConfig | undefined;
+  approvals: ReturnType<typeof resolveExecApprovals>;
+  security: ExecSecurity;
+  ask: ExecAsk;
+  autoReview: boolean;
+};
+
 function hasLegacyExecPolicyOverride(exec?: ExecToolConfig): boolean {
   return exec?.security !== undefined || exec?.ask !== undefined;
 }
@@ -208,6 +217,45 @@ function resolveAgentExecConfig(
       normalizeAgentId(candidate.id) === normalizedAgentId,
   );
   return entry?.tools?.exec;
+}
+
+export function resolveEffectiveSystemRunExecPolicy(params: {
+  cfg: OpenClawConfig;
+  agentId: string | undefined;
+  defaultSecurity: ExecSecurity;
+  defaultAsk: ExecAsk;
+  requireSocket: boolean;
+}): EffectiveSystemRunExecPolicy {
+  const agentExec = resolveAgentExecConfig(params.cfg, params.agentId);
+  const globalExec = params.cfg.tools?.exec;
+  const layeredPolicy = applyExecPolicyLayer(
+    applyExecPolicyLayer(
+      {
+        security: params.defaultSecurity,
+        ask: params.defaultAsk,
+      },
+      globalExec,
+    ),
+    agentExec,
+  );
+  const modePolicy = resolveExecModePolicy({
+    mode: layeredPolicy.mode,
+    security: layeredPolicy.security,
+    ask: layeredPolicy.ask,
+  });
+  const approvals = resolveExecApprovals(params.agentId, {
+    security: modePolicy.security,
+    ask: modePolicy.ask,
+    requireSocket: params.requireSocket,
+  });
+  return {
+    agentExec,
+    globalExec,
+    approvals,
+    security: minSecurity(modePolicy.security, approvals.agent.security),
+    ask: maxAsk(modePolicy.ask, approvals.agent.ask),
+    autoReview: modePolicy.autoReview,
+  };
 }
 
 async function resolveSystemRunAutoReviewer(params: {
@@ -443,32 +491,14 @@ async function evaluateSystemRunPolicyPhase(
   parsed: SystemRunParsePhase,
 ): Promise<SystemRunPolicyPhase | null> {
   const cfg = await loadSystemRunConfig(opts);
-  const agentExec = resolveAgentExecConfig(cfg, parsed.agentId);
-  const globalExec = cfg.tools?.exec;
-  const layeredPolicy = applyExecPolicyLayer(
-    applyExecPolicyLayer(
-      {
-        security: opts.resolveExecSecurity(undefined),
-        ask: opts.resolveExecAsk(undefined),
-      },
-      globalExec,
-    ),
-    agentExec,
-  );
-  const modePolicy = resolveExecModePolicy({
-    mode: layeredPolicy.mode,
-    security: layeredPolicy.security,
-    ask: layeredPolicy.ask,
-  });
-  const configuredSecurity = modePolicy.security;
-  const configuredAsk = modePolicy.ask;
-  const approvals = resolveExecApprovals(parsed.agentId, {
-    security: configuredSecurity,
-    ask: configuredAsk,
+  const effectivePolicy = resolveEffectiveSystemRunExecPolicy({
+    cfg,
+    agentId: parsed.agentId,
+    defaultSecurity: opts.resolveExecSecurity(undefined),
+    defaultAsk: opts.resolveExecAsk(undefined),
     requireSocket: opts.preferMacAppExecHost,
   });
-  const security = minSecurity(configuredSecurity, approvals.agent.security);
-  const ask = maxAsk(configuredAsk, approvals.agent.ask);
+  const { agentExec, globalExec, approvals, security, ask } = effectivePolicy;
   const autoAllowSkills = approvals.agent.autoAllowSkills;
   const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
     global: cfg.tools?.exec,
@@ -580,7 +610,7 @@ async function evaluateSystemRunPolicyPhase(
         ? autoReviewSegment?.argv
         : undefined;
     const canAutoReviewApprovalMiss =
-      modePolicy.autoReview &&
+      effectivePolicy.autoReview &&
       ask !== "always" &&
       analysisOk &&
       autoReviewArgv !== undefined &&
