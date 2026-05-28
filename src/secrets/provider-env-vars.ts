@@ -39,15 +39,23 @@ export type ProviderEnvVarLookupParams = {
   metadataSnapshot?: PluginMetadataSnapshot;
 };
 
-export type ProviderAuthEvidence = {
-  type: "local-file-with-env";
-  fileEnvVar?: string;
-  fallbackPaths?: readonly string[];
-  requiresAnyEnv?: readonly string[];
-  requiresAllEnv?: readonly string[];
-  credentialMarker: string;
-  source?: string;
-};
+export type ProviderAuthEvidence =
+  | {
+      type: "local-file-with-env";
+      fileEnvVar?: string;
+      fallbackPaths?: readonly string[];
+      requiresAnyEnv?: readonly string[];
+      requiresAllEnv?: readonly string[];
+      credentialMarker: string;
+      source?: string;
+    }
+  | {
+      type: "env-vars-with-marker";
+      requiresAnyEnv?: readonly string[];
+      requiresAllEnv?: readonly string[];
+      credentialMarker: string;
+      source?: string;
+    };
 
 export type ProviderAuthLookupMaps = {
   aliasMap: Readonly<Record<string, string>>;
