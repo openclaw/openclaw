@@ -337,9 +337,10 @@ function abortSiblingSteps(abortController) {
 export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
   const abortController = params.abortController;
   const onFailure = params.onFailure;
+  const spawnImpl = params.spawnImpl ?? spawn;
   const startedAt = Date.now();
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawnImpl(process.execPath, args, {
       cwd: repoRoot,
       env: process.env,
       signal: abortController?.signal,
@@ -353,8 +354,8 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       if (settled) {
         return;
       }
-      child.kill("SIGTERM");
       settled = true;
+      child.kill("SIGKILL");
       const error = attachStepFailureMetadata(
         new Error(
           formatStepFailure(label, {

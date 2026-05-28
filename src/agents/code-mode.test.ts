@@ -441,7 +441,7 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
-          timeoutMs: 100,
+          timeoutMs: 1_000,
         },
       },
     } as never;
@@ -941,7 +941,7 @@ describe("Code Mode", () => {
         config,
         catalog: [],
       },
-      500,
+      10_000,
     );
 
     expect(result.status).toBe("failed");

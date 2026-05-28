@@ -65,6 +65,30 @@ sparkle_framework_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
 }
 
+PNPM_CMD=()
+
+resolve_pnpm_cmd() {
+  if command -v pnpm >/dev/null 2>&1; then
+    PNPM_CMD=(pnpm)
+    return 0
+  fi
+
+  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
+    PNPM_CMD=(corepack pnpm)
+    return 0
+  fi
+
+  echo "ERROR: pnpm is not on PATH and corepack pnpm is unavailable. Install pnpm or run with Node/Corepack on PATH." >&2
+  exit 1
+}
+
+run_pnpm() {
+  if [[ "${#PNPM_CMD[@]}" -eq 0 ]]; then
+    resolve_pnpm_cmd
+  fi
+  (cd "$ROOT_DIR" && "${PNPM_CMD[@]}" "$@")
+}
+
 merge_framework_machos() {
   local primary="$1"
   local dest="$2"
@@ -127,8 +151,8 @@ merge_framework_machos() {
 }
 
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
-  echo "📦 Ensuring deps (pnpm install)"
-  (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+  echo "📦 Ensuring deps (pnpm install --frozen-lockfile)"
+  run_pnpm install --frozen-lockfile --config.node-linker=hoisted
 else
   echo "📦 Skipping pnpm install (SKIP_PNPM_INSTALL=1)"
 fi
@@ -153,7 +177,7 @@ fi
 
 if [[ "${SKIP_TSC:-0}" != "1" ]]; then
   echo "📦 Building JS (pnpm build)"
-  (cd "$ROOT_DIR" && pnpm build)
+  run_pnpm build
 else
   echo "📦 Skipping JS build (SKIP_TSC=1)"
 fi
@@ -256,16 +280,6 @@ echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
-echo "📦 Copying model catalog"
-MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@earendil-works/pi-ai/dist/models.generated.js"
-MODEL_CATALOG_DEST="$APP_ROOT/Contents/Resources/models.generated.js"
-if [ -f "$MODEL_CATALOG_SRC" ]; then
-  cp "$MODEL_CATALOG_SRC" "$MODEL_CATALOG_DEST"
-else
-  echo "ERROR: model catalog missing at $MODEL_CATALOG_SRC" >&2
-  exit 1
-fi
-
 echo "📦 Copying Control UI assets"
 CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"
 CONTROL_UI_DEST="$APP_ROOT/Contents/Resources/control-ui"
@@ -314,8 +328,51 @@ else
   fi
 fi
 
-echo "⏹  Stopping any running OpenClaw"
-killall -q OpenClaw 2>/dev/null || true
+running_packaged_app_pids() {
+  command -v pgrep >/dev/null 2>&1 || return 0
+  local app_binary="$APP_ROOT/Contents/MacOS/OpenClaw"
+  local pid
+  pgrep -x "$PRODUCT" 2>/dev/null | while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    if command -v lsof >/dev/null 2>&1 &&
+      lsof -a -p "$pid" -d txt -Fn 2>/dev/null | sed 's/^n//' | grep -Fx "$app_binary" >/dev/null; then
+      printf '%s\n' "$pid"
+      continue
+    fi
+    local command_line
+    command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    if [[ "$command_line" == "$app_binary" || "$command_line" == "$app_binary "* ]]; then
+      printf '%s\n' "$pid"
+    fi
+  done
+}
+
+stop_packaged_app_if_running() {
+  local pids=()
+  local pid
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] && pids+=("$pid")
+  done < <(running_packaged_app_pids)
+  if [[ "${#pids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  echo "⏹  Stopping packaged OpenClaw bundle (${pids[*]})"
+  kill "${pids[@]}" 2>/dev/null || true
+  for _ in $(seq 1 40); do
+    local alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+      fi
+    done
+    [[ "$alive" == "0" ]] && return 0
+    sleep 0.25
+  done
+  kill -KILL "${pids[@]}" 2>/dev/null || true
+}
+
+stop_packaged_app_if_running
 
 echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"

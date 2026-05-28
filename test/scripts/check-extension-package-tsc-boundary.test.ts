@@ -35,6 +35,14 @@ function writeCanaryArtifacts(rootDir: string, extensionId = "demo") {
   return { canaryPath, tsconfigPath };
 }
 
+function createMockPipe() {
+  const pipe = new EventEmitter() as EventEmitter & {
+    setEncoding: (encoding: string) => void;
+  };
+  pipe.setEncoding = () => {};
+  return pipe;
+}
+
 afterEach(() => {
   for (const rootDir of tempRoots) {
     fs.rmSync(rootDir, { force: true, recursive: true });
@@ -347,6 +355,47 @@ describe("check-extension-package-tsc-boundary", () => {
     }
     expect(elapsedMs).toBeGreaterThanOrEqual(0);
   }, 30_000);
+
+  it("hard-kills timed out async node steps", async () => {
+    const signals: Array<NodeJS.Signals | number | undefined> = [];
+    const child = new EventEmitter() as EventEmitter & {
+      kill: (signal?: NodeJS.Signals | number) => boolean;
+      stderr: ReturnType<typeof createMockPipe>;
+      stdout: ReturnType<typeof createMockPipe>;
+    };
+    child.stdout = createMockPipe();
+    child.stderr = createMockPipe();
+    child.kill = (signal) => {
+      signals.push(signal);
+      return true;
+    };
+
+    const failure = await runNodeStepAsync(
+      "hung-plugin",
+      ["--eval", "setTimeout(() => {}, 60_000)"],
+      5,
+      {
+        spawnImpl(command: string, args: string[]) {
+          expect(command).toBe(process.execPath);
+          expect(args).toEqual(["--eval", "setTimeout(() => {}, 60_000)"]);
+          return child;
+        },
+      },
+    ).then(
+      () => {
+        throw new Error("expected hung-plugin step to time out");
+      },
+      (error: unknown) => error,
+    );
+
+    expect(signals).toEqual(["SIGKILL"]);
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) {
+      throw new Error("expected timeout failure to reject with an Error");
+    }
+    expect(failure.message).toContain("hung-plugin timed out after 5ms");
+    expect((failure as { kind?: unknown }).kind).toBe("timeout");
+  });
 
   it("aborts concurrent sibling steps after the first failure", async () => {
     const startedAt = Date.now();

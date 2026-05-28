@@ -1,6 +1,6 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
 export const formatDirectiveAck = (text: string): string => {
@@ -15,31 +15,36 @@ export const formatElevatedRuntimeHint = () =>
   `${SYSTEM_MARK} Runtime is direct; sandboxing does not apply.`;
 
 export const formatInternalExecPersistenceDeniedText = () =>
-  "Exec defaults require operator.admin for internal gateway callers; skipped persistence.";
+  "Exec defaults require operator.admin for gateway callers; skipped persistence.";
 
 export const formatInternalVerbosePersistenceDeniedText = () =>
-  "Verbose defaults require operator.admin for internal gateway callers; skipped persistence.";
+  "Verbose defaults require operator.admin for gateway callers; skipped persistence.";
 
 export const formatInternalVerboseCurrentReplyOnlyText = () =>
   "Verbose logging set for the current reply only.";
 
-function canPersistInternalDirective(params: {
+export function canPersistSessionDirectiveDefaults(params: {
   messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
+  commandAuthorized?: boolean;
+  senderIsOwner?: boolean;
 }): boolean {
-  const authoritativeChannel = isInternalMessageChannel(params.messageProvider)
-    ? params.messageProvider
-    : params.surface;
-  if (!isInternalMessageChannel(authoritativeChannel)) {
-    return true;
-  }
-  const scopes = params.gatewayClientScopes ?? [];
-  return scopes.includes("operator.admin");
-}
+  const messageProvider = normalizeOptionalString(params.messageProvider);
+  const surface = normalizeOptionalString(params.surface);
+  const hasChannelContext = messageProvider !== undefined || surface !== undefined;
+  const isInternalGatewayCaller = messageProvider === "webchat" || surface === "webchat";
 
-export const canPersistInternalExecDirective = canPersistInternalDirective;
-export const canPersistInternalVerboseDirective = canPersistInternalDirective;
+  if (isInternalGatewayCaller) {
+    return params.gatewayClientScopes?.includes("operator.admin") === true;
+  }
+
+  if (hasChannelContext) {
+    return params.commandAuthorized === true || params.senderIsOwner === true;
+  }
+
+  return true;
+}
 
 const formatElevatedEvent = (level: ElevatedLevel) => {
   if (level === "full") {

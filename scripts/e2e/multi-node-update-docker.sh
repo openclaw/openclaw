@@ -53,7 +53,7 @@ docker_e2e_run_with_harness \
   --user root \
   -e HOME=/root \
   "$IMAGE_NAME" \
-  timeout "$DOCKER_RUN_TIMEOUT" bash -lc '
+  timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc '
 set -euo pipefail
 source scripts/lib/openclaw-e2e-instance.sh
 

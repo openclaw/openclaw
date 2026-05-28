@@ -1,5 +1,12 @@
 import { spawn } from "node:child_process";
+import {
+  appendBoundedChildOutput,
+  emptyBoundedChildOutput,
+  formatBoundedChildOutput,
+} from "./bounded-child-output.js";
 import { getTailscaleDnsName } from "./webhook/tailscale.js";
+
+const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
 
 /**
  * Tunnel configuration for exposing the webhook server.
@@ -117,9 +124,11 @@ export async function startNgrokTunnel(config: {
     };
 
     proc.stdout.on("data", (data: Buffer) => {
-      outputBuffer += data.toString();
-      const lines = outputBuffer.split("\n");
+      const lines = (outputBuffer + data.toString()).split("\n");
       outputBuffer = lines.pop() || "";
+      if (outputBuffer.length > NGROK_LOG_BUFFER_MAX_CHARS) {
+        outputBuffer = outputBuffer.slice(-NGROK_LOG_BUFFER_MAX_CHARS);
+      }
 
       for (const line of lines) {
         if (line.trim()) {
@@ -135,7 +144,8 @@ export async function startNgrokTunnel(config: {
         if (!resolved) {
           resolved = true;
           clearTimeout(timeout);
-          reject(new Error(`ngrok error: ${msg}`));
+          const output = appendBoundedChildOutput(emptyBoundedChildOutput(), msg);
+          reject(new Error(`ngrok error: ${formatBoundedChildOutput(output)}`));
         }
       }
     });
@@ -167,21 +177,22 @@ async function runNgrokCommand(args: string[]): Promise<string> {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
+    let stdout = emptyBoundedChildOutput();
+    let stderr = emptyBoundedChildOutput();
 
     proc.stdout.on("data", (data) => {
-      stdout += data.toString();
+      stdout = appendBoundedChildOutput(stdout, data.toString());
     });
     proc.stderr.on("data", (data) => {
-      stderr += data.toString();
+      stderr = appendBoundedChildOutput(stderr, data.toString());
     });
 
     proc.on("close", (code) => {
       if (code === 0) {
-        resolve(stdout);
+        resolve(stdout.text);
       } else {
-        reject(new Error(`ngrok command failed: ${stderr || stdout}`));
+        const output = stderr.text ? stderr : stdout;
+        reject(new Error(`ngrok command failed: ${formatBoundedChildOutput(output)}`));
       }
     });
 

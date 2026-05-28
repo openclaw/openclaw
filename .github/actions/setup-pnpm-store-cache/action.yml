@@ -62,6 +62,12 @@ runs:
             ;;
         esac
         corepack enable
+        for attempt in 1 2 3; do
+          if corepack prepare "$package_manager" --activate; then
+            exit 0
+          fi
+          sleep $((attempt * 5))
+        done
         corepack prepare "$package_manager" --activate
 
     - name: Resolve pnpm store path

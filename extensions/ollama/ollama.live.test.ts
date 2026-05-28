@@ -158,7 +158,7 @@ function buildCliEnv(root: string): NodeJS.ProcessEnv {
 }
 
 describe.skipIf(!LIVE)("ollama live", () => {
-  it("runs infer model run through the local CLI path without PI model discovery", async () => {
+  it("runs infer model run through the local CLI path without static model discovery", async () => {
     await withTempOpenClawState(async ({ root }) => {
       const result = await runOpenClawCli(
         [
@@ -258,7 +258,7 @@ describe.skipIf(!LIVE)("ollama live", () => {
     expect(events.map((event) => (event as { type?: string }).type)).toContain("done");
     expect(payload?.model).toBe(CHAT_MODEL);
     expect(payload?.options?.num_ctx).toBe(4096);
-    expect(payload?.options?.top_p).toBe(0.9);
+    expect(payload?.options?.top_p).toBe(1);
     expect(payload?.think).toBe(false);
     expect(payload?.keep_alive).toBe("5m");
     const properties = payload?.tools?.[0]?.function?.parameters?.properties;
