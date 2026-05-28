@@ -520,6 +520,28 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));
       registerDiscordListener(client.listeners, new DiscordVoiceResumedListener(voiceManager));
       registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));
+
+      const scheduleVoiceAutoJoin = (label: string, delayMs: number) => {
+        const startedAt = Date.now();
+        setTimeout(() => {
+          logger.info(
+            `discord voice: ${label} autoJoin fired after ${Date.now() - startedAt}ms account=${account.accountId}`,
+          );
+          if (!voiceManager?.isEnabled()) return;
+          void voiceManager
+            .autoJoin()
+            .then(() => {
+              logger.info(`discord voice: ${label} autoJoin settled account=${account.accountId}`);
+            })
+            .catch((err: unknown) => {
+              logger.warn(
+                `discord voice: ${label} autoJoin failed account=${account.accountId}: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+        }, delayMs);
+      };
+      scheduleVoiceAutoJoin("8s", 8000);
+      scheduleVoiceAutoJoin("75s", 75_000);
     }
 
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
