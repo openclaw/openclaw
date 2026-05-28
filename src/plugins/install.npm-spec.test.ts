@@ -1374,6 +1374,108 @@ describe("installPluginFromNpmSpec", () => {
     ).rejects.toHaveProperty("code", "ENOENT");
   });
 
+  it("quarantines and rebuilds the managed npm root when npm reports ENOTEMPTY", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const npmProjectRoot = resolvePluginNpmProjectDir({
+      npmDir: npmRoot,
+      packageName: "@openclaw/discord",
+    });
+    mockNpmViewAndInstall({
+      spec: "@openclaw/discord@2026.5.27",
+      packageName: "@openclaw/discord",
+      version: "2026.5.27",
+      pluginId: "discord",
+      npmRoot,
+    });
+    const baseImplementation = runCommandWithTimeoutMock.getMockImplementation();
+    let installAttempts = 0;
+    runCommandWithTimeoutMock.mockImplementation(
+      async (argv: string[], options?: { cwd?: string }) => {
+        if (isManagedNpmInstallCommand(argv)) {
+          installAttempts += 1;
+          if (installAttempts === 1) {
+            fs.mkdirSync(
+              path.join(
+                npmProjectRoot,
+                "node_modules",
+                "@openclaw",
+                "discord",
+                "node_modules",
+                "undici",
+                "types",
+              ),
+              { recursive: true },
+            );
+            fs.writeFileSync(
+              path.join(
+                npmProjectRoot,
+                "node_modules",
+                "@openclaw",
+                "discord",
+                "node_modules",
+                "undici",
+                "types",
+                "index.d.ts",
+              ),
+              "stale",
+              "utf8",
+            );
+            fs.writeFileSync(path.join(npmProjectRoot, "package-lock.json"), "broken\n", "utf8");
+            return {
+              code: 1,
+              stdout: "",
+              stderr:
+                "npm error code ENOTEMPTY\nnpm error syscall rmdir\nnpm error ENOTEMPTY: directory not empty, rmdir '/tmp/openclaw/npm/node_modules/@openclaw/discord/node_modules/undici/types'",
+              signal: null,
+              killed: false,
+              termination: "exit" as const,
+            };
+          }
+        }
+        return await baseImplementation?.(argv, options);
+      },
+    );
+    const warnings: string[] = [];
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/discord@2026.5.27",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: (message) => warnings.push(message) },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(installAttempts).toBe(2);
+    expect(
+      warnings.some(
+        (warning) =>
+          warning.includes("managed npm root corruption") &&
+          warning.includes("_openclaw-quarantined-npm-roots"),
+      ),
+    ).toBe(true);
+    const quarantineParent = path.join(npmProjectRoot, "_openclaw-quarantined-npm-roots");
+    const quarantines = fs.readdirSync(quarantineParent);
+    expect(quarantines).toHaveLength(1);
+    expect(
+      fs.readFileSync(
+        path.join(
+          quarantineParent,
+          quarantines[0] ?? "",
+          "node_modules",
+          "@openclaw",
+          "discord",
+          "node_modules",
+          "undici",
+          "types",
+          "index.d.ts",
+        ),
+        "utf8",
+      ),
+    ).toBe("stale");
+    expect(fs.existsSync(path.join(npmProjectRoot, "node_modules", "@openclaw", "discord"))).toBe(
+      true,
+    );
+  });
+
   it("retries without npm alias overrides when npm rejects alias comparators", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const hostRoot = suiteTempRootTracker.makeTempDir();

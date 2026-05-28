@@ -18,12 +18,15 @@ import {
   readManagedNpmRootPeerDependencySnapshot,
   readOpenClawManagedNpmRootOverrides,
   repairManagedNpmRootOpenClawPeer,
+  quarantineManagedNpmRootForRebuild,
   removeManagedNpmRootDependency,
   resolveManagedNpmRootDependencySpec,
   restoreManagedNpmRootPeerDependencySnapshot,
+  shouldRebuildManagedNpmRootAfterInstallFailure,
   syncManagedNpmRootPeerDependencies,
   upsertManagedNpmRootDependency,
   type ManagedNpmRootInstalledDependency,
+  type ManagedNpmRootQuarantineResult,
 } from "../infra/npm-managed-root.js";
 import {
   compareOpenClawReleaseVersions,
@@ -81,6 +84,8 @@ type PluginInstallLogger = {
   warn?: (message: string) => void;
 };
 
+type ManagedNpmInstallResult = Awaited<ReturnType<typeof runCommandWithTimeout>>;
+
 type PackageManifest = PluginPackageManifest & {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
@@ -94,6 +99,14 @@ function formatUnresolvedOpenClawPeerLinkError(packageName: string): string {
 
 function isNpmAliasOverrideComparatorError(result: { stdout: string; stderr: string }): boolean {
   return `${result.stderr}\n${result.stdout}`.includes("Invalid comparator: npm:");
+}
+
+function formatNpmCommandFailureOutput(result: { stdout: string; stderr: string }): string {
+  return result.stderr.trim() || result.stdout.trim();
+}
+
+function formatManagedNpmRootRecoveryArtifacts(artifactNames: string[]): string {
+  return artifactNames.length > 0 ? artifactNames.join(", ") : "no existing rebuild artifacts";
 }
 
 const MISSING_EXTENSIONS_ERROR =
@@ -800,6 +813,38 @@ async function installPluginFromManagedNpmRoot(
       quiet: true,
     }),
   };
+  let managedNpmRootRecovery: ManagedNpmRootQuarantineResult | null = null;
+  const retryInstallAfterManagedNpmRootRecovery = async (params: {
+    install: ManagedNpmInstallResult;
+    context: string;
+  }): Promise<ManagedNpmInstallResult> => {
+    if (managedNpmRootRecovery || !shouldRebuildManagedNpmRootAfterInstallFailure(params.install)) {
+      return params.install;
+    }
+    try {
+      managedNpmRootRecovery = await quarantineManagedNpmRootForRebuild({ npmRoot });
+    } catch (error) {
+      logger.warn?.(
+        `npm reported managed npm root corruption while ${params.context}, but OpenClaw could not quarantine the managed npm root for rebuild: ${String(error)}`,
+      );
+      return params.install;
+    }
+    logger.warn?.(
+      `npm reported managed npm root corruption while ${params.context}; quarantined ${formatManagedNpmRootRecoveryArtifacts(
+        managedNpmRootRecovery.movedArtifactNames,
+      )} at ${managedNpmRootRecovery.quarantineDir} and retrying once with a rebuilt managed npm root.`,
+    );
+    return await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
+  };
+  const formatManagedNpmInstallError = (params: {
+    prefix: string;
+    install: ManagedNpmInstallResult;
+  }): string => {
+    const recoveryContext = managedNpmRootRecovery
+      ? ` after managed npm root recovery (quarantine: ${managedNpmRootRecovery.quarantineDir})`
+      : "";
+    return `${params.prefix}${recoveryContext}: ${formatNpmCommandFailureOutput(params.install)}`;
+  };
   let install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
   let omitUnsupportedManagedOverrides = false;
   if (install.code !== 0 && isNpmAliasOverrideComparatorError(install)) {
@@ -822,6 +867,10 @@ async function installPluginFromManagedNpmRoot(
     }
     install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
   }
+  install = await retryInstallAfterManagedNpmRootRecovery({
+    install,
+    context: `installing ${params.displaySpec}`,
+  });
   if (install.code !== 0) {
     await rollbackManagedNpmPluginInstall({
       npmRoot,
@@ -833,7 +882,7 @@ async function installPluginFromManagedNpmRoot(
     });
     return {
       ok: false,
-      error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
+      error: formatManagedNpmInstallError({ prefix: "npm install failed", install }),
     };
   }
   let settledManagedPeerDependencies = false;
@@ -850,6 +899,10 @@ async function installPluginFromManagedNpmRoot(
       break;
     }
     install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
+    install = await retryInstallAfterManagedNpmRootRecovery({
+      install,
+      context: `syncing managed peer dependencies for ${params.displaySpec}`,
+    });
     if (install.code !== 0) {
       await rollbackManagedNpmPluginInstall({
         npmRoot,
@@ -861,7 +914,10 @@ async function installPluginFromManagedNpmRoot(
       });
       return {
         ok: false,
-        error: `npm install failed after syncing managed peer dependencies: ${install.stderr.trim() || install.stdout.trim()}`,
+        error: formatManagedNpmInstallError({
+          prefix: "npm install failed after syncing managed peer dependencies",
+          install,
+        }),
       };
     }
   }

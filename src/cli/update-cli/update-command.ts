@@ -1789,9 +1789,10 @@ export async function updatePluginsAfterCoreUpdate(params: {
 
   // Mandatory post-core convergence: repair any configured plugin install
   // records that are still missing payloads on disk and run a static smoke
-  // check that the repaired payloads are at least loadable. Failures here
-  // escalate `status` to `"error"`, which the caller maps to exit 1 BEFORE
-  // restarting the gateway. See `post-core-plugin-convergence.ts`.
+  // check that the repaired payloads are at least loadable. Plugin-scoped
+  // convergence failures are reported as warnings so the updated core can
+  // still restart; invalid config snapshots and unexpected exceptions remain
+  // fatal above this path.
   //
   // We pass `baselineInstallRecords: pluginConfig.plugins?.installs ?? {}`
   // so that convergence layers its mutations on top of the latest
@@ -1820,7 +1821,6 @@ export async function updatePluginsAfterCoreUpdate(params: {
     }
   }
   pluginUpdateOutcomes.push(...convergenceFolded.outcomes);
-  const convergenceErrored = convergenceFolded.errored;
   // Reseed `pluginConfig` from convergence's authoritative post-merge
   // record map. This is unconditional because convergence is what
   // reconciled the baseline (sync/npm in-memory state) with disk and any
@@ -1858,7 +1858,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
 
   if (params.opts.json) {
     return {
-      status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
+      status: warnings.length > 0 ? "warning" : "ok",
       changed: pluginsChanged,
       warnings,
       sync: {
@@ -1928,7 +1928,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   }
 
   return {
-    status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
+    status: warnings.length > 0 ? "warning" : "ok",
     changed: pluginsChanged,
     warnings,
     sync: {

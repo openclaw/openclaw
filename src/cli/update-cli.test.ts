@@ -1008,12 +1008,9 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
-  it("does not restart a stopped managed gateway after post-core plugin errors", async () => {
-    const root = createCaseDir("openclaw-update");
-    const entryPath = path.join(root, "dist", "index.js");
+  it("restarts a stopped managed gateway after post-core plugin convergence warnings", async () => {
+    const { root } = setupUpdatedRootRefresh();
     mockPackageInstallStatus(root);
-    serviceLoaded.mockResolvedValue(true);
-    pathExists.mockImplementation(async (candidate: string) => candidate === entryPath);
     spawn.mockImplementationOnce((_command: unknown, _argv: unknown, options: unknown) => {
       const resultPath = (options as { env?: NodeJS.ProcessEnv }).env
         ?.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
@@ -1024,7 +1021,7 @@ describe("update-cli", () => {
         void fs.writeFile(
           resultPath,
           JSON.stringify({
-            status: "error",
+            status: "warning",
             changed: false,
             warnings: [
               {
@@ -1068,9 +1065,10 @@ describe("update-cli", () => {
     await updateCommand({ yes: true });
 
     expect(serviceStop).toHaveBeenCalled();
+    expect(runRestartScript).toHaveBeenCalledTimes(1);
     expect(serviceRestart).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
   it("does not carry gateway service markers into the post-core update process", async () => {

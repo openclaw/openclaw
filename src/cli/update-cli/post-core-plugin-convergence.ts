@@ -85,8 +85,9 @@ async function repairManagedNpmOpenClawPeerLinks(params: {
 /**
  * Mandatory post-core convergence pass. Runs AFTER the core package files
  * are swapped and the in-update doctor pass has already returned, but BEFORE
- * the gateway is restarted. Failures here must block the restart so we
- * never restart with a configured plugin whose payload is unloadable.
+ * the gateway is restarted. Plugin-scoped failures are returned as warnings
+ * so update can keep the core gateway available; invalid config and unexpected
+ * convergence exceptions fail before callers reach this pass.
  */
 export async function runPostCorePluginConvergence(params: {
   cfg: OpenClawConfig;
@@ -214,7 +215,8 @@ export function filterRecordsToActive(params: {
  *  - `outcomes` to append to `pluginUpdateOutcomes`. Only convergence
  *    warnings that name a `pluginId` produce per-plugin error outcomes; the
  *    rest are surfaced via `warnings`.
- *  - `errored` boolean that callers translate into `status: "error"`.
+ *  - `errored` boolean for callers that still need to distinguish whether any
+ *    convergence warning was emitted.
  */
 export function convergenceWarningsToOutcomes(convergence: PostCoreConvergenceResult): {
   warnings: PostCoreConvergenceWarning[];

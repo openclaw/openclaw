@@ -7,10 +7,12 @@ import type { CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   repairManagedNpmRootOpenClawPeer,
+  quarantineManagedNpmRootForRebuild,
   removeManagedNpmRootDependency,
   readManagedNpmRootInstalledDependency,
   readOpenClawManagedNpmRootOverrides,
   resolveManagedNpmRootDependencySpec,
+  shouldRebuildManagedNpmRootAfterInstallFailure,
   syncManagedNpmRootPeerDependencies,
   upsertManagedNpmRootDependency,
 } from "./npm-managed-root.js";
@@ -99,6 +101,66 @@ function requireCommandOptions(
 }
 
 describe("managed npm root", () => {
+  it("detects npm managed-root corruption signatures that should be rebuilt", () => {
+    expect(
+      shouldRebuildManagedNpmRootAfterInstallFailure({
+        stdout: "",
+        stderr:
+          'npm ERR! code ERR_INVALID_ARG_TYPE\nThe "from" argument must be of type string. Received undefined',
+      }),
+    ).toBe(true);
+    expect(
+      shouldRebuildManagedNpmRootAfterInstallFailure({
+        stdout: "",
+        stderr:
+          "npm error code ENOTEMPTY\nnpm error syscall rmdir\nnpm error ENOTEMPTY: directory not empty, rmdir '/tmp/openclaw/npm/node_modules/@openclaw/discord/node_modules/undici/types'",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRebuildManagedNpmRootAfterInstallFailure({
+        stdout: "",
+        stderr: "npm ERR! code E404\nnpm ERR! 404 Not Found - GET https://registry.npmjs.org/demo",
+      }),
+    ).toBe(false);
+  });
+
+  it("quarantines only npm rebuild artifacts before rebuilding the managed root", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.mkdir(path.join(npmRoot, "node_modules", "@openclaw", "discord"), {
+      recursive: true,
+    });
+    await fs.writeFile(path.join(npmRoot, "node_modules", "@openclaw", "discord", "x"), "old");
+    await fs.writeFile(path.join(npmRoot, "package-lock.json"), "{}\n");
+    await fs.writeFile(path.join(npmRoot, "npm-shrinkwrap.json"), "{}\n");
+    await fs.writeFile(path.join(npmRoot, "package.json"), '{"private":true}\n');
+    await fs.mkdir(path.join(npmRoot, "_openclaw-pack-archives"), { recursive: true });
+    await fs.writeFile(path.join(npmRoot, "_openclaw-pack-archives", "plugin.tgz"), "archive");
+
+    const result = await quarantineManagedNpmRootForRebuild({ npmRoot });
+
+    expect(result.quarantineDir).toContain("_openclaw-quarantined-npm-roots");
+    expect(result.movedArtifactNames).toEqual([
+      "node_modules",
+      "package-lock.json",
+      "npm-shrinkwrap.json",
+    ]);
+    await expectPathMissing(path.join(npmRoot, "node_modules"));
+    await expectPathMissing(path.join(npmRoot, "package-lock.json"));
+    await expectPathMissing(path.join(npmRoot, "npm-shrinkwrap.json"));
+    await expect(fs.readFile(path.join(npmRoot, "package.json"), "utf8")).resolves.toBe(
+      '{"private":true}\n',
+    );
+    await expect(
+      fs.readFile(path.join(npmRoot, "_openclaw-pack-archives", "plugin.tgz"), "utf8"),
+    ).resolves.toBe("archive");
+    await expect(
+      fs.readFile(
+        path.join(result.quarantineDir, "node_modules", "@openclaw", "discord", "x"),
+        "utf8",
+      ),
+    ).resolves.toBe("old");
+  });
+
   it("keeps existing plugin dependencies when adding another managed plugin", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(

@@ -57,6 +57,18 @@ type ManagedNpmRootRunCommand = typeof runCommandWithTimeout;
 
 type ManagedNpmRootOpenClawHostState = "none" | "managed-active-host" | "linked-active-host";
 
+const MANAGED_NPM_ROOT_REBUILD_ARTIFACT_NAMES = [
+  "node_modules",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+] as const;
+const MANAGED_NPM_ROOT_QUARANTINE_DIR = "_openclaw-quarantined-npm-roots";
+
+export type ManagedNpmRootQuarantineResult = {
+  quarantineDir: string;
+  movedArtifactNames: string[];
+};
+
 function readDependencyRecord(value: unknown): Record<string, string> {
   if (!isRecord(value)) {
     return {};
@@ -531,6 +543,49 @@ function isHostPeerResolutionFailure(
 ): boolean {
   const output = `${result.stdout}\n${result.stderr}`;
   return /(^|[^@\w.-])openclaw(?=$|[@\s:,"'])/i.test(output);
+}
+
+export function shouldRebuildManagedNpmRootAfterInstallFailure(result: {
+  stdout: string;
+  stderr: string;
+}): boolean {
+  const output = `${result.stderr}\n${result.stdout}`;
+  const lowerOutput = output.toLowerCase();
+  const invalidFromArgument =
+    output.includes("ERR_INVALID_ARG_TYPE") &&
+    output.includes('"from" argument') &&
+    output.includes("Received undefined");
+  const enotemptyTreeMutation =
+    lowerOutput.includes("enotempty") &&
+    (lowerOutput.includes("directory not empty") ||
+      lowerOutput.includes("syscall rmdir") ||
+      lowerOutput.includes("syscall rename") ||
+      lowerOutput.includes("npm error code enotempty"));
+  return invalidFromArgument || enotemptyTreeMutation;
+}
+
+export async function quarantineManagedNpmRootForRebuild(params: {
+  npmRoot: string;
+}): Promise<ManagedNpmRootQuarantineResult> {
+  await fs.mkdir(params.npmRoot, { recursive: true });
+  const quarantineParent = path.join(params.npmRoot, MANAGED_NPM_ROOT_QUARANTINE_DIR);
+  await fs.mkdir(quarantineParent, { recursive: true });
+  const quarantineDir = await fs.mkdtemp(path.join(quarantineParent, "corrupt-"));
+  const movedArtifactNames: string[] = [];
+  for (const artifactName of MANAGED_NPM_ROOT_REBUILD_ARTIFACT_NAMES) {
+    const source = path.join(params.npmRoot, artifactName);
+    const destination = path.join(quarantineDir, artifactName);
+    try {
+      await fs.rename(source, destination);
+      movedArtifactNames.push(artifactName);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+  }
+  return { quarantineDir, movedArtifactNames };
 }
 
 function createManagedNpmPeerPlanArgs(params?: {
