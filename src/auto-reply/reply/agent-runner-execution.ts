@@ -676,6 +676,10 @@ const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
   /\bcodex app-server client closed before turn completed\b/iu;
 const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
   /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
+const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_REPLY_RE =
+  /\bCodex stopped before confirming the turn was complete\./iu;
+const CODEX_APP_SERVER_CHANNEL_SAFE_TIMEOUT_TEXT =
+  "⚠️ Codex did not finish the turn cleanly. Some work may already have been performed; verify the current state before retrying.";
 
 function buildCodexAppServerFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
@@ -792,6 +796,31 @@ function buildExternalRunFailureReply(
 
 function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T {
   return markReplyPayloadForSourceSuppressionDelivery(payload);
+}
+
+function buildCodexPromptTimeoutReplyPayloadForConversation(params: {
+  payloads: readonly ReplyPayload[] | undefined;
+  sessionCtx: TemplateContext;
+  cfg?: OpenClawConfig;
+}): ReplyPayload | undefined {
+  const hasCodexPromptTimeoutPayload = params.payloads?.some(
+    (payload) =>
+      payload.isError === true &&
+      hasNonEmptyString(payload.text) &&
+      CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_REPLY_RE.test(payload.text),
+  );
+  if (!hasCodexPromptTimeoutPayload) {
+    return undefined;
+  }
+  return markAgentRunFailureReplyPayload({
+    text: resolveExternalRunFailureTextForConversation({
+      text: CODEX_APP_SERVER_CHANNEL_SAFE_TIMEOUT_TEXT,
+      sessionCtx: params.sessionCtx,
+      isGenericRunnerFailure: true,
+      cfg: params.cfg,
+    }),
+    isError: true,
+  });
 }
 
 export function buildKnownAgentRunFailureReplyPayload(params: {
@@ -2860,6 +2889,14 @@ export async function runAgentTurnWithFallback(params: {
       (p) => !p.isError && !p.isReasoning && hasOutboundReplyContent(p, { trimText: true }),
     );
     if (!hasNonErrorContent) {
+      const codexPromptTimeoutPayload = buildCodexPromptTimeoutReplyPayloadForConversation({
+        payloads: runResult.payloads,
+        sessionCtx: params.sessionCtx,
+        cfg: params.followupRun.run.config,
+      });
+      if (codexPromptTimeoutPayload) {
+        runResult.payloads = [codexPromptTimeoutPayload];
+      }
       const metaErrorMsg = finalEmbeddedError?.message ?? "";
       const rawErrorPayloadText =
         runResult.payloads?.find(
@@ -2869,7 +2906,7 @@ export async function runAgentTurnWithFallback(params: {
       const formattedErrorCandidate = errorCandidate
         ? formatRateLimitOrOverloadedErrorCopy(errorCandidate)
         : undefined;
-      if (formattedErrorCandidate) {
+      if (!codexPromptTimeoutPayload && formattedErrorCandidate) {
         runResult.payloads = [
           markAgentRunFailureReplyPayload({
             text: resolveExternalRunFailureTextForConversation({

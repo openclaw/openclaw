@@ -4780,6 +4780,86 @@ describe("runAgentTurnWithFallback", () => {
   );
 
   it.each(["group", "channel"] as const)(
+    "keeps Codex prompt-timeout payloads out of Discord %s chats",
+    async (chatType) => {
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [
+          {
+            text: "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+            isError: true,
+          },
+        ],
+        meta: { livenessState: "abandoned", replayInvalid: true },
+      });
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: {
+            Provider: "discord",
+            Surface: "discord",
+            ChatType: chatType,
+            GroupSubject: "agent group",
+            GroupChannel: "#general",
+            MessageSid: "msg",
+          } as unknown as TemplateContext,
+        }),
+      );
+
+      expect(result.kind).toBe("success");
+      if (result.kind === "success") {
+        expect(result.runResult.payloads).toEqual([{ text: SILENT_REPLY_TOKEN, isError: true }]);
+      }
+    },
+  );
+
+  it("uses channel-safe Codex prompt-timeout copy when Discord group failures are explicitly surfaced", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [
+        {
+          text: "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+          isError: true,
+        },
+      ],
+      meta: { livenessState: "abandoned", replayInvalid: true },
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          silentReply: { group: "disallow" },
+        },
+      },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "group",
+          GroupSubject: "agent group",
+          GroupChannel: "#general",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads?.[0]?.text).toContain(
+        "Codex did not finish the turn cleanly",
+      );
+      expect(result.runResult.payloads?.[0]?.text).not.toContain(
+        "Codex stopped before confirming the turn was complete",
+      );
+    }
+  });
+
+  it.each(["group", "channel"] as const)(
     "surfaces raw runner failure copy in Discord %s chats when silentReply.group is set to disallow",
     async (chatType) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(
