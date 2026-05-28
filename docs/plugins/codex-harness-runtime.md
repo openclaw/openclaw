@@ -99,17 +99,15 @@ OpenClaw can mirror selected events, but it cannot rewrite the native Codex
 thread unless Codex exposes that operation through app-server or native hook
 callbacks.
 
-Codex app-server report-mode `PreToolUse` events are fail-closed for plugin
-approval requests. If an OpenClaw `before_tool_call` hook returns
-`requireApproval` while the native payload sets report approval mode
-(`openclaw_approval_mode` is `"report"`), OpenClaw does not open an
-interactive plugin approval prompt. The relay reports the requirement back to
-Codex as a denied `PreToolUse` response using the approval title or
-description as the deny reason. Plugins that need a
-human decision on this path should return `block` with explicit retry or
-out-of-band approval instructions. Codex `PermissionRequest` events are a
-separate approval path and can still route through OpenClaw approvals when the
-runtime is configured for that bridge.
+Codex app-server report-mode `PreToolUse` events defer plugin approval requests
+to the matching app-server approval. If an OpenClaw `before_tool_call` hook
+returns `requireApproval` while the native payload sets report approval mode
+(`openclaw_approval_mode` is `"report"`), the native hook relay records the
+plugin approval requirement and returns no native decision. When Codex sends the
+app-server approval request for the same tool use, OpenClaw opens the plugin
+approval prompt and maps the decision back to Codex. Codex `PermissionRequest`
+events are a separate approval path and can still route through OpenClaw
+approvals when the runtime is configured for that bridge.
 
 Codex app-server item notifications also provide async `after_tool_call`
 observations for native tool completions that are not already covered by the

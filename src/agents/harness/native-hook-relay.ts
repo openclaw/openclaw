@@ -23,7 +23,13 @@ import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
-import { hasBeforeToolCallPolicy, runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
+import {
+  cancelDeferredPluginToolApproval,
+  hasBeforeToolCallPolicy,
+  requestDeferredPluginToolApproval,
+  runBeforeToolCallHook,
+  type DeferredPluginToolApproval,
+} from "../agent-tools.before-tool-call.js";
 import { stableStringify } from "../stable-stringify.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeToolName } from "../tool-policy.js";
@@ -212,6 +218,7 @@ type NativeHookRelaySharedState = {
   relayBridges: Map<string, NativeHookRelayBridgeRegistration>;
   invocations: NativeHookRelayInvocation[];
   pendingPermissionApprovals: Map<string, Promise<NativeHookRelayPermissionApprovalResult>>;
+  pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;
   permissionApprovalWindows: Map<string, number[]>;
   permissionAllowAlwaysApprovals: Map<string, { expiresAtMs: number }>;
 };
@@ -235,6 +242,7 @@ function getNativeHookRelaySharedState(): NativeHookRelaySharedState {
     relayBridges: new Map<string, NativeHookRelayBridgeRegistration>(),
     invocations: [],
     pendingPermissionApprovals: new Map<string, Promise<NativeHookRelayPermissionApprovalResult>>(),
+    pendingPreToolUseApprovals: new Map<string, NativeHookRelayPreToolUseApproval>(),
     permissionApprovalWindows: new Map<string, number[]>(),
     permissionAllowAlwaysApprovals: new Map<string, { expiresAtMs: number }>(),
   };
@@ -246,6 +254,7 @@ const relays = nativeHookRelayState.relays;
 const relayBridges = nativeHookRelayState.relayBridges;
 const invocations = nativeHookRelayState.invocations;
 const pendingPermissionApprovals = nativeHookRelayState.pendingPermissionApprovals;
+const pendingPreToolUseApprovals = nativeHookRelayState.pendingPreToolUseApprovals;
 const permissionApprovalWindows = nativeHookRelayState.permissionApprovalWindows;
 const permissionAllowAlwaysApprovals = nativeHookRelayState.permissionAllowAlwaysApprovals;
 
@@ -266,6 +275,25 @@ type NativeHookRelayPermissionApprovalRequest = {
 type NativeHookRelayPermissionApprovalRequester = (
   request: NativeHookRelayPermissionApprovalRequest,
 ) => Promise<NativeHookRelayPermissionApprovalResult>;
+
+type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
+
+type NativeHookRelayPreToolUseApproval = {
+  deferredApproval: DeferredPluginToolApproval;
+  originalParamsFingerprint: string;
+  resolutionPromise?: Promise<NativeHookRelayDeferredApprovalOutcome>;
+};
+
+export type NativeHookRelayDeferredApprovalOutcome =
+  | {
+      handled: true;
+      outcome: "approved-once";
+    }
+  | {
+      handled: true;
+      outcome: "denied";
+      reason: string;
+    };
 
 type NativeHookRelayBridgeRegistration = {
   relayId: string;
@@ -294,6 +322,8 @@ type NativeHookRelayBridgeRequestAuth = {
 
 let nativeHookRelayPermissionApprovalRequester: NativeHookRelayPermissionApprovalRequester =
   requestNativeHookRelayPermissionApproval;
+let nativeHookRelayDeferredToolApprovalRequester: NativeHookRelayDeferredToolApprovalRequester =
+  requestDeferredPluginToolApproval;
 
 const NATIVE_HOOK_TOOL_NAME_ALIASES: Record<string, string> = {
   exec_command: "exec",
@@ -429,6 +459,7 @@ function unregisterNativeHookRelay(
   unregisterNativeHookRelayBridge(relayId);
   relays.delete(relayId);
   removeNativeHookRelayInvocations(relayId);
+  removeNativeHookRelayPreToolUseApprovals(relayId);
   removeNativeHookRelayPermissionState(relayId);
 }
 
@@ -596,6 +627,60 @@ export function hasNativeHookRelayInvocation(params: {
   );
 }
 
+export async function resolveNativeHookRelayDeferredToolApproval(params: {
+  relayId: string;
+  toolUseId?: string;
+  signal?: AbortSignal;
+}): Promise<NativeHookRelayDeferredApprovalOutcome | undefined> {
+  const pendingApprovalKey = nativeHookRelayPreToolUseApprovalKey({
+    relayId: params.relayId,
+    toolUseId: params.toolUseId,
+  });
+  if (!pendingApprovalKey) {
+    return undefined;
+  }
+  const pendingApproval = pendingPreToolUseApprovals.get(pendingApprovalKey);
+  if (!pendingApproval) {
+    return undefined;
+  }
+  pendingApproval.resolutionPromise ??= resolveNativeHookRelayPreToolUseApproval(
+    pendingApproval,
+    params.signal,
+  ).finally(() => {
+    if (pendingPreToolUseApprovals.get(pendingApprovalKey) === pendingApproval) {
+      pendingPreToolUseApprovals.delete(pendingApprovalKey);
+    }
+  });
+  return pendingApproval.resolutionPromise;
+}
+
+async function resolveNativeHookRelayPreToolUseApproval(
+  pendingApproval: NativeHookRelayPreToolUseApproval,
+  signal?: AbortSignal,
+): Promise<NativeHookRelayDeferredApprovalOutcome> {
+  const outcome = await nativeHookRelayDeferredToolApprovalRequester({
+    deferredApproval: pendingApproval.deferredApproval,
+    signal,
+  });
+  if (outcome.blocked) {
+    return { handled: true, outcome: "denied", reason: outcome.reason };
+  }
+  if (
+    nativeHookRelayParamsWereRewritten(pendingApproval.originalParamsFingerprint, outcome.params)
+  ) {
+    return {
+      handled: true,
+      outcome: "denied",
+      reason:
+        "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+    };
+  }
+  return {
+    handled: true,
+    outcome: "approved-once",
+  };
+}
+
 export async function invokeNativeHookRelayBridge(
   params: InvokeNativeHookRelayBridgeParams,
 ): Promise<NativeHookRelayProcessResponse> {
@@ -698,6 +783,55 @@ function canAcceptNativeHookRelayGenerationMismatch(
   }
   registration.generationMismatchGraceAcceptedGeneration = generation;
   return true;
+}
+
+function nativeHookRelayPreToolUseApprovalKey(params: {
+  relayId: string;
+  toolUseId?: string;
+}): string | undefined {
+  const toolUseId = params.toolUseId?.trim();
+  return toolUseId ? `${params.relayId}:${toolUseId}` : undefined;
+}
+
+function setNativeHookRelayPreToolUseApproval(params: {
+  relayId: string;
+  toolUseId?: string;
+  deferredApproval: DeferredPluginToolApproval;
+  originalParamsFingerprint: string;
+}): boolean {
+  const key = nativeHookRelayPreToolUseApprovalKey(params);
+  if (!key) {
+    return false;
+  }
+  const previousApproval = pendingPreToolUseApprovals.get(key);
+  if (previousApproval) {
+    cancelDeferredPluginToolApproval(previousApproval.deferredApproval);
+  }
+  pendingPreToolUseApprovals.set(key, {
+    deferredApproval: params.deferredApproval,
+    originalParamsFingerprint: params.originalParamsFingerprint,
+  });
+  if (pendingPreToolUseApprovals.size > MAX_NATIVE_HOOK_RELAY_INVOCATIONS) {
+    const oldestKey = pendingPreToolUseApprovals.keys().next().value;
+    if (oldestKey) {
+      const oldestApproval = pendingPreToolUseApprovals.get(oldestKey);
+      if (oldestApproval) {
+        cancelDeferredPluginToolApproval(oldestApproval.deferredApproval);
+      }
+      pendingPreToolUseApprovals.delete(oldestKey);
+    }
+  }
+  return true;
+}
+
+function removeNativeHookRelayPreToolUseApprovals(relayId: string): void {
+  const prefix = `${relayId}:`;
+  for (const [key, pendingApproval] of pendingPreToolUseApprovals) {
+    if (key.startsWith(prefix)) {
+      cancelDeferredPluginToolApproval(pendingApproval.deferredApproval);
+      pendingPreToolUseApprovals.delete(key);
+    }
+  }
 }
 
 function pruneExpiredNativeHookRelays(now = Date.now()): void {
@@ -1160,13 +1294,12 @@ async function runNativeHookRelayPreToolUse(params: {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
   const originalToolInputFingerprint = stableStringify(toolInput);
+  const approvalMode = readNativeHookRelayApprovalMode(params.invocation.rawPayload);
   const outcome = await runBeforeToolCallHook({
     toolName,
     params: toolInput,
     ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
-    ...(readNativeHookRelayApprovalMode(params.invocation.rawPayload) === "report"
-      ? { approvalMode: "report" }
-      : {}),
+    ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
     signal: params.registration.signal,
     ctx: {
       ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
@@ -1180,6 +1313,22 @@ async function runNativeHookRelayPreToolUse(params: {
   });
   if (outcome.blocked) {
     return params.adapter.renderPreToolUseBlockResponse(outcome.reason);
+  }
+  if (outcome.deferredApproval) {
+    if (
+      !setNativeHookRelayPreToolUseApproval({
+        relayId: params.registration.relayId,
+        toolUseId: params.invocation.toolUseId,
+        deferredApproval: outcome.deferredApproval,
+        originalParamsFingerprint: originalToolInputFingerprint,
+      })
+    ) {
+      cancelDeferredPluginToolApproval(outcome.deferredApproval);
+      return params.adapter.renderPreToolUseBlockResponse(
+        "Plugin approval required but Codex tool id unavailable.",
+      );
+    }
+    return params.adapter.renderNoopResponse(params.invocation.event);
   }
   if (nativeHookRelayParamsWereRewritten(originalToolInputFingerprint, outcome.params)) {
     // Codex app-server may continue with the original params when updatedInput
@@ -2061,9 +2210,14 @@ export const testing = {
     relays.clear();
     invocations.length = 0;
     pendingPermissionApprovals.clear();
+    for (const pendingApproval of pendingPreToolUseApprovals.values()) {
+      cancelDeferredPluginToolApproval(pendingApproval.deferredApproval);
+    }
+    pendingPreToolUseApprovals.clear();
     permissionApprovalWindows.clear();
     permissionAllowAlwaysApprovals.clear();
     nativeHookRelayPermissionApprovalRequester = requestNativeHookRelayPermissionApproval;
+    nativeHookRelayDeferredToolApprovalRequester = requestDeferredPluginToolApproval;
   },
   getNativeHookRelayInvocationsForTests(): NativeHookRelayInvocation[] {
     return [...invocations];
@@ -2098,6 +2252,11 @@ export const testing = {
     requester: NativeHookRelayPermissionApprovalRequester,
   ): void {
     nativeHookRelayPermissionApprovalRequester = requester;
+  },
+  setNativeHookRelayDeferredToolApprovalRequesterForTests(
+    requester: NativeHookRelayDeferredToolApprovalRequester,
+  ): void {
+    nativeHookRelayDeferredToolApprovalRequester = requester;
   },
 } as const;
 export { testing as __testing };
