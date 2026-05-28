@@ -156,6 +156,57 @@ gitlab_merge_request: {
 GitLab setup: Project Settings -> Webhooks, set the URL, Secret token, and
 enable Merge request events.
 
+### Meego or Meegle requirements
+
+Use Meego or Meegle work item events when a new requirement should trigger
+triage, risk analysis, owner suggestions, or a follow-up TaskFlow.
+
+Meego provider setup is environment-specific. First configure the Meego project
+webhook or event subscription UI to send the real work-item-created event to the
+OpenClaw route. Then capture one real delivery in `ack` or `deliver: "log"` mode
+and copy the actual event header, payload event path, and delivery id path into
+the route. Do not guess these fields from examples.
+
+```json5
+meego_requirement_created: {
+  path: "/plugins/webhooks/meego-requirement-created",
+  sessionKey: "agent:main:main",
+  auth: {
+    mode: "header",
+    header: "x-meego-webhook-token",
+    secret: { source: "env", provider: "default", id: "MEEGO_WEBHOOK_TOKEN" },
+  },
+  dispatch: { mode: "agent", agent: { deliveryMode: "none", delayMs: 1 } },
+  event: {
+    // Replace this with the real header or payload path from the first delivery.
+    payloadPath: "event.type",
+  },
+  events: ["requirement.created"],
+  idempotency: {
+    // Replace this with the real delivery id header or payload path.
+    payloadPath: "event.id",
+    ttlHours: 24,
+  },
+  prompt: "Analyze the new Meego requirement. Identify missing fields, risks, suggested owners, and next steps.\n\nPayload:\n{__raw__}",
+  skills: ["requirement-triage"],
+}
+```
+
+Operational notes:
+
+- OpenClaw should receive Meego events as normal HTTP `POST` requests to the
+  route. Do not build a Meego-to-OpenClaw WebSocket relay; OpenClaw's Gateway
+  WebSocket is only the CLI/RPC control plane.
+- The `@lark-project/meegle` CLI can create/query work items and add comments
+  after authentication. It does not currently expose webhook, event,
+  subscription, or callback management commands, so the real provider webhook
+  must be configured from the Meego project/admin surface or another official
+  project API.
+- For end-to-end validation, create a real test requirement, record the provider
+  delivery id, verify OpenClaw returns `202`, confirm the agent run id, and
+  write back a Meego comment or send a channel notification. A CLI-created work
+  item without a provider webhook delivery is not sufficient proof.
+
 ### Jira issues
 
 Use Jira webhooks to triage issue changes and create follow-up TaskFlows.
