@@ -1001,6 +1001,40 @@ describe("gateway agent handler", () => {
     expectStringFieldContains(error, "message", "does not accept image inputs");
   });
 
+  it("does not bypass image support check for ACP-shaped sessions without ACP metadata", async () => {
+    mockMainSessionEntry({ sessionId: "existing-acp-shaped-session" });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "describe this image",
+        agentId: "main",
+        sessionKey: "agent:main:acp:missing-meta",
+        acpTurnSource: "manual_spawn",
+        idempotencyKey: "test-acp-image-metadata-bypass-guard",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "test.png",
+            content: Buffer.from("fake-png-data").toString("base64"),
+          },
+        ],
+      },
+      { respond, reqId: "test-acp-image-metadata-bypass-guard" },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    const error = expectRespondError(respond, {});
+    expectStringFieldContains(error, "message", "does not accept image inputs");
+  });
+
   it("rejects provider and model overrides for write-scoped callers", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();

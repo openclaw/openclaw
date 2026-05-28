@@ -1092,10 +1092,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (normalizedAttachments.length > 0) {
         let baseProvider: string | undefined;
         let baseModel: string | undefined;
+        let requestedSessionEntry: SessionEntry | undefined;
         if (requestedSessionKeyRaw) {
           const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw, {
             clone: false,
           });
+          requestedSessionEntry = sessEntry;
           const sessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
           const modelRef = resolveSessionModelRef(sessCfg, sessEntry, sessionAgentId);
           baseProvider = modelRef.provider;
@@ -1103,14 +1105,17 @@ export const agentHandlers: GatewayRequestHandlers = {
         }
         const effectiveProvider = providerOverride || baseProvider;
         const effectiveModel = modelOverride || baseModel;
-        const supportsInlineImages =
-          request.acpTurnSource === "manual_spawn" && isAcpSessionKey(requestedSessionKeyRaw)
-            ? true
-            : await resolveGatewayModelSupportsImages({
-                loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-                provider: effectiveProvider,
-                model: effectiveModel,
-              });
+        const isConfirmedAcpSession =
+          request.acpTurnSource === "manual_spawn" &&
+          isAcpSessionKey(requestedSessionKeyRaw) &&
+          requestedSessionEntry?.acp != null;
+        const supportsInlineImages = isConfirmedAcpSession
+          ? true
+          : await resolveGatewayModelSupportsImages({
+              loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+              provider: effectiveProvider,
+              model: effectiveModel,
+            });
 
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
