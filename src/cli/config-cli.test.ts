@@ -2845,6 +2845,42 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
+
+    it("rejects double-dot empty segments for config set instead of writing a different key", async () => {
+      await expect(runConfigCommand(["config", "set", "gateway..port", "23456"])).rejects.toThrow(
+        "Invalid path (empty segment): gateway..port",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects leading-dot empty segments for config get", async () => {
+      await expect(runConfigCommand(["config", "get", ".gateway.port"])).rejects.toThrow(
+        "Invalid path (empty segment): .gateway.port",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects trailing-dot empty segments for config unset", async () => {
+      await expect(runConfigCommand(["config", "unset", "gateway.port."])).rejects.toThrow(
+        "Invalid path (empty segment): gateway.port.",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects whitespace-only segments for config set", async () => {
+      await expect(runConfigCommand(["config", "set", "gateway. .port", "23456"])).rejects.toThrow(
+        "Invalid path (empty segment): gateway. .port",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
   });
 
   describe("config unset - issue #6070", () => {

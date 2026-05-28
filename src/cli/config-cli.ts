@@ -354,6 +354,10 @@ function parsePath(raw: string): PathSegment[] {
   }
   const parts: string[] = [];
   let current = "";
+  // Tracks whether a bracket segment was emitted since the last "." boundary, so
+  // "foo[0].bar" is accepted while empty key segments (leading/trailing/double dots,
+  // whitespace-only segments) are rejected instead of silently collapsed.
+  let segmentEmitted = false;
   let i = 0;
   while (i < trimmed.length) {
     const ch = trimmed[i];
@@ -366,10 +370,14 @@ function parsePath(raw: string): PathSegment[] {
       continue;
     }
     if (ch === ".") {
+      if (!segmentEmitted && !current.trim()) {
+        throw new Error(`Invalid path (empty segment): ${raw}`);
+      }
       if (current) {
         parts.push(current);
       }
       current = "";
+      segmentEmitted = false;
       i += 1;
       continue;
     }
@@ -387,11 +395,15 @@ function parsePath(raw: string): PathSegment[] {
         throw new Error(`Invalid path (empty "[]"): ${raw}`);
       }
       parts.push(parseBracketPathSegment(inside, raw));
+      segmentEmitted = true;
       i = close + 1;
       continue;
     }
     current += ch;
     i += 1;
+  }
+  if (!segmentEmitted && !current.trim()) {
+    throw new Error(`Invalid path (empty segment): ${raw}`);
   }
   if (current) {
     parts.push(current);
