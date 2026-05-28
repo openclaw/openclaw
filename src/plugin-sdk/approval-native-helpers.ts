@@ -146,7 +146,7 @@ type NativeApprovalChannelRouteGateParams<TTarget extends NativeApprovalTarget> 
   targetsMatch?: (left: TTarget, right: TTarget) => boolean;
 };
 
-type NativeApprovalChannelRouteGates<TTarget extends NativeApprovalTarget> = {
+type NativeApprovalChannelRouteGates = {
   canApprovalPotentiallyRouteToChannel: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -500,7 +500,7 @@ function normalizeApprovalForwardingModeWithDefault(params: {
 
 export function createNativeApprovalChannelRouteGates<TTarget extends NativeApprovalTarget>(
   params: NativeApprovalChannelRouteGateParams<TTarget>,
-): NativeApprovalChannelRouteGates<TTarget> {
+): NativeApprovalChannelRouteGates {
   const targetsMatch =
     params.targetsMatch ??
     ((left: TTarget, right: TTarget) =>
