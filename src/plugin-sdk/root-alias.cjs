@@ -2,6 +2,7 @@
 
 const path = require("node:path");
 const fs = require("node:fs");
+const os = require("node:os");
 
 let monolithicSdk = null;
 let diagnosticEventsModule = null;
@@ -325,6 +326,41 @@ function buildPluginSdkAliasMap(useDist) {
   return aliasMap;
 }
 
+function sanitizeJitiCachePathSegment(value) {
+  const normalized = String(value)
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized.length > 0 ? normalized : "unknown";
+}
+
+function resolvePluginSdkJitiFsCacheDir() {
+  const packageRoot = getPackageRoot();
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  let version = "unknown";
+  let installMarker = "no-package-json";
+  try {
+    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+    if (typeof parsed.version === "string" && parsed.version.trim().length > 0) {
+      version = parsed.version;
+    }
+  } catch {
+    // Keep the root alias load path best-effort when package metadata is unavailable.
+  }
+  try {
+    const stat = fs.statSync(packageJsonPath);
+    installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
+  } catch {
+    // Package installs should have package.json, but source/test graphs may stub it.
+  }
+  return path.join(
+    os.tmpdir(),
+    "jiti",
+    "openclaw",
+    sanitizeJitiCachePathSegment(version),
+    sanitizeJitiCachePathSegment(installMarker),
+  );
+}
+
 function getModuleLoader(tryNative) {
   if (moduleLoaders.has(tryNative)) {
     return moduleLoaders.get(tryNative);
@@ -334,6 +370,7 @@ function getModuleLoader(tryNative) {
   const moduleLoader = createJiti(__filename, {
     alias: buildPluginSdkAliasMap(tryNative),
     interopDefault: true,
+    fsCache: resolvePluginSdkJitiFsCacheDir(),
     // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
     // so local plugins do not create a second transpiled OpenClaw core graph.
     tryNative,

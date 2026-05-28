@@ -71,6 +71,7 @@ function loadRootAliasWithStubs(options?: {
   platform?: string;
   existingPaths?: string[];
   privateLocalOnlySubpaths?: unknown;
+  packageVersion?: string;
 }) {
   let createJitiCalls = 0;
   let jitiLoadCalls = 0;
@@ -113,12 +114,14 @@ function loadRootAliasWithStubs(options?: {
             return JSON.stringify(options?.privateLocalOnlySubpaths ?? []);
           }
           return JSON.stringify({
+            version: options?.packageVersion ?? "0.0.0-test",
             exports: {
               "./plugin-sdk/group-access": { default: "./dist/plugin-sdk/group-access.js" },
               ...options?.packageExports,
             },
           });
         },
+        statSync: () => ({ mtimeMs: 12_345, size: 678 }),
         existsSync: (targetPath: string) => {
           if (targetPath.endsWith(path.join("dist", "infra", "diagnostic-events.js"))) {
             return options?.distExists ?? false;
@@ -134,6 +137,11 @@ function loadRootAliasWithStubs(options?: {
             isFile: () => true,
             isDirectory: () => false,
           })),
+      };
+    }
+    if (id === "node:os") {
+      return {
+        tmpdir: () => "/tmp/openclaw-root-alias-test",
       };
     }
     if (id === "jiti") {
@@ -336,6 +344,7 @@ describe("plugin-sdk root alias", () => {
       monolithicExports: {
         slowHelper: (): string => "loaded",
       },
+      packageVersion: "3.4.5",
     });
     const lazyRootSdk = lazyModule.moduleExports;
 
@@ -344,6 +353,9 @@ describe("plugin-sdk root alias", () => {
     expect(lazyModule.createJitiCalls).toBe(1);
     expect(lazyModule.jitiLoadCalls).toBe(1);
     expect(lazyModule.createJitiOptions.at(-1)?.tryNative).toBe(false);
+    expect(lazyModule.createJitiOptions.at(-1)?.fsCache).toBe(
+      path.join("/tmp/openclaw-root-alias-test", "jiti", "openclaw", "3.4.5", "12345-678"),
+    );
     expect((lazyRootSdk.slowHelper as () => string)()).toBe("loaded");
     expect(Object.keys(lazyRootSdk)).toContain("slowHelper");
     expectEnumerableConfigurableDescriptor(lazyRootSdk, "slowHelper");

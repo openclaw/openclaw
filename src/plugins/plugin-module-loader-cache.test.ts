@@ -1,3 +1,4 @@
+import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginModuleLoaderFactory } from "./plugin-module-loader-cache.js";
@@ -269,6 +270,8 @@ describe("getCachedPluginModuleLoader", () => {
     const options = expectJitiOptions(createJiti, 0, "file:///repo/src/plugins/loader.ts", {
       tryNative: false,
     });
+    expect(options.fsCache).toEqual(expect.any(String));
+    expect(String(options.fsCache)).toContain(`${path.sep}jiti${path.sep}openclaw${path.sep}`);
     expect(options.alias).toEqual({
       alpha: "/repo/alpha.js",
       zeta: "/repo/zeta.js",

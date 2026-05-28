@@ -16,6 +16,7 @@ import {
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
   normalizeJitiAliasTargetPath,
+  resolvePluginLoaderJitiFsCacheDir,
   resolvePluginLoaderModuleConfig,
   resolvePluginLoaderTryNative,
   resolveExtensionApiAlias,
@@ -47,6 +48,27 @@ function makeTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
   mkdirSafeDir(dir);
   return dir;
+}
+
+function createTrustedOpenClawPackageFixture(version: string) {
+  const root = makeTempDir();
+  fs.writeFileSync(path.join(root, "openclaw.mjs"), "export {};\n", "utf-8");
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify(
+      {
+        name: "openclaw",
+        version,
+        bin: { openclaw: "openclaw.mjs" },
+        exports: { "./plugin-sdk": { default: "./dist/plugin-sdk/index.js" } },
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  mkdirSafeDir(path.join(root, "dist", "plugins"));
+  return root;
 }
 
 function withCwd<T>(cwd: string, run: () => T): T {
@@ -2091,6 +2113,34 @@ describe("buildPluginLoaderAliasMap memoization", () => {
 });
 
 describe("buildPluginLoaderJitiOptions", () => {
+  it("scopes jiti fs cache by OpenClaw package version and install metadata", () => {
+    const root = createTrustedOpenClawPackageFixture("1.2.3-beta.4");
+    const tmpDir = path.join(root, "tmp");
+
+    const fsCache = withEnv({ TMPDIR: tmpDir }, () =>
+      resolvePluginLoaderJitiFsCacheDir({
+        modulePath: path.join(root, "dist", "plugins", "loader.js"),
+      }),
+    );
+
+    expect(fsCache).toContain(path.join(tmpDir, "jiti", "openclaw", "1.2.3-beta.4") + path.sep);
+    expect(path.basename(fsCache)).toMatch(/^\d+-\d+$/u);
+  });
+
+  it("adds the versioned fs cache directory to plugin loader jiti options", () => {
+    const root = createTrustedOpenClawPackageFixture("2.0.0");
+    const tmpDir = path.join(root, "tmp");
+
+    const options = withEnv({ TMPDIR: tmpDir }, () =>
+      buildPluginLoaderJitiOptions(
+        { "openclaw/plugin-sdk": path.join(root, "dist", "plugin-sdk", "root-alias.cjs") },
+        { modulePath: path.join(root, "dist", "plugins", "loader.js") },
+      ),
+    );
+
+    expect(options.fsCache).toContain(path.join(tmpDir, "jiti", "openclaw", "2.0.0"));
+  });
+
   it("pre-normalizes and marks alias maps for source transforms", () => {
     const marker = Symbol.for("pathe:normalizedAlias");
     const aliasMap = {
