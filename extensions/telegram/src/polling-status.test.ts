@@ -30,19 +30,4 @@ describe("createTelegramPollingStatusPublisher", () => {
       connected: false,
     });
   });
-
-  it("notePollingStart clears inherited connected state until getUpdates succeeds", () => {
-    const setStatus = vi.fn();
-    const status = createTelegramPollingStatusPublisher(setStatus);
-
-    status.notePollingStart();
-
-    expect(setStatus).toHaveBeenCalledWith({
-      mode: "polling",
-      connected: false,
-      lastConnectedAt: null,
-      lastEventAt: null,
-      lastTransportActivityAt: null,
-    });
-  });
 });

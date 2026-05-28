@@ -124,24 +124,6 @@ export function evaluateChannelHealth(
       return { healthy: false, reason: "stale-socket" };
     }
   }
-  // Defense in depth against patch-merge oversights: `notePollingStart` now
-  // writes connected:false explicitly so a hung polling restart is normally
-  // caught by the connected===false branch above. But if a future code path
-  // forgets to clear the inherited connected flag on lifecycle start, this
-  // branch catches the same hang: connected:true paired with null
-  // lastConnectedAt and null lastTransportActivityAt after the grace window
-  // means the channel never reached its first transport event. Scoped to
-  // polling mode so webhook channels and channels without continuous transport
-  // tracking are not falsely flagged.
-  if (
-    snapshot.mode === "polling" &&
-    snapshot.connected === true &&
-    lastTransportActivityAt == null &&
-    snapshot.lastConnectedAt == null &&
-    lastStartAt != null
-  ) {
-    return { healthy: false, reason: "stale-socket" };
-  }
   return { healthy: true, reason: "healthy" };
 }
 

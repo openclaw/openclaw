@@ -9,8 +9,6 @@ type TelegramPollingStatusSink = (patch: Omit<ChannelAccountSnapshot, "accountId
 export function createTelegramPollingStatusPublisher(setStatus?: TelegramPollingStatusSink) {
   return {
     notePollingStart() {
-      // Runtime snapshots are patch-merged, so a fresh polling lifecycle must
-      // explicitly clear a previous connected:true until getUpdates succeeds.
       setStatus?.({
         mode: "polling",
         connected: false,
