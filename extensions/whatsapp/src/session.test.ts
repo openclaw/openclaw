@@ -40,6 +40,7 @@ const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
 let createWaSocket: typeof import("./session.js").createWaSocket;
 let formatError: typeof import("./session.js").formatError;
 let logWebSelfId: typeof import("./session.js").logWebSelfId;
+let renderQrTerminalMock: ReturnType<typeof vi.fn>;
 let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 let waitForCredsSaveQueue: typeof import("./session.js").waitForCredsSaveQueue;
 let writeCredsJsonAtomically: typeof import("./session.js").writeCredsJsonAtomically;
@@ -224,6 +225,7 @@ describe("web session", () => {
       waitForCredsSaveQueue,
       writeCredsJsonAtomically,
     } = await import("./session.js"));
+    renderQrTerminalMock = vi.mocked((await import("./qr-terminal.js")).renderQrTerminal);
     ({ DEFAULT_WHATSAPP_SOCKET_TIMING } = await import("./socket-timing.js"));
   });
 
@@ -269,6 +271,27 @@ describe("web session", () => {
     expect(write.options.mode).toBe(0o600);
     expect(write.options.flag).toBe("wx");
     openMock.restore();
+  });
+
+  it("prints compact terminal QR output when requested", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-terminal-qr");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    try {
+      await createWaSocket(true, false, { authDir });
+      getLastSocket().ev.emit("connection.update", { qr: "qr-data" });
+      await flushCredsUpdate();
+
+      expect(logSpy).toHaveBeenCalledWith(
+        "Open the WhatsApp app, go to Linked Devices, then scan this QR:",
+      );
+      expect(renderQrTerminalMock).toHaveBeenCalledWith("qr-data", { small: true });
+      expect(stdoutSpy).toHaveBeenCalledWith("ASCII-QR\n");
+    } finally {
+      logSpy.mockRestore();
+      stdoutSpy.mockRestore();
+    }
   });
 
   it.runIf(process.platform !== "win32")(

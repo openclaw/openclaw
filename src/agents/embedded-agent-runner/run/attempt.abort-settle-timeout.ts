@@ -1,12 +1,6 @@
 import { parseStrictPositiveInteger } from "../../../infra/parse-finite-number.js";
 
-type EmbeddedAbortSettleTimeoutEnv = Partial<
-  Pick<NodeJS.ProcessEnv, "OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS" | "OPENCLAW_TEST_FAST">
->;
-
-export function resolveEmbeddedAbortSettleTimeoutMs(
-  env: EmbeddedAbortSettleTimeoutEnv = process.env,
-): number {
+export function resolveEmbeddedAbortSettleTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   const override = parseStrictPositiveInteger(env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS);
   if (override !== undefined) {
     return override;
