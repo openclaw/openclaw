@@ -66,6 +66,13 @@ function requireRecords(value: unknown, label: string): Array<Record<string, unk
   return value as Array<Record<string, unknown>>;
 }
 
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`expected string: ${label}`);
+  }
+  return value;
+}
+
 function findRecord(
   records: Array<Record<string, unknown>>,
   predicate: (record: Record<string, unknown>) => boolean,
@@ -374,8 +381,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("sends transcriptPrompt visibly and keeps runtime context out of transcript messages", async () => {
-    const runBeforeAgentRun = vi.fn(async () => undefined);
-    const runLlmInput = vi.fn(async () => undefined);
+    const runBeforeAgentRun = vi.fn<(payload: Record<string, unknown>) => Promise<void>>(
+      async () => {},
+    );
+    const runLlmInput = vi.fn<(payload: Record<string, unknown>) => Promise<void>>(async () => {});
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_agent_run" || name === "llm_input"),
       runBeforeAgentRun,
@@ -426,20 +435,24 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seen.systemPrompt).not.toContain("secret runtime context");
     const precheck = hoisted.preemptiveCompactionCalls.at(-1);
     expect(precheck, "preemptive compaction request").toBeDefined();
-    expect(String(precheck?.systemPrompt ?? "")).not.toContain("secret runtime context");
+    expect(
+      requireString(precheck?.systemPrompt, "preemptive compaction systemPrompt"),
+    ).not.toContain("secret runtime context");
     expect(JSON.stringify(precheck?.messages ?? [])).toContain("secret runtime context");
     const beforeAgentRunPayload = requireRecord(
       runBeforeAgentRun.mock.calls[0]?.[0],
       "before_agent_run payload",
     );
-    expect(String(beforeAgentRunPayload.systemPrompt ?? "")).not.toContain(
-      "secret runtime context",
-    );
+    expect(
+      requireString(beforeAgentRunPayload.systemPrompt, "before_agent_run systemPrompt"),
+    ).not.toContain("secret runtime context");
     expect(JSON.stringify(beforeAgentRunPayload.messages ?? [])).toContain(
       "secret runtime context",
     );
     const llmInputPayload = requireRecord(runLlmInput.mock.calls[0]?.[0], "llm_input payload");
-    expect(String(llmInputPayload.systemPrompt ?? "")).not.toContain("secret runtime context");
+    expect(requireString(llmInputPayload.systemPrompt, "llm_input systemPrompt")).not.toContain(
+      "secret runtime context",
+    );
     expect(JSON.stringify(llmInputPayload.historyMessages ?? [])).toContain(
       "secret runtime context",
     );
