@@ -171,6 +171,52 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
   }
 }
 
+function parseCodexAppServerProcessRows(output: string): Array<{ pid: string; command: string }> {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = /^(\d+)\s+(.+)$/.exec(line);
+      return match ? { pid: match[1]!, command: match[2]! } : undefined;
+    })
+    .filter((row): row is { pid: string; command: string } => Boolean(row))
+    .filter((row) => /\bcodex\b.*\bapp-server\b/i.test(row.command));
+}
+
+async function listProcessCommands(): Promise<string> {
+  const result = await execFileAsync("/bin/ps", ["-axo", "pid=,command="], { encoding: "utf8" });
+  return result.stdout ?? "";
+}
+
+export async function collectCodexAppServerSplitBrainWarning(deps?: {
+  listProcesses?: () => Promise<string>;
+}): Promise<string | null> {
+  const processRows = parseCodexAppServerProcessRows(
+    await (deps?.listProcesses ?? listProcessCommands)().catch(() => ""),
+  );
+  if (processRows.length === 0) {
+    return null;
+  }
+
+  const managed = processRows.filter((row) =>
+    row.command.includes(".openclaw/npm/node_modules/@openclaw/codex"),
+  );
+  const unmanaged = processRows.filter(
+    (row) => !row.command.includes(".openclaw/npm/node_modules/@openclaw/codex"),
+  );
+  if (managed.length === 0 || unmanaged.length === 0) {
+    return null;
+  }
+
+  return [
+    "- Dual Codex app-server daemons detected.",
+    `- Managed OpenClaw Codex app-server PID(s): ${managed.map((row) => row.pid).join(", ")}.`,
+    `- Unmanaged system Codex app-server PID(s): ${unmanaged.map((row) => row.pid).join(", ")}.`,
+    "- Stop the unmanaged system Codex app-server before diagnosing agent timeout settings.",
+  ].join("\n");
+}
+
 export async function collectMacGatewayPlatformWarnings(
   cfg: OpenClawConfig,
 ): Promise<readonly string[]> {
@@ -186,6 +232,10 @@ export async function collectMacGatewayPlatformWarnings(
   const launchctlWarning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg);
   if (launchctlWarning) {
     warnings.push(launchctlWarning);
+  }
+  const codexSplitBrainWarning = await collectCodexAppServerSplitBrainWarning();
+  if (codexSplitBrainWarning) {
+    warnings.push(codexSplitBrainWarning);
   }
   return warnings;
 }

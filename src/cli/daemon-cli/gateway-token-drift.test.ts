@@ -45,6 +45,30 @@ describe("resolveGatewayTokenForDriftCheck", () => {
     expect(token).toBe("service-token");
   });
 
+  it("resolves the canonical gateway token ref from the legacy env alias", async () => {
+    const token = await resolveGatewayTokenForDriftCheck({
+      cfg: {
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+          },
+        },
+      } as OpenClawConfig,
+      env: {
+        OPENCLAW_GATEWAY_AUTH_TOKEN: "legacy-service-token",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(token).toBe("legacy-service-token");
+  });
+
   it("throws when an active local token ref is unresolved", async () => {
     await expect(
       resolveGatewayTokenForDriftCheck({
