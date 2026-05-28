@@ -3,7 +3,7 @@ summary: "Google Vertex AI / Agent Platform setup (ADC auth for GCE, GKE, gcloud
 title: "Google Vertex AI"
 read_when:
   - You want to use Gemini models through Google Cloud Vertex AI (Agent Platform)
-  - You have GCP credits or a GCP project and want to use ADC instead of an API key
+  - You have a GCP project and want to use ADC for authentication
   - You are running OpenClaw on a GCE VM, GKE, or Cloud Run
 ---
 
@@ -12,13 +12,13 @@ Vertex AI (now Gemini Enterprise Agent Platform) using Application Default
 Credentials (ADC).
 
 - Provider: `google-vertex`
-- Auth: Application Default Credentials (ADC)
+- Auth: Application Default Credentials (metadata server, gcloud CLI, service account key)
 - Env vars: `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` (optional, defaults to `global`)
 - Models: Gemini models accessed via `google-vertex/*` prefix
 
 ## Getting started
 
-Choose the auth method that matches your environment.
+Choose the setup that matches your environment.
 
 <Tabs>
   <Tab title="GCE / GKE / Cloud Run">
