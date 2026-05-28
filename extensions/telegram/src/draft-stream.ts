@@ -117,7 +117,11 @@ export function createTelegramDraftStream(params: {
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
-  let resetStreamToNewMessage: (options?: { keepPending?: boolean; resetOffset?: boolean }) => void;
+  let resetStreamToNewMessage: (options?: {
+    keepFinal?: boolean;
+    keepPending?: boolean;
+    resetOffset?: boolean;
+  }) => void;
   type PreviewSendParams = {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
@@ -227,7 +231,7 @@ export function createTelegramDraftStream(params: {
         const supersededParseMode = lastSentParseMode;
         const supersededVisibleSinceMs = streamVisibleSinceMs;
         deliveredTextOffset = lastDeliveredText.length;
-        resetStreamToNewMessage({ keepPending: true, resetOffset: false });
+        resetStreamToNewMessage({ keepFinal: true, keepPending: true, resetOffset: false });
         if (typeof supersededMessageId === "number") {
           params.onSupersededPreview?.({
             messageId: supersededMessageId,
@@ -314,7 +318,7 @@ export function createTelegramDraftStream(params: {
 
   resetStreamToNewMessage = (options) => {
     streamState.stopped = false;
-    streamState.final = false;
+    streamState.final = options?.keepFinal === true;
     generation += 1;
     messageSendAttempted = false;
     streamMessageId = undefined;

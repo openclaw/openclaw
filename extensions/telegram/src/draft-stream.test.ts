@@ -505,6 +505,25 @@ describe("createTelegramDraftStream", () => {
     );
   });
 
+  it("continues finalizing more than two overflow chunks after a clamped preview", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 })
+      .mockResolvedValueOnce({ message_id: 43 });
+    const stream = createDraftStream(api, { maxChars: 10 });
+
+    stream.update("1234567890ABCDEFGHIJKLMNOPQRST");
+    await stream.flush();
+    await stream.stop();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(3);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "1234567890", undefined);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "ABCDEFGHIJ", undefined);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(3, 123, "KLMNOPQRST", undefined);
+    expect(stream.lastDeliveredText?.()).toBe("1234567890ABCDEFGHIJKLMNOPQRST");
+  });
+
   it("retains final overflow preview pages", async () => {
     const api = createMockDraftApi();
     api.sendMessage
