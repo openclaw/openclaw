@@ -9,9 +9,17 @@ import {
   buildConfiguredModelCatalog,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import { parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { updateSessionStore } from "../config/sessions.js";
+import {
+  clearSessionGoal,
+  createSessionGoal,
+  formatSessionGoalStatus,
+  getSessionGoal,
+  updateSessionGoalStatus,
+  updateSessionStore,
+} from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import {
@@ -523,6 +531,90 @@ export class EmbeddedTuiBackend implements TuiBackend {
       contextWindow: entry.contextWindow,
       reasoning: entry.reasoning,
     }));
+  }
+
+  async runGoalCommand(opts: Parameters<NonNullable<TuiBackend["runGoalCommand"]>>[0]) {
+    const { canonicalKey, storePath, entry } = loadSessionEntry(opts.sessionKey);
+    const sessionKey = canonicalKey ?? opts.sessionKey;
+    const parsed = parseGoalCommand(opts.command.trim());
+    if (!parsed) {
+      throw new Error("invalid goal command");
+    }
+
+    switch (parsed.action) {
+      case "status": {
+        const snapshot = await getSessionGoal({ sessionKey, storePath });
+        return { text: formatSessionGoalStatus(snapshot.goal) };
+      }
+      case "start":
+      case "set":
+      case "create": {
+        const objective = parsed.text.trim();
+        if (!objective) {
+          return { text: "Usage: /goal start <objective>" };
+        }
+        const fallbackEntry =
+          entry ??
+          (
+            await this.patchSession({
+              key: sessionKey,
+            })
+          ).entry;
+        const goal = await createSessionGoal({
+          sessionKey,
+          storePath,
+          objective,
+          fallbackEntry,
+        });
+        return { text: `Goal started: ${goal.objective}` };
+      }
+      case "pause": {
+        const goal = await updateSessionGoalStatus({
+          sessionKey,
+          storePath,
+          status: "paused",
+          ...(parsed.text ? { note: parsed.text } : {}),
+        });
+        return { text: `Goal paused: ${goal.objective}` };
+      }
+      case "resume": {
+        const goal = await updateSessionGoalStatus({
+          sessionKey,
+          storePath,
+          status: "active",
+          ...(parsed.text ? { note: parsed.text } : {}),
+        });
+        return { text: `Goal resumed: ${goal.objective}` };
+      }
+      case "complete":
+      case "done": {
+        const goal = await updateSessionGoalStatus({
+          sessionKey,
+          storePath,
+          status: "complete",
+          ...(parsed.text ? { note: parsed.text } : {}),
+        });
+        return { text: `Goal complete: ${goal.objective}\nTokens used: ${goal.tokensUsed}` };
+      }
+      case "block":
+      case "blocked": {
+        const goal = await updateSessionGoalStatus({
+          sessionKey,
+          storePath,
+          status: "blocked",
+          ...(parsed.text ? { note: parsed.text } : {}),
+        });
+        return { text: `Goal blocked: ${goal.objective}` };
+      }
+      case "clear": {
+        const removed = await clearSessionGoal({ sessionKey, storePath });
+        return { text: removed ? "Goal cleared." : "No goal to clear." };
+      }
+      default:
+        return {
+          text: "Usage: /goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear",
+        };
+    }
   }
 
   private findQueuedSessionRunPromise(sessionKey: string): QueuedSessionRun | undefined {

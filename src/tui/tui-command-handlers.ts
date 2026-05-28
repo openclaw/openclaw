@@ -381,6 +381,22 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await sendMessage(raw);
         }
         break;
+      case "goal":
+        if (opts.local === true && client.runGoalCommand) {
+          try {
+            const result = await client.runGoalCommand({
+              sessionKey: state.currentSessionKey,
+              command: raw,
+            });
+            chatLog.addSystem(result.text);
+            await refreshSessionInfo();
+          } catch (err) {
+            chatLog.addSystem(`goal failed: ${sanitizeRenderableText(String(err))}`);
+          }
+        } else {
+          await sendMessage(raw);
+        }
+        break;
       case "crestodian":
         chatLog.addSystem(
           args ? `returning to Crestodian with request: ${args}` : "returning to Crestodian",

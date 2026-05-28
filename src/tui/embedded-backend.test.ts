@@ -5,6 +5,10 @@ import { defaultRuntime } from "../runtime.js";
 const agentCommandFromIngressMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const applySessionsPatchToStoreMock = vi.fn();
+const createSessionGoalMock = vi.fn();
+const clearSessionGoalMock = vi.fn();
+const getSessionGoalMock = vi.fn();
+const updateSessionGoalStatusMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
 const loadGatewayModelCatalogMock = vi.fn(
   (_params?: unknown): Array<{ id: string; name: string; provider: string }> => [],
@@ -37,8 +41,14 @@ vi.mock("../cli/deps.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
+  clearSessionGoal: (...args: unknown[]) => clearSessionGoalMock(...args),
+  createSessionGoal: (...args: unknown[]) => createSessionGoalMock(...args),
+  formatSessionGoalStatus: (goal?: { objective?: string }) =>
+    goal ? `Goal: ${goal.objective ?? ""}` : "No goal for this session.",
+  getSessionGoal: (...args: unknown[]) => getSessionGoalMock(...args),
   resolveAgentMainSessionKey: () => "agent:main:main",
   resolveStorePath: () => "/tmp/openclaw-sessions.json",
+  updateSessionGoalStatus: (...args: unknown[]) => updateSessionGoalStatusMock(...args),
   updateSessionStore: (...args: unknown[]) => updateSessionStoreMock(...args),
 }));
 
@@ -165,6 +175,21 @@ describe("EmbeddedTuiBackend", () => {
       async (_storePath: string, update: (store: Record<string, unknown>) => unknown) =>
         await update({}),
     );
+    createSessionGoalMock.mockReset();
+    createSessionGoalMock.mockImplementation(async ({ objective }: { objective: string }) => ({
+      objective,
+      tokensUsed: 0,
+    }));
+    clearSessionGoalMock.mockReset();
+    clearSessionGoalMock.mockResolvedValue(false);
+    getSessionGoalMock.mockReset();
+    getSessionGoalMock.mockResolvedValue({ status: "missing" });
+    updateSessionGoalStatusMock.mockReset();
+    updateSessionGoalStatusMock.mockImplementation(async ({ status }: { status: string }) => ({
+      objective: "ship",
+      status,
+      tokensUsed: 0,
+    }));
     applySessionsPatchToStoreMock.mockReset();
     applySessionsPatchToStoreMock.mockResolvedValue({ ok: true, entry: {} });
     getRuntimeConfigMock.mockReset();
@@ -410,6 +435,39 @@ describe("EmbeddedTuiBackend", () => {
       key: "agent:main:main",
     });
     expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+  });
+
+  it("creates a local session entry before starting a goal", async () => {
+    const entry = { sessionId: "session-1", updatedAt: embeddedEventTimestamp };
+    loadSessionEntryMock.mockReturnValueOnce({
+      cfg: {},
+      canonicalKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+      entry: undefined,
+    });
+    applySessionsPatchToStoreMock.mockResolvedValueOnce({ ok: true, entry });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(
+      backend.runGoalCommand({
+        sessionKey: "agent:main:main",
+        command: "/GOAL start Ship Goal",
+      }),
+    ).resolves.toEqual({ text: "Goal started: Ship Goal" });
+    expect(applySessionsPatchToStoreMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeKey: "agent:main:main",
+        patch: { key: "agent:main:main" },
+      }),
+    );
+    expect(createSessionGoalMock).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+      objective: "Ship Goal",
+      fallbackEntry: entry,
+    });
   });
 
   it("loads history thinking defaults from configured replace-mode models", async () => {

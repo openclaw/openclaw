@@ -17,6 +17,11 @@ export type ChatSendOptions = {
   runId?: string;
 };
 
+export type TuiGoalCommandOptions = {
+  sessionKey: string;
+  command: string;
+};
+
 export type TuiEvent = {
   event: string;
   payload?: unknown;
@@ -123,4 +128,5 @@ export type TuiBackend = {
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
+  runGoalCommand?: (opts: TuiGoalCommandOptions) => Promise<{ text: string }>;
 };

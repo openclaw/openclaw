@@ -56,6 +56,7 @@ function createHarness(params?: {
   listModels?: ReturnType<typeof vi.fn>;
   patchSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
+  runGoalCommand?: ReturnType<typeof vi.fn>;
   runAuthFlow?: RunAuthFlow;
   setSession?: SetSessionMock;
   loadHistory?: LoadHistoryMock;
@@ -77,6 +78,7 @@ function createHarness(params?: {
   const listModels = params?.listModels ?? vi.fn().mockResolvedValue([]);
   const patchSession = params?.patchSession ?? vi.fn().mockResolvedValue({});
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
+  const runGoalCommand = params?.runGoalCommand ?? vi.fn().mockResolvedValue({ text: "Goal" });
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
   const addUser = vi.fn();
   const addSystem = vi.fn();
@@ -119,6 +121,7 @@ function createHarness(params?: {
       listModels,
       patchSession,
       resetSession,
+      runGoalCommand,
     } as never,
     chatLog: { addUser, addSystem, reserveAssistantSlot } as never,
     tui: { requestRender } as never,
@@ -154,6 +157,7 @@ function createHarness(params?: {
     closeOverlay,
     patchSession,
     resetSession,
+    runGoalCommand,
     setSession,
     addUser,
     addSystem,
@@ -251,6 +255,36 @@ describe("tui command handlers", () => {
       sessionKey: "agent:main:main",
       sessionId: "session-before-relaunch",
       message: "/status",
+    });
+  });
+
+  it("runs goal commands locally instead of sending them to the model", async () => {
+    const runGoalCommand = vi.fn().mockResolvedValue({ text: "Goal started: ship" });
+    const { handleCommand, sendChat, addSystem, refreshSessionInfo } = createHarness({
+      opts: { local: true },
+      runGoalCommand,
+    });
+
+    await handleCommand("/goal start ship");
+
+    expect(runGoalCommand).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      command: "/goal start ship",
+    });
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("Goal started: ship");
+    expect(refreshSessionInfo).toHaveBeenCalled();
+  });
+
+  it("forwards goal commands to the gateway outside local mode", async () => {
+    const { handleCommand, sendChat, runGoalCommand } = createHarness();
+
+    await handleCommand("/goal status");
+
+    expect(runGoalCommand).not.toHaveBeenCalled();
+    expectSendChatFields(sendChat, {
+      sessionKey: "agent:main:main",
+      message: "/goal status",
     });
   });
 

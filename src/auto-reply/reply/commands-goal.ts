@@ -19,11 +19,14 @@ import type {
 
 const GOAL_COMMAND_PREFIX = "/goal";
 
-function parseGoalCommand(raw: string): { action: string; text: string } | null {
-  if (raw !== GOAL_COMMAND_PREFIX && !raw.startsWith(`${GOAL_COMMAND_PREFIX} `)) {
+export function parseGoalCommand(raw: string): { action: string; text: string } | null {
+  const trimmed = raw.trim();
+  const commandEnd = trimmed.search(/\s/);
+  const commandToken = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
+  if (normalizeOptionalLowercaseString(commandToken) !== GOAL_COMMAND_PREFIX) {
     return null;
   }
-  const argText = raw === GOAL_COMMAND_PREFIX ? "" : raw.slice(GOAL_COMMAND_PREFIX.length).trim();
+  const argText = commandEnd === -1 ? "" : trimmed.slice(commandEnd).trim();
   if (!argText) {
     return { action: "status", text: "" };
   }
