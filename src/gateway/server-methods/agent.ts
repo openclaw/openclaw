@@ -1104,7 +1104,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         const effectiveProvider = providerOverride || baseProvider;
         const effectiveModel = modelOverride || baseModel;
         const supportsInlineImages =
-          request.acpTurnSource === "manual_spawn"
+          request.acpTurnSource === "manual_spawn" && isAcpSessionKey(requestedSessionKeyRaw)
             ? true
             : await resolveGatewayModelSupportsImages({
                 loadGatewayModelCatalog: context.loadGatewayModelCatalog,
