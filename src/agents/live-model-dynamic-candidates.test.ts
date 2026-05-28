@@ -37,13 +37,22 @@ function model(provider: string, id: string): Model {
 
 describe("appendPrioritizedDynamicLiveModels", () => {
   it("materializes prioritized refs from provider dynamic model hooks", async () => {
-    const resolveDynamicModel: DynamicModelResolver = vi.fn((params) =>
-      params.context.provider === DYNAMIC_PROVIDER && params.context.modelId === "glm-5"
+    const resolveCalls: Parameters<DynamicModelResolver>[] = [];
+    const prepareCalls: Parameters<DynamicModelPreparer>[] = [];
+    const normalizeCalls: Array<[Model, string]> = [];
+    const resolveDynamicModel: DynamicModelResolver = (params) => {
+      resolveCalls.push([params]);
+      return params.context.provider === DYNAMIC_PROVIDER && params.context.modelId === "glm-5"
         ? model(DYNAMIC_PROVIDER, "glm-5")
-        : undefined,
-    );
-    const prepareDynamicModel: DynamicModelPreparer = vi.fn(async () => undefined);
-    const normalizeModel: DynamicModelNormalizer = vi.fn((entry) => entry);
+        : undefined;
+    };
+    const prepareDynamicModel: DynamicModelPreparer = async (params) => {
+      prepareCalls.push([params]);
+    };
+    const normalizeModel: DynamicModelNormalizer = (entry, agentDir) => {
+      normalizeCalls.push([entry, agentDir]);
+      return entry;
+    };
     const config = {
       models: {
         providers: {
@@ -77,39 +86,31 @@ describe("appendPrioritizedDynamicLiveModels", () => {
       "anthropic/claude-sonnet-4-6",
       `${DYNAMIC_PROVIDER}/glm-5`,
     ]);
-    expect(prepareDynamicModel).toHaveBeenCalledTimes(1);
-    expect(prepareDynamicModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: DYNAMIC_PROVIDER,
-        context: expect.objectContaining({
-          agentDir: "/tmp/openclaw-agent",
-          modelId: "glm-5",
-          modelRegistry: REGISTRY,
-          provider: DYNAMIC_PROVIDER,
-          providerConfig: config.models?.providers?.[DYNAMIC_PROVIDER],
-        }),
-      }),
+    expect(prepareCalls).toHaveLength(1);
+    const prepareParam = prepareCalls[0]?.[0];
+    expect(prepareParam?.provider).toBe(DYNAMIC_PROVIDER);
+    expect(prepareParam?.context.agentDir).toBe("/tmp/openclaw-agent");
+    expect(prepareParam?.context.modelId).toBe("glm-5");
+    expect(prepareParam?.context.modelRegistry).toBe(REGISTRY);
+    expect(prepareParam?.context.provider).toBe(DYNAMIC_PROVIDER);
+    expect(prepareParam?.context.providerConfig).toBe(
+      config.models?.providers?.[DYNAMIC_PROVIDER],
     );
-    expect(resolveDynamicModel).toHaveBeenCalledTimes(1);
-    expect(resolveDynamicModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: DYNAMIC_PROVIDER,
-        context: expect.objectContaining({
-          agentDir: "/tmp/openclaw-agent",
-          modelId: "glm-5",
-          modelRegistry: REGISTRY,
-          provider: DYNAMIC_PROVIDER,
-          providerConfig: config.models?.providers?.[DYNAMIC_PROVIDER],
-        }),
-      }),
+    expect(resolveCalls).toHaveLength(1);
+    const resolveParam = resolveCalls[0]?.[0];
+    expect(resolveParam?.provider).toBe(DYNAMIC_PROVIDER);
+    expect(resolveParam?.context.agentDir).toBe("/tmp/openclaw-agent");
+    expect(resolveParam?.context.modelId).toBe("glm-5");
+    expect(resolveParam?.context.modelRegistry).toBe(REGISTRY);
+    expect(resolveParam?.context.provider).toBe(DYNAMIC_PROVIDER);
+    expect(resolveParam?.context.providerConfig).toBe(
+      config.models?.providers?.[DYNAMIC_PROVIDER],
     );
-    expect(normalizeModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: DYNAMIC_PROVIDER,
-        id: "glm-5",
-      }),
-      "/tmp/openclaw-agent",
-    );
+    expect(normalizeCalls).toHaveLength(1);
+    const normalizeParam = normalizeCalls[0];
+    expect(normalizeParam?.[0].provider).toBe(DYNAMIC_PROVIDER);
+    expect(normalizeParam?.[0].id).toBe("glm-5");
+    expect(normalizeParam?.[1]).toBe("/tmp/openclaw-agent");
   });
 
   it("does not duplicate refs already present in the generated registry", async () => {
