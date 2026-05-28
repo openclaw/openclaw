@@ -322,13 +322,14 @@ describe("runMemoryFlushIfNeeded", () => {
     // where the embedded runner ignored its AbortSignal or completed
     // concurrently with the abort.
     const replyOperationAbortController = new AbortController();
+    const updateSessionIdMock = vi.fn();
     const replyOperation = {
       abortSignal: replyOperationAbortController.signal,
       setPhase: vi.fn(),
-      updateSessionId: vi.fn(),
+      updateSessionId: updateSessionIdMock,
     } as never;
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (params: {
         onAgentEvent?: (evt: { stream: string; data: { phase: string } }) => void;
       }) => {
@@ -372,7 +373,7 @@ describe("runMemoryFlushIfNeeded", () => {
     // sole writer.
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
     expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
-    expect(replyOperation.updateSessionId).not.toHaveBeenCalled();
+    expect(updateSessionIdMock).not.toHaveBeenCalled();
     expect(followupRun.run.sessionId).toBe("session");
     expect(entry?.sessionId).toBe("session");
 
@@ -555,7 +556,7 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokens: 80_000,
       compactionCount: 1,
     };
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [
         {
           text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
@@ -2073,7 +2074,7 @@ describe("pending memory-flush registry", () => {
     const flushPromise = new Promise<void>((resolve) => {
       // The flush only settles after `abort()` is called by the barrier.
       // This mirrors how the real maintenance ReplyOperation propagates
-      // abort into runEmbeddedPiAgent / runWithModelFallback and makes
+      // abort into runEmbeddedAgent / runWithModelFallback and makes
       // them short-circuit.
       const interval = setInterval(() => {
         if (aborted) {
@@ -2168,7 +2169,7 @@ describe("runPreflightCompactionIfNeeded pending-flush barrier", () => {
       systemPrompt: "noop",
       relativePath: "memory/2023-11-14.md",
     }));
-    compactEmbeddedPiSessionMock.mockReset().mockResolvedValue({
+    compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue({
       ok: true,
       compacted: true,
       result: { tokensAfter: 42, sessionId: "session-after-compaction" },
@@ -2190,9 +2191,9 @@ describe("runPreflightCompactionIfNeeded pending-flush barrier", () => {
       return nextEntry.compactionCount;
     });
     setAgentRunnerMemoryTestDeps({
-      compactEmbeddedPiSession: compactEmbeddedPiSessionMock as never,
+      compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock as never,
       runWithModelFallback: vi.fn() as never,
-      runEmbeddedPiAgent: vi.fn() as never,
+      runEmbeddedAgent: vi.fn() as never,
       ensureMemoryFlushTargetFile: vi.fn().mockResolvedValue(undefined) as never,
       refreshQueuedFollowupSession: vi.fn() as never,
       incrementCompactionCount: incrementCompactionCountMock as never,
@@ -2249,12 +2250,12 @@ describe("runPreflightCompactionIfNeeded pending-flush barrier", () => {
     // Give the preflight microtasks a chance to run and reach the barrier.
     await Promise.resolve();
     await Promise.resolve();
-    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
 
     resolveFlush();
     await preflightPromise;
 
-    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
   });
 
   // The barrier inside runPreflightCompactionIfNeeded uses the default
@@ -2304,12 +2305,12 @@ describe("runPreflightCompactionIfNeeded pending-flush barrier", () => {
 
     await Promise.resolve();
     await Promise.resolve();
-    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
 
     resolveFlush();
     await preflightPromise;
 
-    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
   });
 
   it("rebinds the active run sessionId after the barrier when the prior flush rotated it, even if no compaction runs this turn", async () => {
@@ -2341,7 +2342,7 @@ describe("runPreflightCompactionIfNeeded pending-flush barrier", () => {
     ).updateSessionId;
     const refreshQueuedFollowupSessionMock = vi.fn();
     setAgentRunnerMemoryTestDeps({
-      compactEmbeddedPiSession: compactEmbeddedPiSessionMock as never,
+      compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock as never,
       refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
       incrementCompactionCount: incrementCompactionCountMock as never,
       registerAgentRunContext: vi.fn() as never,
@@ -2372,7 +2373,7 @@ describe("runPreflightCompactionIfNeeded pending-flush barrier", () => {
       nextSessionFile: rotatedSessionEntry.sessionFile,
     });
     // No compaction was triggered this turn.
-    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
   it("does not block heartbeat preflight on a pending flush", async () => {
@@ -2411,6 +2412,6 @@ describe("runPreflightCompactionIfNeeded pending-flush barrier", () => {
     ]);
 
     expect(result).not.toBe("timed-out");
-    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 });

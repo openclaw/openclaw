@@ -418,7 +418,7 @@ export function createReplyOperation(params: {
  * `clearReplyRunState` / `markReplyRunDiagnosticWorkEnded`.
  *
  * Use this instead of passing a completed reply operation into
- * `runEmbeddedPiAgent`: the embedded runner calls `attachBackend(...)`
+ * `runEmbeddedAgent`: the embedded runner calls `attachBackend(...)`
  * which cancels any handle attached to a completed reply operation, so
  * the deferred work would never reach its LLM call.
  *

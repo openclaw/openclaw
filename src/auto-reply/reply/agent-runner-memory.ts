@@ -219,7 +219,7 @@ export async function awaitPendingMemoryFlush(
       // (e.g. the embedded runner ignores its AbortSignal), abandon
       // the pending entry so subsequent turns are not blocked
       // indefinitely. The flush's runWithModelFallback /
-      // runEmbeddedPiAgent normally see the maintenance op's aborted
+      // runEmbeddedAgent normally see the maintenance op's aborted
       // abortSignal and short-circuit well inside this window; the
       // wrapped promise always resolves (never throws) by construction.
       let graceTimer: ReturnType<typeof setTimeout> | undefined;

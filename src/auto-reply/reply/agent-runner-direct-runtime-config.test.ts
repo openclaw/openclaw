@@ -411,7 +411,7 @@ describe("runReplyAgent runtime config", () => {
     expect(typeof registerCall[2]).toBe("function");
 
     // The abort callback must put the maintenance ReplyOperation into a
-    // terminal aborted state so subsequent runEmbeddedPiAgent /
+    // terminal aborted state so subsequent runEmbeddedAgent /
     // runWithModelFallback calls see an aborted abortSignal and
     // short-circuit. Pull the maintenance op out of the
     // runMemoryFlushIfNeeded call args and verify.
