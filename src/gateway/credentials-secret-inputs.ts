@@ -127,7 +127,7 @@ function localAuthModeAllowsGatewaySecretInputPath(params: {
   return true;
 }
 
-function gatewaySecretInputPathCanWin(params: {
+function canGatewaySecretInputPathWin(params: {
   options: NormalizedGatewayCredentialSecretInputOptions;
   env: NodeJS.ProcessEnv;
   config: OpenClawConfig;
@@ -180,6 +180,21 @@ function gatewaySecretInputPathCanWin(params: {
   }
 }
 
+export function gatewaySecretInputPathCanWin(
+  params: GatewayCredentialSecretInputOptions & { path: SupportedGatewaySecretInputPath },
+): boolean {
+  const { path, env = process.env, ...options } = params;
+  return canGatewaySecretInputPathWin({
+    options: {
+      ...options,
+      explicitAuth: resolveExplicitGatewayAuth(options.explicitAuth),
+    },
+    env,
+    config: params.config,
+    path,
+  });
+}
+
 async function resolveConfiguredGatewaySecretInput(params: {
   config: OpenClawConfig;
   path: SupportedGatewaySecretInputPath;
@@ -201,7 +216,7 @@ async function resolvePreferredGatewaySecretInputs(params: {
   let nextConfig = params.config;
   for (const path of ALL_GATEWAY_SECRET_INPUT_PATHS) {
     if (
-      !gatewaySecretInputPathCanWin({
+      !canGatewaySecretInputPathWin({
         options: params.options,
         env: params.env,
         config: nextConfig,

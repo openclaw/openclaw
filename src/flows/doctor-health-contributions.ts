@@ -723,45 +723,22 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
   const { resolveSecretInputRef } = await import("../config/types.secrets.js");
-  const { createGatewayCredentialPlan } = await import("../gateway/credential-planner.js");
+  const { gatewaySecretInputPathCanWin } = await import("../gateway/credentials-secret-inputs.js");
   const { readGatewaySecretInputValue } = await import("../gateway/secret-input-paths.js");
   const { note } = await import("../terminal/note.js");
-  const credentialPlan = createGatewayCredentialPlan({ config: ctx.cfg, env: process.env });
-  const ambiguousLocalAuthRefs =
-    credentialPlan.authMode === undefined &&
-    !credentialPlan.envToken &&
-    !credentialPlan.envPassword &&
-    credentialPlan.localToken.hasSecretRef &&
-    credentialPlan.localPassword.hasSecretRef;
-  const remoteHealthCredentialsActive = credentialPlan.configuredMode === "remote";
-  const remoteLocalTokenFallbackActive =
-    remoteHealthCredentialsActive &&
-    !credentialPlan.envToken &&
-    !credentialPlan.remoteToken.configured &&
-    !credentialPlan.remotePassword.configured;
-  const remoteLocalPasswordFallbackActive =
-    remoteHealthCredentialsActive &&
-    !credentialPlan.envPassword &&
-    !credentialPlan.remoteToken.configured &&
-    !credentialPlan.remotePassword.configured;
-  const activeSecretRefPaths = [
-    credentialPlan.localTokenSurfaceActive ||
-    remoteLocalTokenFallbackActive ||
-    ambiguousLocalAuthRefs
-      ? credentialPlan.localToken.refPath
-      : undefined,
-    (credentialPlan.localPasswordCanWin && !credentialPlan.envPassword) ||
-    remoteLocalPasswordFallbackActive ||
-    ambiguousLocalAuthRefs
-      ? credentialPlan.localPassword.refPath
-      : undefined,
-    remoteHealthCredentialsActive && credentialPlan.remoteTokenActive
-      ? credentialPlan.remoteToken.refPath
-      : undefined,
-    remoteHealthCredentialsActive && credentialPlan.remotePasswordActive
-      ? credentialPlan.remotePassword.refPath
-      : undefined,
-  ].filter((path): path is NonNullable<typeof path> => Boolean(path));
+  const credentialPaths = [
+    "gateway.auth.token",
+    "gateway.auth.password",
+    "gateway.remote.token",
+    "gateway.remote.password",
+  ] as const;
+  const activeSecretRefPaths = credentialPaths.filter((path) =>
+    gatewaySecretInputPathCanWin({
+      config: ctx.cfg,
+      env: process.env,
+      path,
+    }),
+  );
   const hasActiveExecCredential = activeSecretRefPaths.some((path) => {
     const ref = resolveSecretInputRef({
       value: readGatewaySecretInputValue(ctx.cfg, path),

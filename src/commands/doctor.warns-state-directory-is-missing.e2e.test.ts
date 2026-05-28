@@ -792,6 +792,108 @@ describe("doctor command", () => {
     expect(skippedGatewayHealth).toBe(false);
   });
 
+  it("keeps remote gateway health probes when env token wins over an exec password ref", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "https://gateway.example.test",
+            password: {
+              source: "exec",
+              provider: "default",
+              id: "gateway/remote-password",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: {
+              source: "exec",
+              command: process.execPath,
+            },
+          },
+        },
+      },
+    });
+
+    const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token";
+    try {
+      await doctorCommand(createDoctorRuntime(), {
+        nonInteractive: true,
+        workspaceSuggestions: false,
+      });
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+      }
+    }
+
+    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
+      return (
+        title === "Gateway" &&
+        String(message).includes(
+          "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+        )
+      );
+    });
+    expect(skippedGatewayHealth).toBe(false);
+  });
+
+  it("keeps remote gateway health probes when env password wins over an exec token ref", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "https://gateway.example.test",
+            token: {
+              source: "exec",
+              provider: "default",
+              id: "gateway/remote-token",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: {
+              source: "exec",
+              command: process.execPath,
+            },
+          },
+        },
+      },
+    });
+
+    const previousPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "fallback-password";
+    try {
+      await doctorCommand(createDoctorRuntime(), {
+        nonInteractive: true,
+        workspaceSuggestions: false,
+      });
+    } finally {
+      if (previousPassword === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PASSWORD = previousPassword;
+      }
+    }
+
+    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
+      return (
+        title === "Gateway" &&
+        String(message).includes(
+          "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+        )
+      );
+    });
+    expect(skippedGatewayHealth).toBe(false);
+  });
+
   it("keeps local gateway health probes when only dormant remote refs use exec", async () => {
     mockDoctorConfigSnapshot({
       config: {
