@@ -57,6 +57,7 @@ export const AgentDefaultsSchema = z
     imageGenerationModel: AgentToolModelSchema.optional(),
     videoGenerationModel: AgentToolModelSchema.optional(),
     musicGenerationModel: AgentToolModelSchema.optional(),
+    voiceModel: AgentToolModelSchema.optional(),
     mediaGenerationAutoProviderFallback: z.boolean().optional(),
     pdfModel: AgentToolModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),

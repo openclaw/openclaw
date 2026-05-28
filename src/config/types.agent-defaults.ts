@@ -216,6 +216,8 @@ export type AgentDefaultsConfig = {
   videoGenerationModel?: AgentToolModelConfig;
   /** Optional music-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   musicGenerationModel?: AgentToolModelConfig;
+  /** Optional voice model and fallbacks (provider/model) for TTS/STT/realtime voice providers. */
+  voiceModel?: AgentToolModelConfig;
   /**
    * When true (default), shared image/music/video generation appends other
    * auth-backed provider defaults after explicit primary/fallback refs. Set to

@@ -550,6 +550,106 @@ describe("resolvePluginCapabilityProviders", () => {
     expectActiveRegistryLookup(["fal", "xai"]);
   });
 
+  it.each([
+    {
+      key: "speechProviders" as const,
+      contracts: { speechProviders: ["openai"] },
+      seedLoadedProvider(registry: ReturnType<typeof createEmptyPluginRegistry>) {
+        registry.speechProviders.push({
+          pluginId: "openai",
+          pluginName: "OpenAI",
+          source: "test",
+          provider: {
+            id: "openai",
+            label: "OpenAI",
+            isConfigured: () => true,
+            synthesize: async () => ({
+              audioBuffer: Buffer.from("x"),
+              outputFormat: "mp3",
+              voiceCompatible: false,
+              fileExtension: ".mp3",
+            }),
+          },
+        } as never);
+      },
+    },
+    {
+      key: "realtimeTranscriptionProviders" as const,
+      contracts: { realtimeTranscriptionProviders: ["openai"] },
+      seedLoadedProvider(registry: ReturnType<typeof createEmptyPluginRegistry>) {
+        registry.realtimeTranscriptionProviders.push({
+          pluginId: "openai",
+          pluginName: "OpenAI",
+          source: "test",
+          provider: {
+            id: "openai",
+            label: "OpenAI",
+            isConfigured: () => true,
+            createSession: () => ({
+              connect: async () => {},
+              sendAudio() {},
+              close() {},
+              isConnected: () => true,
+            }),
+          },
+        } as never);
+      },
+    },
+    {
+      key: "realtimeVoiceProviders" as const,
+      contracts: { realtimeVoiceProviders: ["openai"] },
+      seedLoadedProvider(registry: ReturnType<typeof createEmptyPluginRegistry>) {
+        registry.realtimeVoiceProviders.push({
+          pluginId: "openai",
+          pluginName: "OpenAI",
+          source: "test",
+          provider: {
+            id: "openai",
+            label: "OpenAI",
+            isConfigured: () => true,
+            createBridge: () => ({
+              connect: async () => {},
+              sendAudio() {},
+              setMediaTimestamp() {},
+              submitToolResult() {},
+              acknowledgeMark() {},
+              close() {},
+              isConnected: () => true,
+            }),
+          },
+        } as never);
+      },
+    },
+  ])("uses agents.defaults.voiceModel to scope %s", ({ key, contracts, seedLoadedProvider }) => {
+    const loaded = createEmptyPluginRegistry();
+    seedLoadedProvider(loaded);
+    const cfg = {
+      agents: {
+        defaults: {
+          voiceModel: { primary: "openai/gpt-4o-mini-tts" },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          origin: "bundled",
+          contracts,
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? undefined : loaded,
+    );
+
+    const providers = resolvePluginCapabilityProviders({ key, cfg });
+
+    expectResolvedCapabilityProviderIds(providers, ["openai"]);
+    expectActiveRegistryLookup(["openai"]);
+  });
+
   it("cold-loads enabled external manifest-contract providers missing from startup registry", () => {
     const loaded = createEmptyPluginRegistry();
     loaded.speechProviders.push({

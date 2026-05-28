@@ -301,6 +301,40 @@ function addStringValue(target: Set<string>, value: unknown): void {
   }
 }
 
+function addModelRefProviderId(target: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const slashIndex = value.indexOf("/");
+  if (slashIndex <= 0) {
+    return;
+  }
+  addStringValue(target, value.slice(0, slashIndex));
+}
+
+function addModelConfigProviderIds(target: Set<string>, value: unknown): void {
+  if (typeof value === "string") {
+    addModelRefProviderId(target, value);
+    return;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return;
+  }
+  const config = value as { primary?: unknown; fallbacks?: unknown };
+  addModelRefProviderId(target, config.primary);
+  if (Array.isArray(config.fallbacks)) {
+    for (const fallback of config.fallbacks) {
+      addModelRefProviderId(target, fallback);
+    }
+  }
+}
+
+function collectRequestedVoiceModelProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
+  const requested = new Set<string>();
+  addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);
+  return requested;
+}
+
 function collectRequestedSpeechProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
   const requested = new Set<string>();
   const tts =
@@ -310,6 +344,9 @@ function collectRequestedSpeechProviderIds(cfg: OpenClawConfig | undefined): Set
   addStringValue(requested, tts?.provider);
   addObjectKeys(requested, tts?.providers);
   addObjectKeys(requested, cfg?.models?.providers);
+  for (const providerId of collectRequestedVoiceModelProviderIds(cfg)) {
+    requested.add(providerId);
+  }
   return requested;
 }
 
@@ -343,6 +380,9 @@ function collectRequestedCapabilityProviderIds(params: {
   switch (params.key) {
     case "speechProviders":
       return collectRequestedSpeechProviderIds(params.cfg);
+    case "realtimeTranscriptionProviders":
+    case "realtimeVoiceProviders":
+      return collectRequestedVoiceModelProviderIds(params.cfg);
     case "mediaUnderstandingProviders":
       return collectRequestedMediaUnderstandingProviderIds(params.cfg);
     default:

@@ -439,6 +439,75 @@ describe("speech-core native voice-note routing", () => {
     expect(request.timeoutMs).toBe(45_000);
   });
 
+  it("uses agents.defaults.voiceModel as the default speech provider and model", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("mock", { autoSelectOrder: 1 }),
+      createMockSpeechProvider("openai", { autoSelectOrder: 10 }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "Use configured voice model.",
+      cfg: {
+        agents: {
+          defaults: {
+            voiceModel: { primary: "openai/gpt-4o-mini-tts" },
+          },
+        },
+        messages: {
+          tts: {
+            enabled: true,
+            prefsPath: "/tmp/openclaw-speech-core-voice-model-default-test.json",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.provider).toBe("openai");
+    expect(result.providerModel).toBe("gpt-4o-mini-tts");
+    const request = requireFirstSynthesisRequest("voice model synthesis request");
+    expect(request.providerConfig).toMatchObject({
+      model: "gpt-4o-mini-tts",
+      modelId: "gpt-4o-mini-tts",
+    });
+  });
+
+  it("tries voiceModel fallbacks before auto-selected speech providers", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("mock", { autoSelectOrder: 1 }),
+      createMockSpeechProvider("openai", {
+        autoSelectOrder: 10,
+        isConfigured: () => false,
+      }),
+      createMockSpeechProvider("elevenlabs", { autoSelectOrder: 99 }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "Use configured voice model fallback.",
+      cfg: {
+        agents: {
+          defaults: {
+            voiceModel: {
+              primary: "openai/gpt-4o-mini-tts",
+              fallbacks: ["elevenlabs/eleven_multilingual_v2"],
+            },
+          },
+        },
+        messages: {
+          tts: {
+            enabled: true,
+            prefsPath: "/tmp/openclaw-speech-core-voice-model-fallback-test.json",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.provider).toBe("elevenlabs");
+    expect(result.fallbackFrom).toBe("openai");
+    expect(result.providerModel).toBe("eleven_multilingual_v2");
+  });
+
   it.each(["feishu", "whatsapp"] as const)(
     "marks %s voice-note TTS for channel-side transcoding when provider returns mp3",
     async (channel) => {

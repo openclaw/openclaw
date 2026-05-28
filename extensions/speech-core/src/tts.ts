@@ -260,6 +260,79 @@ function resolveModelOverridePolicy(
   };
 }
 
+type VoiceModelRef = {
+  provider: string;
+  model: string;
+};
+
+function parseVoiceModelRef(value: unknown): VoiceModelRef | undefined {
+  const raw = normalizeOptionalString(value);
+  if (!raw) {
+    return undefined;
+  }
+  const slashIndex = raw.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === raw.length - 1) {
+    return undefined;
+  }
+  const provider = normalizeOptionalLowercaseString(raw.slice(0, slashIndex));
+  const model = normalizeOptionalString(raw.slice(slashIndex + 1));
+  return provider && model ? { provider, model } : undefined;
+}
+
+function resolveConfiguredVoiceModelRefs(cfg: OpenClawConfig | undefined): VoiceModelRef[] {
+  const voiceModel = cfg?.agents?.defaults?.voiceModel;
+  const refs: VoiceModelRef[] = [];
+  if (typeof voiceModel === "string") {
+    const parsed = parseVoiceModelRef(voiceModel);
+    return parsed ? [parsed] : [];
+  }
+  if (typeof voiceModel !== "object" || voiceModel === null || Array.isArray(voiceModel)) {
+    return [];
+  }
+  const primary = parseVoiceModelRef(voiceModel.primary);
+  if (primary) {
+    refs.push(primary);
+  }
+  if (Array.isArray(voiceModel.fallbacks)) {
+    for (const fallback of voiceModel.fallbacks) {
+      const parsed = parseVoiceModelRef(fallback);
+      if (parsed) {
+        refs.push(parsed);
+      }
+    }
+  }
+  return refs;
+}
+
+function resolveConfiguredVoiceModelForProvider(
+  cfg: OpenClawConfig | undefined,
+  providerId: string,
+): VoiceModelRef | undefined {
+  const canonicalProviderId = canonicalizeSpeechProviderId(providerId, cfg) ?? providerId;
+  return resolveConfiguredVoiceModelRefs(cfg).find((ref) => {
+    const refProvider = canonicalizeSpeechProviderId(ref.provider, cfg) ?? ref.provider;
+    return refProvider === canonicalProviderId;
+  });
+}
+
+function applyVoiceModelToSpeechProviderConfig(params: {
+  cfg: OpenClawConfig | undefined;
+  providerId: string;
+  providerConfig: SpeechProviderConfig;
+}): SpeechProviderConfig {
+  const voiceModel = resolveConfiguredVoiceModelForProvider(params.cfg, params.providerId);
+  if (!voiceModel) {
+    return params.providerConfig;
+  }
+  return {
+    ...params.providerConfig,
+    ...(normalizeOptionalString(params.providerConfig.model) ? {} : { model: voiceModel.model }),
+    ...(normalizeOptionalString(params.providerConfig.modelId)
+      ? {}
+      : { modelId: voiceModel.model }),
+  };
+}
+
 function sortSpeechProvidersForAutoSelection(cfg?: OpenClawConfig) {
   return listSpeechProviders(cfg).toSorted((left, right) => {
     const leftOrder = left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER;
@@ -648,6 +721,10 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (config.providerSource === "config") {
     return normalizeConfiguredSpeechProviderId(config.provider) ?? config.provider;
   }
+  const configuredVoiceProvider = resolveConfiguredVoiceModelRefs(config.sourceConfig)[0]?.provider;
+  if (configuredVoiceProvider && getSpeechProvider(configuredVoiceProvider, config.sourceConfig)) {
+    return configuredVoiceProvider;
+  }
 
   const effectiveCfg = config.sourceConfig;
   for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg)) {
@@ -861,6 +938,12 @@ export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConf
   const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : undefined;
   const normalizedPrimary = canonicalizeSpeechProviderId(primary, effectiveCfg) ?? primary;
   const ordered = new Set<TtsProvider>([normalizedPrimary]);
+  for (const ref of resolveConfiguredVoiceModelRefs(effectiveCfg)) {
+    const provider = canonicalizeSpeechProviderId(ref.provider, effectiveCfg) ?? ref.provider;
+    if (provider !== normalizedPrimary) {
+      ordered.add(provider);
+    }
+  }
   for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg)) {
     const normalized = provider.id;
     if (normalized !== normalizedPrimary) {
@@ -960,7 +1043,11 @@ function resolveReadySpeechProvider(params: {
     params.cfg,
   );
   const merged = mergeProviderConfigWithPersona({
-    providerConfig,
+    providerConfig: applyVoiceModelToSpeechProviderConfig({
+      cfg: params.cfg,
+      providerId: resolvedProvider.id,
+      providerConfig,
+    }),
     persona: params.persona,
     providerId: resolvedProvider.id,
   });
