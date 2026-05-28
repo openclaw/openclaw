@@ -102,7 +102,7 @@ describe("appendPrioritizedDynamicLiveModels", () => {
     );
     expect(normalizeModel).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "opencode-go",
+        provider: DYNAMIC_PROVIDER,
         id: "glm-5",
       }),
       "/tmp/openclaw-agent",
