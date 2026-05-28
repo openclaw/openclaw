@@ -142,6 +142,53 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
   Restrict which tools the job can use, for example `--tools exec,read`.
 </ParamField>
 
+### ACP harness jobs (`acpTurn`)
+
+Isolated cron jobs can run through an external ACP harness (`cursor-agent` / `acpx`) instead of the embedded Gateway model. Each run spawns a **oneshot** ACP session, submits one `prompt` turn, delivers the collected output, and closes the session.
+
+**Install and first job:** [Cron + ACP quickstart](/automation/cron-acp-quickstart) (source checkout, `openclaw.json`, Control UI build, troubleshooting).
+
+```bash
+openclaw cron add \
+  --name "Nightly repo sweep" \
+  --cron "0 9 * * *" \
+  --tz "Asia/Shanghai" \
+  --session isolated \
+  --acp \
+  --agent cursor \
+  --cwd "C:/Users/you/project" \
+  --message "List open PRs and summarize blockers" \
+  --announce --channel leliao --to "449766"
+```
+
+| Flag / field | Purpose |
+| ------------ | ------- |
+| `--acp` | Payload `kind: "acpTurn"` (CLI sugar) |
+| `--agent <id>` | OpenClaw agent with `runtime.type: "acp"` (or harness via `runtime.acp.agent`) |
+| `--harness <id>` | Override harness id (defaults to `acp.defaultAgent`) |
+| `--cwd <path>` | ACP working directory |
+| `--model`, `--thinking`, `--timeout-seconds` | Passed to the ACP runtime options |
+
+Requirements: `acp.enabled=true`, a configured backend (`acp.backend`, typically `acpx`), and `acp.dispatch.enabled` not set to `false`. Cron does not bind channel threads or reuse `/acp spawn` sessions; each firing is an isolated `agent:<id>:acp:cron:<jobId>:<uuid>` session.
+
+`sessionTarget` `isolated`, `current`, or `session:<id>` accepts `payload.kind` `agentTurn` or `acpTurn`. Manual runs and the Control UI use the same validation as the scheduler.
+
+Example `jobs.json` fragment:
+
+```json
+{
+  "sessionTarget": "isolated",
+  "agentId": "cursor",
+  "payload": {
+    "kind": "acpTurn",
+    "message": "Summarize open issues",
+    "cwd": "/path/to/repo",
+    "timeoutSeconds": 600
+  },
+  "delivery": { "mode": "none" }
+}
+```
+
 `--model` uses the selected allowed model as that job's primary model. It is not the same as a chat-session `/model` override: configured fallback chains still apply when the job primary fails. If the requested model is not allowed or cannot be resolved, cron fails the run with an explicit validation error instead of silently falling back to the job's agent/default model selection.
 
 Cron jobs can also carry payload-level `fallbacks`. When present, that list replaces the configured fallback chain for the job. Use `fallbacks: []` in the job payload/API when you want a strict cron run that tries only the selected model. If a job has `--model` but neither payload nor configured fallbacks, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden extra retry target.

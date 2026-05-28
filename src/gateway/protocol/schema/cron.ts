@@ -18,6 +18,21 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema; toolsAllow: TSch
   );
 }
 
+function cronAcpTurnPayloadSchema(params: { message: TSchema }) {
+  return Type.Object(
+    {
+      kind: Type.Literal("acpTurn"),
+      message: params.message,
+      harness: Type.Optional(Type.String()),
+      cwd: Type.Optional(Type.String()),
+      model: Type.Optional(Type.String()),
+      thinking: Type.Optional(Type.String()),
+      timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+    },
+    { additionalProperties: false },
+  );
+}
+
 const CronSessionTargetSchema = Type.Union([
   Type.Literal("main"),
   Type.Literal("isolated"),
@@ -183,6 +198,9 @@ export const CronPayloadSchema = Type.Union([
     message: NonEmptyString,
     toolsAllow: Type.Array(Type.String()),
   }),
+  cronAcpTurnPayloadSchema({
+    message: NonEmptyString,
+  }),
 ]);
 
 export const CronPayloadPatchSchema = Type.Union([
@@ -196,6 +214,9 @@ export const CronPayloadPatchSchema = Type.Union([
   cronAgentTurnPayloadSchema({
     message: Type.Optional(NonEmptyString),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
+  }),
+  cronAcpTurnPayloadSchema({
+    message: Type.Optional(NonEmptyString),
   }),
 ]);
 

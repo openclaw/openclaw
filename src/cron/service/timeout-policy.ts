@@ -1,4 +1,4 @@
-import type { CronJob } from "../types.js";
+import { isIsolatedPromptPayloadKind, type CronJob } from "../types.js";
 
 /**
  * Maximum wall-clock time for a single job execution. Acts as a safety net
@@ -14,12 +14,13 @@ export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
 export const AGENT_TURN_SAFETY_TIMEOUT_MS = 60 * 60_000; // 60 minutes
 
 export function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
+  const isPromptTurn = isIsolatedPromptPayloadKind(job.payload.kind);
   const configuredTimeoutMs =
-    job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+    isPromptTurn && typeof job.payload.timeoutSeconds === "number"
       ? Math.floor(job.payload.timeoutSeconds * 1_000)
       : undefined;
   if (configuredTimeoutMs === undefined) {
-    return job.payload.kind === "agentTurn" ? AGENT_TURN_SAFETY_TIMEOUT_MS : DEFAULT_JOB_TIMEOUT_MS;
+    return isPromptTurn ? AGENT_TURN_SAFETY_TIMEOUT_MS : DEFAULT_JOB_TIMEOUT_MS;
   }
   return configuredTimeoutMs <= 0 ? undefined : configuredTimeoutMs;
 }

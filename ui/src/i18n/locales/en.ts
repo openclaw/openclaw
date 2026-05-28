@@ -1325,9 +1325,18 @@ export const en: TranslationMap = {
       payloadKind: "What should run?",
       systemEvent: "Post message to main timeline",
       agentTurn: "Run assistant task (isolated)",
+      acpTurn: "Run ACP task (Cursor / Codex)",
       systemEventHelp:
         "Sends your text to the gateway main timeline (good for reminders/triggers).",
       agentTurnHelp: "Starts an assistant run in its own session using your prompt.",
+      acpTurnHelp:
+        "Runs a one-shot ACP harness turn (local cursor-agent / acpx). Requires isolated session.",
+      acpHarness: "ACP harness",
+      acpHarnessPlaceholder: "e.g. cursor (default from config)",
+      acpHarnessHelp: "Harness id for the ACP backend. Leave blank to use acp.defaultAgent.",
+      acpCwd: "Working directory",
+      acpCwdPlaceholder: "e.g. C:\\Users\\you\\project",
+      acpCwdHelp: "Optional cwd passed to the ACP runtime for this job.",
       timeoutSeconds: "Timeout (seconds)",
       timeoutPlaceholder: "Optional, e.g. 90",
       timeoutHelp:

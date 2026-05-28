@@ -33,6 +33,32 @@ Preferred setup: run `openclaw onboard` in your terminal.
 OpenClaw Onboard guides you step by step through setting up the gateway, workspace, channels, and skills. It is the recommended CLI setup path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
 Works with npm, pnpm, or bun.
 
+### ACP cron (`acpTurn`) — this fork
+
+Isolated cron jobs can run through **acpx** (for example **Cursor** via `cursor-agent`) using `payload.kind: "acpTurn"`, in addition to embedded `agentTurn` runs.
+
+- **Quickstart (install, config, CLI, Control UI):** [docs/automation/cron-acp-quickstart.md](docs/automation/cron-acp-quickstart.md)
+- **Reference:** [docs/automation/cron-jobs.md](docs/automation/cron-jobs.md#acp-harness-jobs-acpturn)
+
+After cloning, run `pnpm run build` and `pnpm run ui:build`, point your Gateway at this checkout, then `openclaw cron add --session isolated --acp …`.
+
+**One-command install / upgrade (fork):**
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/lxf-lxf/openclaw/main/scripts/fork-upgrade.ps1 | iex
+
+# Restart gateway after upgrade
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/lxf-lxf/openclaw/main/scripts/fork-upgrade.ps1))) -RestartGateway
+```
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/lxf-lxf/openclaw/main/scripts/fork-upgrade.sh | bash
+```
+
+Optional flags: `-InstallDir`, `-RestartGateway` (PowerShell) or `--install-dir`, `--restart-gateway` (bash). See `scripts/fork-upgrade.ps1` / `scripts/fork-upgrade.sh`.
+
 ## Sponsors
 
 <table>

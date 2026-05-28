@@ -589,6 +589,37 @@ describe("cron controller", () => {
     expect(state.cronForm.deliveryAccountId).toBe("bot-2");
   });
 
+  it("loads acpTurn jobs into the cron form", () => {
+    const state = createState();
+    const job = {
+      id: "job-acp",
+      name: "ACP smoke",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every" as const, everyMs: 86_400_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: {
+        kind: "acpTurn" as const,
+        message: "Reply OK",
+        harness: "cursor",
+        cwd: "C:\\work",
+        timeoutSeconds: 120,
+      },
+      delivery: { mode: "none" as const },
+      state: {},
+    };
+
+    startCronEdit(state, job);
+
+    expect(state.cronForm.payloadKind).toBe("acpTurn");
+    expect(state.cronForm.payloadText).toBe("Reply OK");
+    expect(state.cronForm.payloadHarness).toBe("cursor");
+    expect(state.cronForm.payloadCwd).toBe("C:\\work");
+    expect(state.cronForm.timeoutSeconds).toBe("120");
+  });
+
   it('keeps implicit announce delivery implicit when editing a job that shows "last" in the form', async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {

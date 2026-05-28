@@ -159,7 +159,7 @@ export async function ensureLoaded(
       let defaulted: "main" | "isolated" | undefined;
       if (payloadKind === "systemEvent") {
         defaulted = "main";
-      } else if (payloadKind === "agentTurn") {
+      } else if (payloadKind === "agentTurn" || payloadKind === "acpTurn") {
         defaulted = "isolated";
       }
       if (defaulted) {

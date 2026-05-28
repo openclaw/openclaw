@@ -1167,6 +1167,10 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
+  if (params.job.payload.kind === "acpTurn") {
+    const { runCronAcpTurn } = await import("./run-acp.js");
+    return await runCronAcpTurn(params);
+  }
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
   const abortReason = () => {

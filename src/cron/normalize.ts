@@ -166,6 +166,8 @@ function coercePayload(payload: UnknownRecord) {
   const kindRaw = normalizeLowercaseStringOrEmpty(next.kind);
   if (kindRaw === "agentturn") {
     next.kind = "agentTurn";
+  } else if (kindRaw === "acpturn") {
+    next.kind = "acpTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
   } else if (kindRaw) {

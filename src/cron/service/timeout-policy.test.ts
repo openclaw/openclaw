@@ -33,6 +33,13 @@ describe("timeout-policy", () => {
     expect(timeout).toBe(AGENT_TURN_SAFETY_TIMEOUT_MS);
   });
 
+  it("uses expanded safety timeout for acpTurn jobs without explicit timeout", () => {
+    const job = makeJob({ kind: "acpTurn", message: "hi" });
+    job.sessionTarget = "isolated";
+    const timeout = resolveCronJobTimeoutMs(job);
+    expect(timeout).toBe(AGENT_TURN_SAFETY_TIMEOUT_MS);
+  });
+
   it("disables timeout when timeoutSeconds <= 0", () => {
     const timeout = resolveCronJobTimeoutMs(
       makeJob({ kind: "agentTurn", message: "hi", timeoutSeconds: 0 }),

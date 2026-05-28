@@ -53,7 +53,7 @@ export function getInvalidPersistedCronJobReason(
   }
   const payloadRecord = payload as Record<string, unknown>;
   const payloadKind = payloadRecord.kind;
-  if (payloadKind !== "systemEvent" && payloadKind !== "agentTurn") {
+  if (payloadKind !== "systemEvent" && payloadKind !== "agentTurn" && payloadKind !== "acpTurn") {
     return "invalid-payload";
   }
   if (payloadKind === "systemEvent") {
@@ -62,7 +62,7 @@ export function getInvalidPersistedCronJobReason(
       return "invalid-payload";
     }
   }
-  if (payloadKind === "agentTurn") {
+  if (payloadKind === "agentTurn" || payloadKind === "acpTurn") {
     const message = payloadRecord.message;
     if (typeof message !== "string" || message.trim().length === 0) {
       return "invalid-payload";

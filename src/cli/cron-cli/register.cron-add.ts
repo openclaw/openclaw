@@ -102,6 +102,9 @@ export function registerCronAddCommand(cron: Command) {
       .option("--exact", "Disable cron staggering (set stagger to 0)", false)
       .option("--system-event <text>", "System event payload (main session)")
       .option("--message <text>", "Agent message payload")
+      .option("--acp", "Run isolated jobs via ACP harness (cursor-agent/acpx)", false)
+      .option("--harness <id>", "ACP harness id override (e.g. cursor)")
+      .option("--cwd <path>", "ACP working directory for --acp jobs")
       .option(
         "--thinking <level>",
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
@@ -159,6 +162,18 @@ export function registerCronAddCommand(cron: Command) {
               return { kind: "systemEvent" as const, text: systemEvent };
             }
             const timeoutSeconds = parsePositiveIntOrUndefined(opts.timeoutSeconds);
+            if (opts.acp === true) {
+              return {
+                kind: "acpTurn" as const,
+                message,
+                harness: normalizeOptionalString(opts.harness),
+                cwd: normalizeOptionalString(opts.cwd),
+                model: normalizeOptionalString(opts.model),
+                thinking: normalizeOptionalString(opts.thinking),
+                timeoutSeconds:
+                  timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
+              };
+            }
             return {
               kind: "agentTurn" as const,
               message,
@@ -177,7 +192,9 @@ export function registerCronAddCommand(cron: Command) {
               : () => undefined;
           const sessionSource = optionSource("session");
           const sessionTargetRaw = normalizeOptionalString(opts.session) ?? "";
-          const inferredSessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
+          const isIsolatedTurnPayload =
+            payload.kind === "agentTurn" || payload.kind === "acpTurn";
+          const inferredSessionTarget = isIsolatedTurnPayload ? "isolated" : "main";
           const sessionTarget =
             sessionSource === "cli"
               ? normalizeCronSessionTargetOption(sessionTargetRaw) || ""
@@ -198,14 +215,18 @@ export function registerCronAddCommand(cron: Command) {
           if (sessionTarget === "main" && payload.kind !== "systemEvent") {
             throw new Error("Main jobs require --system-event (systemEvent).");
           }
-          if (isIsolatedLikeSessionTarget && payload.kind !== "agentTurn") {
-            throw new Error("Isolated/current/custom-session jobs require --message (agentTurn).");
+          if (isIsolatedLikeSessionTarget && !isIsolatedTurnPayload) {
+            throw new Error(
+              "Isolated/current/custom-session jobs require --message (agentTurn or --acp).",
+            );
           }
           if (
             (opts.announce || typeof opts.deliver === "boolean") &&
-            (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn")
+            (!isIsolatedLikeSessionTarget || !isIsolatedTurnPayload)
           ) {
-            throw new Error("--announce/--no-deliver require a non-main agentTurn session target.");
+            throw new Error(
+              "--announce/--no-deliver require a non-main agentTurn/acpTurn session target.",
+            );
           }
 
           const accountId = normalizeOptionalString(opts.account);
@@ -214,15 +235,15 @@ export function registerCronAddCommand(cron: Command) {
 
           if (
             (accountId || hasThreadId) &&
-            (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn")
+            (!isIsolatedLikeSessionTarget || !isIsolatedTurnPayload)
           ) {
             throw new Error(
-              "--account and --thread-id require a non-main agentTurn job with delivery.",
+              "--account and --thread-id require a non-main agentTurn/acpTurn job with delivery.",
             );
           }
 
           const deliveryMode =
-            isIsolatedLikeSessionTarget && payload.kind === "agentTurn"
+            isIsolatedLikeSessionTarget && isIsolatedTurnPayload
               ? hasAnnounce
                 ? "announce"
                 : hasNoDeliver
@@ -239,7 +260,7 @@ export function registerCronAddCommand(cron: Command) {
 
           const sessionKey = normalizeOptionalString(opts.sessionKey);
 
-          if (payload.kind === "agentTurn" && !agentId) {
+          if ((payload.kind === "agentTurn" || payload.kind === "acpTurn") && !agentId) {
             defaultRuntime.error(
               theme.warn(
                 "No --agent specified; the job will run with the configured default agent. " +

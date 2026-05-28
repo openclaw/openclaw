@@ -375,7 +375,9 @@ export function printCronList(
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
     const modelLabel = pad(
       truncate(
-        (job.payload?.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
+        (job.payload?.kind === "agentTurn" || job.payload?.kind === "acpTurn"
+          ? job.payload.model
+          : undefined) ?? "-",
         CRON_MODEL_PAD,
       ),
       CRON_MODEL_PAD,
@@ -417,7 +419,7 @@ export function printCronList(
         ? colorize(rich, theme.info, deliveryLabel)
         : colorize(rich, theme.muted, deliveryLabel),
       coloredAgent,
-      job.payload?.kind === "agentTurn" && job.payload.model
+      (job.payload?.kind === "agentTurn" || job.payload?.kind === "acpTurn") && job.payload.model
         ? colorize(rich, theme.info, modelLabel)
         : colorize(rich, theme.muted, modelLabel),
     ].join(" ");
@@ -438,7 +440,13 @@ export function printCronShow(
   runtime.log(`schedule: ${formatSchedule(job.schedule)}`);
   runtime.log(`session: ${job.sessionTarget ?? "-"}`);
   runtime.log(`agent: ${job.agentId ?? "-"}`);
-  runtime.log(`model: ${job.payload.kind === "agentTurn" ? (job.payload.model ?? "-") : "-"}`);
+  runtime.log(
+    `model: ${
+      job.payload.kind === "agentTurn" || job.payload.kind === "acpTurn"
+        ? (job.payload.model ?? "-")
+        : "-"
+    }`,
+  );
   runtime.log(`delivery: ${preview.label} (${preview.detail})`);
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);

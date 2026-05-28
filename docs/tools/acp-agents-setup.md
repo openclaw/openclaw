@@ -9,6 +9,8 @@ title: "ACP agents — setup"
 
 For the overview, operator runbook, and concepts, see [ACP agents](/tools/acp-agents).
 
+To schedule recurring **oneshot** ACP runs (Cursor/Codex via cron), see [Cron + ACP quickstart](/automation/cron-acp-quickstart).
+
 The sections below cover acpx harness config, plugin setup for the MCP bridges, and permission configuration.
 
 Use this page only when you are setting up the ACP/acpx route. For native Codex
