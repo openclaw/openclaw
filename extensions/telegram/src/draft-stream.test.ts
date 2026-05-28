@@ -172,6 +172,21 @@ describe("createTelegramDraftStream", () => {
     },
   );
 
+  it("does not finalize stale preview text after a stopped send failure", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage.mockRejectedValueOnce(new Error("temporary send failure"));
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { warn });
+
+    stream.update("Hello");
+    await stream.flush();
+    await stream.stop();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined);
+    expect(warn).toHaveBeenCalledWith("telegram stream preview failed: temporary send failure");
+  });
+
   it("keeps allow_sending_without_reply on message previews that target a reply", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, {

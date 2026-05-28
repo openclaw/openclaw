@@ -302,6 +302,9 @@ export function createTelegramDraftStream(params: {
   const stop = async () => {
     streamState.final = true;
     await loop.flush();
+    if (streamState.stopped) {
+      return;
+    }
     const finalText = lastRequestedText.trimEnd();
     if (finalText && finalText !== lastDeliveredText.trimEnd()) {
       await sendOrEditStreamMessage(finalText);
