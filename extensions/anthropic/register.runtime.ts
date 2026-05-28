@@ -45,12 +45,18 @@ import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "anthropic";
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-7";
+const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-8";
+const ANTHROPIC_OPUS_48_MODEL_ID = "claude-opus-4-8";
+const ANTHROPIC_OPUS_48_DOT_MODEL_ID = "claude-opus-4.8";
 const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
 const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
 const ANTHROPIC_GA_1M_CONTEXT_TOKENS = 1_048_576;
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
+const ANTHROPIC_OPUS_48_TEMPLATE_MODEL_IDS = [
+  ANTHROPIC_OPUS_47_MODEL_ID,
+  ANTHROPIC_OPUS_47_DOT_MODEL_ID,
+] as const;
 const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
   ANTHROPIC_OPUS_46_MODEL_ID,
   ANTHROPIC_OPUS_46_DOT_MODEL_ID,
@@ -62,10 +68,14 @@ const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
   ANTHROPIC_OPUS_46_DOT_MODEL_ID,
   ANTHROPIC_OPUS_47_MODEL_ID,
   ANTHROPIC_OPUS_47_DOT_MODEL_ID,
+  ANTHROPIC_OPUS_48_MODEL_ID,
+  ANTHROPIC_OPUS_48_DOT_MODEL_ID,
   ANTHROPIC_SONNET_46_MODEL_ID,
   ANTHROPIC_SONNET_46_DOT_MODEL_ID,
 ] as const;
 const ANTHROPIC_MODERN_MODEL_PREFIXES = [
+  "claude-opus-4-8",
+  "claude-opus-4.8",
   "claude-opus-4-7",
   "claude-opus-4.7",
   "claude-opus-4-6",
@@ -293,6 +303,14 @@ function resolveAnthropicForwardCompatModel(
   return (
     resolveAnthropic46ForwardCompatModel({
       ctx,
+      dashModelId: ANTHROPIC_OPUS_48_MODEL_ID,
+      dotModelId: ANTHROPIC_OPUS_48_DOT_MODEL_ID,
+      dashTemplateId: ANTHROPIC_OPUS_47_MODEL_ID,
+      dotTemplateId: ANTHROPIC_OPUS_47_DOT_MODEL_ID,
+      fallbackTemplateIds: ANTHROPIC_OPUS_48_TEMPLATE_MODEL_IDS,
+    }) ??
+    resolveAnthropic46ForwardCompatModel({
+      ctx,
       dashModelId: ANTHROPIC_OPUS_47_MODEL_ID,
       dotModelId: ANTHROPIC_OPUS_47_DOT_MODEL_ID,
       dashTemplateId: ANTHROPIC_OPUS_46_MODEL_ID,
@@ -413,15 +431,18 @@ function resolveAnthropicImageMediaInput(modelId: string, modelName?: string) {
     return undefined;
   }
   const refs = [modelId, modelName].filter((value): value is string => typeof value === "string");
-  const opus47 = refs.some((ref) =>
-    [ANTHROPIC_OPUS_47_MODEL_ID, ANTHROPIC_OPUS_47_DOT_MODEL_ID].some((prefix) =>
-      normalizeLowercaseStringOrEmpty(ref).startsWith(prefix),
-    ),
+  const highResOpus = refs.some((ref) =>
+    [
+      ANTHROPIC_OPUS_47_MODEL_ID,
+      ANTHROPIC_OPUS_47_DOT_MODEL_ID,
+      ANTHROPIC_OPUS_48_MODEL_ID,
+      ANTHROPIC_OPUS_48_DOT_MODEL_ID,
+    ].some((prefix) => normalizeLowercaseStringOrEmpty(ref).startsWith(prefix)),
   );
   return {
     image: {
-      maxSidePx: opus47 ? 2576 : 1568,
-      preferredSidePx: opus47 ? 2576 : 1568,
+      maxSidePx: highResOpus ? 2576 : 1568,
+      preferredSidePx: highResOpus ? 2576 : 1568,
       tokenMode: "provider" as const,
     },
   };
