@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { formatTokenCount } from "../../utils/usage-format.js";
-import { patchSessionEntry } from "./store.js";
+import { getSessionEntry, patchSessionEntry } from "./store.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
@@ -14,6 +14,7 @@ type SessionGoalStoreOptions = {
   storePath?: string;
   now?: number;
   fallbackEntry?: SessionEntry;
+  persist?: boolean;
 };
 
 type CreateSessionGoalOptions = SessionGoalStoreOptions & {
@@ -153,6 +154,15 @@ export async function getSessionGoal(
   options: SessionGoalStoreOptions,
 ): Promise<SessionGoalSnapshot> {
   const now = nowMs(options.now);
+  if (options.persist === false) {
+    const entry =
+      getSessionEntry({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
+      options.fallbackEntry;
+    const projected = entry
+      ? resolveSessionGoalDisplayState(entry, now, { adoptFreshBaseline: false })
+      : undefined;
+    return projected ? { status: "found", goal: projected } : { status: "missing" };
+  }
   let goal: SessionGoal | undefined;
   const result = await patchSessionEntry({
     sessionKey: options.sessionKey,

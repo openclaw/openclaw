@@ -73,7 +73,10 @@ export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
     description: "Get the current goal for this thread, including status and token usage.",
     parameters: Type.Object({}),
     execute: async () => {
-      const snapshot = await getSessionGoal(resolveGoalSessionScope(options));
+      const snapshot = await getSessionGoal({
+        ...resolveGoalSessionScope(options),
+        persist: false,
+      });
       return jsonResult(snapshot);
     },
   };
