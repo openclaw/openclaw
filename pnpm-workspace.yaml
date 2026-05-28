@@ -54,6 +54,7 @@ minimumReleaseAgeExclude:
   - "sqlite-vec"
   - "sqlite-vec-*"
   - "rastermill"
+  - "clawpdf"
 
 nodeLinker: hoisted
 blockExoticSubdeps: true

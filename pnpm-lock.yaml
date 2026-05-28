@@ -94,8 +94,8 @@ importers:
         specifier: 5.0.0
         version: 5.0.0
       clawpdf:
-        specifier: https://codeload.github.com/openclaw/clawpdf/tar.gz/2b942755f7ae3d1d8ba6bb219cb3bc1b589069b1
-        version: https://codeload.github.com/openclaw/clawpdf/tar.gz/2b942755f7ae3d1d8ba6bb219cb3bc1b589069b1
+        specifier: 0.2.0
+        version: 0.2.0
       commander:
         specifier: 14.0.3
         version: 14.0.3
@@ -690,8 +690,8 @@ importers:
   extensions/document-extract:
     dependencies:
       clawpdf:
-        specifier: https://codeload.github.com/openclaw/clawpdf/tar.gz/2b942755f7ae3d1d8ba6bb219cb3bc1b589069b1
-        version: https://codeload.github.com/openclaw/clawpdf/tar.gz/2b942755f7ae3d1d8ba6bb219cb3bc1b589069b1
+        specifier: 0.2.0
+        version: 0.2.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -4519,9 +4519,8 @@ packages:
   cjs-module-lexer@2.2.0:
     resolution: {integrity: sha512-4bHTS2YuzUvtoLjdy+98ykbNB5jS0+07EvFNXerqZQJ89F7DI6ET7OQo/HJuW6K0aVsKA9hj9/RVb2kQVOrPDQ==}
 
-  clawpdf@https://codeload.github.com/openclaw/clawpdf/tar.gz/2b942755f7ae3d1d8ba6bb219cb3bc1b589069b1:
-    resolution: {tarball: https://codeload.github.com/openclaw/clawpdf/tar.gz/2b942755f7ae3d1d8ba6bb219cb3bc1b589069b1}
-    version: 0.1.0
+  clawpdf@0.2.0:
+    resolution: {integrity: sha512-Za4HD3CMRHNqOXOOyVJiQLnEuezRZR/oXiBzraTwL5XEQZuBwFxnyC1UzN4AjQWV2JrLN3ItbzfPRGE0gGOVwg==}
     engines: {node: '>=20'}
 
   cli-table3@0.6.5:
@@ -10058,7 +10057,7 @@ snapshots:
 
   cjs-module-lexer@2.2.0: {}
 
-  clawpdf@https://codeload.github.com/openclaw/clawpdf/tar.gz/2b942755f7ae3d1d8ba6bb219cb3bc1b589069b1: {}
+  clawpdf@0.2.0: {}
 
   cli-table3@0.6.5:
     dependencies:

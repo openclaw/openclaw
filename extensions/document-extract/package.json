@@ -5,7 +5,7 @@
   "description": "OpenClaw local document extraction plugin",
   "type": "module",
   "dependencies": {
-    "clawpdf": "https://codeload.github.com/openclaw/clawpdf/tar.gz/2b942755f7ae3d1d8ba6bb219cb3bc1b589069b1"
+    "clawpdf": "0.2.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
