@@ -90,6 +90,32 @@ describe("agent end side effects", () => {
     resolveCapture?.();
   });
 
+  it("does not wait for Skill Research auto-capture when awaiting plugin hooks", async () => {
+    let resolveCapture: (() => void) | undefined;
+    mockAutoCapture.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveCapture = resolve;
+      }),
+    );
+
+    await expect(
+      awaitAgentEndSideEffects({
+        event: {
+          messages: [],
+          success: true,
+        },
+        ctx: {
+          runId: "run-1",
+          workspaceDir: "/workspace",
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(mockAutoCapture).toHaveBeenCalledTimes(1);
+    expect(mockAwaitAgentEndHook).toHaveBeenCalledTimes(1);
+    resolveCapture?.();
+  });
+
   it("still runs agent_end hooks when Skill Research auto-capture fails", async () => {
     mockAutoCapture.mockRejectedValueOnce(new Error("capture failed"));
 
