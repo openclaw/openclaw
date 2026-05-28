@@ -95,7 +95,11 @@ export function createPluginActivationSource(params: {
 }
 
 const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
-  Boolean(plugins?.slots && Object.prototype.hasOwnProperty.call(plugins.slots, "memory"));
+  Boolean(
+    plugins?.slots &&
+    (Object.prototype.hasOwnProperty.call(plugins.slots, "memory") ||
+      Object.prototype.hasOwnProperty.call(plugins.slots, "memory.recall")),
+  );
 
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(
