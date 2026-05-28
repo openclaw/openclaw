@@ -152,6 +152,7 @@ import {
   shouldAllowSilentLocalPairing,
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
+import { buildHandshakeAuthLogKey, HandshakeAuthLogLimiter } from "./handshake-auth-log-limiter.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -162,6 +163,7 @@ const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.token.rotate",
   "device.token.revoke",
 ]);
+const unauthorizedHandshakeLogLimiter = new HandshakeAuthLogLimiter();
 
 /** Match production release versions (YYYY.M.D or YYYY.M.D-beta.N). */
 const RELEASED_VERSION_RE = /^\d{4}\.\d+\.\d+/;
@@ -759,9 +761,24 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             scopeCount: scopes.length,
             hasDeviceIdentity: Boolean(device),
           });
-          logWsControl.warn(
-            `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatForLog(connectParams.client.platform)} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"}`,
+          const authLogDecision = unauthorizedHandshakeLogLimiter.register(
+            buildHandshakeAuthLogKey({
+              reason: failedAuth.reason,
+              remoteAddr,
+              client: clientLabel,
+              mode: connectParams.client.mode,
+              authProvided,
+            }),
           );
+          if (authLogDecision.shouldLog) {
+            const suppressedText =
+              authLogDecision.suppressedSinceLastLog > 0
+                ? ` suppressed=${authLogDecision.suppressedSinceLastLog}`
+                : "";
+            logWsControl.warn(
+              `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatForLog(connectParams.client.platform)} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"}${suppressedText}`,
+            );
+          }
           const authMessage = formatGatewayAuthFailureMessage({
             authMode: resolvedAuth.mode,
             authProvided,

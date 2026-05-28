@@ -173,6 +173,7 @@ import {
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
+  shouldRetryMissingAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
@@ -1157,6 +1158,8 @@ export async function runEmbeddedAgent(
       // visible-answer retry instruction instead.
       const MAX_EMPTY_ERROR_RETRIES = 3;
       let emptyErrorRetries = 0;
+      const MAX_MISSING_ASSISTANT_RETRIES = 1;
+      let missingAssistantRetryAttempts = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
@@ -3062,6 +3065,24 @@ export async function runEmbeddedAgent(
             nextReasoningOnlyRetryInstruction &&
             reasoningOnlyRetryAttempts >= maxReasoningOnlyRetryAttempts;
           if (
+            !emptyAssistantReplyIsSilent &&
+            shouldRetryMissingAssistantTurn({
+              payloadCount,
+              aborted,
+              promptError,
+              timedOut,
+              attempt,
+            }) &&
+            missingAssistantRetryAttempts < MAX_MISSING_ASSISTANT_RETRIES
+          ) {
+            missingAssistantRetryAttempts += 1;
+            log.warn(
+              `missing assistant terminal message detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} with same prompt`,
+            );
+            continue;
+          }
+          if (
             !nextPlanningOnlyRetryInstruction &&
             !nextReasoningOnlyRetryInstruction &&
             nextEmptyResponseRetryInstruction &&
@@ -3288,9 +3309,17 @@ export async function runEmbeddedAgent(
               livenessState,
             });
             const incompleteStopReason = attempt.lastAssistant?.stopReason;
+            const replayMetadata = resolveAttemptReplayMetadata(attempt);
             log.warn(
               `incomplete turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `stopReason=${incompleteStopReason} payloads=${payloadCount} — surfacing error to user`,
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} ` +
+                `stopReason=${incompleteStopReason ?? "missing"} hasLastAssistant=${attempt.lastAssistant ? "yes" : "no"} ` +
+                `hasCurrentAttemptAssistant=${attempt.currentAttemptAssistant ? "yes" : "no"} payloads=${payloadCount} ` +
+                `tools=${attempt.toolMetas?.length ?? 0} replaySafe=${replayMetadata.replaySafe ? "yes" : "no"} ` +
+                `compactions=${attemptCompactionCount} planningRetries=${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} ` +
+                `reasoningRetries=${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
+                `emptyRetries=${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} ` +
+                `missingAssistantRetries=${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} — surfacing error to user`,
             );
 
             // Mark the failing profile for cooldown so multi-profile setups

@@ -1,0 +1,68 @@
+export type HandshakeAuthLogDecision = {
+  shouldLog: boolean;
+  suppressedSinceLastLog: number;
+};
+
+type HandshakeAuthLogState = {
+  lastLoggedAtMs: number;
+  suppressedSinceLastLog: number;
+};
+
+export class HandshakeAuthLogLimiter {
+  private readonly intervalMs: number;
+  private readonly maxEntries: number;
+  private readonly entries = new Map<string, HandshakeAuthLogState>();
+
+  constructor(options?: { intervalMs?: number; maxEntries?: number }) {
+    this.intervalMs = Math.max(1, Math.floor(options?.intervalMs ?? 30_000));
+    this.maxEntries = Math.max(1, Math.floor(options?.maxEntries ?? 256));
+  }
+
+  register(key: string, nowMs = Date.now()): HandshakeAuthLogDecision {
+    const entry = this.entries.get(key);
+    if (!entry) {
+      this.pruneIfNeeded();
+      this.entries.set(key, {
+        lastLoggedAtMs: nowMs,
+        suppressedSinceLastLog: 0,
+      });
+      return { shouldLog: true, suppressedSinceLastLog: 0 };
+    }
+
+    if (nowMs - entry.lastLoggedAtMs < this.intervalMs) {
+      entry.suppressedSinceLastLog += 1;
+      return { shouldLog: false, suppressedSinceLastLog: 0 };
+    }
+
+    const suppressedSinceLastLog = entry.suppressedSinceLastLog;
+    entry.lastLoggedAtMs = nowMs;
+    entry.suppressedSinceLastLog = 0;
+    return { shouldLog: true, suppressedSinceLastLog };
+  }
+
+  private pruneIfNeeded(): void {
+    if (this.entries.size < this.maxEntries) {
+      return;
+    }
+    const oldestKey = this.entries.keys().next().value;
+    if (oldestKey !== undefined) {
+      this.entries.delete(oldestKey);
+    }
+  }
+}
+
+export function buildHandshakeAuthLogKey(params: {
+  reason?: string;
+  remoteAddr?: string;
+  client?: string;
+  mode?: string;
+  authProvided?: string;
+}): string {
+  return [
+    params.reason ?? "unknown",
+    params.remoteAddr ?? "?",
+    params.client ?? "?",
+    params.mode ?? "?",
+    params.authProvided ?? "?",
+  ].join("|");
+}

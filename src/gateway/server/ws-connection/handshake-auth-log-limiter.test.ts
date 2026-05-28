@@ -1,0 +1,45 @@
+import { describe, expect, it } from "vitest";
+import { buildHandshakeAuthLogKey, HandshakeAuthLogLimiter } from "./handshake-auth-log-limiter.js";
+
+describe("HandshakeAuthLogLimiter", () => {
+  it("suppresses repeated auth failures for the same client key within the interval", () => {
+    const limiter = new HandshakeAuthLogLimiter({ intervalMs: 1_000 });
+    const key = buildHandshakeAuthLogKey({
+      reason: "token_missing",
+      remoteAddr: "127.0.0.1",
+      client: "gateway:sessions.list",
+      mode: "backend",
+      authProvided: "none",
+    });
+
+    expect(limiter.register(key, 10_000)).toEqual({
+      shouldLog: true,
+      suppressedSinceLastLog: 0,
+    });
+    expect(limiter.register(key, 10_100)).toEqual({
+      shouldLog: false,
+      suppressedSinceLastLog: 0,
+    });
+    expect(limiter.register(key, 10_200)).toEqual({
+      shouldLog: false,
+      suppressedSinceLastLog: 0,
+    });
+    expect(limiter.register(key, 11_001)).toEqual({
+      shouldLog: true,
+      suppressedSinceLastLog: 2,
+    });
+  });
+
+  it("does not suppress distinct clients", () => {
+    const limiter = new HandshakeAuthLogLimiter({ intervalMs: 1_000 });
+
+    expect(limiter.register("token_missing|127.0.0.1|gateway:sessions.list", 10)).toEqual({
+      shouldLog: true,
+      suppressedSinceLastLog: 0,
+    });
+    expect(limiter.register("token_missing|127.0.0.1|gateway:health", 20)).toEqual({
+      shouldLog: true,
+      suppressedSinceLastLog: 0,
+    });
+  });
+});

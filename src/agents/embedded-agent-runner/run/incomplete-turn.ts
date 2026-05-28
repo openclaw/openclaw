@@ -306,6 +306,51 @@ export function resolveIncompleteTurnPayloadText(params: {
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
+export function shouldRetryMissingAssistantTurn(params: {
+  payloadCount: number;
+  aborted: boolean;
+  promptError?: unknown;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): boolean {
+  if (
+    params.payloadCount !== 0 ||
+    params.aborted ||
+    Boolean(params.promptError) ||
+    params.timedOut ||
+    params.attempt.clientToolCalls ||
+    params.attempt.currentAttemptAssistant ||
+    params.attempt.lastAssistant ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError
+  ) {
+    return false;
+  }
+
+  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
+    return false;
+  }
+
+  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+    return false;
+  }
+
+  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
+    return false;
+  }
+
+  if (hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns)) {
+    return false;
+  }
+
+  if (hasAsyncStartedToolActivity(params.attempt.toolMetas)) {
+    return false;
+  }
+
+  return !resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects;
+}
+
 function joinAssistantTexts(assistantTexts?: readonly string[]): string {
   return (assistantTexts ?? []).join("\n\n").trim();
 }
