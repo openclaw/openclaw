@@ -1,4 +1,3 @@
-// Covers MiniMax VLM auth/header normalization and provider-specific routing.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "./minimax-vlm.js";
@@ -22,8 +21,6 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
   });
 
   async function runNormalizationCase(apiKey: string) {
-    // Headers must be Latin-1 and line-break free; normalize user/API-key
-    // input before constructing the Authorization header.
     const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
       expect(auth).toBe("Bearer minimax-test-key");
@@ -158,8 +155,6 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
   });
 
   it("bounds large provider error response bodies", async () => {
-    // Provider error bodies can be large. Read enough for diagnostics, then
-    // cancel the stream so failures stay bounded.
     let canceled = false;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -183,15 +178,14 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       prompt: "hi",
       imageDataUrl: "data:image/png;base64,AAAA",
       apiHost: "https://api.minimax.io",
-    }).catch((caught: unknown) => caught);
+    }).catch((caught: unknown) => caught as Error);
 
-    if (!(error instanceof Error)) {
-      throw new Error("expected MiniMax VLM request to throw an Error");
-    }
-    expect(error.message).toContain("MiniMax VLM request failed");
-    expect(error.message).toContain("Trace-Id: trace-123");
-    expect(error.message).not.toContain("tail-marker");
-    expect(error.message.length).toBeLessThan(520);
+    expect(error).toBeInstanceOf(Error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    expect(errorMessage).toContain("MiniMax VLM request failed");
+    expect(errorMessage).toContain("Trace-Id: trace-123");
+    expect(errorMessage).not.toContain("tail-marker");
+    expect(errorMessage.length).toBeLessThan(520);
     expect(canceled).toBe(true);
   });
 });

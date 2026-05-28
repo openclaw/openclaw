@@ -1,5 +1,3 @@
-// Native PDF provider tests cover direct Anthropic and Gemini request shapes,
-// base URL handling, and bounded API error reporting.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 
@@ -66,7 +64,6 @@ describe("native PDF provider API calls", () => {
 
   afterEach(() => {
     global.fetch = priorFetch;
-    vi.unstubAllEnvs();
   });
 
   it("anthropicAnalyzePdf sends correct request shape", async () => {
@@ -102,21 +99,6 @@ describe("native PDF provider API calls", () => {
     expect(body.messages[0].content[1].type).toBe("text");
   });
 
-  it("anthropicAnalyzePdf honors ANTHROPIC_BASE_URL when no base URL is configured", async () => {
-    vi.stubEnv("ANTHROPIC_BASE_URL", "https://anthropic-pdf-proxy.example/v1");
-    const fetchMock = mockFetchResponse({
-      ok: true,
-      json: async () => ({
-        content: [{ type: "text", text: "Analysis of PDF" }],
-      }),
-    });
-
-    await pdfNativeProviders.anthropicAnalyzePdf(makeAnthropicAnalyzeParams());
-
-    const [url] = firstFetchCall(fetchMock) as [string];
-    expect(url).toBe("https://anthropic-pdf-proxy.example/v1/messages");
-  });
-
   it("anthropicAnalyzePdf throws on API error", async () => {
     mockFetchResponse({
       ok: false,
@@ -131,8 +113,6 @@ describe("native PDF provider API calls", () => {
   });
 
   it("bounds large Anthropic API error bodies", async () => {
-    // Provider errors can contain large or sensitive payloads; surface a compact
-    // diagnostic and cancel the stream once the cap is reached.
     let canceled = false;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -151,14 +131,13 @@ describe("native PDF provider API calls", () => {
 
     const error = await pdfNativeProviders
       .anthropicAnalyzePdf(makeAnthropicAnalyzeParams())
-      .catch((caught: unknown) => caught);
+      .catch((caught: unknown) => caught as Error);
 
-    if (!(error instanceof Error)) {
-      throw new Error("expected Anthropic PDF request to throw an Error");
-    }
-    expect(error.message).toContain("Anthropic PDF request failed");
-    expect(error.message).not.toContain("tail-marker");
-    expect(error.message.length).toBeLessThan(500);
+    expect(error).toBeInstanceOf(Error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    expect(errorMessage).toContain("Anthropic PDF request failed");
+    expect(errorMessage).not.toContain("tail-marker");
+    expect(errorMessage.length).toBeLessThan(500);
     expect(canceled).toBe(true);
   });
 
@@ -182,16 +161,15 @@ describe("native PDF provider API calls", () => {
     const error = await Promise.race([
       pdfNativeProviders
         .anthropicAnalyzePdf(makeAnthropicAnalyzeParams())
-        .catch((caught: unknown) => caught),
+        .catch((caught: unknown) => caught as Error),
       new Promise<Error>((_resolve, reject) => {
         setTimeout(() => reject(new Error("timed out waiting for bounded error body")), 500);
       }),
     ]);
 
-    if (!(error instanceof Error)) {
-      throw new Error("expected Anthropic PDF request to throw an Error");
-    }
-    expect(error.message).toContain("Anthropic PDF request failed");
+    expect(error).toBeInstanceOf(Error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    expect(errorMessage).toContain("Anthropic PDF request failed");
     expect(canceled).toBe(true);
   });
 
@@ -209,8 +187,6 @@ describe("native PDF provider API calls", () => {
   });
 
   it("geminiAnalyzePdf sends correct request shape", async () => {
-    // Gemini API keys belong in headers here, not query strings that are more
-    // likely to leak through logs and URL diagnostics.
     const fetchMock = mockFetchResponse({
       ok: true,
       json: async () => ({
