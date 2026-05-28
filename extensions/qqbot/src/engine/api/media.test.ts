@@ -77,6 +77,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       expect(result).toBe(UPLOAD_RESPONSE);
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
         url,
+        maxRedirects: 0,
         policy: { allowRfc2544BenchmarkRange: true },
       });
       expect(tokenManager.getAccessToken).toHaveBeenCalledWith("app-id", "client-secret");
@@ -263,6 +264,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
       url: "http://93.184.216.34/assets/photo.png",
+      maxRedirects: 0,
       policy: undefined,
     });
   });
@@ -282,6 +284,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
       url: "https://cdn.example.com/assets/photo.png",
+      maxRedirects: 0,
       policy: { allowRfc2544BenchmarkRange: true },
     });
     expect(client.request).toHaveBeenCalledWith(

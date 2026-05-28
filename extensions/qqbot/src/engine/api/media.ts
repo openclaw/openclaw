@@ -85,6 +85,7 @@ async function downloadDirectUploadUrl(url: string, fileType: MediaFileType): Pr
 
   const { response, release } = await fetchWithSsrFGuard({
     url: parsed.toString(),
+    maxRedirects: 0,
     policy: directUploadDownloadPolicy(parsed.hostname),
   });
   try {
