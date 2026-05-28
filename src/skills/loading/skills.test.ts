@@ -279,56 +279,61 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
   });
 
   it("includes enabled Claude bundle markdown commands as native OpenClaw slash commands", async () => {
-    const workspaceDir = await makeWorkspace();
-    const config = {
-      plugins: {
-        entries: {
-          "compound-bundle": { enabled: true },
+    await withClearedEnv(["OPENCLAW_DISABLE_BUNDLED_PLUGINS"], async () => {
+      const workspaceDir = await makeWorkspace();
+      const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "compound-bundle");
+      const config = {
+        plugins: {
+          load: {
+            paths: [pluginRoot],
+          },
+          entries: {
+            "compound-bundle": { enabled: true },
+          },
         },
-      },
-    } satisfies OpenClawConfig;
+      } satisfies OpenClawConfig;
 
-    // Prime plugin discovery before the bundle exists; clear the lifecycle cache
-    // below to model the install/reload boundary that exposes new plugin files.
-    buildWorkspaceSkillCommandSpecs(workspaceDir, {
-      ...resolveTestSkillDirs(workspaceDir),
-      config,
+      // Prime plugin discovery before the bundle exists; clear the lifecycle cache
+      // below to model the install/reload boundary that exposes new plugin files.
+      buildWorkspaceSkillCommandSpecs(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        config,
+      });
+
+      await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "commands"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+        `${JSON.stringify({ name: "compound-bundle", commands: "commands" }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, "commands", "workflows-review.md"),
+        [
+          "---",
+          "name: workflows:review",
+          "description: Review code with a structured checklist",
+          "---",
+          "Review the branch carefully.",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      clearPluginMetadataLifecycleCaches();
+
+      const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        config,
+      });
+
+      const command = commands.find((entry) => entry.skillName === "workflows:review");
+      expect(command?.name).toBe("workflows_review");
+      expect(command?.description).toBe("Review code with a structured checklist");
+      expect(command?.promptTemplate).toBe("Review the branch carefully.");
+      expect(command?.sourceFilePath).toContain(
+        path.join(pluginRoot, "commands", "workflows-review.md"),
+      );
     });
-
-    const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "compound-bundle");
-    await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
-    await fs.mkdir(path.join(pluginRoot, "commands"), { recursive: true });
-    await fs.writeFile(
-      path.join(pluginRoot, ".claude-plugin", "plugin.json"),
-      `${JSON.stringify({ name: "compound-bundle", commands: "commands" }, null, 2)}\n`,
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(pluginRoot, "commands", "workflows-review.md"),
-      [
-        "---",
-        "name: workflows:review",
-        "description: Review code with a structured checklist",
-        "---",
-        "Review the branch carefully.",
-        "",
-      ].join("\n"),
-      "utf-8",
-    );
-    clearPluginMetadataLifecycleCaches();
-
-    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
-      ...resolveTestSkillDirs(workspaceDir),
-      config,
-    });
-
-    const command = commands.find((entry) => entry.skillName === "workflows:review");
-    expect(command?.name).toBe("workflows_review");
-    expect(command?.description).toBe("Review code with a structured checklist");
-    expect(command?.promptTemplate).toBe("Review the branch carefully.");
-    expect(command?.sourceFilePath).toContain(
-      path.join(pluginRoot, "commands", "workflows-review.md"),
-    );
   });
 });
 

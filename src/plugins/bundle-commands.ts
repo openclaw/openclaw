@@ -167,6 +167,7 @@ export function loadEnabledClaudeBundleCommands(params: {
     workspaceDir: params.workspaceDir,
     config: params.cfg,
     includeDisabled: true,
+    diagnostics: [],
   });
   const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
   const commands: ClaudeBundleCommandSpec[] = [];
