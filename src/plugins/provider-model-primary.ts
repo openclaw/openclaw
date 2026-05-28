@@ -13,7 +13,7 @@ function humanizeModelId(modelId: string): string {
   return modelId
     .split("-")
     .map((word) => {
-      if (/^\d/.test(word)) return word;
+      if (/^\d/.test(word)) { return word; }
       return word.charAt(0).toUpperCase() + word.slice(1);
     })
     .join(" ");
