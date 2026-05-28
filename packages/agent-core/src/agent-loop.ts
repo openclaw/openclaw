@@ -69,6 +69,14 @@ function applyThinkingDelta(
   return next;
 }
 
+function applyToolCallDelta(
+  message: AssistantMessage,
+  event: Extract<AssistantMessageEvent, { type: "toolcall_delta" }>,
+): AssistantMessage {
+  const existing = message.content[event.contentIndex];
+  return existing?.type === "toolCall" ? cloneAssistantMessage(message) : event.partial;
+}
+
 function resolvePartialAssistantMessage(
   current: AssistantMessage | null,
   event: AssistantMessageEvent,
@@ -78,13 +86,14 @@ function resolvePartialAssistantMessage(
       return applyTextDelta(current ?? event.partial, event);
     case "thinking_delta":
       return applyThinkingDelta(current ?? event.partial, event);
+    case "toolcall_delta":
+      return applyToolCallDelta(current ?? event.partial, event);
     case "start":
     case "text_start":
     case "text_end":
     case "thinking_start":
     case "thinking_end":
     case "toolcall_start":
-    case "toolcall_delta":
     case "toolcall_end":
       return event.partial;
     case "done":
