@@ -4,6 +4,7 @@ import type {
   ResponseFunctionCallOutputItemList,
   ResponseFunctionToolCall,
   ResponseInput,
+  ResponseInputItem,
   ResponseInputContent,
   ResponseInputImage,
   ResponseInputText,
@@ -38,6 +39,8 @@ import { transformMessages } from "./transform-messages.js";
 // =============================================================================
 // Utilities
 // =============================================================================
+
+type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 
 function encodeTextSignatureV1(id: string, phase?: TextSignatureV1["phase"]): string {
   const payload: TextSignatureV1 = { v: 1, id };
@@ -269,7 +272,7 @@ export function convertResponsesMessages<TApi extends Api>(
           if (msgId && msgId.length > 64) {
             msgId = `msg_${shortHash(msgId)}`;
           }
-          output.push({
+          const messageItem: ReplayableResponseOutputMessage = {
             type: "message",
             role: "assistant",
             content: [
@@ -278,7 +281,8 @@ export function convertResponsesMessages<TApi extends Api>(
             status: "completed",
             ...(msgId ? { id: msgId } : {}),
             phase: parsedSignature?.phase,
-          } satisfies ResponseOutputMessage);
+          };
+          output.push(messageItem as ResponseInputItem);
           previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
           const toolCall = block;
