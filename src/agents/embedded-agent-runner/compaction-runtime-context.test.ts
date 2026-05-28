@@ -5,6 +5,7 @@ import { createProcessSessionFixture } from "../bash-process-registry.test-helpe
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveEmbeddedCompactionTarget,
+  resolveEmbeddedCompactionThinkingLevel,
 } from "./compaction-runtime-context.js";
 
 describe("buildEmbeddedCompactionRuntimeContext", () => {
@@ -145,6 +146,47 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.provider).toBe("anthropic");
     expect(result.model).toBe("claude-opus-4-6");
     expect(result.authProfileId).toBeUndefined();
+  });
+
+  it("uses default compaction.thinkingLevel for compaction runtime context", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {
+        agents: { defaults: { compaction: { thinkingLevel: "low" } } },
+      } as OpenClawConfig,
+      thinkLevel: "high",
+      useCompactionThinkingLevel: true,
+    });
+
+    expect(result.thinkLevel).toBe("low");
+  });
+
+  it("prefers per-agent compaction.thinkingLevel over defaults", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      agentId: "worker",
+      config: {
+        agents: {
+          defaults: { compaction: { thinkingLevel: "low" } },
+          list: [{ id: "worker", compaction: { thinkingLevel: "off" } }],
+        },
+      } as OpenClawConfig,
+      thinkLevel: "high",
+      useCompactionThinkingLevel: true,
+    });
+
+    expect(result.thinkLevel).toBe("off");
+  });
+
+  it("falls back to active session thinking level when compaction.thinkingLevel is unset", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        config: {} as OpenClawConfig,
+        thinkLevel: "medium",
+      }),
+    ).toBe("medium");
   });
 
   it("inherits default model override when per-agent compaction is empty", () => {

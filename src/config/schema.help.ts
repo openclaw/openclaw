@@ -1489,6 +1489,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 900). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
   "agents.defaults.compaction.model":
     "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
+  "agents.defaults.compaction.thinkingLevel":
+    'Optional thinking-level override used only for compaction summarization. Valid values are "off", "minimal", "low", "medium", "high", "xhigh", "adaptive", and "max". Leave unset to use the active session thinking level, or set "off" to disable reasoning for compaction.',
   "agents.defaults.compaction.truncateAfterCompaction":
     "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
@@ -1547,6 +1549,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Use this per-agent compaction timeout override in seconds when the matching agent needs a different compaction budget.",
   "agents.list[].compaction.model":
     "Use this per-agent exact compaction model override when one agent should compact on a different model. This stays exact instead of inheriting session fallback chains.",
+  "agents.list[].compaction.thinkingLevel":
+    "Use this per-agent compaction thinking-level override when one agent's summarization should use a different reasoning budget than its normal session turns.",
   "agents.list[].compaction.truncateAfterCompaction":
     "Use this per-agent transcript rotation override to control whether the matching agent truncates transcript files after successful compaction.",
   "agents.list[].compaction.maxActiveTranscriptBytes":

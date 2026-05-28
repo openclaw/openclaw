@@ -201,12 +201,14 @@ describe("agent defaults schema", () => {
         mode: "safeguard",
         reserveTokensFloor: 24_000,
         model: "anthropic/claude-opus-4-6",
+        thinkingLevel: "low",
       },
     });
 
     expect(agent.compaction?.mode).toBe("safeguard");
     expect(agent.compaction?.reserveTokensFloor).toBe(24_000);
     expect(agent.compaction?.model).toBe("anthropic/claude-opus-4-6");
+    expect(agent.compaction?.thinkingLevel).toBe("low");
   });
 
   it("rejects invalid per-agent bootstrap profile overrides", () => {

@@ -1084,6 +1084,9 @@ export const AgentCompactionSchema = z
     postIndexSync: z.enum(["off", "async", "await"]).optional(),
     postCompactionSections: z.array(z.string()).optional(),
     model: z.string().optional(),
+    thinkingLevel: z
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
+      .optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     memoryFlush: z
       .object({

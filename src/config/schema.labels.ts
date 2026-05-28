@@ -690,6 +690,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
   "agents.defaults.compaction.timeoutSeconds": "Compaction Timeout (Seconds)",
   "agents.defaults.compaction.model": "Compaction Model Override",
+  "agents.defaults.compaction.thinkingLevel": "Compaction Thinking Level",
   "agents.defaults.compaction.truncateAfterCompaction": "Rotate Transcript After Compaction",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
     "Compaction Active Transcript Size Threshold",
@@ -722,6 +723,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].compaction.postCompactionSections": "Agent Post-Compaction Context Sections",
   "agents.list[].compaction.timeoutSeconds": "Agent Compaction Timeout (Seconds)",
   "agents.list[].compaction.model": "Agent Compaction Model Override",
+  "agents.list[].compaction.thinkingLevel": "Agent Compaction Thinking Level",
   "agents.list[].compaction.truncateAfterCompaction": "Agent Rotate Transcript After Compaction",
   "agents.list[].compaction.maxActiveTranscriptBytes":
     "Agent Compaction Active Transcript Size Threshold",
