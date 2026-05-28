@@ -51,6 +51,18 @@ describe("wizard i18n", () => {
     expect(telegramT("wizard.gateway.port")).toBe("Gateway 端口");
   });
 
+  it("makes the WhatsApp second-number recommendation explicit in onboarding copy", () => {
+    expect(t("wizard.whatsapp.separatePhoneLabel", undefined, { locale: "en" })).toContain(
+      "Recommended",
+    );
+    expect(t("wizard.whatsapp.personalPhoneLabel", undefined, { locale: "en" })).toContain(
+      "higher ban risk",
+    );
+    expect(t("wizard.whatsapp.scanQr", undefined, { locale: "en" })).toContain(
+      "prefer a separate number",
+    );
+  });
+
   it("keeps shipped locale keys aligned with English", () => {
     const english = listWizardI18nKeys("en");
     for (const locale of WIZARD_SUPPORTED_LOCALES) {
