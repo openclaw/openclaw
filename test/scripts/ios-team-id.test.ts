@@ -1,13 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-team-id.sh");
-const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
-const BASH_ARGS = process.platform === "win32" ? [SCRIPT] : ["--noprofile", "--norc", SCRIPT];
+const BASH_BIN =
+  process.platform === "win32"
+    ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "bash.exe")
+    : "/bin/bash";
+const BASH_ARGS = ["--noprofile", "--norc", SCRIPT];
 const BASE_PATH = process.env.PATH ?? "/usr/bin:/bin";
 const BASE_LANG = process.env.LANG ?? "C";
 let fixtureRoot = "";
@@ -72,6 +76,20 @@ function pickTeamIdFromCandidates(params: {
   return params.candidates[0]?.teamId;
 }
 
+function toBashPath(filePath: string): string {
+  const normalized = filePath.replaceAll("\\", "/");
+  const match = /^([A-Za-z]):\/(.*)$/u.exec(normalized);
+  return match ? `/mnt/${match[1].toLowerCase()}/${match[2]}` : normalized;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function toBashEnvValue(value: string): string {
+  return /^[A-Za-z]:[\\/]/u.test(value) ? toBashPath(value) : value;
+}
+
 async function writeExecutable(filePath: string, body: string): Promise<void> {
   await writeFile(filePath, body, "utf8");
   chmodSync(filePath, 0o755);
@@ -95,15 +113,27 @@ function runScript(
     return cached;
   }
   const binDir = path.join(homeDir, "bin");
-  const env = {
-    HOME: homeDir,
-    PATH: `${binDir}${path.delimiter}${sharedBinDir}${path.delimiter}${BASE_PATH}`,
-    LANG: BASE_LANG,
-    ...extraEnv,
-  };
+  const env =
+    process.platform === "win32"
+      ? {
+          HOME: toBashPath(homeDir),
+          PATH: `${toBashPath(binDir)}:${toBashPath(sharedBinDir)}:/usr/bin:/bin`,
+          LANG: BASE_LANG,
+          ...Object.fromEntries(
+            Object.entries(extraEnv).map(([key, value]) => [key, toBashEnvValue(value)]),
+          ),
+        }
+      : {
+          HOME: homeDir,
+          PATH: `${binDir}${path.delimiter}${sharedBinDir}${path.delimiter}${BASE_PATH}`,
+          LANG: BASE_LANG,
+          ...extraEnv,
+        };
+  const args =
+    process.platform === "win32" ? [toBashPath(writeWindowsBashWrapper(env))] : BASH_ARGS;
   try {
-    const stdout = execFileSync(BASH_BIN, BASH_ARGS, {
-      env,
+    const stdout = execFileSync(BASH_BIN, args, {
+      env: process.platform === "win32" ? process.env : env,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -127,6 +157,36 @@ function runScript(
     const result = { ok: false, stdout: stdout.trim(), stderr: stderr.trim() };
     runScriptCache.set(cacheKey, result);
     return result;
+  } finally {
+    if (process.platform === "win32") {
+      cleanupWindowsBashWrappers();
+    }
+  }
+}
+
+const windowsBashWrapperDirs: string[] = [];
+
+function writeWindowsBashWrapper(env: Record<string, string>): string {
+  const wrapperDir = mkdtempSync(path.join(tmpdir(), "openclaw-ios-team-id-bash-"));
+  windowsBashWrapperDirs.push(wrapperDir);
+  const wrapperPath = path.join(wrapperDir, "run.sh");
+  const exportLines = Object.entries(env)
+    .map(([key, value]) => `export ${key}=${shellQuote(value)}`)
+    .join("\n");
+  writeFileSync(wrapperPath, `${exportLines}\nexec ${shellQuote(toBashPath(SCRIPT))}\n`, {
+    encoding: "utf8",
+    mode: 0o755,
+  });
+  return wrapperPath;
+}
+
+function cleanupWindowsBashWrappers(): void {
+  while (windowsBashWrapperDirs.length > 0) {
+    const dir = windowsBashWrapperDirs.pop();
+    if (!dir) {
+      continue;
+    }
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 

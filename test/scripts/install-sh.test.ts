@@ -5,16 +5,41 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/install.sh";
+const BASH_COMMAND =
+  process.platform === "win32"
+    ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "bash.exe")
+    : "bash";
+
+function toBashPath(filePath: string): string {
+  const normalized = filePath.replaceAll("\\", "/");
+  const match = /^([A-Za-z]):\/(.*)$/u.exec(normalized);
+  return match ? `/mnt/${match[1].toLowerCase()}/${match[2]}` : normalized;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
 
 function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
-  return spawnSync("bash", ["-c", script], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      OPENCLAW_INSTALL_SH_NO_RUN: "1",
-      ...env,
-    },
-  });
+  const bashEnv = {
+    OPENCLAW_INSTALL_SH_NO_RUN: "1",
+    ...env,
+  };
+  const exportLines = Object.entries(bashEnv)
+    .filter(([key, value]) => /^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) && typeof value === "string")
+    .map(([key, value]) => `export ${key}=${shellQuote(value)}`)
+    .join("\n");
+  const scriptDir = mkdtempSync(join(tmpdir(), "openclaw-install-shell-"));
+  const scriptPath = join(scriptDir, "run.sh");
+  try {
+    writeFileSync(scriptPath, `${exportLines}\n${script}\n`, { encoding: "utf8", mode: 0o755 });
+    return spawnSync(BASH_COMMAND, [toBashPath(scriptPath)], {
+      encoding: "utf8",
+      env: process.env,
+    });
+  } finally {
+    rmSync(scriptDir, { recursive: true, force: true });
+  }
 }
 
 describe("install.sh", () => {
@@ -82,7 +107,7 @@ describe("install.sh", () => {
     try {
       result = runInstallShell(
         [
-          `cd ${JSON.stringify(process.cwd())}`,
+          `cd ${JSON.stringify(toBashPath(process.cwd()))}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
           "set +e",
           "load_nvm_for_node_detection",
@@ -92,9 +117,9 @@ describe("install.sh", () => {
           "exit $status",
         ].join("\n"),
         {
-          HOME: home,
-          NVM_DIR: join(tmp, "stale-nvm"),
-          PATH: `${systemBin}:/usr/bin:/bin`,
+          HOME: toBashPath(home),
+          NVM_DIR: toBashPath(join(tmp, "stale-nvm")),
+          PATH: `${toBashPath(systemBin)}:/usr/bin:/bin`,
           TERM: "dumb",
         },
       );
@@ -104,9 +129,9 @@ describe("install.sh", () => {
 
     expect(result?.status).toBe(0);
     const output = result?.stdout ?? "";
-    expect(output).toContain("status=0");
-    expect(output).toContain(`path=${nvmNode}`);
-    expect(output).toContain("version=v22.22.1");
+    expect(output).toContain("Node.js v22.22.1 found");
+    expect(output).toContain(toBashPath(nvmNode));
+    expect(output).not.toContain("v8.11.3");
   });
 
   it("warns before redirecting an unwritable npm prefix", () => {
@@ -121,25 +146,25 @@ describe("install.sh", () => {
         set -euo pipefail
         source "${SCRIPT_PATH}"
         OS=linux
-        HOME=${JSON.stringify(home)}
-        prefix=${JSON.stringify(join(tmp, "root-owned-prefix"))}
-        events=${JSON.stringify(events)}
+        HOME=${JSON.stringify(toBashPath(home))}
+        TEST_PREFIX=${JSON.stringify(toBashPath(join(tmp, "root-owned-prefix")))}
+        EVENTS_FILE=${JSON.stringify(toBashPath(events))}
         npm() {
           if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then
-            printf '%s\\n' "$prefix"
+            printf '%s\\n' "$TEST_PREFIX"
             return 0
           fi
           if [[ "$1" == "config" && "$2" == "set" && "$3" == "prefix" ]]; then
-            printf 'npm-set:%s\\n' "$4" >> "$events"
+            printf 'npm-set:%s\\n' "$4" >> "$EVENTS_FILE"
             return 0
           fi
           return 1
         }
-        ui_info() { printf 'info:%s\\n' "$*" >> "$events"; }
-        ui_warn() { printf 'warn:%s\\n' "$*" >> "$events"; }
-        ui_success() { printf 'success:%s\\n' "$*" >> "$events"; }
+        ui_info() { printf 'info:%s\\n' "$*" >> "$EVENTS_FILE"; }
+        ui_warn() { printf 'warn:%s\\n' "$*" >> "$EVENTS_FILE"; }
+        ui_success() { printf 'success:%s\\n' "$*" >> "$EVENTS_FILE"; }
         fix_npm_permissions
-        cat "$events"
+        cat "$EVENTS_FILE"
       `);
     } finally {
       rmSync(tmp, { force: true, recursive: true });
@@ -271,17 +296,21 @@ describe("install.sh macOS Homebrew Node behavior", () => {
         "#!/usr/bin/env bash\nprintf 'inappropriate ioctl for device\\n'\nexit 0\n",
         { mode: 0o755 },
       );
-      writeFileSync(commandPath, `#!/usr/bin/env bash\nprintf 'ran' >"${markerPath}"\n`, {
-        mode: 0o755,
-      });
+      writeFileSync(
+        commandPath,
+        `#!/usr/bin/env bash\nprintf 'ran' >"${toBashPath(markerPath)}"\n`,
+        {
+          mode: 0o755,
+        },
+      );
 
       const result = runInstallShell(`
         set -euo pipefail
         source "${SCRIPT_PATH}"
         gum_is_tty() { return 0; }
-        GUM="${gumPath}"
-        run_with_spinner "Installing node" "${commandPath}"
-        cat "${markerPath}"
+        GUM="${toBashPath(gumPath)}"
+        run_with_spinner "Installing node" "${toBashPath(commandPath)}"
+        cat "${toBashPath(markerPath)}"
       `);
 
       expect(result.status).toBe(0);

@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const WRAPPERS = {
@@ -36,10 +36,40 @@ const TS_PATHS = {
 const OS_TS_PATHS = [TS_PATHS.linux, TS_PATHS.macos, TS_PATHS.windows];
 
 function runTsEval(source: string, env: Record<string, string> = {}) {
+  const nextEnv = { ...process.env, ...env };
+  if (env.PATH) {
+    nextEnv.Path = env.PATH;
+  }
   return execFileSync("node", ["--import", "tsx", "--input-type=module", "--eval", source], {
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: nextEnv,
+    stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+function writeFakePrlctl(tempDir: string, command: string, json: string): void {
+  const outputPath = join(tempDir, `${command}.json`);
+  writeFileSync(outputPath, json);
+  const prlctlPath = join(tempDir, process.platform === "win32" ? "prlctl.cmd" : "prlctl");
+  if (process.platform === "win32") {
+    writeFileSync(
+      prlctlPath,
+      `@echo off\r\nif "%~1"=="${command}" (\r\ntype "${outputPath}"\r\nexit /b 0\r\n)\r\nexit /b 1\r\n`,
+    );
+  } else {
+    writeFileSync(
+      prlctlPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "${command}" ]]; then
+  cat '${outputPath.replaceAll("'", `'\\''`)}'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(prlctlPath, 0o755);
+  }
 }
 
 function resolveProviderAuth(
@@ -152,25 +182,16 @@ console.log(result);
 
   it("quotes shell args and resolves fuzzy snapshot hints through the shared TypeScript helper", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-helper-"));
-    const prlctlPath = join(tempDir, "prlctl");
-    writeFileSync(
-      prlctlPath,
-      `#!/usr/bin/env bash
-set -euo pipefail
-if [[ "$1" == "snapshot-list" ]]; then
-  cat <<'JSON'
-{
+    writeFakePrlctl(
+      tempDir,
+      "snapshot-list",
+      `{
   "{older}": {"name": "fresh", "state": "running"},
   "{wanted}": {"name": "fresh-poweroff-2026-04-01", "state": "poweroff"},
   "{other}": {"name": "unrelated", "state": "poweroff"}
 }
-JSON
-  exit 0
-fi
-exit 1
 `,
     );
-    chmodSync(prlctlPath, 0o755);
 
     try {
       const output = runTsEval(
@@ -180,7 +201,7 @@ console.log(shellQuote("it's ok"));
 const snapshot = resolveSnapshot("vm", "fresh");
 console.log([snapshot.id, snapshot.state, snapshot.name].join("\\t"));
 `,
-        { PATH: `${tempDir}:${process.env.PATH ?? ""}` },
+        { PATH: `${tempDir}${delimiter}${process.env.PATH ?? ""}` },
       );
 
       expect(output.split("\n")[0]).toBe("'it'\"'\"'s ok'");
@@ -192,25 +213,16 @@ console.log([snapshot.id, snapshot.state, snapshot.name].join("\\t"));
 
   it("uses one Ubuntu VM fallback resolver for Linux lanes", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-vm-helper-"));
-    const prlctlPath = join(tempDir, "prlctl");
-    writeFileSync(
-      prlctlPath,
-      `#!/usr/bin/env bash
-set -euo pipefail
-if [[ "$1" == "list" ]]; then
-  cat <<'JSON'
-[
+    writeFakePrlctl(
+      tempDir,
+      "list",
+      `[
   {"name": "Ubuntu 25.10"},
   {"name": "Ubuntu 23.10"},
   {"name": "Ubuntu 24.04.3 ARM64"}
 ]
-JSON
-  exit 0
-fi
-exit 1
 `,
     );
-    chmodSync(prlctlPath, 0o755);
 
     try {
       const output = runTsEval(
@@ -218,7 +230,7 @@ exit 1
 import { resolveUbuntuVmName } from "./${TS_PATHS.common}";
 console.log(resolveUbuntuVmName("Ubuntu missing"));
 `,
-        { PATH: `${tempDir}:${process.env.PATH ?? ""}` },
+        { PATH: `${tempDir}${delimiter}${process.env.PATH ?? ""}` },
       );
 
       expect(output.trim()).toBe("Ubuntu 24.04.3 ARM64");

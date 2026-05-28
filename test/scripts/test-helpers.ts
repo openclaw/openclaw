@@ -7,11 +7,32 @@ import { afterEach } from "vitest";
 export function createScriptTestHarness() {
   const tempDirs: string[] = [];
 
+  function sleepSync(ms: number): void {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  }
+
+  function cleanupTempDir(dir: string): void {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        sleepSync(100);
+      }
+    }
+    if (lastError) {
+      throw lastError;
+    }
+  }
+
   afterEach(() => {
     while (tempDirs.length > 0) {
       const dir = tempDirs.pop();
       if (dir) {
-        fs.rmSync(dir, { recursive: true, force: true });
+        cleanupTempDir(dir);
       }
     }
   });

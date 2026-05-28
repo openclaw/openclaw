@@ -62,6 +62,8 @@ describe("check-no-conflict-markers", () => {
   it("finds conflict markers in tracked script files", () => {
     const rootDir = createTempDir("openclaw-conflict-markers-");
     git(rootDir, "init", "-q");
+    git(rootDir, "config", "core.autocrlf", "false");
+    git(rootDir, "config", "core.eol", "lf");
     git(rootDir, "config", "user.email", "test@example.com");
     git(rootDir, "config", "user.name", "Test User");
 

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectClawHubPublishablePluginPackages,
@@ -19,6 +19,16 @@ import {
 import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
+
+function toBashPath(filePath: string): string {
+  const normalized = filePath.replaceAll("\\", "/");
+  const match = /^([A-Za-z]):\/(.*)$/u.exec(normalized);
+  return match ? `/mnt/${match[1].toLowerCase()}/${match[2]}` : normalized;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
@@ -418,7 +428,7 @@ describe("plugin-clawhub-publish.sh", () => {
       clawhubPath,
       `#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\\n' "$*" >> ${JSON.stringify(markerPath)}
+printf '%s\\n' "$*" >> ${JSON.stringify(toBashPath(markerPath))}
 if [[ "\${1:-}" == "package" && "\${2:-}" == "pack" ]]; then
   pack_destination=""
   while [[ "$#" -gt 0 ]]; do
@@ -442,12 +452,13 @@ exit 0
     );
     chmodSync(clawhubPath, 0o755);
 
+    const scriptPath = toBashPath(join(process.cwd(), "scripts", "plugin-clawhub-publish.sh"));
+
     const output = execFileSync(
       "bash",
       [
-        join(process.cwd(), "scripts/plugin-clawhub-publish.sh"),
-        "--dry-run",
-        "extensions/demo-plugin",
+        "-lc",
+        `export PATH=${shellQuote(toBashPath(binDir))}:"$PATH"; ${shellQuote(scriptPath)} --dry-run extensions/demo-plugin`,
       ],
       {
         cwd: repoDir,
@@ -455,7 +466,6 @@ exit 0
         env: {
           ...process.env,
           OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
-          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
         },
       },
     );
@@ -547,6 +557,8 @@ function createTempPluginRepo(
   }
 
   git(repoDir, ["init", "-b", "main"]);
+  git(repoDir, ["config", "core.autocrlf", "false"]);
+  git(repoDir, ["config", "core.eol", "lf"]);
   git(repoDir, ["add", "."]);
   git(repoDir, [
     "-c",

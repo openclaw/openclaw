@@ -4,7 +4,13 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
-const scriptPath = path.join(process.cwd(), "scripts", "committer");
+function toBashPath(filePath: string): string {
+  const normalized = filePath.replaceAll("\\", "/");
+  const match = /^([A-Za-z]):\/(.*)$/u.exec(normalized);
+  return match ? `/mnt/${match[1].toLowerCase()}/${match[2]}` : normalized;
+}
+
+const scriptPath = toBashPath(path.join(process.cwd(), "scripts", "committer"));
 const { createTempDir } = createScriptTestHarness();
 
 function run(cwd: string, command: string, args: string[]) {
@@ -22,6 +28,8 @@ function createRepo() {
   const repo = createTempDir("committer-test-");
 
   git(repo, "init", "-q");
+  git(repo, "config", "core.autocrlf", "false");
+  git(repo, "config", "core.eol", "lf");
   git(repo, "config", "user.email", "test@example.com");
   git(repo, "config", "user.name", "Test User");
   writeFileSync(path.join(repo, "seed.txt"), "seed\n");

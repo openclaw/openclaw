@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
@@ -117,7 +117,7 @@ describe("packed CLI smoke", () => {
           : `${dirname(process.execPath)}:/usr/bin:/bin`,
       HOME: "/tmp/smoke-home",
       USERPROFILE: "/tmp/smoke-home",
-      ComSpec: "C:\\Windows/System32/cmd.exe",
+      ComSpec: win32.join("C:\\Windows", "System32", "cmd.exe"),
       APPDATA: "/tmp/smoke-home/AppData/Roaming",
       LOCALAPPDATA: "/tmp/smoke-home/AppData/Local",
       AWS_EC2_METADATA_DISABLED: "true",

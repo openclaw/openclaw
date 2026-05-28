@@ -83,6 +83,7 @@ describe("production lint suppressions", () => {
       "extensions/browser/src/node-host/invoke-browser.ts|typescript/no-unnecessary-type-parameters|1",
       "extensions/discord/src/outbound-adapter.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
       "extensions/discord/src/test-support/provider.test-support.ts|typescript/no-unnecessary-type-parameters|1",
+      "extensions/evolution-learning/src/embedding.ts|@typescript-eslint/no-explicit-any|1",
       "extensions/feishu/src/bitable.ts|typescript/no-unnecessary-type-parameters|1",
       "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
       "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",

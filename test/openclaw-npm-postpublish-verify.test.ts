@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildPublishedInstallCommandArgs,
@@ -164,7 +164,7 @@ describe("resolveInstalledBinaryPath", () => {
 
   it("uses the Windows npm shim path on win32", () => {
     expect(resolveInstalledBinaryPath("C:/openclaw-prefix", "win32")).toBe(
-      "C:/openclaw-prefix/openclaw.cmd",
+      win32.join("C:/openclaw-prefix", "openclaw.cmd"),
     );
   });
 });

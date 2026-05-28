@@ -165,6 +165,7 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "XDG_DATA_HOME", value: process.env.XDG_DATA_HOME },
     { key: "XDG_STATE_HOME", value: process.env.XDG_STATE_HOME },
     { key: "XDG_CACHE_HOME", value: process.env.XDG_CACHE_HOME },
+    { key: "OPENCLAW_HOME", value: process.env.OPENCLAW_HOME },
     { key: "OPENCLAW_STATE_DIR", value: process.env.OPENCLAW_STATE_DIR },
     { key: "OPENCLAW_CONFIG_PATH", value: process.env.OPENCLAW_CONFIG_PATH },
     { key: "OPENCLAW_GATEWAY_PORT", value: process.env.OPENCLAW_GATEWAY_PORT },
@@ -201,6 +202,7 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   delete process.env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS;
 
   // Ensure test runs never touch the developer's real config/state, even if they have overrides set.
+  delete process.env.OPENCLAW_HOME;
   delete process.env.OPENCLAW_CONFIG_PATH;
   // Prefer deriving state dir from HOME so nested tests that change HOME also isolate correctly.
   delete process.env.OPENCLAW_STATE_DIR;

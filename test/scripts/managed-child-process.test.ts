@@ -4,7 +4,10 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { signalExitCode } from "../../scripts/lib/managed-child-process.mjs";
+import {
+  shouldUseManagedCommandShell,
+  signalExitCode,
+} from "../../scripts/lib/managed-child-process.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -14,6 +17,13 @@ describe("managed-child-process", () => {
     expect(signalExitCode("SIGHUP")).toBe(129);
     expect(signalExitCode("SIGINT")).toBe(130);
     expect(signalExitCode("SIGTERM")).toBe(143);
+  });
+
+  it("does not wrap native Windows executables in a shell", () => {
+    expect(shouldUseManagedCommandShell("C:\\node\\node.exe", "win32")).toBe(false);
+    expect(shouldUseManagedCommandShell("C:\\tools\\pnpm.cmd", "win32")).toBe(true);
+    expect(shouldUseManagedCommandShell("pnpm", "win32")).toBe(true);
+    expect(shouldUseManagedCommandShell("/usr/bin/node", "linux")).toBe(false);
   });
 
   it("kills the managed child process group when the runner is terminated", async () => {
@@ -67,8 +77,10 @@ process.exitCode = await runManagedCommand({
 
       process.kill(runner.pid!, "SIGTERM");
       const result = await waitForClose(runner);
+      const expectedResult =
+        process.platform === "win32" ? { code: 1, signal: null } : { code: 143, signal: null };
 
-      expect(result).toEqual({ code: 143, signal: null });
+      expect(result).toEqual(expectedResult);
       await waitFor(() => !isProcessAlive(childPid), 10_000);
     } finally {
       if (runner.pid && isProcessAlive(runner.pid)) {

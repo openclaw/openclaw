@@ -10,6 +10,16 @@ const helperPath = path.join(
   ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh",
 );
 
+function toBashPath(filePath: string): string {
+  const normalized = filePath.replaceAll("\\", "/");
+  const match = /^([A-Za-z]):\/(.*)$/u.exec(normalized);
+  return match ? `/mnt/${match[1].toLowerCase()}/${match[2]}` : normalized;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 function runHelper(args: string[]) {
   const dir = mkdtempSync(path.join(tmpdir(), "github-activity-helper-"));
   const binDir = path.join(dir, "bin");
@@ -43,13 +53,17 @@ exit 64
 `,
   );
   chmodSync(ghPath, 0o755);
-  const result = spawnSync("bash", [helperPath, ...args], {
+  const command = [
+    `export FAKE_GH_LOG=${shellQuote(toBashPath(logPath))};`,
+    `export PATH=${shellQuote(toBashPath(binDir))}:"$PATH";`,
+    shellQuote(toBashPath(helperPath)),
+    ...args.map(shellQuote),
+  ].join(" ");
+  const result = spawnSync("bash", ["-lc", command], {
     cwd: repoRoot,
     encoding: "utf8",
     env: {
       ...process.env,
-      FAKE_GH_LOG: logPath,
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
     },
   });
   return {

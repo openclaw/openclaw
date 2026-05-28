@@ -9,30 +9,59 @@ import {
   shouldSuppressVitestStderrLine,
 } from "../../scripts/run-vitest.mjs";
 
+const WINDOWS_EXEC_GUARD = expect.stringMatching(/vitest-windows-net-use-exec-guard\.cjs$/);
+
 describe("scripts/run-vitest", () => {
-  it("adds --no-maglev to vitest child processes by default", () => {
-    expect(resolveVitestNodeArgs({ PATH: "/usr/bin" })).toEqual(["--no-maglev"]);
+  it("adds --no-maglev to vitest child processes by default on Unix hosts", () => {
+    expect(resolveVitestNodeArgs({ PATH: "/usr/bin" }, "linux")).toEqual(["--no-maglev"]);
+  });
+
+  it("preloads the Windows net-use exec guard for vitest child processes", () => {
+    expect(resolveVitestNodeArgs({ PATH: "C:\\Windows\\System32" }, "win32")).toEqual([
+      "--require",
+      WINDOWS_EXEC_GUARD,
+      "--no-maglev",
+    ]);
   });
 
   it("detects pnpm exec node wrappers that can be spawned directly", () => {
     expect(
-      resolveDirectNodeVitestArgs([
-        "exec",
-        "node",
-        "--no-maglev",
-        "node_modules/vitest/vitest.mjs",
-      ]),
+      resolveDirectNodeVitestArgs(
+        ["exec", "node", "--no-maglev", "node_modules/vitest/vitest.mjs"],
+        "linux",
+      ),
     ).toEqual(["--no-maglev", "node_modules/vitest/vitest.mjs"]);
     expect(resolveDirectNodeVitestArgs(["exec", "vitest", "run"])).toBeNull();
+    expect(
+      resolveDirectNodeVitestArgs(
+        ["exec", "node", "--no-maglev", "node_modules/vitest/vitest.mjs"],
+        "win32",
+      ),
+    ).toBeNull();
   });
 
-  it("allows opting back into Maglev explicitly", () => {
+  it("allows opting back into Maglev explicitly on Unix hosts", () => {
     expect(
-      resolveVitestNodeArgs({
-        OPENCLAW_VITEST_ENABLE_MAGLEV: "1",
-        PATH: "/usr/bin",
-      }),
+      resolveVitestNodeArgs(
+        {
+          OPENCLAW_VITEST_ENABLE_MAGLEV: "1",
+          PATH: "/usr/bin",
+        },
+        "linux",
+      ),
     ).toEqual([]);
+  });
+
+  it("keeps the Windows exec guard when Maglev is explicitly enabled", () => {
+    expect(
+      resolveVitestNodeArgs(
+        {
+          OPENCLAW_VITEST_ENABLE_MAGLEV: "1",
+          PATH: "C:\\Windows\\System32",
+        },
+        "win32",
+      ),
+    ).toEqual(["--require", WINDOWS_EXEC_GUARD]);
   });
 
   it("parses the optional no-output timeout env", () => {
