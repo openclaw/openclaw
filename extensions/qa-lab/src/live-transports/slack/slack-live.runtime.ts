@@ -97,6 +97,7 @@ type SlackQaBeforeRunResult =
     };
 
 type SlackQaConfigOverrides = {
+  allowFrom?: string[];
   approvals?: {
     exec?: boolean;
     plugin?: boolean;
@@ -334,7 +335,10 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
     standardId: "allowlist-block",
     title: "Slack non-allowlisted sender does not trigger",
     timeoutMs: 8_000,
-    configOverrides: { users: ["U_OPENCLAW_QA_NEVER_ALLOWED"] },
+    configOverrides: {
+      allowFrom: ["U_OPENCLAW_QA_NEVER_ALLOWED"],
+      users: ["U_OPENCLAW_QA_NEVER_ALLOWED"],
+    },
     buildRun: (sutUserId) => {
       const token = `SLACK_QA_BLOCK_${randomUUID().slice(0, 8).toUpperCase()}`;
       return {
@@ -656,7 +660,7 @@ function buildSlackQaConfig(
             mode: "socket",
             botToken: params.sutBotToken,
             appToken: params.sutAppToken,
-            allowFrom: [params.driverBotUserId],
+            allowFrom: params.overrides?.allowFrom ?? [params.driverBotUserId],
             groupPolicy: "allowlist",
             allowBots: true,
             replyToMode: params.overrides?.replyToMode ?? "off",
