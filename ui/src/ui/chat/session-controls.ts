@@ -201,6 +201,20 @@ function focusChatSessionPickerSearch(state: AppViewState) {
   setTimeout(focus, 0);
 }
 
+// Search input blur from clicks on sibling picker controls (option, submit, clear,
+// load-more) used to clear chatSessionPickerResult before the click dispatched. Lit's
+// microtask re-render then unmounted the option/button so the click target vanished
+// and no handler fired (#87554). The blur->apply contract only matters when focus
+// leaves the popover; in-popover focus moves keep the search state intact and let
+// the click handler take over.
+function isFocusMovingInsideChatSessionPicker(event: FocusEvent): boolean {
+  const next = event.relatedTarget;
+  if (!(next instanceof Element)) {
+    return false;
+  }
+  return next.closest(".chat-session-picker") !== null;
+}
+
 function openChatSessionPicker(state: AppViewState, surface: ChatSessionSelectSurface) {
   state.chatSessionPickerOpen = true;
   state.chatSessionPickerSurface = surface;
@@ -594,7 +608,12 @@ function renderChatSessionPickerPopover(
                 void applyChatSessionPickerSearch(state);
               }
             }}
-            @blur=${() => void applyChatSessionPickerSearch(state)}
+            @blur=${(event: FocusEvent) => {
+              if (isFocusMovingInsideChatSessionPicker(event)) {
+                return;
+              }
+              void applyChatSessionPickerSearch(state);
+            }}
           />
         </label>
         <button

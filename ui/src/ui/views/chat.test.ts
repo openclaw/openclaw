@@ -1433,6 +1433,46 @@ describe("chat session controls", () => {
     });
   });
 
+  it("keeps chat session picker results when the search input blurs onto a sibling control", async () => {
+    // Regression for #87554: a blur whose relatedTarget is inside the picker (option, submit,
+    // clear, load-more) must not tear down picker state before the click handler dispatches.
+    // Reproduces the previously-broken scenario where blurring with an empty query would call
+    // clearChatSessionPickerSearch, null chatSessionPickerResult, and schedule a Lit re-render
+    // that removed the click target before its handler ran.
+    const { state, request } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!.click();
+    await vi.waitFor(() =>
+      expect(state.chatSessionPickerResult?.sessions.length ?? 0).toBeGreaterThan(0),
+    );
+    render(renderChatSessionSelect(state), container);
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-picker-search="true"]',
+    );
+    const option = container.querySelector<HTMLButtonElement>(
+      'button[data-chat-session-picker-option="true"]',
+    );
+    expect(input).not.toBeNull();
+    expect(option).not.toBeNull();
+    const populatedResult = state.chatSessionPickerResult;
+    expect(populatedResult).not.toBeNull();
+    request.mockClear();
+
+    // Simulate the browser focus shift that triggers the blur/click race: focus moves from
+    // the search input to a picker option button before the option's click handler dispatches.
+    // The search query is empty here, so the pre-fix blur handler would have called
+    // clearChatSessionPickerSearch and nulled chatSessionPickerResult.
+    input!.dispatchEvent(new FocusEvent("blur", { bubbles: false, relatedTarget: option }));
+
+    expect(state.chatSessionPickerResult).toBe(populatedResult);
+    expect(state.chatSessionPickerAppliedQuery).toBe("");
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("clears applied chat session picker search when the input is cleared", async () => {
     const { state } = createChatHeaderState();
     state.sessionsIncludeGlobal = false;
