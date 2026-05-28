@@ -87,6 +87,7 @@ type GatewayClientErrorShape = {
 };
 
 type GatewayClientInternalAccess = {
+  opts: GatewayClientOptions;
   ws: unknown;
   pending: Map<string, unknown>;
   tickIntervalMs: number;
@@ -207,6 +208,10 @@ export class GatewayClient {
     const target = this as unknown as GatewayClientInternalAccess;
     const base = this.#client as unknown as GatewayClientInternalAccess;
     Object.defineProperties(target, {
+      opts: {
+        configurable: true,
+        get: () => base.opts,
+      },
       ws: {
         configurable: true,
         get: () => base.ws,
