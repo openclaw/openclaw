@@ -166,6 +166,7 @@ export async function executeNodeHostCommand(
   let inlineApprovalDecision: "allow-once" | "allow-always" | null = null;
   let inlineApprovalId: string | undefined;
   if (requiresAsk) {
+    const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
     const autoReviewBlockedByNodePolicy =
       params.autoReview === true &&
       hostAsk !== "always" &&
@@ -176,10 +177,13 @@ export async function executeNodeHostCommand(
         nodeAsk,
       });
     let autoReviewRequiresHumanApproval =
-      autoReviewBlockedByNodePolicy || requiresSecurityAuditSuppressionApproval;
+      autoReviewBlockedByNodePolicy ||
+      (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
+      requiresSecurityAuditSuppressionApproval;
     if (
       params.autoReview === true &&
       hostAsk !== "always" &&
+      autoReviewHasBoundCommand &&
       !autoReviewBlockedByNodePolicy &&
       !requiresSecurityAuditSuppressionApproval
     ) {
