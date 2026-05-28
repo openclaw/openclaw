@@ -1,4 +1,4 @@
-import type { ModelApi, ModelCompatConfig } from "../config/types.models.js";
+import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
 
 export type ModelCatalogInput = "text" | "image" | "document";
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
@@ -71,6 +71,7 @@ export type ModelCatalogModel = {
   maxTokens?: number;
   cost?: ModelCatalogCost;
   compat?: ModelCompatConfig;
+  mediaInput?: ModelMediaInputConfig;
   status?: ModelCatalogStatus;
   statusReason?: string;
   replaces?: string[];
@@ -127,6 +128,7 @@ export type NormalizedModelCatalogRow = {
   maxTokens?: number;
   cost?: ModelCatalogCost;
   compat?: ModelCompatConfig;
+  mediaInput?: ModelMediaInputConfig;
   statusReason?: string;
   replaces?: string[];
   replacedBy?: string;

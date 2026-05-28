@@ -1,6 +1,8 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
+import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { appendRegularFile, isPathInside, pathExists, root as fsRoot } from "../infra/fs-safe.js";
@@ -10,6 +12,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
 import { normalizeCronRunDiagnostics } from "./run-diagnostics.js";
 import type {
   CronDeliveryStatus,
@@ -26,6 +29,7 @@ export type CronRunLogEntry = {
   action: "finished";
   status?: CronRunStatus;
   error?: string;
+  errorReason?: FailoverReason;
   summary?: string;
   diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
@@ -70,6 +74,29 @@ type ReadCronRunLogAllPageOptions = Omit<ReadCronRunLogPageOptions, "jobId"> & {
   storePath: string;
   jobNameById?: Record<string, string>;
 };
+
+const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
+  "auth",
+  "auth_permanent",
+  "format",
+  "rate_limit",
+  "overloaded",
+  "billing",
+  "server_error",
+  "timeout",
+  "model_not_found",
+  "session_expired",
+  "empty_response",
+  "no_error_details",
+  "unclassified",
+  "unknown",
+]);
+
+function normalizeCronRunLogErrorReason(value: unknown): FailoverReason | undefined {
+  return typeof value === "string" && CRON_FAILOVER_REASONS.has(value as FailoverReason)
+    ? (value as FailoverReason)
+    : undefined;
+}
 
 function assertSafeCronRunLogJobId(jobId: string): string {
   const trimmed = jobId.trim();
@@ -146,10 +173,7 @@ async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLin
   }
 
   const raw = await fs.readFile(filePath, "utf-8").catch(() => "");
-  const lines = raw
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(raw.split("\n"));
   const kept = lines.slice(Math.max(0, lines.length - opts.keepLines));
   await privateFileStore(path.dirname(filePath)).writeText(
     path.basename(filePath),
@@ -241,7 +265,7 @@ function normalizeRunStatuses(opts?: {
         status === "ok" || status === "error" || status === "skipped",
     );
     if (filtered.length > 0) {
-      return Array.from(new Set(filtered));
+      return uniqueValues(filtered);
     }
   }
   const status = normalizeRunStatusFilter(opts?.status);
@@ -264,7 +288,7 @@ function normalizeDeliveryStatuses(opts?: {
         status === "not-requested",
     );
     if (filtered.length > 0) {
-      return Array.from(new Set(filtered));
+      return uniqueValues(filtered);
     }
   }
   if (
@@ -311,12 +335,20 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
         obj.usage && typeof obj.usage === "object"
           ? (obj.usage as Record<string, unknown>)
           : undefined;
+      const normalizedError = typeof obj.error === "string" ? obj.error : undefined;
+      const normalizedProvider =
+        typeof obj.provider === "string" && obj.provider.trim() ? obj.provider : undefined;
+      const normalizedErrorReason =
+        normalizeCronRunLogErrorReason(obj.errorReason) ??
+        resolveFailoverReasonFromError(normalizedError, normalizedProvider) ??
+        undefined;
       const entry: CronRunLogEntry = {
         ts: obj.ts,
         jobId: obj.jobId,
         action: "finished",
         status: obj.status,
-        error: obj.error,
+        error: normalizedError,
+        errorReason: normalizedErrorReason,
         summary: obj.summary,
         runId: typeof obj.runId === "string" && obj.runId.trim() ? obj.runId : undefined,
         diagnostics: normalizeCronRunDiagnostics(obj.diagnostics),
@@ -324,8 +356,7 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
         durationMs: obj.durationMs,
         nextRunAtMs: obj.nextRunAtMs,
         model: typeof obj.model === "string" && obj.model.trim() ? obj.model : undefined,
-        provider:
-          typeof obj.provider === "string" && obj.provider.trim() ? obj.provider : undefined,
+        provider: normalizedProvider,
         usage: usage
           ? {
               input_tokens: typeof usage.input_tokens === "number" ? usage.input_tokens : undefined,
@@ -449,6 +480,7 @@ export async function readCronRunLogEntriesPage(
       [
         entry.summary ?? "",
         entry.error ?? "",
+        entry.errorReason ?? "",
         entry.diagnostics?.summary ?? "",
         ...(entry.diagnostics?.entries ?? []).map((diagnostic) => diagnostic.message),
         entry.jobId,
@@ -537,6 +569,7 @@ export async function readCronRunLogEntriesPageAll(
       return [
         entry.summary ?? "",
         entry.error ?? "",
+        entry.errorReason ?? "",
         entry.diagnostics?.summary ?? "",
         ...(entry.diagnostics?.entries ?? []).map((diagnostic) => diagnostic.message),
         entry.jobId,

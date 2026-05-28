@@ -10,14 +10,20 @@ import {
   execServerUrlFromClient,
   openSocket,
   rpc,
-  shellQuote,
   waitForHttpBodyDeltas,
 } from "./sandbox-exec-server.test-helpers.js";
+import { SANDBOX_HTTP_STREAM_LINE_MAX_CHARS } from "./sandbox-exec-server/http.js";
 
 afterEach(async () => {
   vi.unstubAllEnvs();
   await closeCodexSandboxExecServersForTests();
 });
+
+function testExecEnv(): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH,
+  };
+}
 
 describe("OpenClaw Codex sandbox exec-server HTTP", () => {
   it("routes HTTP requests through the sandbox backend", async () => {
@@ -84,13 +90,13 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     });
     const buildExecSpec = vi.fn(async () => ({
       argv: [
-        "/bin/sh",
-        "-lc",
+        process.execPath,
+        "-e",
         [headerLine, bodyLine, doneLine]
-          .map((line) => `printf '%s\\n' ${shellQuote(line)}`)
-          .join("; "),
+          .map((line) => `process.stdout.write(${JSON.stringify(`${line}\n`)});`)
+          .join(""),
       ],
-      env: process.env,
+      env: testExecEnv(),
       stdinMode: "pipe-closed" as const,
     }));
     const runShellCommand = vi.fn(async () => ({
@@ -167,7 +173,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
             "setInterval(() => {}, 1000);",
           ].join(""),
         ],
-        env: process.env,
+        env: testExecEnv(),
         finalizeToken: "stream-token",
         stdinMode: "pipe-closed",
       }),
@@ -206,5 +212,54 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
         ),
       { timeout: 5_000 },
     );
+  });
+
+  it("rejects streaming HTTP helpers that never terminate a stdout line", async () => {
+    const finalizeExec = vi.fn(async () => undefined);
+    const sandbox = createSandboxContext({
+      buildExecSpec: async () => ({
+        argv: [
+          process.execPath,
+          "-e",
+          [
+            `process.stdout.write("x".repeat(${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS + 1}));`,
+            "setInterval(() => {}, 1000);",
+          ].join(""),
+        ],
+        env: testExecEnv(),
+        finalizeToken: "stream-line-token",
+        stdinMode: "pipe-closed",
+      }),
+      finalizeExec,
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "http/request", {
+        requestId: "http-stream-long-line",
+        method: "GET",
+        url: "https://example.test/sse",
+        streamResponse: true,
+      }),
+    ).rejects.toThrow("unterminated stdout line");
+
+    await vi.waitFor(
+      () =>
+        expect(finalizeExec).toHaveBeenCalledWith(
+          expect.objectContaining({
+            status: "failed",
+            token: "stream-line-token",
+          }),
+        ),
+      { timeout: 5_000 },
+    );
+    socket.close();
   });
 });

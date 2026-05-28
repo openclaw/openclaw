@@ -77,6 +77,10 @@ async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
     join(repoRoot, "scripts", "lib", "docker-e2e-logs.sh"),
     join(rootDir, "scripts", "lib", "docker-e2e-logs.sh"),
   );
+  await copyFile(
+    join(repoRoot, "scripts", "lib", "docker-e2e-container.sh"),
+    join(rootDir, "scripts", "lib", "docker-e2e-container.sh"),
+  );
   await chmod(scriptPath, 0o755);
   await writeFile(dockerfilePath, "FROM scratch\n");
   await writeFile(
@@ -482,6 +486,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
+    expect(log).toContain("chown node:node /home/node/.config");
   });
 
   it("precreates auth profile secret key dir outside the mounted state dir", async () => {

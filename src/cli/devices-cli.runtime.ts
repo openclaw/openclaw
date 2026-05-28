@@ -30,10 +30,12 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
+import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
 
 type DevicesRpcOpts = {
@@ -126,7 +128,7 @@ const callGatewayCli = async (
         password: opts.password,
         method,
         params,
-        timeoutMs: Number(opts.timeout ?? DEFAULT_DEVICES_TIMEOUT_MS),
+        timeoutMs: parseTimeoutMsWithFallback(opts.timeout, DEFAULT_DEVICES_TIMEOUT_MS),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
         scopes: callOpts?.scopes,
@@ -403,7 +405,7 @@ function resolveOriginalReplacementScopes(
 ): string[] {
   const requestedScopes = normalizeDeviceAuthScopes(original.scopes);
   const inferredOperatorScopes = resolvePendingOperatorApprovalScopes(original, paired);
-  return [...new Set([...requestedScopes, ...inferredOperatorScopes])];
+  return uniqueStrings([...requestedScopes, ...inferredOperatorScopes]);
 }
 
 function replacementScopesCoverOriginal(

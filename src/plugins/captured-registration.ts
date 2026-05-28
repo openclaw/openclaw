@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
@@ -27,7 +28,7 @@ import type {
   OpenClawPluginApi,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
-  MeetingNotesSourceProviderPlugin,
+  TranscriptSourceProvider,
   MigrationProviderPlugin,
   MusicGenerationProviderPlugin,
   OpenClawPluginCliCommandDescriptor,
@@ -64,7 +65,7 @@ export type CapturedPluginRegistration = {
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
-  meetingNotesSourceProviders: MeetingNotesSourceProviderPlugin[];
+  transcriptSourceProviders: TranscriptSourceProvider[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
   videoGenerationProviders: VideoGenerationProviderPlugin[];
   musicGenerationProviders: MusicGenerationProviderPlugin[];
@@ -103,7 +104,7 @@ export function createCapturedPluginRegistration(params?: {
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
-  const meetingNotesSourceProviders: MeetingNotesSourceProviderPlugin[] = [];
+  const transcriptSourceProviders: TranscriptSourceProvider[] = [];
   const imageGenerationProviders: ImageGenerationProviderPlugin[] = [];
   const videoGenerationProviders: VideoGenerationProviderPlugin[] = [];
   const musicGenerationProviders: MusicGenerationProviderPlugin[] = [];
@@ -145,7 +146,7 @@ export function createCapturedPluginRegistration(params?: {
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
     mediaUnderstandingProviders,
-    meetingNotesSourceProviders,
+    transcriptSourceProviders,
     imageGenerationProviders,
     videoGenerationProviders,
     musicGenerationProviders,
@@ -174,9 +175,7 @@ export function createCapturedPluginRegistration(params?: {
       resolvePath: (input) => input,
       handlers: {
         registerCli(registrar, opts) {
-          const parentPath = (opts?.parentPath ?? [])
-            .map((segment) => segment.trim())
-            .filter(Boolean);
+          const parentPath = normalizeStringEntries(opts?.parentPath ?? []);
           const descriptors = (opts?.descriptors ?? [])
             .map((descriptor) => ({
               name: descriptor.name.trim(),
@@ -184,12 +183,10 @@ export function createCapturedPluginRegistration(params?: {
               hasSubcommands: descriptor.hasSubcommands,
             }))
             .filter((descriptor) => descriptor.name && descriptor.description);
-          const commands = [
+          const commands = normalizeStringEntries([
             ...(opts?.commands ?? []),
             ...descriptors.map((descriptor) => descriptor.name),
-          ]
-            .map((command) => command.trim())
-            .filter(Boolean);
+          ]);
           if (commands.length === 0) {
             return;
           }
@@ -247,8 +244,8 @@ export function createCapturedPluginRegistration(params?: {
         registerMediaUnderstandingProvider(provider: MediaUnderstandingProviderPlugin) {
           mediaUnderstandingProviders.push(provider);
         },
-        registerMeetingNotesSourceProvider(provider: MeetingNotesSourceProviderPlugin) {
-          meetingNotesSourceProviders.push(provider);
+        registerTranscriptSourceProvider(provider: TranscriptSourceProvider) {
+          transcriptSourceProviders.push(provider);
         },
         registerImageGenerationProvider(provider: ImageGenerationProviderPlugin) {
           imageGenerationProviders.push(provider);

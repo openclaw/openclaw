@@ -1,4 +1,7 @@
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
@@ -11,7 +14,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  resolveAgentDeliveryPlan,
+  resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -26,12 +29,12 @@ import {
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
+import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { isNestedAgentLane } from "../lanes.js";
-import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
-import type { EmbeddedPiRunMeta } from "../pi-embedded-runner/types.js";
 import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
 
-type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
+type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatch>>;
 
 export type AgentCommandDeliveryPayloadStatus = "sent" | "suppressed" | "failed";
@@ -67,7 +70,7 @@ export type AgentCommandDeliveryStatus = {
 
 export type AgentCommandDeliveryResult = {
   payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
-  meta: EmbeddedPiRunMeta & AgentCommandResultMetaOverrides;
+  meta: EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides;
   didSendViaMessagingTool?: boolean;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -152,9 +155,9 @@ function logNestedOutput(
 }
 
 function mergeResultMetaOverrides(
-  meta: EmbeddedPiRunMeta,
+  meta: EmbeddedAgentRunMeta,
   overrides: AgentCommandResultMetaOverrides | undefined,
-): EmbeddedPiRunMeta & AgentCommandResultMetaOverrides {
+): EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides {
   if (!overrides) {
     return meta;
   }
@@ -416,6 +419,13 @@ export async function deliverAgentCommandResult(
 ): Promise<AgentCommandDeliveryResult> {
   const { cfg, deps, runtime, opts, outboundSession, sessionEntry, payloads, result } = params;
   const effectiveSessionKey = outboundSession?.key ?? opts.sessionKey;
+  const deliveryAgentId =
+    outboundSession?.agentId ??
+    resolveSessionAgentId({
+      sessionKey: effectiveSessionKey,
+      config: cfg,
+    }) ??
+    resolveDefaultAgentId(cfg);
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
   const turnSourceChannel = opts.runContext?.messageChannel ?? opts.messageChannel;
@@ -424,7 +434,10 @@ export async function deliverAgentCommandResult(
   const turnSourceThreadId = opts.runContext?.currentThreadTs ?? opts.threadId;
   const explicitChannelHint = (opts.replyChannel ?? opts.channel)?.trim();
   const resolveDeliveryRouting = async (candidateSessionEntry: SessionEntry | undefined) => {
-    const deliveryPlan = resolveAgentDeliveryPlan({
+    const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg,
+      agentId: deliveryAgentId,
+      currentSessionKey: effectiveSessionKey,
       sessionEntry: candidateSessionEntry,
       requestedChannel: opts.replyChannel ?? opts.channel,
       explicitTo: opts.replyTo ?? opts.to,

@@ -261,6 +261,32 @@ function resolveAnthropic46ForwardCompatModel(params: {
   });
 }
 
+function buildAnthropicForwardCompatModel(
+  ctx: ProviderResolveDynamicModelContext,
+): ProviderRuntimeModel | undefined {
+  const trimmedModelId = ctx.modelId.trim();
+  const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
+  if (trimmedModelId !== lower || !matchesAnthropicModernModel(lower)) {
+    return undefined;
+  }
+  const provider =
+    normalizeLowercaseStringOrEmpty(ctx.provider) === CLAUDE_CLI_BACKEND_ID
+      ? CLAUDE_CLI_BACKEND_ID
+      : PROVIDER_ID;
+  return {
+    id: trimmedModelId,
+    name: trimmedModelId,
+    provider,
+    api: "anthropic-messages",
+    baseUrl: "https://api.anthropic.com",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 64_000,
+  };
+}
+
 function resolveAnthropicForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
@@ -288,7 +314,8 @@ function resolveAnthropicForwardCompatModel(
       dashTemplateId: ANTHROPIC_SONNET_46_MODEL_ID,
       dotTemplateId: ANTHROPIC_SONNET_46_MODEL_ID,
       fallbackTemplateIds: [ANTHROPIC_SONNET_46_MODEL_ID, ANTHROPIC_SONNET_46_DOT_MODEL_ID],
-    })
+    }) ??
+    buildAnthropicForwardCompatModel(ctx)
   );
 }
 
@@ -381,6 +408,25 @@ function supportsAnthropicImageInput(modelId: string, modelName?: string): boole
     .some((candidate) => matchesAnthropicModernModel(candidate));
 }
 
+function resolveAnthropicImageMediaInput(modelId: string, modelName?: string) {
+  if (!supportsAnthropicImageInput(modelId, modelName)) {
+    return undefined;
+  }
+  const refs = [modelId, modelName].filter((value): value is string => typeof value === "string");
+  const opus47 = refs.some((ref) =>
+    [ANTHROPIC_OPUS_47_MODEL_ID, ANTHROPIC_OPUS_47_DOT_MODEL_ID].some((prefix) =>
+      normalizeLowercaseStringOrEmpty(ref).startsWith(prefix),
+    ),
+  );
+  return {
+    image: {
+      maxSidePx: opus47 ? 2576 : 1568,
+      preferredSidePx: opus47 ? 2576 : 1568,
+      tokenMode: "provider" as const,
+    },
+  };
+}
+
 function applyAnthropicImageInputCapability(params: {
   modelId: string;
   model: ProviderRuntimeModel;
@@ -401,13 +447,27 @@ function normalizeAnthropicResolvedModel(
   ctx: ProviderNormalizeResolvedModelContext,
 ): ProviderRuntimeModel | undefined {
   const imageCapableModel = applyAnthropicImageInputCapability(ctx) ?? ctx.model;
+  const mediaInput = resolveAnthropicImageMediaInput(ctx.modelId, imageCapableModel.name);
+  const mediaInputModel = mediaInput
+    ? {
+        ...imageCapableModel,
+        mediaInput: {
+          ...mediaInput,
+          ...imageCapableModel.mediaInput,
+          image: {
+            ...mediaInput.image,
+            ...imageCapableModel.mediaInput?.image,
+          },
+        },
+      }
+    : imageCapableModel;
   const contextWindowModel =
     applyAnthropicGa1MContextWindow({
       config: ctx.config,
       provider: ctx.provider,
       modelId: ctx.modelId,
-      model: imageCapableModel,
-    }) ?? imageCapableModel;
+      model: mediaInputModel,
+    }) ?? mediaInputModel;
   return contextWindowModel === ctx.model ? undefined : contextWindowModel;
 }
 

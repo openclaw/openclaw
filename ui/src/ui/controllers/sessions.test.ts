@@ -1,14 +1,29 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isSessionRunActive } from "../session-run-state.ts";
 import {
   applySessionsChangedEvent,
   createSessionAndRefresh,
   deleteSessionsAndRefresh,
   loadSessions,
   subscribeSessions,
+  syncSelectedSessionMessageSubscription,
   type SessionsState,
 } from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
+
+function createDeferred<T>() {
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
+  return { promise, resolve, reject };
+}
 
 if (!("window" in globalThis)) {
   Object.assign(globalThis, {
@@ -52,6 +67,98 @@ describe("subscribeSessions", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.subscribe", {});
     expect(state.sessionsError).toBeNull();
+  });
+});
+
+describe("syncSelectedSessionMessageSubscription", () => {
+  it("subscribes to the selected session message stream", async () => {
+    const request = vi.fn(async () => ({ key: "agent:main:main" }));
+    const state = createState(request, { sessionKey: "agent:main:main" } as Partial<
+      SessionsState & { sessionKey: string }
+    >) as SessionsState & { sessionKey: string };
+
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", {
+      key: "agent:main:main",
+    });
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:main");
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:main");
+  });
+
+  it("unsubscribes the previous selected session before switching streams", async () => {
+    const request = vi.fn(async () => ({ key: "agent:main:next" }));
+    const state = createState(request, {
+      sessionKey: "agent:main:next",
+      chatSessionMessageSubscriptionKey: "agent:main:previous",
+    } as Partial<SessionsState & { sessionKey: string }>) as SessionsState & {
+      sessionKey: string;
+    };
+
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.unsubscribe", {
+      key: "agent:main:previous",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
+      key: "agent:main:next",
+    });
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:next");
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:next");
+  });
+
+  it("does not churn when the selected alias resolves to a canonical key", async () => {
+    const request = vi.fn(async () => ({ key: "agent:main:main" }));
+    const state = createState(request, { sessionKey: "main" } as Partial<
+      SessionsState & { sessionKey: string }
+    >) as SessionsState & { sessionKey: string };
+
+    await syncSelectedSessionMessageSubscription(state);
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", { key: "main" });
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("main");
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:main");
+  });
+
+  it("ignores stale subscription completions after the selected session changes", async () => {
+    const firstSubscribe = createDeferred<{ key: string }>();
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      const key = (params as { key?: string } | undefined)?.key;
+      if (method === "sessions.messages.subscribe" && key === "agent:main:first") {
+        return await firstSubscribe.promise;
+      }
+      if (method === "sessions.messages.subscribe" && key === "agent:main:second") {
+        return { key: "agent:main:second" };
+      }
+      if (method === "sessions.messages.unsubscribe") {
+        return { subscribed: false, key };
+      }
+      throw new Error(`unexpected request: ${method} ${String(key)}`);
+    });
+    const state = createState(request, { sessionKey: "agent:main:first" } as Partial<
+      SessionsState & { sessionKey: string }
+    >) as SessionsState & { sessionKey: string };
+
+    const firstSync = syncSelectedSessionMessageSubscription(state);
+    expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", {
+      key: "agent:main:first",
+    });
+
+    state.sessionKey = "agent:main:second";
+    await syncSelectedSessionMessageSubscription(state);
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:second");
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:second");
+
+    firstSubscribe.resolve({ key: "agent:main:first" });
+    await firstSync;
+
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:second");
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:second");
+    expect(request).toHaveBeenCalledWith("sessions.messages.unsubscribe", {
+      key: "agent:main:first",
+    });
   });
 });
 
@@ -420,6 +527,57 @@ describe("loadSessions", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps stale running session list rows idle when no live run remains", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 2,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 2,
+            hasActiveRun: false,
+            status: "running",
+          },
+        ],
+      };
+    });
+    const state = createState(request, {
+      sessionKey: "main",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            status: "done",
+          },
+        ],
+      },
+    } as Partial<SessionsState & { sessionKey: string }>);
+
+    await loadSessions(state);
+
+    const current = state.sessionsResult?.sessions[0];
+    expect(current).toMatchObject({
+      key: "main",
+      hasActiveRun: false,
+      status: "running",
+    });
+    expect(isSessionRunActive(current!)).toBe(false);
   });
 
   it("omits the active-window cutoff when archived sessions are shown", async () => {
@@ -907,6 +1065,7 @@ describe("applySessionsChangedEvent", () => {
       chatRunId: string | null;
       chatStream: string | null;
       chatStreamStartedAt: number | null;
+      chatRunStatus?: unknown;
       requestUpdate: () => void;
     } = {
       ...createState(async () => undefined, {
@@ -943,10 +1102,20 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toEqual({ applied: true, change: "updated", clearedChatRun: true });
+    expect(applied).toEqual({
+      applied: true,
+      change: "updated",
+      clearedChatRun: true,
+      clearedChatRunStatus: {
+        phase: "done",
+        runId: "run-1",
+        sessionKey: "agent:super:main",
+      },
+    });
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
+    expect(state.chatRunStatus).toBeUndefined();
     expect(requestUpdate).toHaveBeenCalled();
   });
 
@@ -957,6 +1126,7 @@ describe("applySessionsChangedEvent", () => {
       chatRunId: string | null;
       chatStream: string | null;
       chatStreamStartedAt: number | null;
+      chatRunStatus?: unknown;
       requestUpdate: () => void;
     } = {
       ...createState(async () => undefined, {
@@ -994,10 +1164,20 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toEqual({ applied: true, change: "updated", clearedChatRun: true });
+    expect(applied).toEqual({
+      applied: true,
+      change: "updated",
+      clearedChatRun: true,
+      clearedChatRunStatus: {
+        phase: "done",
+        runId: "client-run-1",
+        sessionKey: "agent:super:main",
+      },
+    });
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
+    expect(state.chatRunStatus).toBeUndefined();
     expect(requestUpdate).toHaveBeenCalled();
   });
 
@@ -1199,6 +1379,83 @@ describe("applySessionsChangedEvent", () => {
     expect(state.chatStream).toBe("");
     expect(state.chatStreamStartedAt).toBe(3);
     expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("keeps stale running session events idle after a local terminal reconcile", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:super:main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            status: "done",
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      phase: "message",
+      status: "running",
+      updatedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    const current = state.sessionsResult?.sessions[0];
+    expect(current).toMatchObject({
+      key: "agent:super:main",
+      hasActiveRun: false,
+      status: "running",
+    });
+    expect(isSessionRunActive(current!)).toBe(false);
+  });
+
+  it("revives active state when a new lifecycle start follows stale idle state", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:super:main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            status: "done",
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      phase: "start",
+      status: "running",
+      startedAt: 2,
+      updatedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    const current = state.sessionsResult?.sessions[0];
+    expect(current).toMatchObject({
+      key: "agent:super:main",
+      hasActiveRun: true,
+      status: "running",
+    });
+    expect(isSessionRunActive(current!)).toBe(true);
   });
 
   it("updates fresh context usage from websocket event payloads", () => {

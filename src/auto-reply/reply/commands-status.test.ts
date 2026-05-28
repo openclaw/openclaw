@@ -4,6 +4,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
@@ -44,10 +45,10 @@ vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../agents/harness/builtin-pi.js", () => ({
-  createPiAgentHarness: () => ({
-    id: "pi",
-    label: "OpenClaw Pi",
+vi.mock("../../agents/harness/builtin-openclaw.js", () => ({
+  createOpenClawAgentHarness: () => ({
+    id: "openclaw",
+    label: "OpenClaw Default",
     supports: () => ({ supported: true, priority: 0 }),
     runAttempt: async () => {
       throw new Error("not used in status tests");
@@ -95,11 +96,14 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
 }
 
 function registerStatusCodexHarness(): void {
+  const codexProviders = new Set(["codex", "openai", "openai-codex"]);
   const harness: AgentHarness = {
     id: "codex",
     label: "Codex",
     supports: (ctx) =>
-      ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+      codexProviders.has(ctx.provider.trim().toLowerCase())
+        ? { supported: true, priority: 100 }
+        : { supported: false },
     runAttempt: async () => {
       throw new Error("not used in status tests");
     },
@@ -108,6 +112,7 @@ function registerStatusCodexHarness(): void {
 }
 
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   clearAgentHarnesses();
   providerUsageMock.loadProviderUsageSummary.mockReset();
   providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
@@ -153,6 +158,24 @@ function writeTranscriptUsageLog(params: {
 
 describe("buildStatusReply subagent summary", () => {
   beforeEach(() => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupRegistry: () => ({
+        providers: [],
+        cliBackends: [],
+        configMigrations: [],
+        autoEnableProbes: [],
+        diagnostics: [],
+      }),
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "claude-cli",
+          modelProvider: "anthropic",
+          config: { command: "claude" },
+          bundleMcp: false,
+        },
+      ],
+    });
     resetSubagentRegistryForTests();
     resetTaskRegistryForTests({ persist: false });
     configureInMemoryTaskRegistryStoreForTests();
@@ -559,7 +582,7 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalizeTestText(text)).toContain("Uptime: gateway 2h 5m · system 4d 3h");
   });
 
-  it("shows the effective non-PI embedded harness in /status", async () => {
+  it("shows the effective non-OpenClaw embedded harness in /status", async () => {
     registerStatusCodexHarness();
 
     const text = await buildStatusText({
@@ -716,7 +739,7 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("uses Codex OAuth auth labels for explicit OpenAI PI auth order", async () => {
+  it("uses Codex OAuth auth labels for explicit OpenAI OpenClaw auth order", async () => {
     await withTempHome(
       async (dir) => {
         const authPath = path.join(
@@ -757,7 +780,7 @@ describe("buildStatusReply subagent summary", () => {
               defaults: {
                 models: {
                   "openai/gpt-5.5": {
-                    agentRuntime: { id: "pi" },
+                    agentRuntime: { id: "openclaw" },
                   },
                 },
               },
@@ -769,7 +792,7 @@ describe("buildStatusReply subagent summary", () => {
             },
           },
           sessionEntry: {
-            sessionId: "sess-status-openai-pi-codex-oauth",
+            sessionId: "sess-status-openai-agent-codex-oauth",
             updatedAt: 0,
           },
           sessionKey: "agent:main:main",
@@ -779,7 +802,7 @@ describe("buildStatusReply subagent summary", () => {
           provider: "openai",
           model: "gpt-5.5",
           contextTokens: 32_000,
-          resolvedHarness: "pi",
+          resolvedHarness: "openclaw",
           resolvedFastMode: false,
           resolvedVerboseLevel: "off",
           resolvedReasoningLevel: "off",
@@ -854,6 +877,52 @@ describe("buildStatusReply subagent summary", () => {
         },
       },
     );
+  });
+
+  it("prefers active Claude CLI OAuth over selected env API-key labels for runtime aliases", async () => {
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            agentRuntime: { id: "claude-cli" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-claude-cli-env-key-shadow",
+        updatedAt: 0,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        modelProvider: "claude-cli",
+        model: "claude-opus-4-7",
+        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
+        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
+        fallbackNoticeReason: "selected model unavailable",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      contextTokens: 32_000,
+      resolvedHarness: "claude-cli",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key (env: ANTHROPIC_API_KEY)",
+      activeModelAuthOverride: "oauth (claude-cli)",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Session selected: anthropic/claude-opus-4-7");
+    expect(normalized).toContain("oauth (claude-cli)");
+    expect(normalized).not.toContain("api-key (env: ANTHROPIC_API_KEY)");
+    expect(normalized).not.toContain("Usage:");
   });
 
   it("uses Codex OAuth context overrides for openai models running on the Codex harness", async () => {
@@ -1030,7 +1099,7 @@ describe("buildStatusReply subagent summary", () => {
     }
   });
 
-  it("keeps /status on a session-pinned PI harness after config changes", async () => {
+  it("keeps /status on a session-pinned OpenClaw harness after config changes", async () => {
     registerStatusCodexHarness();
 
     const text = await buildStatusText({
@@ -1043,10 +1112,10 @@ describe("buildStatusReply subagent summary", () => {
         },
       },
       sessionEntry: {
-        sessionId: "sess-status-pinned-pi",
+        sessionId: "sess-status-pinned-agent",
         updatedAt: 0,
         fastMode: true,
-        agentHarnessId: "pi",
+        agentHarnessId: "openclaw",
       },
       sessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",

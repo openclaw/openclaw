@@ -44,6 +44,15 @@ type MonitorMSTeamsResult = {
 };
 
 const MSTEAMS_WEBHOOK_MAX_BODY_BYTES = DEFAULT_WEBHOOK_MAX_BODY_BYTES;
+
+function getActivityServiceUrl(body: unknown): string | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return undefined;
+  }
+  const serviceUrl = (body as { serviceUrl?: unknown }).serviceUrl;
+  return typeof serviceUrl === "string" ? serviceUrl : undefined;
+}
+
 export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
 ): Promise<MonitorMSTeamsResult> {
@@ -299,16 +308,27 @@ export async function monitorMSTeamsProvider(
     next();
   });
 
-  // JWT validation — verify Bot Framework tokens using the Teams SDK's
-  // JwtValidator (validates signature via JWKS, audience, issuer, expiration).
+  // Microsoft requires the JWT serviceurl claim to match the Activity body.
+  // Keep the cheap Bearer gate above, then parse the bounded JSON payload
+  // before full JWT validation so the service URL is authenticated.
+  expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
+  expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
+    if (err && typeof err === "object" && "status" in err && err.status === 413) {
+      res.status(413).json({ error: "Payload too large" });
+      return;
+    }
+    next(err);
+  });
+
+  // JWT validation — verify Bot Framework tokens using jsonwebtoken + JWKS,
+  // including the Microsoft serviceUrl claim binding.
   const jwtValidator = await createBotFrameworkJwtValidator(creds);
   expressApp.use((req: Request, res: Response, next: (err?: unknown) => void) => {
     // Authorization header is guaranteed by the pre-parse auth gate above.
-    // `serviceUrl` is optional, so authenticate from headers alone before body
-    // I/O to avoid spending memory and CPU on unauthenticated requests.
     const authHeader = req.headers.authorization!;
+    const activityServiceUrl = getActivityServiceUrl(req.body);
     jwtValidator
-      .validate(authHeader)
+      .validate(authHeader, activityServiceUrl)
       .then((valid) => {
         if (!valid) {
           log.debug?.("JWT validation failed");
@@ -337,15 +357,6 @@ export async function monitorMSTeamsProvider(
         }
         res.status(401).json({ error: "Unauthorized" });
       });
-  });
-
-  expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
-  expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
-    if (err && typeof err === "object" && "status" in err && err.status === 413) {
-      res.status(413).json({ error: "Payload too large" });
-      return;
-    }
-    next(err);
   });
 
   // Set up the messages endpoint - use configured path and /api/messages as fallback

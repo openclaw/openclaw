@@ -8,7 +8,7 @@ import type {
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createChannelDirectoryAdapter,
@@ -44,7 +44,6 @@ import {
   buildDiscordCrossContextPresentation,
   matchDiscordAcpConversation,
   normalizeDiscordAcpConversationId,
-  parseDiscordExplicitTarget,
   resolveDiscordAttachedOutboundTarget,
   resolveDiscordCommandConversation,
   resolveDiscordInboundConversation,
@@ -320,8 +319,17 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         normalizeExplicitSessionKey: ({ sessionKey, ctx }) =>
           normalizeExplicitDiscordSessionKey(sessionKey, ctx),
         resolveSessionTarget: ({ id }) => normalizeDiscordMessagingTarget(`channel:${id}`),
-        parseExplicitTarget: ({ raw }) => parseDiscordExplicitTarget(raw),
-        inferTargetChatType: ({ to }) => parseDiscordExplicitTarget(to)?.chatType,
+        inferTargetChatType: ({ to }) => {
+          try {
+            const parsed = parseDiscordTarget(to, { defaultKind: "channel" });
+            if (!parsed) {
+              return undefined;
+            }
+            return parsed?.kind === "user" ? "direct" : "channel";
+          } catch {
+            return undefined;
+          }
+        },
         buildCrossContextPresentation: buildDiscordCrossContextPresentation,
         resolveOutboundSessionRoute: (params) => resolveDiscordOutboundSessionRoute(params),
         targetResolver: {

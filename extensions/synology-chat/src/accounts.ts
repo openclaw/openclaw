@@ -10,6 +10,8 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   SynologyChatChannelConfig,
   ResolvedSynologyChatAccount,
@@ -61,10 +63,7 @@ function parseAllowedUserIds(raw: string | string[] | undefined): string[] {
   if (Array.isArray(raw)) {
     return raw.filter(Boolean);
   }
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(raw.split(","));
 }
 
 function parseRateLimitPerMinute(raw: string | undefined): number {
@@ -75,7 +74,7 @@ function parseRateLimitPerMinute(raw: string | undefined): number {
   if (!/^-?\d+$/.test(trimmed)) {
     return 30;
   }
-  return Number.parseInt(trimmed, 10);
+  return parseStrictInteger(trimmed) ?? 30;
 }
 
 /**

@@ -466,6 +466,7 @@ describe("qa cli registration", () => {
       output: ".artifacts/qa-coverage.md",
       json: true,
       tools: false,
+      match: [],
     });
   });
 
@@ -487,6 +488,26 @@ describe("qa cli registration", () => {
       tools: true,
       json: false,
       summary: ".artifacts/runtime-summary.json",
+      match: [],
+    });
+  });
+
+  it("routes coverage match queries into the qa runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "coverage",
+      "--match",
+      "image roundtrip",
+      "--match",
+      "native",
+    ]);
+
+    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
+      tools: false,
+      json: false,
+      match: ["image roundtrip", "native"],
     });
   });
 
@@ -501,7 +522,7 @@ describe("qa cli registration", () => {
       "--transcripts",
       "qa/scenarios/jsonl-replay",
       "--runtime-pair",
-      "pi,codex",
+      "openclaw,codex",
       "--provider-mode",
       "mock-openai",
       "--output-dir",
@@ -511,7 +532,7 @@ describe("qa cli registration", () => {
     expect(runQaJsonlReplayCommand).toHaveBeenCalledWith({
       repoRoot: "/tmp/openclaw-repo",
       transcripts: "qa/scenarios/jsonl-replay",
-      runtimePair: "pi,codex",
+      runtimePair: "openclaw,codex",
       providerMode: "mock-openai",
       outputDir: ".artifacts/qa-e2e/jsonl-replay-test",
     });

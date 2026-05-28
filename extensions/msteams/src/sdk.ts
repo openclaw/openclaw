@@ -3,7 +3,14 @@ import * as fs from "node:fs";
 // but tsgo cannot resolve the chain. Use the dist subpath directly (type-only import).
 import type { IHttpServerAdapter } from "@microsoft/teams.apps/dist/http/index.js";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  BOT_FRAMEWORK_SERVICE_URL_SSRF_POLICY,
+  normalizeBotFrameworkServiceUrl,
+  tryNormalizeBotFrameworkServiceUrl,
+} from "./bot-framework-service-url.js";
 import { formatUnknownError } from "./errors.js";
+import { createMSTeamsHttpError } from "./http-error.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
@@ -262,7 +269,8 @@ function createApiClient(
   serviceUrl: string,
   getToken: () => Promise<string | undefined>,
 ) {
-  return new sdk.Client(serviceUrl, {
+  const normalizedServiceUrl = normalizeBotFrameworkServiceUrl(serviceUrl);
+  return new sdk.Client(normalizedServiceUrl, {
     token: async () => (await getToken()) || undefined,
     headers: { "User-Agent": buildUserAgent() },
   } as Record<string, unknown>);
@@ -294,9 +302,10 @@ function createSendContext(params: {
   /** Target user's Azure AD object ID; included as the recipient on personal DMs. */
   recipientAadObjectId?: string;
 }): MSTeamsSendContext {
+  const normalizedServiceUrl = tryNormalizeBotFrameworkServiceUrl(params.serviceUrl);
   const apiClient =
-    params.serviceUrl && params.conversationId
-      ? createApiClient(params.sdk, params.serviceUrl, params.getToken)
+    normalizedServiceUrl && params.conversationId
+      ? createApiClient(params.sdk, normalizedServiceUrl, params.getToken)
       : undefined;
 
   return {
@@ -304,6 +313,9 @@ function createSendContext(params: {
       const msg = normalizeOutboundActivity(textOrActivity);
       if (params.treatInvokeResponseAsNoop && msg.type === "invokeResponse") {
         return { id: "invokeResponse" };
+      }
+      if (params.serviceUrl && !normalizedServiceUrl) {
+        normalizeBotFrameworkServiceUrl(params.serviceUrl);
       }
       if (!apiClient || !params.conversationId) {
         return { id: "unknown" };
@@ -367,8 +379,9 @@ function createSendContext(params: {
       if (!params.serviceUrl || !params.conversationId) {
         return { id: "unknown" };
       }
+      const serviceUrl = normalizeBotFrameworkServiceUrl(params.serviceUrl);
       return await updateActivityViaRest({
-        serviceUrl: params.serviceUrl,
+        serviceUrl,
         conversationId: params.conversationId,
         activityId,
         activity: nextActivity,
@@ -383,8 +396,9 @@ function createSendContext(params: {
       if (!params.serviceUrl || !params.conversationId) {
         return;
       }
+      const serviceUrl = normalizeBotFrameworkServiceUrl(params.serviceUrl);
       await deleteActivityViaRest({
-        serviceUrl: params.serviceUrl,
+        serviceUrl,
         conversationId: params.conversationId,
         activityId,
         token: await params.getToken(),
@@ -448,7 +462,7 @@ async function updateActivityViaRest(params: {
   token?: string;
 }): Promise<{ id?: string }> {
   const { serviceUrl, conversationId, activityId, activity, token } = params;
-  const baseUrl = serviceUrl.replace(/\/+$/, "");
+  const baseUrl = normalizeBotFrameworkServiceUrl(serviceUrl);
   const url = `${baseUrl}/v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(activityId)}`;
 
   const headers: Record<string, string> = {
@@ -473,13 +487,13 @@ async function updateActivityViaRest(params: {
       }),
     },
     auditContext: "msteams-update-activity",
+    policy: BOT_FRAMEWORK_SERVICE_URL_SSRF_POLICY,
   });
 
   try {
     if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw Object.assign(new Error(`updateActivity failed: HTTP ${response.status} ${body}`), {
-        statusCode: response.status,
+      throw await createMSTeamsHttpError(response, "updateActivity failed", {
+        statusPrefix: "HTTP ",
       });
     }
 
@@ -500,7 +514,7 @@ async function deleteActivityViaRest(params: {
   token?: string;
 }): Promise<void> {
   const { serviceUrl, conversationId, activityId, token } = params;
-  const baseUrl = serviceUrl.replace(/\/+$/, "");
+  const baseUrl = normalizeBotFrameworkServiceUrl(serviceUrl);
   const url = `${baseUrl}/v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(activityId)}`;
 
   const headers: Record<string, string> = {
@@ -519,13 +533,13 @@ async function deleteActivityViaRest(params: {
       headers,
     },
     auditContext: "msteams-delete-activity",
+    policy: BOT_FRAMEWORK_SERVICE_URL_SSRF_POLICY,
   });
 
   try {
     if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw Object.assign(new Error(`deleteActivity failed: HTTP ${response.status} ${body}`), {
-        statusCode: response.status,
+      throw await createMSTeamsHttpError(response, "deleteActivity failed", {
+        statusPrefix: "HTTP ",
       });
     }
   } finally {
@@ -544,10 +558,11 @@ async function deleteActivityViaRest(params: {
 export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MSTeamsAdapter {
   return {
     async continueConversation(_appId, reference, logic) {
-      const serviceUrl = reference.serviceUrl;
-      if (!serviceUrl) {
+      const rawServiceUrl = reference.serviceUrl;
+      if (!rawServiceUrl) {
         throw new Error("Missing serviceUrl in conversation reference");
       }
+      const serviceUrl = normalizeBotFrameworkServiceUrl(rawServiceUrl);
 
       const conversationId = reference.conversation?.id;
       if (!conversationId) {
@@ -667,9 +682,16 @@ type JwksClientCtor = BotFrameworkJwtDeps["JwksClient"];
 
 const BOT_FRAMEWORK_GLOBAL_AUDIENCE = "https://api.botframework.com";
 
-function isJwtPayloadObject(
-  value: unknown,
-): value is { iss?: unknown; aud?: unknown; appid?: unknown; azp?: unknown } {
+type BotFrameworkJwtPayload = {
+  iss?: unknown;
+  aud?: unknown;
+  appid?: unknown;
+  azp?: unknown;
+  serviceurl?: unknown;
+  serviceUrl?: unknown;
+};
+
+function isJwtPayloadObject(value: unknown): value is BotFrameworkJwtPayload {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -683,10 +705,9 @@ function getAudienceClaims(payload: unknown): string[] {
     return trimmed ? [trimmed] : [];
   }
   if (Array.isArray(audience)) {
-    return audience
-      .filter((value): value is string => typeof value === "string")
-      .map((value) => value.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(
+      audience.filter((value): value is string => typeof value === "string"),
+    );
   }
   return [];
 }
@@ -711,6 +732,43 @@ function hasExpectedBotIdentity(payload: unknown, expectedAppId: string): boolea
     normalizeBotIdentityClaim(payload.appid) === expected ||
     normalizeBotIdentityClaim(payload.azp) === expected
   );
+}
+
+function validateAndNormalizeBotFrameworkServiceUrl(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const url = new URL(trimmed);
+    // Match the signed endpoint, not a loosely equivalent URL: the URL parser
+    // normalizes host/default port, while path casing and encoding stay intact.
+    // Query/fragment values are not valid Bot Framework service endpoints.
+    if (url.protocol !== "https:" || url.search || url.hash) {
+      return null;
+    }
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function hasMatchingServiceUrlClaim(
+  payload: BotFrameworkJwtPayload,
+  activityServiceUrl: string | undefined,
+): boolean {
+  const expectedServiceUrl = validateAndNormalizeBotFrameworkServiceUrl(activityServiceUrl);
+  if (!expectedServiceUrl) {
+    return false;
+  }
+  // Bot Framework tokens commonly use lowercase `serviceurl`; keep the
+  // documented camelCase spelling as a narrow fallback for SDK/source variants.
+  const claimValue = payload.serviceurl ?? payload.serviceUrl;
+  const claimServiceUrl = validateAndNormalizeBotFrameworkServiceUrl(claimValue);
+  return claimServiceUrl === expectedServiceUrl;
 }
 
 let botFrameworkJwtDepsPromise: Promise<BotFrameworkJwtDeps> | null = null;
@@ -780,10 +838,11 @@ async function loadBotFrameworkJwtDeps(): Promise<BotFrameworkJwtDeps> {
  * - signature verification via issuer-specific JWKS endpoints
  * - audience validation: appId, api://appId, and https://api.botframework.com
  * - issuer validation: strict allowlist (Bot Framework + tenant-scoped Entra)
+ * - service URL binding: JWT serviceurl claim must match a usable Activity.serviceUrl
  * - expiration validation with 5-minute clock tolerance
  */
 export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials): Promise<{
-  validate: (authHeader: string) => Promise<boolean>;
+  validate: (authHeader: string, activityServiceUrl?: string) => Promise<boolean>;
 }> {
   const { jwt, JwksClient } = await loadBotFrameworkJwtDeps();
 
@@ -832,7 +891,7 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
   }
 
   return {
-    async validate(authHeader: string, _serviceUrl?: string): Promise<boolean> {
+    async validate(authHeader: string, activityServiceUrl: string | undefined): Promise<boolean> {
       const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
       if (!token) {
         return false;
@@ -866,6 +925,9 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
           clockTolerance: 300,
         });
         if (!isJwtPayloadObject(verifiedPayload)) {
+          return false;
+        }
+        if (!hasMatchingServiceUrlClaim(verifiedPayload, activityServiceUrl)) {
           return false;
         }
         const audiences = getAudienceClaims(verifiedPayload);

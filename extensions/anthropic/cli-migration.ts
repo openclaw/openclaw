@@ -3,7 +3,10 @@ import {
   type OpenClawConfig,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveClaudeCliAnthropicModelRefs } from "./claude-model-refs.js";
 import {
   readClaudeCliCredentialsForSetup,
@@ -13,9 +16,6 @@ import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-
 
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
 type AgentDefaultsModels = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
-type AgentDefaultsRuntimePolicy = NonNullable<
-  NonNullable<OpenClawConfig["agents"]>["defaults"]
->["agentRuntime"];
 type ClaudeCliCredential = NonNullable<ReturnType<typeof readClaudeCliCredentialsForSetup>>;
 
 function toAnthropicModelRef(raw: string): string | null {
@@ -29,10 +29,6 @@ function toAnthropicRuntimeRefs(raw: string): string[] {
 function toAnthropicSelectedModelRef(raw: string): string | undefined {
   const resolved = resolveClaudeCliAnthropicModelRefs(raw);
   return resolved?.rewriteRef ?? resolved?.selectedRef;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function rewriteModelSelection(model: AgentDefaultsModel): {
@@ -157,17 +153,6 @@ function seedClaudeCliAllowlist(
   return next;
 }
 
-function selectClaudeCliRuntime(agentRuntime: AgentDefaultsRuntimePolicy | undefined) {
-  const currentRuntime = agentRuntime?.id?.trim();
-  if (currentRuntime && currentRuntime !== "auto") {
-    return agentRuntime;
-  }
-  return {
-    ...agentRuntime,
-    id: CLAUDE_CLI_BACKEND_ID,
-  };
-}
-
 function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown> {
   const base = isRecord(entry) ? { ...entry } : {};
   const currentRuntimeId = isRecord(base.agentRuntime) ? base.agentRuntime.id : undefined;
@@ -247,7 +232,6 @@ export function buildAnthropicCliMigrationResult(
       agents: {
         defaults: {
           ...(rewrittenModel.changed ? { model: rewrittenModel.value } : {}),
-          agentRuntime: selectClaudeCliRuntime(defaults?.agentRuntime),
           models: nextModels,
         },
       },
