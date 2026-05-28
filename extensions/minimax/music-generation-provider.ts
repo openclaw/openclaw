@@ -211,8 +211,9 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
       }
 
       const fetchFn = fetch;
+      const operationTimeoutMs = req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS;
       const deadline = createProviderOperationDeadline({
-        timeoutMs: req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
+        timeoutMs: operationTimeoutMs,
         label: "MiniMax music generation",
       });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
@@ -252,7 +253,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
         body,
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
-          defaultTimeoutMs: DEFAULT_OPERATION_TIMEOUT_MS,
+          defaultTimeoutMs: operationTimeoutMs,
         }),
         fetchFn,
         pinDns: false,
@@ -286,7 +287,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
               url: audioUrl,
               timeoutMs: resolveProviderOperationTimeoutMs({
                 deadline,
-                defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+                defaultTimeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
               }),
               fetchFn,
             })

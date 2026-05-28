@@ -186,6 +186,33 @@ describe("minimax music generation provider", () => {
     expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(0);
   });
 
+  it("honors explicit long caller timeouts for request and download fallbacks", async () => {
+    mockMusicGenerationResponse({
+      data: {
+        audio: "https://example.com/long-timeout.mp3",
+      },
+      base_resp: { status_code: 0 },
+    });
+
+    const provider = buildMinimaxMusicGenerationProvider();
+    await provider.generateMusic({
+      provider: "minimax",
+      model: "music-2.6",
+      prompt: "upbeat dance-pop with female vocals",
+      cfg: {},
+      lyrics: "our city wakes",
+      timeoutMs: 600000,
+    });
+
+    expect(mockCallArg(postJsonRequestMock).timeoutMs).toBe(600000);
+    expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
+      "https://example.com/long-timeout.mp3",
+      { method: "GET" },
+      600000,
+      fetch,
+    );
+  });
+
   it("rejects instrumental requests that also include lyrics", async () => {
     const provider = buildMinimaxMusicGenerationProvider();
 
