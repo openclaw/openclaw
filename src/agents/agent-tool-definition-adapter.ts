@@ -396,7 +396,7 @@ export function toToolDefinitions(
         },
       } satisfies ToolDefinition;
     })
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
