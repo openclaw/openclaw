@@ -514,6 +514,20 @@ export const OpenClawSchema = z
             heapUsedCriticalBytes: z.number().int().positive().optional(),
           })
           .strict()
+          .refine(
+            (v) =>
+              v.rssWarningBytes == null ||
+              v.rssCriticalBytes == null ||
+              v.rssWarningBytes < v.rssCriticalBytes,
+            { message: "rssWarningBytes must be less than rssCriticalBytes" },
+          )
+          .refine(
+            (v) =>
+              v.heapUsedWarningBytes == null ||
+              v.heapUsedCriticalBytes == null ||
+              v.heapUsedWarningBytes < v.heapUsedCriticalBytes,
+            { message: "heapUsedWarningBytes must be less than heapUsedCriticalBytes" },
+          )
           .optional(),
         otel: z
           .object({
