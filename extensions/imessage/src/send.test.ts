@@ -151,14 +151,20 @@ describe("sendMessageIMessage receipts", () => {
 
   it("copies media to the configured bot-readable handoff directory before sending", async () => {
     const client = createClient({ message_id: 12345 });
-    const runCliJson = vi
-      .fn()
-      .mockResolvedValueOnce({ messageId: "p:0/media-guid", transferGuid: "transfer-1" });
     const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-send-"));
     const sourcePath = path.join(root, "source image.png");
     const handoffDir = path.join(root, "handoff");
     await writeFile(sourcePath, "image-bytes");
     vi.stubEnv("OPENCLAW_IMESSAGE_OUTBOUND_HANDOFF_DIR", handoffDir);
+    let copiedContent = "";
+    let copiedMode: number | undefined;
+    const runCliJson = vi.fn(async (args: readonly string[]) => {
+      const copiedPath = args[4];
+      expect(typeof copiedPath).toBe("string");
+      copiedContent = await readFile(copiedPath as string, "utf8");
+      copiedMode = (await stat(copiedPath as string)).mode & 0o777;
+      return { messageId: "p:0/media-guid", transferGuid: "transfer-1" };
+    });
 
     const result = await sendMessageIMessage("chat_guid:chat-1", "", {
       config: IMESSAGE_TEST_CFG,
@@ -177,9 +183,9 @@ describe("sendMessageIMessage receipts", () => {
     expect(typeof copiedPath).toBe("string");
     expect(copiedPath).not.toBe(sourcePath);
     expect(copiedPath).toContain(`${handoffDir}${path.sep}`);
-    expect(await readFile(copiedPath as string, "utf8")).toBe("image-bytes");
-    const copiedStat = await stat(copiedPath as string);
-    expect(copiedStat.mode & 0o777).toBe(0o640);
+    expect(copiedContent).toBe("image-bytes");
+    expect(copiedMode).toBe(0o640);
+    await expect(readFile(copiedPath as string, "utf8")).rejects.toThrow();
     expect(requestArgs.slice(5)).toEqual(["--transport", "auto"]);
   });
 

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { constants, accessSync, readFileSync } from "node:fs";
-import { chmod, copyFile, mkdir } from "node:fs/promises";
+import { chmod, copyFile, mkdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -172,10 +172,12 @@ function sanitizeHandoffBasename(filePath: string): string {
   return sanitized && sanitized !== "." && sanitized !== ".." ? sanitized : "attachment";
 }
 
-async function copyOutboundAttachmentToHandoffDir(filePath: string): Promise<string> {
+async function prepareOutboundAttachmentForSend(
+  filePath: string,
+): Promise<{ filePath: string; handoffCopyPath?: string }> {
   const handoffDir = process.env[OUTBOUND_HANDOFF_DIR_ENV]?.trim();
   if (!handoffDir) {
-    return filePath;
+    return { filePath };
   }
   if (!path.isAbsolute(handoffDir)) {
     throw new Error(`${OUTBOUND_HANDOFF_DIR_ENV} must be an absolute path`);
@@ -186,7 +188,7 @@ async function copyOutboundAttachmentToHandoffDir(filePath: string): Promise<str
     resolvedFilePath === resolvedHandoffDir ||
     resolvedFilePath.startsWith(`${resolvedHandoffDir}${path.sep}`)
   ) {
-    return filePath;
+    return { filePath };
   }
   await mkdir(resolvedHandoffDir, { recursive: true });
   const targetPath = path.join(
@@ -195,7 +197,18 @@ async function copyOutboundAttachmentToHandoffDir(filePath: string): Promise<str
   );
   await copyFile(filePath, targetPath);
   await chmod(targetPath, 0o640);
-  return targetPath;
+  return { filePath: targetPath, handoffCopyPath: targetPath };
+}
+
+async function removeOutboundHandoffCopy(filePath: string | undefined): Promise<void> {
+  if (!filePath) {
+    return;
+  }
+  try {
+    await rm(filePath, { force: true });
+  } catch {
+    // Do not mask the send result if best-effort handoff cleanup fails.
+  }
 }
 
 function stripUnsafeReplyTagChars(value: string): string {
@@ -1104,6 +1117,7 @@ export async function sendMessageIMessage(
         : 16 * 1024 * 1024;
   let message = text ? appendIMessageApprovalReactionHintForOutboundMessage(text) : "";
   let filePath: string | undefined;
+  let handoffCopyPath: string | undefined;
   let mediaContentType: string | undefined;
 
   if (opts.mediaUrl?.trim()) {
@@ -1114,7 +1128,9 @@ export async function sendMessageIMessage(
     });
     filePath = resolved.path;
     mediaContentType = resolved.contentType ?? undefined;
-    filePath = await copyOutboundAttachmentToHandoffDir(filePath);
+    const preparedAttachment = await prepareOutboundAttachmentForSend(filePath);
+    filePath = preparedAttachment.filePath;
+    handoffCopyPath = preparedAttachment.handoffCopyPath;
   }
 
   if (!message.trim() && !filePath) {
@@ -1222,6 +1238,7 @@ export async function sendMessageIMessage(
       resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
     });
   } finally {
+    await removeOutboundHandoffCopy(handoffCopyPath);
     if (clientRef.shouldClose) {
       await clientRef.current?.stop();
     }
