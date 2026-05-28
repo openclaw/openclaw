@@ -38,6 +38,7 @@ const runtimeMocks = vi.hoisted(() => ({
       modelProvider: "openai",
       model: "gpt-4.1",
       spawnedBy: "agent:main:telegram:group:parent-group",
+      spawnedWorkspaceDir: undefined as string | undefined,
     },
   })),
   peekSessionMcpRuntime: vi.fn<
@@ -468,10 +469,12 @@ describe("tools.effective handler", () => {
   it("uses the warm runtime workspace when comparing sandboxed MCP catalogs", async () => {
     const mcpTool = makeMcpTool();
     const catalog: McpToolCatalog = { version: 1, generatedAt: 1, servers: {}, tools: [] };
-    runtimeMocks.resolveSessionMcpConfigSummary.mockImplementationOnce(({ workspaceDir }) => ({
-      fingerprint: workspaceDir === "/tmp/sandbox-copy" ? "mcp:1:sandbox" : "mcp:1:workspace",
-      serverNames: ["reproProbe"],
-    }));
+    runtimeMocks.resolveSessionMcpConfigSummary.mockImplementationOnce(
+      ({ workspaceDir } = { workspaceDir: "" }) => ({
+        fingerprint: workspaceDir === "/tmp/sandbox-copy" ? "mcp:1:sandbox" : "mcp:1:workspace",
+        serverNames: ["reproProbe"],
+      }),
+    );
     runtimeMocks.peekSessionMcpRuntime.mockReturnValueOnce({
       workspaceDir: "/tmp/sandbox-copy",
       configFingerprint: "mcp:1:sandbox",
