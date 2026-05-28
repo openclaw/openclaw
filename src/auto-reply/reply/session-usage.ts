@@ -6,6 +6,7 @@ import {
 } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
+  resolveSessionGoalDisplayState,
   type SessionSystemPromptReport,
   type SessionEntry,
   updateSessionStoreEntry,
@@ -124,6 +125,7 @@ export async function persistSessionUsageUpdate(params: {
         skipMaintenance: true,
         takeCacheOwnership: true,
         update: async (entry) => {
+          const updatedAt = Date.now();
           const preserveSessionModelState =
             params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
           const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
@@ -173,7 +175,7 @@ export async function persistSessionUsageUpdate(params: {
             systemPromptReport: preserveUserFacingRunState
               ? entry.systemPromptReport
               : (params.systemPromptReport ?? entry.systemPromptReport),
-            updatedAt: Date.now(),
+            updatedAt,
           };
           if (hasUsage && !preserveUserFacingRunState) {
             patch.inputTokens = params.usage?.input ?? 0;
@@ -200,6 +202,10 @@ export async function persistSessionUsageUpdate(params: {
           if ((hasFreshContextSnapshot || hasCompactionSnapshot) && !preserveUserFacingRunState) {
             patch.totalTokens = totalTokens;
             patch.totalTokensFresh = true;
+            const accountedGoal = resolveSessionGoalDisplayState({ ...entry, ...patch }, updatedAt);
+            if (accountedGoal) {
+              patch.goal = accountedGoal;
+            }
           } else if (
             !preserveUserFacingRunState &&
             (params.preserveFreshTotalTokensOnStaleUsage !== true ||
