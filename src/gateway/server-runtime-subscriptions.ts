@@ -45,6 +45,14 @@ export function startGatewayEventSubscriptions(params: {
         toolEventRecipients: params.toolEventRecipients,
         sessionEventSubscribers: params.sessionEventSubscribers,
         sessionMessageSubscribers: params.sessionMessageSubscribers,
+        clearTrackedActiveRun: ({ runId, clientRunId, sessionKey }) => {
+          for (const candidateRunId of new Set([runId, clientRunId])) {
+            const entry = params.chatAbortControllers.get(candidateRunId);
+            if (entry?.sessionKey === sessionKey) {
+              params.chatAbortControllers.delete(candidateRunId);
+            }
+          }
+        },
         isChatSendRunActive: (runId) => {
           const entry = params.chatAbortControllers.get(runId);
           return entry !== undefined && entry.kind !== "agent";
