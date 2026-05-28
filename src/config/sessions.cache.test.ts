@@ -20,6 +20,7 @@ import {
   readSessionUpdatedAt,
   saveSessionStore,
   updateSessionStore,
+  updateSessionStoreEntry,
 } from "./sessions/store.js";
 import type { SessionEntry } from "./sessions/types.js";
 
@@ -256,7 +257,12 @@ describe("Session Store Cache", () => {
     const parseSpy = vi.spyOn(JSON, "parse");
 
     try {
-      writeSessionStoreCache({ storePath, store: testStore, serialized });
+      writeSessionStoreCache({
+        storePath,
+        store: testStore,
+        serialized,
+        cloneSerialized: serialized,
+      });
 
       expect(parseSpy).not.toHaveBeenCalled();
 
@@ -557,6 +563,30 @@ describe("Session Store Cache", () => {
     expect(after["session:1"].displayName).toBe("Updated Session");
   });
 
+  it("keeps whole-store update results detached from the mutable cache by default", async () => {
+    await saveSessionStore(storePath, createSingleSessionStore());
+
+    const persisted = await updateSessionStore(
+      storePath,
+      (store) => {
+        const next = {
+          ...store["session:1"],
+          displayName: "Updated Session",
+          updatedAt: Date.now() + 1,
+        };
+        store["session:1"] = next;
+        return next;
+      },
+      { skipMaintenance: true },
+    );
+
+    persisted.displayName = "Mutated after write";
+
+    const cached = loadSessionStore(storePath, { clone: false });
+    expect(cached["session:1"]).not.toBe(persisted);
+    expect(cached["session:1"].displayName).toBe("Updated Session");
+  });
+
   it("can publish writer-owned session updates directly into the object cache", async () => {
     await saveSessionStore(storePath, createSingleSessionStore());
 
@@ -577,6 +607,24 @@ describe("Session Store Cache", () => {
     const cached = loadSessionStore(storePath, { clone: false });
     expect(cached["session:1"]).toBe(persisted);
     expect(cached["session:1"].displayName).toBe("Writer owned");
+  });
+
+  it("can publish writer-owned entry patches directly into the object cache", async () => {
+    await saveSessionStore(storePath, createSingleSessionStore());
+
+    const persisted = await updateSessionStoreEntry({
+      storePath,
+      sessionKey: "session:1",
+      takeCacheOwnership: true,
+      update: async () => ({
+        displayName: "Entry writer owned",
+        updatedAt: Date.now() + 1,
+      }),
+    });
+
+    const cached = loadSessionStore(storePath, { clone: false });
+    expect(cached["session:1"]).toBe(persisted);
+    expect(cached["session:1"].displayName).toBe("Entry writer owned");
   });
 
   it("builds immutable session snapshots lazily after writes", async () => {

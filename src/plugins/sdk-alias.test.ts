@@ -1736,7 +1736,7 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(sourceLoaderBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
-      `import { resolveOutboundSendDep } from "@openclaw/plugin-sdk/outbound-send-deps";
+      `import { resolveOutboundSendDep } from "@openclaw/plugin-sdk/channel-outbound";
 
 export const syntheticRuntimeMarker = {
   resolveOutboundSendDep,
@@ -1744,7 +1744,7 @@ export const syntheticRuntimeMarker = {
 `,
       "utf-8",
     );
-    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "outbound-send-deps.ts");
+    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "channel-outbound.ts");
     fs.writeFileSync(
       copiedChannelRuntimeShim,
       `export function resolveOutboundSendDep() {
@@ -1768,12 +1768,12 @@ export const syntheticRuntimeMarker = {
       loadError = error;
     }
     expect(loadError).toBeInstanceOf(Error);
-    expect((loadError as Error).message).toContain("outbound-send-deps");
+    expect((loadError as Error).message).toContain("channel-outbound");
 
     const withAlias = createJiti(sourceLoaderBaseUrl, {
       ...buildPluginLoaderJitiOptions({
-        "openclaw/plugin-sdk/outbound-send-deps": copiedChannelRuntimeShim,
-        "@openclaw/plugin-sdk/outbound-send-deps": copiedChannelRuntimeShim,
+        "openclaw/plugin-sdk/channel-outbound": copiedChannelRuntimeShim,
+        "@openclaw/plugin-sdk/channel-outbound": copiedChannelRuntimeShim,
       }),
       tryNative: false,
     });
@@ -2117,6 +2117,53 @@ describe("buildPluginLoaderJitiOptions", () => {
 
     expect(alias).not.toBe(aliasMap);
     expect(alias.beta).toBe("/repo/alpha/sub");
+  });
+
+  it("follows chained source-transform alias targets", () => {
+    const aliasMap = {
+      alpha: "/repo/alpha",
+      gamma: "beta/gamma",
+      beta: "alpha/beta",
+    };
+
+    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+
+    expect(alias.gamma).toBe("/repo/alpha/beta/gamma");
+  });
+
+  it("does not rewrite concrete Windows drive alias targets", () => {
+    const aliasMap = {
+      "C:": "/wrong",
+      beta: "C:/repo/beta",
+    };
+
+    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+
+    expect(alias.beta).toBe("C:/repo/beta");
+  });
+
+  it("stops chained source-transform alias rewrites after reaching a Windows drive target", () => {
+    const aliasMap = {
+      beta: "C:/repo/beta",
+      "C:": "/wrong",
+      alpha: "beta/alpha",
+    };
+
+    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+
+    expect(alias.alpha).toBe("C:/repo/beta/alpha");
+  });
+
+  it("bounds cyclic source-transform alias targets", () => {
+    const aliasMap = {
+      alpha: "beta/a",
+      beta: "alpha/b",
+      gamma: "alpha/g",
+    };
+
+    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+
+    expect(alias.gamma.length).toBeLessThan(32);
   });
 
   it("does not attach an empty alias map", () => {

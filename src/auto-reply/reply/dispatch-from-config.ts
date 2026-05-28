@@ -9,6 +9,13 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import {
+  isToolAllowedByPolicies,
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveInheritedToolPolicyForSession,
+  resolveSubagentToolPolicyForSession,
+} from "../../agents/agent-tools.policy.js";
 import { selectAgentHarness } from "../../agents/harness/selection.js";
 import {
   buildModelAliasIndex,
@@ -16,13 +23,6 @@ import {
   resolveModelRefFromString,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
-import {
-  isToolAllowedByPolicies,
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveInheritedToolPolicyForSession,
-  resolveSubagentToolPolicyForSession,
-} from "../../agents/pi-tools.policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -194,7 +194,9 @@ const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
 );
 const abortRuntimeLoader = createLazyImportLoader(() => import("./abort.runtime.js"));
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
-const runtimePluginsLoader = createLazyImportLoader(() => import("./runtime-plugins.runtime.js"));
+const runtimePluginsLoader = createLazyImportLoader(
+  () => import("../../plugins/runtime-plugins.runtime.js"),
+);
 const replyMediaPathsRuntimeLoader = createLazyImportLoader(
   () => import("./reply-media-paths.runtime.js"),
 );
@@ -628,18 +630,24 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
   }
 };
 
-function shouldBypassPluginOwnedBindingForCommand(ctx: FinalizedMsgContext): boolean {
+function shouldBypassPluginOwnedBindingForCommand(
+  ctx: FinalizedMsgContext,
+  cfg: OpenClawConfig,
+): boolean {
   const commandTurn = resolveCommandTurnContext(ctx);
-  if (!commandTurn.authorized) {
+  if (
+    (commandTurn.kind === "native" || commandTurn.kind === "text-slash") &&
+    !commandTurn.authorized
+  ) {
     return false;
   }
-  if (isNativeCommandTurn(commandTurn)) {
+  if (isNativeCommandTurn(commandTurn) && commandTurn.authorized) {
     return true;
   }
-  if (commandTurn.kind !== "text-slash") {
+  if (!isExplicitSourceReplyCommand(ctx, cfg)) {
     return false;
   }
-  const commandBody = normalizeCommandBody(commandTurn.body ?? "", {
+  const commandBody = normalizeCommandBody(commandTurn.body ?? ctx.CommandBody ?? "", {
     botUsername: ctx.BotUsername,
   });
   if (!commandBody.startsWith("/")) {
@@ -674,6 +682,8 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
   await updateSessionStoreEntry({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
+    skipMaintenance: true,
+    takeCacheOwnership: true,
     update: async (entry) => {
       if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
         return null;
@@ -1294,11 +1304,18 @@ export async function dispatchReplyFromConfig(
       return null;
     }
     markInboundDedupeReplayUnsafe();
+    // Outbound session.key must match the session key used by the agent
+    // runtime that produced this payload, so agent_end and message delivery
+    // hooks expose the same canonical key for native command redirects.
+    const agentRuntimeSessionKey =
+      ctx.CommandSource === "native"
+        ? (resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey)
+        : ctx.SessionKey;
     return await routeReplyRuntime.routeReply({
       payload,
       channel: routeReplyChannel,
       to: routeReplyTo,
-      sessionKey: ctx.SessionKey,
+      sessionKey: agentRuntimeSessionKey,
       policySessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
       policyConversationType: resolveRoutedPolicyConversationType(ctx),
       accountId: replyRoute.accountId,
@@ -1437,7 +1454,7 @@ export async function dispatchReplyFromConfig(
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
     (ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn) ||
     (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
-      !isExplicitSourceReplyCommand(ctx) &&
+      !isExplicitSourceReplyCommand(ctx, cfg) &&
       (configuredVisibleReplies === "message_tool" ||
         (!isInternalWebchatTurn && effectiveVisibleReplies === "message_tool")));
   const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
@@ -1569,7 +1586,7 @@ export async function dispatchReplyFromConfig(
       return finishReplyOperationAbortedDispatch();
     }
     touchConversationBindingRecord(pluginOwnedBinding.bindingId);
-    if (shouldBypassPluginOwnedBindingForCommand(ctx)) {
+    if (shouldBypassPluginOwnedBindingForCommand(ctx, cfg)) {
       logVerbose(
         `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
       );
@@ -1624,7 +1641,7 @@ export async function dispatchReplyFromConfig(
           if (
             (chatType === "group" || chatType === "channel") &&
             ctx.WasMentioned === false &&
-            !isExplicitSourceReplyCommand(ctx)
+            !isExplicitSourceReplyCommand(ctx, cfg)
           ) {
             markIdle("plugin_binding_fallback_unmentioned");
             recordProcessed("completed", { reason: pluginFallbackReason });

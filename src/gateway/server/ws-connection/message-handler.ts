@@ -1,7 +1,10 @@
+import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
+import path from "node:path";
 import type { RawData, WebSocket } from "ws";
 import { getRuntimeConfig } from "../../../config/io.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import {
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
@@ -159,6 +162,32 @@ const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.token.rotate",
   "device.token.revoke",
 ]);
+
+/** Match production release versions (YYYY.M.D or YYYY.M.D-beta.N). */
+const RELEASED_VERSION_RE = /^\d{4}\.\d+\.\d+/;
+
+function isReleasedVersion(version: string): boolean {
+  return RELEASED_VERSION_RE.test(version);
+}
+
+/**
+ * Lazily resolve the local node host's nodeId from ~/.openclaw/node.json.
+ * Process-stable: only changes on `openclaw node install`, which requires restart.
+ */
+let cachedLocalNodeId: string | null | undefined;
+function resolveLocalNodeId(): string | null {
+  if (cachedLocalNodeId !== undefined) {
+    return cachedLocalNodeId;
+  }
+  try {
+    const raw = fs.readFileSync(path.join(resolveStateDir(), "node.json"), "utf8");
+    const parsed = JSON.parse(raw) as { nodeId?: string };
+    cachedLocalNodeId = typeof parsed.nodeId === "string" ? parsed.nodeId.trim() || null : null;
+  } catch {
+    cachedLocalNodeId = null;
+  }
+  return cachedLocalNodeId;
+}
 
 export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
@@ -912,7 +941,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
         }
 
-        ({ authResult, authOk, authMethod } = await resolveConnectAuthDecision({
+        const authDecision = await resolveConnectAuthDecision({
           state: {
             authResult,
             authOk,
@@ -938,8 +967,15 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               role,
               scopes,
             }),
-          verifyDeviceToken,
-        }));
+          verifyDeviceToken: async (params) =>
+            await verifyDeviceToken({
+              ...params,
+              requiredSharedGatewaySessionGeneration: getRequiredSharedGatewaySessionGeneration?.(),
+            }),
+        });
+        ({ authResult, authOk, authMethod } = authDecision);
+        const deviceTokenSharedGatewaySessionGeneration =
+          authDecision.deviceTokenSharedGatewaySessionGeneration;
         pairingLocality = resolvePairingLocality({
           connectParams,
           isLocalClient,
@@ -962,16 +998,21 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           rejectUnauthorized(authResult);
           return;
         }
-        if (authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy") {
-          const sharedGatewaySessionGeneration = resolveSharedGatewaySessionGeneration(
-            resolvedAuth,
-            trustedProxies,
-          );
+        const usesSharedGatewayAuth =
+          authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
+        const sharedGatewaySessionGeneration = usesSharedGatewayAuth
+          ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
+          : undefined;
+        const sessionUsesSharedGatewayAuth =
+          usesSharedGatewayAuth || deviceTokenSharedGatewaySessionGeneration !== undefined;
+        const sessionSharedGatewaySessionGeneration =
+          sharedGatewaySessionGeneration ?? deviceTokenSharedGatewaySessionGeneration;
+        if (sessionUsesSharedGatewayAuth) {
           const requiredSharedGatewaySessionGeneration =
             getRequiredSharedGatewaySessionGeneration?.();
           if (
             requiredSharedGatewaySessionGeneration !== undefined &&
-            sharedGatewaySessionGeneration !== requiredSharedGatewaySessionGeneration
+            sessionSharedGatewaySessionGeneration !== requiredSharedGatewaySessionGeneration
           ) {
             setCloseCause("gateway-auth-rotated", {
               authGenerationStale: true,
@@ -1437,9 +1478,23 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
 
         const shouldIssueDeviceToken = !trustedProxyAuthOk;
+        const sharedGatewayAuthIssuer =
+          sessionSharedGatewaySessionGeneration &&
+          (deviceTokenSharedGatewaySessionGeneration !== undefined ||
+            (usesSharedGatewayAuth && (isBrowserOperatorUi || isWebchat)))
+            ? {
+                kind: "shared-gateway-auth" as const,
+                generation: sessionSharedGatewaySessionGeneration,
+              }
+            : undefined;
         const deviceToken =
           shouldIssueDeviceToken && device && hasServerApprovedDeviceTokenBaseline
-            ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
+            ? await ensureDeviceToken({
+                deviceId: device.id,
+                role,
+                scopes,
+                issuer: sharedGatewayAuthIssuer,
+              })
             : null;
         const bootstrapDeviceTokens: Array<{
           deviceToken: string;
@@ -1564,11 +1619,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             });
           }
         }
-        const usesSharedGatewayAuth =
-          authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
-        const sharedGatewaySessionGeneration = usesSharedGatewayAuth
-          ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
-          : undefined;
         const isTrustedApprovalRuntime =
           scopes.includes(APPROVALS_SCOPE) &&
           connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
@@ -1580,8 +1630,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connect: connectParams,
           connId,
           isDeviceTokenAuth: authMethod === "device-token",
-          usesSharedGatewayAuth,
-          sharedGatewaySessionGeneration,
+          usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
+          sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
           ...(isTrustedApprovalRuntime ? { internal: { approvalRuntime: true } } : {}),
@@ -1599,6 +1649,41 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           });
         }
         setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
+
+        // Version mismatch: kick the local node host so the OS supervisor restarts it.
+        // Only applies when the connecting node is the same-install local node (verified by
+        // matching instanceId against ~/.openclaw/node.json nodeId). SSH-tunneled remote
+        // nodes also appear as loopback but have different instanceIds, so they are exempt.
+        // Placed before setClient/presence to avoid phantom online state on rejection.
+        if (role === "node" && isLocalClient) {
+          const localNodeId = resolveLocalNodeId();
+          const clientInstanceId = connectParams.client.instanceId?.trim();
+          if (localNodeId && clientInstanceId && clientInstanceId === localNodeId) {
+            const gatewayVersion = resolveRuntimeServiceVersion(process.env);
+            const clientVersion = connectParams.client.version;
+            if (
+              clientVersion &&
+              gatewayVersion &&
+              clientVersion !== gatewayVersion &&
+              isReleasedVersion(gatewayVersion) &&
+              isReleasedVersion(clientVersion)
+            ) {
+              logWsControl.info(
+                `node version mismatch conn=${connId} client=${formatForLog(clientLabel)} clientVersion=${formatForLog(clientVersion)} gatewayVersion=${gatewayVersion}; closing for supervisor restart`,
+              );
+              sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "client version mismatch", {
+                details: {
+                  code: ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
+                  clientVersion,
+                  gatewayVersion,
+                },
+              });
+              close(1008, "client version mismatch");
+              return;
+            }
+          }
+        }
+
         if (!setClient(nextClient)) {
           setCloseCause("connect-aborted-before-register", {
             ...clientMeta,

@@ -448,12 +448,13 @@
         "start": {
           "label": "start",
           "detailKeys": [
-            "providerId",
             "sessionId",
             "title",
-            "meetingUrl",
+            "providerId",
+            "accountId",
             "guildId",
-            "channelId"
+            "channelId",
+            "meetingUrl"
           ]
         },
         "stop": {
@@ -468,10 +469,11 @@
         "import": {
           "label": "import",
           "detailKeys": [
-            "providerId",
             "sessionId",
             "title",
-            "meetingUrl"
+            "providerId",
+            "meetingUrl",
+            "speakerLabel"
           ]
         },
         "summarize": {

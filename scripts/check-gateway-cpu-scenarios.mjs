@@ -86,27 +86,42 @@ function parseArgs(argv) {
   if (options.qaScenarios.length === 0) {
     options.qaScenarios = [...DEFAULT_QA_SCENARIOS];
   }
+  if (options.skipStartup && options.skipQa) {
+    throw new Error("--skip-startup and --skip-qa cannot be used together");
+  }
   return options;
 }
 
 function parsePositiveInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1) {
+  const text = String(raw).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${label} must be a positive integer`);
   }
   return value;
 }
 
 function parseNonNegativeInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) {
+  const text = String(raw).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${label} must be a non-negative integer`);
   }
   return value;
 }
 
 function parsePositiveNumber(raw, label) {
-  const value = Number(raw);
+  const text = String(raw).trim();
+  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
+    throw new Error(`${label} must be a positive number`);
+  }
+  const value = Number(text);
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`${label} must be a positive number`);
   }

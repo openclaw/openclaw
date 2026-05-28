@@ -90,6 +90,27 @@ describe("voice-call tunnels", () => {
     );
   });
 
+  it("parses complete ngrok log lines before bounding the incomplete tail", async () => {
+    const proc = nextProcess();
+    const result = startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
+
+    proc.stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({ msg: "started tunnel", url: "https://large.ngrok.io" })}\n${"x".repeat(20_000)}`,
+      ),
+    );
+
+    const settled = await Promise.race([
+      result.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 20)),
+    ]);
+    expect(settled).toBe(true);
+
+    const tunnel = await result;
+    expect(tunnel.publicUrl).toBe("https://large.ngrok.io/voice/webhook");
+  });
+
   it("sets ngrok auth token before starting the tunnel", async () => {
     const authProc = nextProcess();
     const tunnelProc = nextProcess();
@@ -109,6 +130,22 @@ describe("voice-call tunnels", () => {
     expect(mocks.spawn).toHaveBeenNthCalledWith(1, "ngrok", ["config", "add-authtoken", "token"], {
       stdio: ["ignore", "pipe", "pipe"],
     });
+  });
+
+  it("bounds ngrok command failure output", async () => {
+    const authProc = nextProcess();
+    const result = startNgrokTunnel({
+      port: 3334,
+      path: "/hook",
+      authToken: "token",
+    });
+
+    authProc.stderr.emit("data", Buffer.from(`start-${"x".repeat(20_000)}-end`));
+    authProc.close(1);
+
+    await expect(result).rejects.toThrow("[output truncated]");
+    await expect(result).rejects.toThrow("-end");
+    await expect(result).rejects.not.toThrow("start-");
   });
 
   it("rejects ngrok startup errors from stderr", async () => {

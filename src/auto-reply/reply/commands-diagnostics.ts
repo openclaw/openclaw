@@ -450,6 +450,7 @@ async function executeCodexDiagnosticsAddon(
     isAuthorizedSender: params.command.isAuthorizedSender,
     senderIsOwner: params.command.senderIsOwner,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
     sessionFile: targetSessionEntry?.sessionFile,

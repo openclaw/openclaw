@@ -1,4 +1,4 @@
-import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
+import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-outbound";
 import type { CoreConfig } from "../types.js";
 import type { MatrixClient } from "./sdk.js";
 import { editMessageMatrix, prepareMatrixSingleText, sendSingleTextMessageMatrix } from "./send.js";
@@ -17,8 +17,11 @@ function resolveDraftPreviewOptions(mode: MatrixDraftPreviewMode): {
       includeMentions: false,
     };
   }
+  // Drafts can contain partial model text and raw tool-progress paths; keep
+  // Matrix mentions inert until callers send a normal final message.
   return {
     msgtype: MsgType.Text,
+    includeMentions: false,
   };
 }
 

@@ -12,9 +12,9 @@ const sendDurableMessageBatchMock = vi.hoisted(() =>
 const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/channel-message", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-message")>(
-    "openclaw/plugin-sdk/channel-message",
+vi.mock("openclaw/plugin-sdk/channel-outbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-outbound")>(
+    "openclaw/plugin-sdk/channel-outbound",
   );
   return {
     ...actual,
