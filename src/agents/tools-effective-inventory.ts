@@ -300,7 +300,9 @@ export function buildRuntimeCompatibleToolInventory(params: {
 } {
   const rawToolsByName = new Map(params.tools.map((tool) => [tool.name, tool]));
   const normalizedTools = normalizeAgentRuntimeTools({
-    tools: params.tools,
+    // Schema normalization can replace tool definitions, so hand the runtime
+    // policy a mutable copy while keeping this inventory API readonly.
+    tools: [...params.tools],
     provider: params.modelProvider ?? "",
     config: params.cfg,
     workspaceDir: params.workspaceDir,
