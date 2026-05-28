@@ -571,6 +571,16 @@ export async function safeFetch(params: {
     throw new Error(`Initial download URL blocked: ${currentUrl}`);
   }
 
+  // Authorization is only allowed on explicitly auth-allowlisted hosts, including
+  // the first hop. Redirect hops apply the same rule below before following.
+  if (
+    currentHeaders.has("authorization") &&
+    params.authorizationAllowHosts &&
+    !isUrlAllowed(currentUrl, params.authorizationAllowHosts)
+  ) {
+    currentHeaders.delete("authorization");
+  }
+
   if (resolveFn) {
     try {
       const initialHost = new URL(currentUrl).hostname;

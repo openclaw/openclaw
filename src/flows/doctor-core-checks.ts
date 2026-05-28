@@ -18,7 +18,7 @@ import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { registerHealthCheck } from "./health-check-registry.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
+import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
@@ -27,6 +27,9 @@ export type CoreHealthCheckDeps = {
   readonly detectUnavailableSkills: (cfg: OpenClawConfig) => Promise<readonly SkillStatusEntry[]>;
   readonly collectSecurityWarnings: (cfg: OpenClawConfig) => Promise<readonly string[]>;
   readonly collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>;
+  readonly collectRuntimeToolSchemaFindings: (
+    ctx: HealthCheckContext,
+  ) => Promise<readonly HealthFinding[]>;
 };
 
 async function detectUnavailableSkillsWithRuntime(
@@ -58,10 +61,18 @@ async function collectWorkspaceSuggestionNotesWithRuntime(
   return notes;
 }
 
+async function collectRuntimeToolSchemaFindingsWithRuntime(
+  ctx: HealthCheckContext,
+): Promise<readonly HealthFinding[]> {
+  const runtime = await import("./doctor-core-checks.runtime.js");
+  return runtime.collectRuntimeToolSchemaFindings(ctx.cfg);
+}
+
 const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   detectUnavailableSkills: detectUnavailableSkillsWithRuntime,
   collectSecurityWarnings: collectSecurityWarningsWithRuntime,
   collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
+  collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
 };
 
 export function configValidationIssuesToHealthFindings(
@@ -216,7 +227,7 @@ const hooksModelCheck: HealthCheck = {
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
-    const catalog = await loadModelCatalog({ config: ctx.cfg });
+    const catalog = await loadModelCatalog({ config: ctx.cfg, readOnly: true });
     const status = getModelRefStatus({
       cfg: ctx.cfg,
       catalog,
@@ -277,7 +288,7 @@ const bootstrapSizeCheck: HealthCheck = {
       await import("../agents/bootstrap-budget.js");
     const { resolveBootstrapContextForRun } = await import("../agents/bootstrap-files.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
-      await import("../agents/pi-embedded-helpers.js");
+      await import("../agents/embedded-agent-helpers.js");
     const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
     const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir,
@@ -325,6 +336,18 @@ const bootstrapSizeCheck: HealthCheck = {
     return findings;
   },
 };
+
+function createRuntimeToolSchemaCheck(deps: CoreHealthCheckDeps): HealthCheck {
+  return {
+    id: "core/doctor/runtime-tool-schemas",
+    kind: "core",
+    description: "Active agent tool schemas project into model/runtime-compatible tool inputs.",
+    source: "doctor",
+    async detect(ctx) {
+      return deps.collectRuntimeToolSchemaFindings(ctx);
+    },
+  };
+}
 
 function normalizeDoctorNoteLine(line: string): string {
   return line.replace(/^- /, "").trim();
@@ -777,6 +800,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     openAIOAuthTlsCheck,
     hooksModelCheck,
     bootstrapSizeCheck,
+    createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
   ];
 }

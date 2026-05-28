@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   browserPluginNodeHostCommands,
   browserPluginReload,
@@ -43,6 +43,10 @@ vi.mock("./register.runtime.js", async () => {
 vi.mock("./src/cli/browser-cli.js", () => ({
   registerBrowserCli: runtimeApiMocks.registerBrowserCli,
 }));
+
+beforeAll(async () => {
+  await import("./register.runtime.js");
+});
 
 function createApi() {
   const registerCli = vi.fn();

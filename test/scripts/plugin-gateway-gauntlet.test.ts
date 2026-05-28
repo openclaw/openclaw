@@ -2,9 +2,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGauntletPrebuildCommand,
+  hasGauntletWorkRows,
   parseTimedMetrics,
   runMeasuredCommand,
   runMeasuredCommandLive,
@@ -29,6 +30,7 @@ describe("plugin gateway gauntlet helpers", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(repoRoot, { recursive: true, force: true });
   });
 
@@ -328,6 +330,14 @@ describe("plugin gateway gauntlet helpers", () => {
     });
   });
 
+  it("does not count prebuild setup as gauntlet work", () => {
+    expect(hasGauntletWorkRows([])).toBe(false);
+    expect(hasGauntletWorkRows([{ phase: "prebuild" }])).toBe(false);
+    expect(hasGauntletWorkRows([{ phase: "prebuild" }, { phase: "lifecycle:install" }])).toBe(true);
+    expect(hasGauntletWorkRows([{ phase: "slash:help" }])).toBe(true);
+    expect(hasGauntletWorkRows([{ phase: "qa:rpc" }])).toBe(true);
+  });
+
   it("parses macOS time -l metrics from strict trailing lines", () => {
     const metrics = parseTimedMetrics(
       [
@@ -423,6 +433,36 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(log).toContain("[stdout truncated after 12 bytes]");
   });
 
+  it("bounds relayed output from live measured commands", async () => {
+    const logDir = path.join(repoRoot, "logs");
+    const writes: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
+      return true;
+    });
+
+    const row = await runMeasuredCommandLive({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: ["-e", "process.stdout.write('x'.repeat(32))"],
+      label: "live-relay-bounded",
+      phase: "probe",
+      timeoutMs: 1000,
+      timeMode: "none",
+      consoleOutputMaxBytes: 12,
+      maxBufferBytes: 64,
+    });
+
+    const relayed = writes.join("");
+    expect(row.status).toBe(0);
+    expect(relayed).toContain("x".repeat(12));
+    expect(relayed).not.toContain("x".repeat(32));
+    expect(relayed).toContain("[stdout relay truncated after 12 bytes]");
+    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("x".repeat(32));
+  });
+
   it("force kills timed-out live measured process groups that ignore SIGTERM", async () => {
     const logDir = path.join(repoRoot, "logs");
     const markerPath = path.join(repoRoot, "timeout-marker.txt");
@@ -457,7 +497,7 @@ describe("plugin gateway gauntlet helpers", () => {
     await expect(fs.readFile(markerPath, "utf8")).resolves.toBe(afterReturn);
   });
 
-  it("cleans the isolated run root after a successful dry run", async () => {
+  it("fails dry runs that do not execute any gauntlet commands", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
     const result = spawnSync(
       process.execPath,
@@ -478,10 +518,71 @@ describe("plugin gateway gauntlet helpers", () => {
       },
     );
 
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("No lifecycle, slash-help, or QA gauntlet commands ran");
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.guardFailures).toEqual([
+      expect.objectContaining({
+        kind: "empty-run",
+      }),
+    ]);
+    expect(summary.isolatedRunRootPreserved).toBe(true);
+    await expect(fs.stat(summary.isolatedRunRoot)).resolves.toBeTruthy();
+    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+  });
+
+  it("rejects non-decimal gauntlet numeric options", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--skip-qa",
+        "--allow-empty",
+        "--limit",
+        "1e3",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("--limit must be a positive integer");
+  });
+
+  it("cleans the isolated run root after an explicitly empty dry run", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--skip-qa",
+        "--allow-empty",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
     expect(result.status, result.stderr).toBe(0);
     const summary = JSON.parse(
       await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
     );
+    expect(summary.guardFailures).toEqual([]);
     expect(summary.isolatedRunRootPreserved).toBe(false);
     await expect(fs.stat(summary.isolatedRunRoot)).rejects.toHaveProperty("code", "ENOENT");
   });

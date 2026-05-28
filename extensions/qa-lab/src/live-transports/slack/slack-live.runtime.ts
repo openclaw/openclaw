@@ -5,6 +5,10 @@ import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/ap
 import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  appendQaLiveLaneIssue as appendLiveLaneIssue,
+  buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
+} from "../shared/live-artifacts.js";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
@@ -20,7 +24,6 @@ import {
   type QaCredentialRole,
 } from "../shared/credential-lease.runtime.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
-import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "../shared/live-lane-helpers.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
@@ -94,6 +97,7 @@ type SlackQaBeforeRunResult =
     };
 
 type SlackQaConfigOverrides = {
+  allowFrom?: string[];
   approvals?: {
     exec?: boolean;
     plugin?: boolean;
@@ -331,7 +335,10 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
     standardId: "allowlist-block",
     title: "Slack non-allowlisted sender does not trigger",
     timeoutMs: 8_000,
-    configOverrides: { users: ["U_OPENCLAW_QA_NEVER_ALLOWED"] },
+    configOverrides: {
+      allowFrom: ["U_OPENCLAW_QA_NEVER_ALLOWED"],
+      users: ["U_OPENCLAW_QA_NEVER_ALLOWED"],
+    },
     buildRun: (sutUserId) => {
       const token = `SLACK_QA_BLOCK_${randomUUID().slice(0, 8).toUpperCase()}`;
       return {
@@ -653,7 +660,7 @@ function buildSlackQaConfig(
             mode: "socket",
             botToken: params.sutBotToken,
             appToken: params.sutAppToken,
-            allowFrom: [params.driverBotUserId],
+            allowFrom: params.overrides?.allowFrom ?? [params.driverBotUserId],
             groupPolicy: "allowlist",
             allowBots: true,
             replyToMode: params.overrides?.replyToMode ?? "off",

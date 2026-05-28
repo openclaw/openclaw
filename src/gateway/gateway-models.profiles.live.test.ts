@@ -7,14 +7,12 @@ import path from "node:path";
 import {
   clampThinkingLevel,
   type Api,
-  getModels,
-  getProviders,
-  type KnownProvider,
   type Model,
   type ModelThinkingLevel,
-} from "@earendil-works/pi-ai";
+} from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
+import { discoverAuthStorage, discoverModels } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import {
   ensureAuthProfileStore,
@@ -27,6 +25,7 @@ import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   getHighSignalLiveModelPriorityIndex,
+  getHighSignalLiveModelProviders,
   isHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
@@ -43,7 +42,6 @@ import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
@@ -70,7 +68,10 @@ const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
 const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
 const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
 const GATEWAY_LIVE_SMOKE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_SMOKE);
-const THINKING_LEVEL = GATEWAY_LIVE_SMOKE ? "low" : "high";
+const THINKING_LEVEL = resolveGatewayLiveThinkingLevel({
+  raw: process.env.OPENCLAW_LIVE_GATEWAY_THINKING,
+  smoke: GATEWAY_LIVE_SMOKE,
+});
 const ENABLE_EXTRA_TOOL_PROBES = !GATEWAY_LIVE_SMOKE;
 const ENABLE_EXTRA_IMAGE_PROBES = !GATEWAY_LIVE_SMOKE;
 const THINKING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\s*>/i;
@@ -88,6 +89,8 @@ const GATEWAY_LIVE_SETUP_TIMEOUT_MS = Math.max(
 );
 const GATEWAY_LIVE_MODEL_TIMEOUT_MS = resolveGatewayLiveModelTimeoutMs();
 const GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS = resolveGatewayLiveTranscriptTimeoutMs();
+const GATEWAY_LIVE_AGENT_RUN_TIMEOUT_MS = resolveGatewayLiveAgentRunTimeoutMs();
+const GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS = resolveGatewayLiveAgentWaitTimeoutMs();
 const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
   1_000,
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS, 30_000),
@@ -167,7 +170,9 @@ function providerScopedModelRegistryProviders(params: {
     return params.providerList;
   }
   if (!params.useExplicit) {
-    return undefined;
+    return getHighSignalLiveModelProviders().filter((provider) =>
+      params.providerFilter ? params.providerFilter.has(provider) : true,
+    );
   }
   return providerListFromExplicitModelFilter({
     modelFilter: params.modelFilter,
@@ -240,7 +245,7 @@ function resolveGatewayLiveModelTimeoutMs(
   liveModelTimeoutRaw = process.env.OPENCLAW_LIVE_MODEL_TIMEOUT_MS,
   stepTimeoutMs = GATEWAY_LIVE_PROBE_TIMEOUT_MS,
 ): number {
-  const requested = toInt(gatewayModelTimeoutRaw, toInt(liveModelTimeoutRaw, 120_000));
+  const requested = toInt(gatewayModelTimeoutRaw, toInt(liveModelTimeoutRaw, 300_000));
   return Math.max(stepTimeoutMs, requested);
 }
 
@@ -249,6 +254,24 @@ function resolveGatewayLiveTranscriptTimeoutMs(
   modelTimeoutMs = GATEWAY_LIVE_MODEL_TIMEOUT_MS,
 ): number {
   return Math.max(stepTimeoutMs, modelTimeoutMs);
+}
+
+function resolveGatewayLiveAgentRunTimeoutMs(
+  modelTimeoutMs = GATEWAY_LIVE_MODEL_TIMEOUT_MS,
+): number {
+  if (!Number.isFinite(modelTimeoutMs) || modelTimeoutMs <= 1_000) {
+    return Math.max(1_000, Math.floor(modelTimeoutMs));
+  }
+  const terminalGraceMs = Math.min(30_000, Math.max(5_000, Math.floor(modelTimeoutMs / 6)));
+  return Math.max(1_000, Math.floor(modelTimeoutMs - terminalGraceMs));
+}
+
+function resolveGatewayLiveAgentWaitTimeoutMs(
+  agentRunTimeoutMs = GATEWAY_LIVE_AGENT_RUN_TIMEOUT_MS,
+  modelTimeoutMs = GATEWAY_LIVE_MODEL_TIMEOUT_MS,
+): number {
+  const waitGraceMs = Math.min(10_000, Math.max(1_000, Math.floor(modelTimeoutMs / 12)));
+  return Math.max(1_000, Math.min(modelTimeoutMs, Math.floor(agentRunTimeoutMs + waitGraceMs)));
 }
 
 function isGatewayLiveProbeTimeout(error: string): boolean {
@@ -382,8 +405,10 @@ function enterProductionEnvForLiveRun() {
   const previous = {
     vitest: process.env.VITEST,
     nodeEnv: process.env.NODE_ENV,
+    testFast: process.env.OPENCLAW_TEST_FAST,
   };
   delete process.env.VITEST;
+  delete process.env.OPENCLAW_TEST_FAST;
   process.env.NODE_ENV = "production";
   return previous;
 }
@@ -391,16 +416,30 @@ function enterProductionEnvForLiveRun() {
 function restoreProductionEnvForLiveRun(previous: {
   vitest: string | undefined;
   nodeEnv: string | undefined;
+  testFast: string | undefined;
 }) {
   if (previous.vitest === undefined) {
     delete process.env.VITEST;
   } else {
     process.env.VITEST = previous.vitest;
   }
+  if (previous.testFast === undefined) {
+    delete process.env.OPENCLAW_TEST_FAST;
+  } else {
+    process.env.OPENCLAW_TEST_FAST = previous.testFast;
+  }
   if (previous.nodeEnv === undefined) {
     delete process.env.NODE_ENV;
   } else {
     process.env.NODE_ENV = previous.nodeEnv;
+  }
+}
+
+function restoreOptionalEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
   }
 }
 
@@ -665,6 +704,10 @@ describe("resolveGatewayLiveModelTimeoutMs", () => {
     expect(resolveGatewayLiveModelTimeoutMs("", "45000", 30_000)).toBe(45_000);
   });
 
+  it("defaults to the release live model budget", () => {
+    expect(resolveGatewayLiveModelTimeoutMs("", undefined, 90_000)).toBe(300_000);
+  });
+
   it("never goes below the probe timeout", () => {
     expect(resolveGatewayLiveModelTimeoutMs("45000", undefined, 90_000)).toBe(90_000);
   });
@@ -677,6 +720,41 @@ describe("resolveGatewayLiveTranscriptTimeoutMs", () => {
 
   it("never goes below the probe timeout", () => {
     expect(resolveGatewayLiveTranscriptTimeoutMs(240_000, 180_000)).toBe(240_000);
+  });
+});
+
+describe("resolveGatewayLiveAgentRunTimeoutMs", () => {
+  it("leaves terminal-observation grace inside the model timeout", () => {
+    expect(resolveGatewayLiveAgentRunTimeoutMs(180_000)).toBe(150_000);
+  });
+
+  it("keeps short live probes bounded but positive", () => {
+    expect(resolveGatewayLiveAgentRunTimeoutMs(6_000)).toBe(1_000);
+  });
+});
+
+describe("resolveGatewayLiveAgentWaitTimeoutMs", () => {
+  it("waits past the run timeout but before the model timeout", () => {
+    expect(resolveGatewayLiveAgentWaitTimeoutMs(150_000, 180_000)).toBe(160_000);
+  });
+});
+
+describe("formatGatewayLiveAgentWaitFailure", () => {
+  it("includes terminal attribution fields without requiring transcript text", () => {
+    expect(
+      formatGatewayLiveAgentWaitFailure({
+        context: "anthropic prompt",
+        runId: "run-1",
+        result: {
+          status: "timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+          stopReason: "rpc",
+        },
+      }).message,
+    ).toContain(
+      "anthropic prompt: agent.wait timeout for runId=run-1 (timeoutPhase=provider, providerStarted=true, stopReason=rpc)",
+    );
   });
 });
 
@@ -784,7 +862,7 @@ describe("resolveGatewayLiveMaxModels", () => {
   });
 });
 
-function createGatewayLiveTestModel(provider: string, id: string): Model<Api> {
+function createGatewayLiveTestModel(provider: string, id: string): Model {
   return {
     provider,
     id,
@@ -795,7 +873,7 @@ function createGatewayLiveTestModel(provider: string, id: string): Model<Api> {
     contextWindow: 1_000,
     maxTokens: 100,
     reasoning: false,
-  } as Model<Api>;
+  } as Model;
 }
 
 describe("resolveExplicitLiveModelCandidates", () => {
@@ -877,6 +955,28 @@ describe("resolveExplicitLiveModelCandidates", () => {
 });
 
 describe("providerScopedModelRegistryProviders", () => {
+  it("uses curated high-signal providers for default modern sweeps", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: false,
+        modelFilter: null,
+        providerFilter: null,
+      }),
+    ).toEqual(getHighSignalLiveModelProviders());
+  });
+
+  it("intersects default modern sweeps with provider filters", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: false,
+        modelFilter: null,
+        providerFilter: new Set(["openai", "not-high-signal"]),
+      }),
+    ).toEqual(["openai"]);
+  });
+
   it("uses explicit provider-qualified model refs without enumerating the full registry", () => {
     expect(
       providerScopedModelRegistryProviders({
@@ -912,6 +1012,13 @@ describe("providerScopedModelRegistryProviders", () => {
 });
 
 describe("resolveGatewayLiveModelThinkingLevel", () => {
+  it("allows release lanes to lower gateway live thinking without smoke mode", () => {
+    expect(resolveGatewayLiveThinkingLevel({ raw: "low", smoke: false })).toBe("low");
+    expect(resolveGatewayLiveThinkingLevel({ raw: undefined, smoke: false })).toBe("high");
+    expect(resolveGatewayLiveThinkingLevel({ raw: undefined, smoke: true })).toBe("low");
+    expect(resolveGatewayLiveThinkingLevel({ raw: "wat", smoke: false })).toBe("high");
+  });
+
   it("clamps requested thinking to levels supported by model metadata", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
@@ -935,15 +1042,40 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
 });
 
 describe("buildLiveGatewayConfig", () => {
-  it("pins selected live gateway models to the Pi runtime", () => {
+  it("pins selected live gateway models to the OpenClaw runtime", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: {},
       candidates: [createGatewayLiveTestModel("openai", "gpt-5.5")],
     });
 
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
-      agentRuntime: { id: "pi" },
+      agentRuntime: { id: "openclaw" },
     });
+  });
+});
+
+describe("enterProductionEnvForLiveRun", () => {
+  it("clears Vitest fast-reply flags while preserving caller state", () => {
+    const previous = {
+      vitest: process.env.VITEST,
+      nodeEnv: process.env.NODE_ENV,
+      testFast: process.env.OPENCLAW_TEST_FAST,
+    };
+    process.env.VITEST = "1";
+    process.env.NODE_ENV = "test";
+    process.env.OPENCLAW_TEST_FAST = "1";
+
+    const runtimeEnv = enterProductionEnvForLiveRun();
+    try {
+      expect(process.env.VITEST).toBeUndefined();
+      expect(process.env.NODE_ENV).toBe("production");
+      expect(process.env.OPENCLAW_TEST_FAST).toBeUndefined();
+    } finally {
+      restoreProductionEnvForLiveRun(runtimeEnv);
+      restoreOptionalEnv("VITEST", previous.vitest);
+      restoreOptionalEnv("NODE_ENV", previous.nodeEnv);
+      restoreOptionalEnv("OPENCLAW_TEST_FAST", previous.testFast);
+    }
   });
 });
 
@@ -1082,10 +1214,10 @@ describe("getHighSignalLiveModelPriorityIndex", () => {
   it("prefers curated Google replacements over big-pickle", () => {
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
-    ).toBe(3);
+    ).toBe(2);
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3-flash-preview" }),
-    ).toBe(4);
+    ).toBe(3);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,
     );
@@ -1582,6 +1714,64 @@ async function waitForSessionAssistantText(params: {
   throw new Error(`${timeoutLabel} timeout after ${timeoutMs}ms (${params.context})`);
 }
 
+function formatGatewayLiveAgentWaitFailure(params: {
+  context: string;
+  runId: string;
+  result: unknown;
+}): Error {
+  const result = params.result as
+    | {
+        status?: unknown;
+        error?: unknown;
+        stopReason?: unknown;
+        timeoutPhase?: unknown;
+        providerStarted?: unknown;
+      }
+    | null
+    | undefined;
+  const status = typeof result?.status === "string" ? result.status : "unknown";
+  const details = [
+    typeof result?.timeoutPhase === "string" ? `timeoutPhase=${result.timeoutPhase}` : undefined,
+    typeof result?.providerStarted === "boolean"
+      ? `providerStarted=${String(result.providerStarted)}`
+      : undefined,
+    typeof result?.stopReason === "string" ? `stopReason=${result.stopReason}` : undefined,
+    typeof result?.error === "string" ? `error=${result.error}` : undefined,
+  ].filter((value): value is string => Boolean(value));
+  return new Error(
+    `${params.context}: agent.wait ${status} for runId=${params.runId}${
+      details.length > 0 ? ` (${details.join(", ")})` : ""
+    }`,
+  );
+}
+
+async function waitForGatewayAgentRun(params: {
+  client: GatewayClient;
+  runId: string;
+  context: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  const timeoutMs = params.timeoutMs ?? GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS;
+  const result = await params.client.request(
+    "agent.wait",
+    {
+      runId: params.runId,
+      timeoutMs,
+    },
+    {
+      timeoutMs: timeoutMs + 5_000,
+    },
+  );
+  if ((result as { status?: unknown } | undefined)?.status === "ok") {
+    return;
+  }
+  throw formatGatewayLiveAgentWaitFailure({
+    context: params.context,
+    runId: params.runId,
+    result,
+  });
+}
+
 async function requestGatewayAgentText(params: {
   client: GatewayClient;
   sessionKey: string;
@@ -1599,13 +1789,15 @@ async function requestGatewayAgentText(params: {
   const baselineAssistantCount = (
     await readSessionAssistantTexts(params.sessionKey, params.modelKey)
   ).length;
+  const runId = params.idempotencyKey;
   const accepted = await withGatewayLiveProbeTimeout(
     params.client.request("agent", {
       sessionKey: params.sessionKey,
-      idempotencyKey: params.idempotencyKey,
+      idempotencyKey: runId,
       message: params.message,
       thinking: params.thinkingLevel,
       deliver: false,
+      timeout: Math.ceil(GATEWAY_LIVE_AGENT_RUN_TIMEOUT_MS / 1_000),
       attachments: params.attachments,
     }),
     `${params.context}: agent-accept`,
@@ -1613,20 +1805,46 @@ async function requestGatewayAgentText(params: {
   if (accepted?.status !== "accepted") {
     throw new Error(`agent status=${String(accepted?.status)}`);
   }
-  return await waitForSessionAssistantText({
+  const transcriptPromise = waitForSessionAssistantText({
     sessionKey: params.sessionKey,
     baselineAssistantCount,
     context: `${params.context}: transcript-final`,
     modelKey: params.modelKey,
     timeoutLabel: "model",
     timeoutMs: GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS,
+  }).then((text) => ({ kind: "transcript" as const, text }));
+  const agentWaitPromise = waitForGatewayAgentRun({
+    client: params.client,
+    runId,
+    context: `${params.context}: agent-wait`,
+    timeoutMs: GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS,
+  }).then(
+    () => ({ kind: "agent-ok" as const }),
+    (error: unknown) => ({ kind: "agent-error" as const, error }),
+  );
+  const first = await Promise.race([transcriptPromise, agentWaitPromise]);
+  if (first.kind === "transcript") {
+    void agentWaitPromise.catch(() => undefined);
+    return first.text;
+  }
+  void transcriptPromise.catch(() => undefined);
+  if (first.kind === "agent-error") {
+    throw first.error instanceof Error ? first.error : new Error(String(first.error));
+  }
+  return await waitForSessionAssistantText({
+    sessionKey: params.sessionKey,
+    baselineAssistantCount,
+    context: `${params.context}: transcript-after-agent-wait`,
+    modelKey: params.modelKey,
+    timeoutLabel: "probe",
+    timeoutMs: GATEWAY_LIVE_PROBE_TIMEOUT_MS,
   });
 }
 
 type GatewayModelSuiteParams = {
   label: string;
   cfg: OpenClawConfig;
-  candidates: Array<Model<Api>>;
+  candidates: Array<Model>;
   allowNotFoundSkip: boolean;
   extraToolProbes: boolean;
   extraImageProbes: boolean;
@@ -1635,20 +1853,15 @@ type GatewayModelSuiteParams = {
 };
 
 type LiveModelRegistry = {
-  find(provider: string, modelId: string): Model<Api> | null | undefined;
-  getAll(): Array<Model<Api>>;
+  find(provider: string, modelId: string): Model | null | undefined;
+  getAll(): Array<Model>;
 };
-
-function resolveKnownProvider(provider: string): KnownProvider | undefined {
-  const normalized = provider.trim();
-  return getProviders().find((knownProvider) => knownProvider === normalized);
-}
 
 function toGatewayLiveModel(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
   modelConfig: NonNullable<ModelProviderConfig["models"]>[number];
-}): Model<Api> | null {
+}): Model | null {
   const id = params.modelConfig.id?.trim();
   const api = params.modelConfig.api ?? params.providerConfig.api;
   const baseUrl = params.modelConfig.baseUrl ?? params.providerConfig.baseUrl;
@@ -1681,7 +1894,7 @@ function toGatewayLiveModel(params: {
 async function loadProviderScopedConfiguredModels(params: {
   agentDir: string;
   providerList: readonly string[];
-}): Promise<Array<Model<Api>>> {
+}): Promise<Array<Model>> {
   const modelsPath = path.join(params.agentDir, "models.json");
   let parsed: { providers?: Record<string, ModelProviderConfig> };
   try {
@@ -1693,7 +1906,7 @@ async function loadProviderScopedConfiguredModels(params: {
   }
 
   const providers = parsed.providers ?? {};
-  const models: Array<Model<Api>> = [];
+  const models: Array<Model> = [];
   const seen = new Set<string>();
   for (const rawProvider of params.providerList) {
     const normalizedProvider = normalizeProviderId(rawProvider);
@@ -1720,42 +1933,14 @@ async function loadProviderScopedConfiguredModels(params: {
   return models;
 }
 
-function loadProviderScopedBuiltInModels(providerList: readonly string[]): Array<Model<Api>> {
-  const models: Array<Model<Api>> = [];
-  const seen = new Set<string>();
-  for (const rawProvider of providerList) {
-    const provider = normalizeProviderId(rawProvider);
-    if (!provider) {
-      continue;
-    }
-    const knownProvider = resolveKnownProvider(provider);
-    if (!knownProvider) {
-      continue;
-    }
-    for (const model of getModels(knownProvider)) {
-      const key = `${normalizeProviderId(model.provider)}/${model.id.toLowerCase()}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      models.push(model);
-    }
-  }
-  return models;
-}
-
 async function loadProviderScopedModels(params: {
   agentDir: string;
   providerList: readonly string[];
-}): Promise<Array<Model<Api>>> {
-  const configured = await loadProviderScopedConfiguredModels(params);
-  if (configured.length > 0) {
-    return configured;
-  }
-  return loadProviderScopedBuiltInModels(params.providerList);
+}): Promise<Array<Model>> {
+  return await loadProviderScopedConfiguredModels(params);
 }
 
-function createStaticLiveModelRegistry(models: Array<Model<Api>>): LiveModelRegistry {
+function createStaticLiveModelRegistry(models: Array<Model>): LiveModelRegistry {
   return {
     find(provider, modelId) {
       const normalizedProvider = normalizeProviderId(provider);
@@ -1770,6 +1955,65 @@ function createStaticLiveModelRegistry(models: Array<Model<Api>>): LiveModelRegi
       return models;
     },
   };
+}
+
+function toLiveModelConfig(model: Model): NonNullable<ModelProviderConfig["models"]>[number] {
+  return {
+    id: model.id,
+    name: model.name,
+    api: model.api as ModelProviderConfig["api"],
+    baseUrl: model.baseUrl,
+    input: model.input ?? ["text"],
+    reasoning: model.reasoning,
+    cost: model.cost,
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+    ...(model.compat ? { compat: model.compat } : {}),
+  };
+}
+
+function mergeLiveProviderConfig(params: {
+  base: ModelProviderConfig | undefined;
+  discovered: ModelProviderConfig;
+}): ModelProviderConfig {
+  const baseModels = params.base?.models ?? [];
+  const discoveredModels = params.discovered.models ?? [];
+  const mergedModels = new Map<string, NonNullable<ModelProviderConfig["models"]>[number]>();
+  for (const model of discoveredModels) {
+    if (model.id) {
+      mergedModels.set(model.id, model);
+    }
+  }
+  for (const model of baseModels) {
+    if (model.id) {
+      mergedModels.set(model.id, model);
+    }
+  }
+  return {
+    ...params.discovered,
+    ...params.base,
+    api: params.base?.api ?? params.discovered.api,
+    baseUrl: params.base?.baseUrl ?? params.discovered.baseUrl,
+    models: [...mergedModels.values()],
+  };
+}
+
+function buildLiveProviderConfigs(candidates: Array<Model>): Record<string, ModelProviderConfig> {
+  const providers: Record<string, ModelProviderConfig> = {};
+  for (const model of candidates) {
+    const existing = providers[model.provider];
+    if (existing) {
+      existing.models ??= [];
+      existing.models.push(toLiveModelConfig(model));
+      continue;
+    }
+    providers[model.provider] = {
+      api: model.api as ModelProviderConfig["api"],
+      baseUrl: model.baseUrl,
+      models: [toLiveModelConfig(model)],
+    };
+  }
+  return providers;
 }
 
 function parseExplicitLiveModelRef(
@@ -1802,11 +2046,11 @@ function resolveExplicitLiveModelCandidates(params: {
   modelFilter: Set<string> | null;
   providerFilter: Set<string> | null;
   targetMatcher: ReturnType<typeof createLiveTargetMatcher>;
-}): Array<Model<Api>> | null {
+}): Array<Model> | null {
   if (!params.modelFilter || params.modelFilter.size === 0) {
     return null;
   }
-  const candidates: Array<Model<Api>> = [];
+  const candidates: Array<Model> = [];
   const seen = new Set<string>();
   for (const raw of params.modelFilter) {
     const ref = parseExplicitLiveModelRef(raw, params.providerFilter);
@@ -1834,7 +2078,7 @@ function resolveExplicitLiveModelCandidates(params: {
 
 function resolveGatewayLiveModelThinkingLevel(params: {
   cfg: OpenClawConfig;
-  model: Model<Api>;
+  model: Model;
   requestedLevel: string;
 }): string {
   const { model, requestedLevel } = params;
@@ -1866,16 +2110,36 @@ function resolveGatewayLiveModelThinkingLevel(params: {
   return clampThinkingLevel(model, normalized);
 }
 
+function resolveGatewayLiveThinkingLevel(params: { raw?: string; smoke: boolean }): string {
+  const raw = params.raw?.trim().toLowerCase();
+  if (!raw) {
+    return params.smoke ? "low" : "high";
+  }
+  return ["off", "minimal", "low", "medium", "high", "xhigh"].includes(raw)
+    ? raw
+    : params.smoke
+      ? "low"
+      : "high";
+}
+
 function buildLiveGatewayConfig(params: {
   cfg: OpenClawConfig;
-  candidates: Array<Model<Api>>;
+  candidates: Array<Model>;
   providerOverrides?: Record<string, ModelProviderConfig>;
 }): OpenClawConfig {
   const providerOverrides = params.providerOverrides ?? {};
   const lmstudioProvider = params.cfg.models?.providers?.lmstudio;
   const baseProviders = params.cfg.models?.providers ?? {};
+  const candidateProviders = buildLiveProviderConfigs(params.candidates);
+  const discoveredProviders = Object.fromEntries(
+    Object.entries(candidateProviders).map(([provider, discovered]) => [
+      provider,
+      mergeLiveProviderConfig({ base: baseProviders[provider], discovered }),
+    ]),
+  );
   const nextProviders = {
     ...baseProviders,
+    ...discoveredProviders,
     ...(lmstudioProvider
       ? {
           lmstudio: {
@@ -1906,7 +2170,7 @@ function buildLiveGatewayConfig(params: {
         models: Object.fromEntries(
           params.candidates.map((m) => [
             `${m.provider}/${m.id}`,
-            { agentRuntime: { id: "pi" as const } },
+            { agentRuntime: { id: "openclaw" as const } },
           ]),
         ),
       },
@@ -1998,7 +2262,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     disableBonjour: process.env.OPENCLAW_DISABLE_BONJOUR,
     logLevel: process.env.OPENCLAW_LOG_LEVEL,
     agentDir: process.env.OPENCLAW_AGENT_DIR,
-    piAgentDir: process.env.PI_CODING_AGENT_DIR,
     stateDir: process.env.OPENCLAW_STATE_DIR,
   };
   let tempAgentDir: string | undefined;
@@ -2039,7 +2302,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
   }
   process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
-  process.env.PI_CODING_AGENT_DIR = tempAgentDir;
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -2128,7 +2390,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       `[${params.label}] running ${params.candidates.length} models (thinking=${params.thinkingLevel})`,
     );
     logProgress(
-      `[${params.label}] heartbeat=${Math.max(1, Math.round(GATEWAY_LIVE_HEARTBEAT_MS / 1_000))}s probe-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_PROBE_TIMEOUT_MS / 1_000))}s model-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_MODEL_TIMEOUT_MS / 1_000))}s transcript-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS / 1_000))}s`,
+      `[${params.label}] heartbeat=${Math.max(1, Math.round(GATEWAY_LIVE_HEARTBEAT_MS / 1_000))}s probe-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_PROBE_TIMEOUT_MS / 1_000))}s agent-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_AGENT_RUN_TIMEOUT_MS / 1_000))}s agent-wait=${Math.max(1, Math.round(GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS / 1_000))}s model-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_MODEL_TIMEOUT_MS / 1_000))}s transcript-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS / 1_000))}s`,
     );
     const anthropicKeys = collectAnthropicApiKeys();
     if (anthropicKeys.length > 0) {
@@ -2765,7 +3027,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     process.env.OPENCLAW_DISABLE_BONJOUR = previous.disableBonjour;
     process.env.OPENCLAW_LOG_LEVEL = previous.logLevel;
     process.env.OPENCLAW_AGENT_DIR = previous.agentDir;
-    process.env.PI_CODING_AGENT_DIR = previous.piAgentDir;
     process.env.OPENCLAW_STATE_DIR = previous.stateDir;
   }
 }
@@ -2786,16 +3047,15 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         );
         const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
         logProgress("[all-models] preparing models.json");
-        await withGatewayLiveSetupTimeout(
+        const modelsJsonResult = await withGatewayLiveSetupTimeout(
           ensureOpenClawModelsJson(cfg, undefined, {
             workspaceDir,
             ...(providerList ? { providerDiscoveryProviderIds: providerList } : {}),
-            providerDiscoveryEntriesOnly: true,
           }),
           "[all-models] prepare models.json",
         );
+        const agentDir = modelsJsonResult.agentDir;
 
-        const agentDir = resolveDefaultAgentDir(cfg);
         const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
         const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
         const useExplicit = Boolean(rawModels) && !useModern;
@@ -2808,7 +3068,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         });
         let authProfileStore: AuthProfileStore | undefined;
         let modelRegistry: LiveModelRegistry;
-        let all: Array<Model<Api>>;
+        let all: Array<Model>;
         if (providerScopedModelProviders) {
           logProgress("[all-models] loading provider-scoped model refs");
           all = await withGatewayLiveSetupTimeout(
@@ -2891,7 +3151,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           wantedCount: wanted.length,
         });
 
-        const candidates: Array<Model<Api>> = [];
+        const candidates: Array<Model> = [];
         const skipped: Array<{ model: string; error: string }> = [];
         for (const model of wanted) {
           if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
@@ -3024,8 +3284,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const agentDir = resolveDefaultAgentDir(cfg);
     const authStorage = discoverAuthStorage(agentDir);
     const modelRegistry = discoverModels(authStorage, agentDir);
-    const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model<Api> | null;
-    const zai = modelRegistry.find("zai", "glm-5.1") as Model<Api> | null;
+    const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model | null;
+    const zai = modelRegistry.find("zai", "glm-5.1") as Model | null;
 
     if (!anthropic || !zai) {
       return;

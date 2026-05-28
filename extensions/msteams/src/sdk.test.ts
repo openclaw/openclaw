@@ -1,6 +1,11 @@
 import * as fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  BOT_FRAMEWORK_SERVICE_URL_SSRF_POLICY,
+  isAllowedBotFrameworkServiceUrl,
+  normalizeBotFrameworkServiceUrl,
+} from "./bot-framework-service-url.js";
+import {
   createBotFrameworkJwtValidator,
   createMSTeamsAdapter,
   createMSTeamsApp,
@@ -12,6 +17,15 @@ import type {
   MSTeamsFederatedCredentials,
 } from "./token.js";
 
+const fetchGuardState = vi.hoisted(() => ({
+  calls: [] as Array<{
+    url: string;
+    init?: RequestInit;
+    auditContext?: string;
+    policy?: unknown;
+  }>,
+}));
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
     "openclaw/plugin-sdk/ssrf-runtime",
@@ -22,11 +36,16 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
       url: string;
       init?: RequestInit;
       fetchImpl?: typeof fetch;
-    }) => ({
-      response: await (params.fetchImpl ?? fetch)(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => {},
-    }),
+      auditContext?: string;
+      policy?: unknown;
+    }) => {
+      fetchGuardState.calls.push(params);
+      return {
+        response: await (params.fetchImpl ?? fetch)(params.url, params.init),
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    },
   };
 });
 
@@ -39,7 +58,7 @@ const jwtState = vi.hoisted(() => ({
   verifyBehavior: "success" as "success" | "throw",
   decodedHeader: { kid: "key-1" } as { kid?: string } | null,
   decodedPayload: { iss: "https://api.botframework.com" } as { iss?: string } | string | null,
-  verifyResult: { sub: "ok" } as unknown,
+  verifyResult: { sub: "ok", serviceurl: "https://smba.trafficmanager.net/amer/" } as unknown,
   verifyCalls: [] as Array<{ token: string; options: unknown }>,
 }));
 
@@ -108,12 +127,13 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  fetchGuardState.calls.length = 0;
   clientConstructorState.calls.length = 0;
   jwtState.verifyCalls.length = 0;
   jwtState.verifyBehavior = "success";
   jwtState.decodedHeader = { kid: "key-1" };
   jwtState.decodedPayload = { iss: "https://api.botframework.com" };
-  jwtState.verifyResult = { sub: "ok" };
+  jwtState.verifyResult = { sub: "ok", serviceurl: "https://smba.trafficmanager.net/amer/" };
   vi.restoreAllMocks();
 });
 
@@ -186,6 +206,29 @@ function readFirstCreatedActivity(createFn: ReturnType<typeof vi.fn>): {
   return activity as { type?: string; text?: string };
 }
 
+describe("Bot Framework serviceUrl allowlist", () => {
+  it("allows documented Teams service hosts and normalizes trailing slashes", () => {
+    expect(isAllowedBotFrameworkServiceUrl("https://smba.trafficmanager.net/amer/")).toBe(true);
+    expect(
+      isAllowedBotFrameworkServiceUrl("https://smba.infra.gcc.teams.microsoft.com/teams/"),
+    ).toBe(true);
+    expect(
+      isAllowedBotFrameworkServiceUrl("https://smba.infra.gov.teams.microsoft.us/teams/"),
+    ).toBe(true);
+    expect(normalizeBotFrameworkServiceUrl("https://smba.trafficmanager.net/amer/")).toBe(
+      "https://smba.trafficmanager.net/amer",
+    );
+  });
+
+  it("rejects non-HTTPS and non-Microsoft service hosts", () => {
+    expect(isAllowedBotFrameworkServiceUrl("http://smba.trafficmanager.net/amer/")).toBe(false);
+    expect(isAllowedBotFrameworkServiceUrl("https://attacker.example.com/teams/")).toBe(false);
+    expect(() => normalizeBotFrameworkServiceUrl("https://attacker.example.com/teams/")).toThrow(
+      /Blocked Microsoft Teams serviceUrl host: attacker\.example\.com/,
+    );
+  });
+});
+
 describe("createMSTeamsApp", () => {
   it("creates app without the Express 5 wildcard route regression (#55161)", async () => {
     // Regression test for: https://github.com/openclaw/openclaw/issues/55161
@@ -230,7 +273,7 @@ describe("createMSTeamsAdapter", () => {
     await adapter.continueConversation(
       creds.appId,
       {
-        serviceUrl: "https://example.com/",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
         conversation: { id: "19:conversation@thread.tacv2" },
         channelId: "msteams",
       },
@@ -242,10 +285,11 @@ describe("createMSTeamsAdapter", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, options] = readFirstFetchCall(fetchMock);
     expect(url).toBe(
-      "https://example.com/v3/conversations/19%3Aconversation%40thread.tacv2/activities/activity-123",
+      "https://smba.trafficmanager.net/amer/v3/conversations/19%3Aconversation%40thread.tacv2/activities/activity-123",
     );
     expect(options.method).toBe("DELETE");
     expect(options.headers?.Authorization).toBe("Bearer bot-token");
+    expect(fetchGuardState.calls[0]?.policy).toEqual(BOT_FRAMEWORK_SERVICE_URL_SSRF_POLICY);
   });
 
   it("passes the OpenClaw User-Agent to the Bot Framework connector client", async () => {
@@ -266,7 +310,7 @@ describe("createMSTeamsAdapter", () => {
     await adapter.continueConversation(
       creds.appId,
       {
-        serviceUrl: "https://service.example.com/",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
         conversation: { id: "19:conversation@thread.tacv2" },
         channelId: "msteams",
       },
@@ -277,13 +321,14 @@ describe("createMSTeamsAdapter", () => {
 
     expect(clientConstructorState.calls).toHaveLength(1);
     const clientCall = clientConstructorState.calls[0];
-    expect(clientCall?.serviceUrl).toBe("https://service.example.com/");
+    expect(clientCall?.serviceUrl).toBe("https://smba.trafficmanager.net/amer");
     const options = clientCall?.options as { headers?: { "User-Agent"?: string } } | undefined;
     expect(options?.headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
   });
 });
 
 describe("createBotFrameworkJwtValidator", () => {
+  const activityServiceUrl = "https://smba.trafficmanager.net/amer";
   const creds = {
     appId: "app-id",
     type: "secret",
@@ -295,7 +340,7 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.decodedPayload = { iss: "https://api.botframework.com" };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-bf")).resolves.toBe(true);
+    await expect(validator.validate("Bearer token-bf", activityServiceUrl)).resolves.toBe(true);
 
     expect(jwtState.verifyCalls).toHaveLength(1);
     const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
@@ -310,13 +355,24 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.verifyResult = {
       aud: ["https://api.botframework.com"],
       appid: creds.appId,
+      serviceurl: activityServiceUrl,
     };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer botfw-token")).resolves.toBe(true);
+    await expect(validator.validate("Bearer botfw-token", activityServiceUrl)).resolves.toBe(true);
 
     const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
     expect(opts.audience).toContain("https://api.botframework.com");
+  });
+
+  it("accepts tokens with documented serviceUrl claim casing", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceUrl: activityServiceUrl,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", activityServiceUrl)).resolves.toBe(true);
   });
 
   it("accepts global audience tokens when azp matches the configured app id", async () => {
@@ -324,10 +380,13 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.verifyResult = {
       aud: ["https://api.botframework.com"],
       azp: "APP-ID",
+      serviceurl: activityServiceUrl,
     };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer botfw-token-azp")).resolves.toBe(true);
+    await expect(validator.validate("Bearer botfw-token-azp", activityServiceUrl)).resolves.toBe(
+      true,
+    );
   });
 
   it("rejects global audience tokens when app binding does not match the configured app id", async () => {
@@ -335,10 +394,112 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.verifyResult = {
       aud: ["https://api.botframework.com"],
       azp: "other-app-id",
+      serviceurl: activityServiceUrl,
     };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer botfw-token-wrong-app")).resolves.toBe(false);
+    await expect(
+      validator.validate("Bearer botfw-token-wrong-app", activityServiceUrl),
+    ).resolves.toBe(false);
+  });
+
+  it("rejects tokens when the serviceurl claim does not match the activity serviceUrl", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: "https://attacker.trafficmanager.net/amer",
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", activityServiceUrl)).resolves.toBe(false);
+  });
+
+  it("rejects schemeless activity serviceUrls even when the host matches the token claim", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: activityServiceUrl,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(
+      validator.validate("Bearer botfw-token", "smba.trafficmanager.net/amer/"),
+    ).resolves.toBe(false);
+  });
+
+  it("rejects tokens when the serviceurl claim is missing", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      sub: "ok",
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", activityServiceUrl)).resolves.toBe(false);
+  });
+
+  it("rejects tokens when the activity serviceUrl is missing", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: activityServiceUrl,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", undefined)).resolves.toBe(false);
+  });
+
+  it("rejects tokens when the activity serviceUrl is malformed", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: activityServiceUrl,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", "not a url")).resolves.toBe(false);
+  });
+
+  it.each([
+    "http://smba.trafficmanager.net/amer",
+    "HTTP://smba.trafficmanager.net/amer",
+    "wss://smba.trafficmanager.net/amer",
+    "ftp://smba.trafficmanager.net/amer",
+  ])("rejects non-HTTPS activity serviceUrl %s", async (serviceUrl) => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: serviceUrl,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", serviceUrl)).resolves.toBe(false);
+  });
+
+  it("rejects serviceUrl values with query strings", async () => {
+    const queriedServiceUrl = `${activityServiceUrl}?target=attacker`;
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: queriedServiceUrl,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", queriedServiceUrl)).resolves.toBe(false);
+  });
+
+  it("rejects serviceUrl values with fragments", async () => {
+    const fragmentServiceUrl = `${activityServiceUrl}#fragment`;
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: fragmentServiceUrl,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", fragmentServiceUrl)).resolves.toBe(false);
+  });
+
+  it("rejects tokens when the serviceurl claim is not a string", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: 123,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", activityServiceUrl)).resolves.toBe(false);
   });
 
   it("rejects non-object verified payloads", async () => {
@@ -346,14 +507,16 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.verifyResult = "verified-string-payload";
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer botfw-token-string")).resolves.toBe(false);
+    await expect(validator.validate("Bearer botfw-token-string", activityServiceUrl)).resolves.toBe(
+      false,
+    );
   });
 
   it("validates a token with Entra issuer", async () => {
     jwtState.decodedPayload = { iss: `https://login.microsoftonline.com/tenant-id/v2.0` };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-entra")).resolves.toBe(true);
+    await expect(validator.validate("Bearer token-entra", activityServiceUrl)).resolves.toBe(true);
 
     expect(jwtState.verifyCalls).toHaveLength(1);
     const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
@@ -369,7 +532,7 @@ describe("createBotFrameworkJwtValidator", () => {
     };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-sts")).resolves.toBe(true);
+    await expect(validator.validate("Bearer token-sts", activityServiceUrl)).resolves.toBe(true);
 
     expect(jwtState.verifyCalls).toHaveLength(1);
     const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
@@ -385,7 +548,9 @@ describe("createBotFrameworkJwtValidator", () => {
     };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-sts-other-tenant")).resolves.toBe(false);
+    await expect(
+      validator.validate("Bearer token-sts-other-tenant", activityServiceUrl),
+    ).resolves.toBe(false);
     expect(jwtState.verifyCalls).toHaveLength(0);
   });
 
@@ -393,7 +558,7 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.decodedPayload = { iss: "https://evil.example.com" };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-evil")).resolves.toBe(false);
+    await expect(validator.validate("Bearer token-evil", activityServiceUrl)).resolves.toBe(false);
     expect(jwtState.verifyCalls).toHaveLength(0);
   });
 
@@ -401,12 +566,12 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.verifyBehavior = "throw";
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-bad")).resolves.toBe(false);
+    await expect(validator.validate("Bearer token-bad", activityServiceUrl)).resolves.toBe(false);
   });
 
   it("returns false for empty bearer token", async () => {
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer ")).resolves.toBe(false);
+    await expect(validator.validate("Bearer ", activityServiceUrl)).resolves.toBe(false);
     expect(jwtState.verifyCalls).toHaveLength(0);
   });
 
@@ -414,7 +579,7 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.decodedHeader = { kid: undefined };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer no-kid")).resolves.toBe(false);
+    await expect(validator.validate("Bearer no-kid", activityServiceUrl)).resolves.toBe(false);
     expect(jwtState.verifyCalls).toHaveLength(0);
   });
 
@@ -422,7 +587,7 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.decodedPayload = { iss: undefined };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer no-iss")).resolves.toBe(false);
+    await expect(validator.validate("Bearer no-iss", activityServiceUrl)).resolves.toBe(false);
     expect(jwtState.verifyCalls).toHaveLength(0);
   });
 
@@ -440,7 +605,9 @@ describe("createBotFrameworkJwtValidator", () => {
     const validator = await createBotFrameworkJwtValidator(creds);
     // Network errors must bubble out — callers can then log them at warn/error
     // level rather than silently returning 401 that looks like a bad credential.
-    await expect(validator.validate("Bearer token-firewall")).rejects.toThrow("ECONNREFUSED");
+    await expect(validator.validate("Bearer token-firewall", activityServiceUrl)).rejects.toThrow(
+      "ECONNREFUSED",
+    );
   });
 
   it("returns false (not throws) for non-network JWKS errors like bad signature (#77674)", async () => {
@@ -448,7 +615,9 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.decodedPayload = { iss: "https://api.botframework.com" };
     jwtState.verifyBehavior = "throw";
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-bad-sig")).resolves.toBe(false);
+    await expect(validator.validate("Bearer token-bad-sig", activityServiceUrl)).resolves.toBe(
+      false,
+    );
   });
 });
 
@@ -619,6 +788,12 @@ function makeFakeApiSdk() {
   };
 }
 
+type TestSendContext = {
+  sendActivity: (textOrActivity: string | object) => Promise<unknown>;
+  updateActivity: (activityUpdate: object) => Promise<{ id?: string } | void>;
+  deleteActivity: (activityId: string) => Promise<void>;
+};
+
 describe("createMSTeamsAdapter – continueConversation", () => {
   const originalFetch = globalThis.fetch;
 
@@ -647,6 +822,30 @@ describe("createMSTeamsAdapter – continueConversation", () => {
     expect(activity.text).toBe("hello from proactive send");
   });
 
+  it("rejects blocked proactive serviceUrl before token lookup or send", async () => {
+    const { sdk, createFn } = makeFakeApiSdk();
+    const app = makeFakeApp();
+    const adapter = createMSTeamsAdapter(app, sdk);
+
+    await expect(
+      adapter.continueConversation(
+        "app-id",
+        {
+          serviceUrl: "https://attacker.example.com/teams/",
+          conversation: { id: "conv-123", conversationType: "personal" },
+          channelId: "msteams",
+        },
+        async (ctx) => {
+          await ctx.sendActivity("should not send");
+        },
+      ),
+    ).rejects.toThrow(/Blocked Microsoft Teams serviceUrl host: attacker\.example\.com/);
+
+    expect(app.getBotToken).not.toHaveBeenCalled();
+    expect(createFn).not.toHaveBeenCalled();
+    expect(fetchGuardState.calls).toHaveLength(0);
+  });
+
   it("provides deleteActivity via REST DELETE in logic callback", async () => {
     const mockFetch = vi.fn().mockResolvedValue({ ok: true });
     globalThis.fetch = mockFetch;
@@ -668,6 +867,38 @@ describe("createMSTeamsAdapter – continueConversation", () => {
     expect(url).toContain("/v3/conversations/conv-456/activities/activity-789");
     expect(opts.method).toBe("DELETE");
     expect(opts.headers.Authorization).toBe("Bearer fake-bot-token");
+    expect(fetchGuardState.calls[0]?.policy).toEqual(BOT_FRAMEWORK_SERVICE_URL_SSRF_POLICY);
+  });
+
+  it("passes the serviceUrl allowlist to updateActivity REST calls", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "activity-789" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    globalThis.fetch = mockFetch;
+    const { sdk } = makeFakeApiSdk();
+    const adapter = createMSTeamsAdapter(makeFakeApp(), sdk);
+
+    await adapter.continueConversation(
+      "app-id",
+      {
+        serviceUrl: "https://smba.trafficmanager.net/teams/",
+        conversation: { id: "conv-456", conversationType: "personal" },
+        channelId: "msteams",
+      },
+      async (ctx) => {
+        await ctx.updateActivity({ id: "activity-789", text: "edited" });
+      },
+    );
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, opts] = readFirstFetchCall(mockFetch);
+    expect(url).toContain("/v3/conversations/conv-456/activities/activity-789");
+    expect(opts.method).toBe("PUT");
+    expect(opts.headers.Authorization).toBe("Bearer fake-bot-token");
+    expect(fetchGuardState.calls[0]?.policy).toEqual(BOT_FRAMEWORK_SERVICE_URL_SSRF_POLICY);
   });
 
   it("throws when serviceUrl is missing", async () => {
@@ -686,7 +917,7 @@ describe("createMSTeamsAdapter – continueConversation", () => {
     await expect(
       adapter.continueConversation(
         "app-id",
-        { serviceUrl: "https://example.com" } as any,
+        { serviceUrl: "https://smba.trafficmanager.net/teams" } as any,
         async () => {},
       ),
     ).rejects.toThrow(/Missing conversation\.id/);
@@ -694,6 +925,47 @@ describe("createMSTeamsAdapter – continueConversation", () => {
 });
 
 describe("createMSTeamsAdapter – process", () => {
+  it.each([
+    ["sendActivity", async (ctx: TestSendContext) => await ctx.sendActivity("blocked")],
+    [
+      "updateActivity",
+      async (ctx: TestSendContext) => await ctx.updateActivity({ id: "activity-1" }),
+    ],
+    ["deleteActivity", async (ctx: TestSendContext) => await ctx.deleteActivity("activity-1")],
+  ])("blocks inbound %s serviceUrls before token lookup or fetch", async (_name, run) => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true });
+    globalThis.fetch = mockFetch;
+    const { sdk, createFn } = makeFakeApiSdk();
+    const app = makeFakeApp();
+    const adapter = createMSTeamsAdapter(app, sdk);
+
+    const sendFn = vi.fn();
+    const res = { status: vi.fn(() => ({ send: sendFn })) };
+
+    await adapter.process(
+      {
+        body: {
+          id: "activity-1",
+          type: "message",
+          text: "hi",
+          serviceUrl: "https://attacker.example.com/teams/",
+          conversation: { id: "conv-123", conversationType: "personal" },
+          recipient: { id: "bot-id", name: "Bot" },
+        },
+      },
+      res,
+      async (ctx) => {
+        await run(ctx as TestSendContext);
+      },
+    );
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(app.getBotToken).not.toHaveBeenCalled();
+    expect(createFn).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(fetchGuardState.calls).toHaveLength(0);
+  });
+
   it("sends 200 for normal message activities", async () => {
     const { sdk } = makeFakeApiSdk();
     const adapter = createMSTeamsAdapter(makeFakeApp(), sdk);

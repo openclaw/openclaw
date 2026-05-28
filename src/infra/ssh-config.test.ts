@@ -56,10 +56,12 @@ function requireSpawnArgs(index: number): string[] {
 
 let parseSshConfigOutput: typeof import("./ssh-config.js").parseSshConfigOutput;
 let resolveSshConfig: typeof import("./ssh-config.js").resolveSshConfig;
+let appendSshConfigOutput: typeof import("./ssh-config.js").appendSshConfigOutput;
 
 describe("ssh-config", () => {
   beforeAll(async () => {
-    ({ parseSshConfigOutput, resolveSshConfig } = await import("./ssh-config.js"));
+    ({ appendSshConfigOutput, parseSshConfigOutput, resolveSshConfig } =
+      await import("./ssh-config.js"));
   });
 
   it("parses ssh -G output", () => {
@@ -129,5 +131,16 @@ describe("ssh-config", () => {
     );
 
     await expect(resolveSshConfig({ user: "me", host: "bad-host", port: 22 })).resolves.toBeNull();
+  });
+
+  it("rejects oversized ssh -G output while preserving the parser contract", () => {
+    expect(appendSshConfigOutput("user bob", "\nhostname example.com", 128)).toEqual({
+      ok: true,
+      value: "user bob\nhostname example.com",
+    });
+    expect(appendSshConfigOutput("x".repeat(8), "y".repeat(8), 12)).toEqual({
+      ok: false,
+      reason: "too-large",
+    });
   });
 });
