@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
+import type { ReplyPayload } from "./types.js";
 
 type DispatchReplyFromConfigFn =
   typeof import("./reply/dispatch-from-config.js").dispatchReplyFromConfig;
@@ -307,6 +308,105 @@ describe("withReplyDispatcher", () => {
         conversationId: "conv-1",
       },
     );
+  });
+
+  // Gap 8: the buffered dispatcher path (used by the Telegram channel via
+  // dispatchReplyWithBufferedBlockDispatcher) must COMPOSE the canonical
+  // message_sending gate with any channel-supplied beforeDeliver — canonical
+  // first — rather than letting the channel's beforeDeliver override it. The
+  // Telegram channel passes an identity no-op `beforeDeliver` (bot-message-
+  // dispatch.ts); under the old `??` wiring that silently discarded the gate,
+  // so message_sending never fired for interactive replies.
+  type ChannelBeforeDeliver = (payload: ReplyPayload) => Promise<ReplyPayload | null>;
+
+  const runBufferedDispatch = async (opts: {
+    runMessageSending: ReturnType<typeof vi.fn>;
+    channelBeforeDeliver?: ChannelBeforeDeliver;
+  }) => {
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName?: string) => hookName === "message_sending"),
+      runMessageSending: opts.runMessageSending,
+    });
+    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
+      dispatcher: createDispatcher([]),
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildTestCtx({ From: "telegram:1155284475", To: "telegram:1155284475" }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        ...(opts.channelBeforeDeliver ? { beforeDeliver: opts.channelBeforeDeliver } : {}),
+        deliver: async () => undefined,
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const beforeDeliver = lastTypingDispatcherOptions().beforeDeliver;
+    if (!beforeDeliver) {
+      throw new Error("expected a composed beforeDeliver on the buffered dispatcher");
+    }
+    return beforeDeliver;
+  };
+
+  it("fires message_sending when no channel beforeDeliver is supplied (baseline)", async () => {
+    const runMessageSending = vi.fn(async () => ({ content: "sanitized reply" }));
+    const beforeDeliver = await runBufferedDispatch({ runMessageSending });
+    const payload = await beforeDeliver({ text: "original reply" }, { kind: "final" });
+    expect(runMessageSending).toHaveBeenCalledTimes(1);
+    expect(payload).toEqual({ text: "sanitized reply" });
+  });
+
+  it("Gap 8 regression: fires message_sending exactly once even when the channel supplies a no-op beforeDeliver", async () => {
+    const runMessageSending = vi.fn(async () => ({ content: "sanitized reply" }));
+    // The live Telegram channel (bot-message-dispatch.ts) passes this identity no-op.
+    const beforeDeliver = await runBufferedDispatch({
+      runMessageSending,
+      channelBeforeDeliver: async (payload) => payload,
+    });
+    const payload = await beforeDeliver({ text: "original reply" }, { kind: "final" });
+    expect(runMessageSending).toHaveBeenCalledTimes(1);
+    expect(payload).toEqual({ text: "sanitized reply" });
+  });
+
+  it("composes canonical-first: the channel beforeDeliver sees the gated payload", async () => {
+    const runMessageSending = vi.fn(async () => ({ content: "sanitized reply" }));
+    const channelSaw: string[] = [];
+    const beforeDeliver = await runBufferedDispatch({
+      runMessageSending,
+      channelBeforeDeliver: async (payload) => {
+        channelSaw.push(payload.text ?? "");
+        return { ...payload, text: `${payload.text} [ch]` };
+      },
+    });
+    const payload = await beforeDeliver({ text: "original reply" }, { kind: "final" });
+    // Canonical gate ran first (sanitized the model output); the channel transform
+    // then saw the gated payload; the final reply reflects both, canonical-first.
+    expect(channelSaw).toEqual(["sanitized reply"]);
+    expect(payload).toEqual({ text: "sanitized reply [ch]" });
+  });
+
+  it("canonical veto is terminal: a message_sending cancel skips the channel beforeDeliver", async () => {
+    const runMessageSending = vi.fn(async () => ({ cancel: true }));
+    const channelBeforeDeliver = vi.fn(async (payload: ReplyPayload) => payload);
+    const beforeDeliver = await runBufferedDispatch({ runMessageSending, channelBeforeDeliver });
+    const payload = await beforeDeliver({ text: "original reply" }, { kind: "final" });
+    expect(payload).toBeNull();
+    expect(channelBeforeDeliver).not.toHaveBeenCalled();
+  });
+
+  it("channel veto is terminal: a null from the channel beforeDeliver cancels delivery after gating", async () => {
+    const runMessageSending = vi.fn(async () => undefined); // canonical passes the payload through
+    const beforeDeliver = await runBufferedDispatch({
+      runMessageSending,
+      channelBeforeDeliver: async () => null,
+    });
+    const payload = await beforeDeliver({ text: "original reply" }, { kind: "final" });
+    expect(runMessageSending).toHaveBeenCalledTimes(1);
+    expect(payload).toBeNull();
   });
 
   it("reconciles queuedFinal and counts after dispatcher-side cancellation", async () => {

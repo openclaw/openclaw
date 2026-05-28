@@ -323,6 +323,40 @@ function buildMessageSendingBeforeDeliver(
   };
 }
 
+/**
+ * Compose the canonical `message_sending` gate with a channel-supplied
+ * `beforeDeliver`, canonical-first. The gate runs on the model's outbound
+ * payload; the channel transform then runs on the gated result, so the
+ * canonical gate always sees the model's raw outbound payload before any
+ * channel-specific transform can mutate it.
+ *
+ * A `null` (veto) from either side is terminal: a canonical veto skips the
+ * channel transform and cancels delivery; a channel veto cancels delivery too
+ * (preserving existing channel-side veto semantics).
+ *
+ * This replaces the previous `??` wiring, under which a channel-supplied
+ * `beforeDeliver` — even an identity no-op — silently discarded the canonical
+ * gate, so `message_sending` never fired for that channel's replies.
+ */
+function composeBeforeDeliver(
+  canonical: ReplyDispatchBeforeDeliver | undefined,
+  channel: ReplyDispatchBeforeDeliver | undefined,
+): ReplyDispatchBeforeDeliver | undefined {
+  if (!canonical) {
+    return channel;
+  }
+  if (!channel) {
+    return canonical;
+  }
+  return async (payload, info) => {
+    const gated = await canonical(payload, info);
+    if (!gated) {
+      return null;
+    }
+    return await channel(gated, info);
+  };
+}
+
 function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) {
   const commandTurn = resolveCommandTurnContext(ctx);
   return {
@@ -437,8 +471,10 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   const finalized = finalizeInboundContext(params.ctx);
   const foregroundReplyFence = beginForegroundReplyFence(finalized);
   const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
-  const configuredBeforeDeliver =
-    params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(finalized);
+  const configuredBeforeDeliver = composeBeforeDeliver(
+    buildMessageSendingBeforeDeliver(finalized),
+    params.dispatcherOptions.beforeDeliver,
+  );
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
       ? async (payload, info) => {
@@ -519,8 +555,10 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,
-    beforeDeliver:
-      params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(params.ctx),
+    beforeDeliver: composeBeforeDeliver(
+      buildMessageSendingBeforeDeliver(params.ctx),
+      params.dispatcherOptions.beforeDeliver,
+    ),
     silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
   });
   return await dispatchInboundMessage({
