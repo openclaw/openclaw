@@ -89,7 +89,7 @@ The `models` root also owns global model-catalog behavior.
 ## MCP
 
 OpenClaw-managed MCP server definitions live under `mcp.servers` and are
-consumed by embedded Pi and other runtime adapters. The `openclaw mcp list`,
+consumed by embedded OpenClaw and other runtime adapters. The `openclaw mcp list`,
 `show`, `set`, and `unset` commands manage this block without connecting to the
 target server during config edits.
 
@@ -197,7 +197,6 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
   plugins: {
     enabled: true,
     allow: ["voice-call"],
-    bundledDiscovery: "allowlist",
     deny: [],
     load: {
       paths: ["~/Projects/oss/voice-call-plugin"],
@@ -219,10 +218,6 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
 - **Config changes require a gateway restart.**
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
-- `bundledDiscovery`: defaults to `"allowlist"` for new configs, so a non-empty
-  `plugins.allow` also gates bundled provider plugins, including web-search
-  runtime providers. Doctor writes `"compat"` for migrated legacy allowlist
-  configs to preserve existing bundled provider behavior until you opt in.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
 - `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks `before_prompt_build` and ignores prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride`. Applies to native plugin hooks and supported bundle-provided hook directories.
@@ -243,7 +238,7 @@ The bundled `codex` plugin owns native Codex app-server harness settings under
 surface and [Codex harness](/plugins/codex-harness) for the runtime model.
 
 `codexPlugins` applies only to sessions that select the native Codex harness.
-It does not enable Codex plugins for Pi, normal OpenAI provider runs, ACP
+It does not enable Codex plugins for OpenClaw provider runs, ACP
 conversation bindings, or any non-Codex harness.
 
 ```json5
@@ -319,7 +314,7 @@ restart after changing native plugin config.
   - `memory.citations`
   - `memory.qmd.*`
   - `plugins.entries.memory-core.config.dreaming`
-- Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
+- Enabled Claude bundle plugins can also contribute embedded OpenClaw defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.
 
@@ -709,8 +704,8 @@ Validation and safety notes:
 - `transform` can point to a JS/TS module returning a hook action.
   - `transform.module` must be a relative path and stays within `hooks.transformsDir` (absolute paths and traversal are rejected).
   - Keep `hooks.transformsDir` under `~/.openclaw/hooks/transforms`; workspace skill directories are rejected. If `openclaw doctor` reports this path as invalid, move the transform module into the hooks transforms directory or remove `hooks.transformsDir`.
-- `agentId` routes to a specific agent; unknown IDs fall back to default.
-- `allowedAgentIds`: restricts explicit routing (`*` or omitted = allow all, `[]` = deny all).
+- `agentId` routes to a specific agent; unknown IDs fall back to the default agent.
+- `allowedAgentIds`: restricts effective agent routing, including the default-agent path when `agentId` is omitted (`*` or omitted = allow all, `[]` = deny all).
 - `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
 - `allowRequestSessionKey`: allow `/hooks/agent` callers and template-driven mapping session keys to set `sessionKey` (default: `false`).
 - `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`. It becomes required when any mapping or preset uses a templated `sessionKey`.
@@ -1052,6 +1047,7 @@ Notes:
         toolInputs: false,
         toolOutputs: false,
         systemPrompt: false,
+        toolDefinitions: false,
       },
     },
 
@@ -1080,8 +1076,8 @@ Notes:
 - `otel.traces` / `otel.metrics` / `otel.logs`: enable trace, metrics, or log export.
 - `otel.sampleRate`: trace sampling rate `0`-`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
-- `otel.captureContent`: opt-in raw content capture for OTEL span attributes. Defaults to off. Boolean `true` captures non-system message/tool content; the object form lets you enable `inputMessages`, `outputMessages`, `toolInputs`, `toolOutputs`, and `systemPrompt` explicitly.
-- `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`: environment toggle for latest experimental GenAI span provider attributes. By default spans keep the legacy `gen_ai.system` attribute for compatibility; GenAI metrics use bounded semantic attributes.
+- `otel.captureContent`: opt-in raw content capture for OTEL span attributes. Defaults to off. Boolean `true` captures non-system message/tool content; the object form lets you enable `inputMessages`, `outputMessages`, `toolInputs`, `toolOutputs`, `systemPrompt`, and `toolDefinitions` explicitly.
+- `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`: environment toggle for latest experimental GenAI inference span shape, including `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of legacy `gen_ai.system`. By default spans keep `openclaw.model.call` and `gen_ai.system` for compatibility; GenAI metrics use bounded semantic attributes.
 - `OPENCLAW_OTEL_PRELOADED=1`: environment toggle for hosts that already registered a global OpenTelemetry SDK. OpenClaw then skips plugin-owned SDK startup/shutdown while keeping diagnostic listeners active.
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, and `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`: signal-specific endpoint env vars used when the matching config key is unset.
 - `cacheTrace.enabled`: log cache trace snapshots for embedded runs (default: `false`).

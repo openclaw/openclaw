@@ -94,10 +94,16 @@ import type {
   WikiImportInsights,
   WikiMemoryPalace,
 } from "./controllers/dreaming.ts";
-import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
+import {
+  dismissExecApprovalPrompt,
+  isStaleApprovalResolutionError,
+  refreshPendingApprovalQueue,
+  type ExecApprovalRequest,
+} from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type {
   ClawHubSearchResult,
+  ClawHubSkillSecurityVerdict,
   ClawHubSkillDetail,
   SkillMessage,
 } from "./controllers/skills.ts";
@@ -571,6 +577,7 @@ export class OpenClawApp extends LitElement {
   @state() skillsBusyKey: string | null = null;
   @state() skillMessages: Record<string, SkillMessage> = {};
   @state() skillsDetailKey: string | null = null;
+  @state() skillsDetailTab: "overview" | "card" = "overview";
   @state() clawhubSearchQuery = "";
   @state() clawhubSearchResults: ClawHubSearchResult[] | null = null;
   @state() clawhubSearchLoading = false;
@@ -581,6 +588,13 @@ export class OpenClawApp extends LitElement {
   @state() clawhubDetailError: string | null = null;
   @state() clawhubInstallSlug: string | null = null;
   @state() clawhubInstallMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict> = {};
+  @state() clawhubVerdictsLoading = false;
+  @state() clawhubVerdictsError: string | null = null;
+  @state() skillCardContents: Record<string, string> = {};
+  @state() skillCardContentKeys: Record<string, string> = {};
+  @state() skillCardLoadingKey: string | null = null;
+  @state() skillCardErrors: Record<string, string> = {};
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
@@ -1226,8 +1240,16 @@ export class OpenClawApp extends LitElement {
         id: active.id,
         decision,
       });
-      this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
+      dismissExecApprovalPrompt(this, active.id);
     } catch (err) {
+      if (isStaleApprovalResolutionError(err)) {
+        dismissExecApprovalPrompt(this, active.id);
+        await refreshPendingApprovalQueue(this);
+        return;
+      }
+      if (!this.execApprovalQueue.some((entry) => entry.id === active.id)) {
+        return;
+      }
       this.execApprovalError = `Approval failed: ${String(err)}`;
     } finally {
       this.execApprovalBusy = false;

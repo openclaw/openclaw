@@ -8,10 +8,8 @@ const mocks = vi.hoisted(() => ({
   formatOpenAIOAuthTlsPreflightFix: vi.fn(),
 }));
 
-vi.mock("@earendil-works/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
-    "@earendil-works/pi-ai/oauth",
-  );
+vi.mock("../llm/oauth.js", async () => {
+  const actual = await vi.importActual<typeof import("../llm/oauth.js")>("../llm/oauth.js");
   return {
     ...actual,
     loginOpenAICodex: mocks.loginOpenAICodex,
@@ -136,7 +134,7 @@ describe("loginOpenAICodexOAuth", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("passes through Pi-provided authorize URLs without mutation", async () => {
+  it("passes through runtime-provided authorize URLs without mutation", async () => {
     const creds = createCodexCredentials();
     mocks.loginOpenAICodex.mockImplementation(
       async (opts: { onAuth: (event: { url: string }) => Promise<void> }) => {

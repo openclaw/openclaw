@@ -23,6 +23,7 @@ import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import type {
+  OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
   SkillEntry,
@@ -31,6 +32,8 @@ import type {
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
+const SKILL_SOURCE_ORIGIN_RELATIVE_PATH = path.join(".openclaw", "source-origin.json");
+const MAX_SKILL_SOURCE_ORIGIN_BYTES = 16 * 1024;
 
 /**
  * Replace the user's home directory prefix with `~` in skill file paths
@@ -407,6 +410,48 @@ function loadContainedSkillRecords(params: {
     : records;
 }
 
+function readSourceInstallSkillKey(skillDir: string): string | undefined {
+  try {
+    const sourceOriginPath = path.join(skillDir, SKILL_SOURCE_ORIGIN_RELATIVE_PATH);
+    const stat = fs.lstatSync(sourceOriginPath);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SKILL_SOURCE_ORIGIN_BYTES) {
+      return undefined;
+    }
+    const skillDirRealPath = tryRealpath(skillDir);
+    const sourceOriginRealPath = tryRealpath(sourceOriginPath);
+    if (
+      !skillDirRealPath ||
+      !sourceOriginRealPath ||
+      !isPathInside(skillDirRealPath, sourceOriginRealPath)
+    ) {
+      return undefined;
+    }
+    const raw = fs.readFileSync(sourceOriginPath, "utf8");
+    const parsed = JSON.parse(raw) as { slug?: unknown };
+    return normalizeOptionalString(parsed.slug);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveSkillEntryMetadata(params: {
+  frontmatter: ParsedSkillFrontmatter;
+  skillDir: string;
+}): OpenClawSkillMetadata | undefined {
+  const metadata = resolveOpenClawMetadata(params.frontmatter);
+  if (metadata?.skillKey) {
+    return metadata;
+  }
+  const sourceInstallSkillKey = readSourceInstallSkillKey(params.skillDir);
+  if (!sourceInstallSkillKey) {
+    return metadata;
+  }
+  return {
+    ...metadata,
+    skillKey: sourceInstallSkillKey,
+  };
+}
+
 function canonicalizeLoadedSkillRecord(
   record: LoadedSkillRecord,
   canonicalSkillDir: string,
@@ -436,6 +481,23 @@ function canonicalizeLoadedSkillRecord(
           }
         : record.skill.sourceInfo,
     },
+  };
+}
+
+/**
+ * Sets only the sync source directory for a skill record, without modifying
+ * the baseDir or filePath. This is used for plugin skills where the symlink
+ * path should be preserved for display purposes, but the real path is needed
+ * for syncing to the sandbox workspace.
+ */
+function setSyncSourceForPluginSkill(
+  record: LoadedSkillRecord,
+  syncSourceDir: string,
+): LoadedSkillRecord {
+  return {
+    ...record,
+    syncSourceDir,
+    syncDirName: path.basename(record.skill.baseDir),
   };
 }
 
@@ -580,12 +642,22 @@ function loadGeneratedPluginSkillRecords(params: {
       continue;
     }
 
+    // Plugin skills live as symlinks under ~/.openclaw/plugin-skills/, so
+    // skillDir is the symlink path while skillDirRealPath is the real target.
+    // We set syncSourceDir to the real path so syncSkillsToWorkspace can copy
+    // the actual skill directory into the sandbox workspace, but we preserve
+    // the symlink path as baseDir for display purposes.  Without this,
+    // sandboxed agents see host-only symlink paths in <available_skills> and
+    // every read of the SKILL.md fails with "Path escapes sandbox root".
+    // skillDirRealPath is safe to use here because it was already validated
+    // against allowedRootRealPaths above.
+    const loadedRecords = loadContainedSkillRecords({
+      skillDir,
+      source: params.source,
+      maxSkillFileBytes: params.limits.maxSkillFileBytes,
+    });
     loadedSkills.push(
-      ...loadContainedSkillRecords({
-        skillDir,
-        source: params.source,
-        maxSkillFileBytes: params.limits.maxSkillFileBytes,
-      }),
+      ...loadedRecords.map((record) => setSyncSourceForPluginSkill(record, skillDirRealPath)),
     );
     if (loadedSkills.length >= maxSkillsLoadedPerSource) {
       break;
@@ -932,7 +1004,7 @@ function loadSkillEntries(
       return {
         skill,
         frontmatter,
-        metadata: resolveOpenClawMetadata(frontmatter),
+        metadata: resolveSkillEntryMetadata({ frontmatter, skillDir: skill.baseDir }),
         invocation,
         ...(record.syncSourceDir !== undefined ? { syncSourceDir: record.syncSourceDir } : {}),
         ...(record.syncDirName !== undefined ? { syncDirName: record.syncDirName } : {}),
@@ -1247,6 +1319,7 @@ export async function syncSkillsToWorkspace(params: {
   eligibility?: SkillEligibilityContext;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
+  pluginSkillsDir?: string;
 }) {
   const sourceDir = resolveUserPath(params.sourceWorkspaceDir);
   const targetDir = resolveUserPath(params.targetWorkspaceDir);
@@ -1264,6 +1337,7 @@ export async function syncSkillsToWorkspace(params: {
       eligibility: params.eligibility,
       managedSkillsDir: params.managedSkillsDir,
       bundledSkillsDir: params.bundledSkillsDir,
+      pluginSkillsDir: params.pluginSkillsDir,
     });
 
     await fsp.rm(targetSkillsDir, { recursive: true, force: true });

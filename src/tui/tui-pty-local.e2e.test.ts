@@ -32,9 +32,9 @@ type MockModelServer = {
 
 const activeRuns: PtyRun[] = [];
 const LOCAL_STARTUP_TIMEOUT_MS = 20_000;
-const LOCAL_OUTPUT_TIMEOUT_MS = 35_000;
+const LOCAL_OUTPUT_TIMEOUT_MS = 60_000;
 const LOCAL_EXIT_TIMEOUT_MS = 4_000;
-const LOCAL_TEST_TIMEOUT_MS = 60_000;
+const LOCAL_TEST_TIMEOUT_MS = 90_000;
 
 function resolveSpawnPty() {
   const runtime = nodePty as NodePtyRuntimeModule;

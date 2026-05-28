@@ -1,8 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Command } from "commander";
 import type {
   ApiKeyCredential,
@@ -10,9 +7,11 @@ import type {
   OAuthCredential,
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
+import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
-import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
+import type { AgentMessage } from "../agents/runtime/index.js";
+import type { StreamFn } from "../agents/runtime/index.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { PromptMode } from "../agents/system-prompt.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -21,20 +20,20 @@ import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { ModelProviderConfig } from "../config/types.js";
-import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type {
+  DiagnosticEventPrivateData,
   DiagnosticEventInput,
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
+import type { ModelRegistry } from "../llm/model-registry.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
-import type { MeetingNotesSourceProviderPlugin as MeetingNotesSourceProviderCapability } from "../meeting-notes/provider-types.js";
 import type { UnifiedModelCatalogEntry, UnifiedModelCatalogKind } from "../model-catalog/types.js";
 import type { MusicGenerationProvider } from "../music-generation/types.js";
 import type {
@@ -59,6 +58,7 @@ import type {
   RealtimeVoiceProviderId,
   RealtimeVoiceProviderResolveConfigContext,
 } from "../talk/provider-types.js";
+import type { TranscriptSourceProvider as TranscriptsSourceProviderCapability } from "../transcripts/provider-types.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -867,7 +867,7 @@ export type ProviderReasoningOutputModeContext = ProviderReplayPolicyContext;
 /**
  * Provider-owned transport creation.
  *
- * Use this when the provider needs to replace pi-ai's default transport with a
+ * Use this when the provider needs to replace shared model runtime's default transport with a
  * custom StreamFn (for example a native API transport that cannot be expressed
  * as a wrapper around `streamSimple`).
  */
@@ -885,7 +885,7 @@ export type ProviderCreateStreamFnContext = {
  * transport-independent wrappers.
  *
  * Use this for provider-specific payload/header/model mutations that still run
- * through the normal `pi-ai` stream path.
+ * through the normal `shared model runtime` stream path.
  */
 export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
   model?: ProviderRuntimeModel;
@@ -1321,17 +1321,6 @@ export type ProviderPlugin = {
     ctx: ProviderNormalizeResolvedModelContext,
   ) => ProviderRuntimeModel | null | undefined;
   /**
-   * Provider-owned compat contribution for resolved models outside direct
-   * provider ownership.
-   *
-   * Use this when a plugin can recognize its vendor's models behind another
-   * OpenAI-compatible transport (for example OpenRouter or a custom base URL)
-   * and needs to contribute compat flags without taking over the provider.
-   */
-  contributeResolvedModelCompat?: (
-    ctx: ProviderNormalizeResolvedModelContext,
-  ) => Partial<ModelCompatConfig> | null | undefined;
-  /**
    * Provider-owned model-id normalization.
    *
    * Runs before model lookup/canonicalization. Use this for alias cleanup such
@@ -1739,7 +1728,7 @@ export type ProviderPlugin = {
   /**
    * Provider-owned OAuth refresh.
    *
-   * OpenClaw calls this before falling back to the shared `pi-ai` OAuth
+   * OpenClaw calls this before falling back to the shared `shared model runtime` OAuth
    * refreshers. Use it when the provider has a custom refresh endpoint, or when
    * the provider needs custom refresh-failure behavior that should stay out of
    * core auth-profile code.
@@ -1802,8 +1791,8 @@ export type ProviderPlugin = {
     | undefined;
   /**
    * @deprecated Declare `contracts.externalAuthProviders` in the plugin manifest
-   * and implement `resolveExternalAuthProfiles` instead. This compatibility hook
-   * is loaded through a slower fallback path and will be removed in a future release.
+   * and implement `resolveExternalAuthProfiles` instead. Kept at the public
+   * plugin boundary until the SDK removal window closes.
    */
   resolveExternalOAuthProfiles?: (
     ctx: ProviderResolveExternalOAuthProfilesContext,
@@ -1878,10 +1867,10 @@ export type PluginRealtimeTranscriptionProviderEntry = RealtimeTranscriptionProv
   pluginId: string;
 };
 
-/** Meeting-notes source capability registered by a channel or meeting plugin. */
-export type MeetingNotesSourceProviderPlugin = MeetingNotesSourceProviderCapability;
+/** Transcript source capability registered by a channel or meeting plugin. */
+export type TranscriptSourceProvider = TranscriptsSourceProviderCapability;
 
-export type PluginMeetingNotesSourceProviderEntry = MeetingNotesSourceProviderPlugin & {
+export type PluginTranscriptsSourceProviderEntry = TranscriptSourceProvider & {
   pluginId: string;
 };
 
@@ -1980,6 +1969,10 @@ export type PluginCommandContext = {
   threadParentId?: string;
   /** Sensitive diagnostics-only session inventory for owner-gated commands. */
   diagnosticsSessions?: PluginCommandDiagnosticsSession[];
+  /** Host-bound runtime capabilities scoped to this command invocation. */
+  runtimeContext?: {
+    llm?: import("./runtime/types-core.js").PluginRuntimeCore["llm"];
+  };
   /** Internal diagnostics-only marker that exec approval already authorized upload. */
   diagnosticsUploadApproved?: boolean;
   /** Internal diagnostics-only marker to preview upload effects without exposing ids. */
@@ -2009,6 +2002,8 @@ export type PluginCommandHandler = (
  * Definition for a plugin-registered command.
  */
 export const AGENT_PROMPT_SURFACE_KINDS = [
+  "openclaw_main",
+  /** @deprecated Use openclaw_main. */
   "pi_main",
   "codex_app_server",
   "cli_backend",
@@ -2309,9 +2304,13 @@ export type OpenClawPluginServiceContext = {
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
   };
   internalDiagnostics?: {
-    emit: (event: DiagnosticEventInput) => void;
+    emit: (event: DiagnosticEventInput, privateData?: DiagnosticEventPrivateData) => void;
     onEvent: (
-      listener: (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => void,
+      listener: (
+        event: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+        privateData: DiagnosticEventPrivateData,
+      ) => void,
     ) => () => void;
   };
 };
@@ -2687,8 +2686,8 @@ export type OpenClawPluginApi = {
   registerRealtimeVoiceProvider: (provider: RealtimeVoiceProviderPlugin) => void;
   /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
-  /** Register a meeting-notes source provider (live or imported meeting transcript capability). */
-  registerMeetingNotesSourceProvider: (provider: MeetingNotesSourceProviderPlugin) => void;
+  /** Register a transcripts source provider (live or imported meeting transcript capability). */
+  registerTranscriptSourceProvider: (provider: TranscriptSourceProvider) => void;
   /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
   /** Register a video generation provider (video generation capability). */
@@ -2872,7 +2871,12 @@ export type OpenClawPluginApi = {
    * @deprecated Use registerMemoryCapability({ runtime }) instead.
    */
   registerMemoryRuntime: (runtime: import("./memory-state.js").MemoryPluginRuntime) => void;
-  /** Register a memory embedding provider adapter. Multiple adapters may coexist. */
+  /**
+   * Register a memory embedding provider adapter. Multiple adapters may coexist.
+   * @deprecated New embedding providers should use `registerEmbeddingProvider`
+   * and `contracts.embeddingProviders`. This memory-specific seam is retained
+   * while existing memory providers migrate.
+   */
   registerMemoryEmbeddingProvider: (
     adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
   ) => void;

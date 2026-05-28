@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
-import { piSdkMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
@@ -19,8 +19,8 @@ function requireNonEmptyString(value: string | undefined, label: string): string
 
 test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
   const { dir, storePath } = await createSessionStoreDir();
-  piSdkMock.enabled = true;
-  piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-parent"),
@@ -268,8 +268,12 @@ test("sessions.create can start the first agent turn from an initial task", asyn
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
   expect(created.payload?.runStarted).toBe(true);
-  requireNonEmptyString(created.payload?.runId, "started run id");
+  const runId = requireNonEmptyString(created.payload?.runId, "started run id");
   expect(created.payload?.messageSeq).toBe(1);
+
+  const wait = await rpcReq(ws, "agent.wait", { runId, timeoutMs: 1_000 });
+  expect(wait.ok).toBe(true);
+  expect(wait.payload?.status).toBe("ok");
 
   ws.close();
 });

@@ -30,13 +30,18 @@ export function registryContainsRuntimePluginIds(
   }
   const present = new Set<string>();
   const loaded = new Set<string>();
+  const pluginStatusById = new Map<string, string | undefined>();
   for (const plugin of registry.plugins ?? []) {
     present.add(plugin.id);
+    pluginStatusById.set(plugin.id, plugin.status);
     if (plugin.status === undefined || plugin.status === "loaded") {
       loaded.add(plugin.id);
     }
   }
-  for (const value of Object.values(registry)) {
+  for (const [key, value] of Object.entries(registry)) {
+    if (key === "diagnostics" || key === "channelSetups") {
+      continue;
+    }
     if (!Array.isArray(value)) {
       continue;
     }
@@ -45,6 +50,10 @@ export function registryContainsRuntimePluginIds(
         const pluginId = entry.pluginId;
         if (typeof pluginId === "string" && pluginId.length > 0) {
           present.add(pluginId);
+          const status = pluginStatusById.get(pluginId);
+          if (status === undefined || status === "loaded") {
+            loaded.add(pluginId);
+          }
         }
       }
     }

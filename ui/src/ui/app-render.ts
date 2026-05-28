@@ -56,6 +56,7 @@ import {
   saveConfig,
   stageDefaultAgentConfigEntry,
   stageConfigPreset,
+  updateConfigRawValue,
   updateConfigFormValue,
   removeConfigFormValue,
 } from "./controllers/config.ts";
@@ -119,6 +120,7 @@ import {
 import {
   closeClawHubDetail,
   installFromClawHub,
+  loadSkillCard,
   installSkill,
   loadClawHubDetail,
   loadSkills,
@@ -1163,7 +1165,7 @@ export function renderApp(state: AppViewState) {
     formValue: state.configForm,
     originalValue: state.configFormOriginal,
     onRawChange: (next: string) => {
-      state.configRaw = next;
+      updateConfigRawValue(state, next);
     },
     onRequestUpdate: requestHostUpdate,
     onFormPatch: (path: Array<string | number>, value: unknown) =>
@@ -1198,7 +1200,10 @@ export function renderApp(state: AppViewState) {
     gatewayUrl: state.settings.gatewayUrl,
     assistantName: state.assistantName,
     configPath: state.configSnapshot?.path ?? null,
-    rawAvailable: typeof state.configSnapshot?.raw === "string",
+    rawAvailable:
+      typeof state.configSnapshot?.raw === "string" ||
+      !!state.configSnapshot?.config ||
+      !!state.configForm,
   } satisfies Omit<
     ConfigProps,
     | "formMode"
@@ -1838,7 +1843,11 @@ export function renderApp(state: AppViewState) {
           </div>
         </aside>
       </div>
-      <main class="content ${isChat ? "content--chat" : ""}">
+      <main
+        class="content ${isChat ? "content--chat" : ""} ${state.tab === "logs"
+          ? "content--logs"
+          : ""}"
+      >
         ${state.updateStatusBanner
           ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
               ${state.updateStatusBanner.text}
@@ -2615,6 +2624,13 @@ export function renderApp(state: AppViewState) {
                 messages: state.skillMessages,
                 busyKey: state.skillsBusyKey,
                 detailKey: state.skillsDetailKey,
+                detailTab: state.skillsDetailTab,
+                clawhubVerdicts: state.clawhubVerdicts,
+                clawhubVerdictsLoading: state.clawhubVerdictsLoading,
+                clawhubVerdictsError: state.clawhubVerdictsError,
+                skillCardContents: state.skillCardContents,
+                skillCardLoadingKey: state.skillCardLoadingKey,
+                skillCardErrors: state.skillCardErrors,
                 clawhubQuery: state.clawhubSearchQuery,
                 clawhubResults: state.clawhubSearchResults,
                 clawhubSearchLoading: state.clawhubSearchLoading,
@@ -2633,8 +2649,17 @@ export function renderApp(state: AppViewState) {
                 onSaveKey: (key) => saveSkillApiKey(state, key),
                 onInstall: (skillKey, name, installId) =>
                   installSkill(state, skillKey, name, installId),
-                onDetailOpen: (key) => (state.skillsDetailKey = key),
+                onDetailOpen: (key) => {
+                  state.skillsDetailKey = key;
+                  state.skillsDetailTab = "overview";
+                },
                 onDetailClose: () => (state.skillsDetailKey = null),
+                onDetailTabChange: (tab) => {
+                  state.skillsDetailTab = tab;
+                  if (tab === "card" && state.skillsDetailKey) {
+                    void loadSkillCard(state, state.skillsDetailKey);
+                  }
+                },
                 onClawHubQueryChange: (query) => {
                   setClawHubSearchQuery(state, query);
                   if (clawhubSearchTimer) {

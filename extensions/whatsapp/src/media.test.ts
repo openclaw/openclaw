@@ -5,7 +5,10 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
-import { createNoisyPngBuffer, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
+import {
+  createGrayscaleAlphaPngBuffer,
+  createSolidPngBuffer,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { withMockedWindowsPlatform, withRestoredMocks } from "openclaw/plugin-sdk/test-node-mocks";
 import { optimizeImageToPng } from "openclaw/plugin-sdk/web-media";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -66,17 +69,20 @@ beforeAll(async () => {
   tinyPngWrongExtFile = await writeTempFile(tinyPngBuffer, ".bin");
   alphaPngBuffer = createSolidPngBuffer(64, 64, { r: 255, g: 0, b: 0, a: 128 });
   alphaPngFile = await writeTempFile(alphaPngBuffer, ".png");
-  // Keep this small so the alpha-fallback test stays deterministic but fast.
-  const size = 24;
-  fallbackPngBuffer = createNoisyPngBuffer(size, size);
-  fallbackPngFile = await writeTempFile(fallbackPngBuffer, ".png");
-  const smallestPng = await optimizeImageToPng(fallbackPngBuffer, 1);
-  fallbackPngCap = Math.max(1, smallestPng.optimizedSize - 1);
-  const jpegOptimized = await optimizeImageToJpeg(fallbackPngBuffer, fallbackPngCap);
-  if (jpegOptimized.buffer.length >= smallestPng.optimizedSize) {
-    throw new Error(
-      `JPEG fallback did not shrink below PNG (jpeg=${jpegOptimized.buffer.length}, png=${smallestPng.optimizedSize})`,
-    );
+  for (const size of [24, 32, 40, 48, 64]) {
+    const buffer = createGrayscaleAlphaPngBuffer(size, size);
+    const smallestPng = await optimizeImageToPng(buffer, 1);
+    const cap = Math.max(1, Math.min(buffer.length, smallestPng.optimizedSize) - 1);
+    const jpegOptimized = await optimizeImageToJpeg(buffer, cap);
+    if (jpegOptimized.buffer.length <= cap) {
+      fallbackPngBuffer = buffer;
+      fallbackPngFile = await writeTempFile(buffer, ".png");
+      fallbackPngCap = cap;
+      break;
+    }
+  }
+  if (!fallbackPngFile) {
+    throw new Error("No PNG alpha fallback fixture could fit the JPEG cap");
   }
 });
 
@@ -151,7 +157,7 @@ describe("web media loading", () => {
     const result = await loadWebMedia(tinyPngWrongExtFile, 1024 * 1024);
 
     expect(result.kind).toBe("image");
-    expect(result.contentType).toBe("image/jpeg");
+    expect(result.contentType).toBe("image/png");
   });
 
   it("includes URL + status in fetch errors", async () => {

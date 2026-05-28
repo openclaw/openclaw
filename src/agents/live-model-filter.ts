@@ -10,11 +10,11 @@ type ModelRef = {
 };
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
-  "anthropic/claude-opus-4-7",
-  "anthropic/claude-opus-4-6",
   "anthropic/claude-sonnet-4-6",
+  "anthropic/claude-opus-4-7",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3-flash-preview",
+  "anthropic/claude-opus-4-6",
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
   "minimax/minimax-m2.7",
@@ -57,6 +57,12 @@ for (const key of HIGH_SIGNAL_LIVE_MODEL_PRIORITY) {
   } else {
     HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.set(provider, new Set([id]));
   }
+}
+
+export function getHighSignalLiveModelProviders(): string[] {
+  return [...HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.keys()].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 function isHighSignalClaudeModelId(id: string): boolean {
@@ -347,8 +353,8 @@ export function resolveHighSignalLiveModelLimit(params: {
 }): number {
   const trimmed = params.rawMaxModels?.trim();
   if (trimmed) {
-    const parsed = Number.parseInt(trimmed, 10);
-    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    return Number.isSafeInteger(parsed) ? Math.max(0, parsed) : 0;
   }
   if (params.useExplicitModels) {
     return 0;

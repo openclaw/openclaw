@@ -17,10 +17,14 @@ import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
+import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { isLikelyContextOverflowError } from "./embedded-agent-helpers/errors.js";
+import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import {
   FailoverError,
   coerceToFailoverError,
@@ -58,8 +62,6 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
-import { isLikelyContextOverflowError } from "./pi-embedded-helpers/errors.js";
-import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
@@ -139,6 +141,20 @@ function isFallbackAbortError(err: unknown): boolean {
 
 function shouldRethrowAbort(err: unknown): boolean {
   return isFallbackAbortError(err) && !isTimeoutError(err);
+}
+
+function isTerminalAbort(signal: AbortSignal | undefined): boolean {
+  if (!signal?.aborted) {
+    return false;
+  }
+  const reason = signal.reason;
+  if (!(reason instanceof Error)) {
+    return false;
+  }
+  if (reason.name === "TimeoutError") {
+    return true;
+  }
+  return reason.name === "ClientDisconnectError";
 }
 
 function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
@@ -245,6 +261,7 @@ async function runFallbackCandidate<T>(params: {
   model: string;
   options?: ModelFallbackRunOptions;
   attribution?: FailoverAttribution;
+  abortSignal?: AbortSignal;
 }): Promise<{ ok: true; result: T } | { ok: false; error: unknown }> {
   try {
     const result = params.options
@@ -256,6 +273,12 @@ async function runFallbackCandidate<T>(params: {
     };
   } catch (err) {
     if (isCommandLaneTaskTimeoutError(err)) {
+      throw err;
+    }
+    if (isNonProviderRuntimeCoordinationError(err)) {
+      throw err;
+    }
+    if (isTerminalAbort(params.abortSignal)) {
       throw err;
     }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
@@ -283,6 +306,7 @@ async function runFallbackAttempt<T>(params: {
   attempt: number;
   total: number;
   attribution?: FailoverAttribution;
+  abortSignal?: AbortSignal;
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
@@ -290,6 +314,7 @@ async function runFallbackAttempt<T>(params: {
     model: params.model,
     options: params.options,
     attribution: params.attribution,
+    abortSignal: params.abortSignal,
   });
   if (runResult.ok) {
     const classification = await params.classifyResult?.({
@@ -305,6 +330,9 @@ async function runFallbackAttempt<T>(params: {
       attribution: params.attribution,
     });
     if (classifiedError) {
+      if (isTerminalAbort(params.abortSignal)) {
+        throw classifiedError;
+      }
       return { error: classifiedError };
     }
     return {
@@ -370,7 +398,7 @@ async function assertModelFallbackCandidateHarnessAvailable(
   if (isCliProvider(params.provider, params.cfg)) {
     return;
   }
-  const agentRuntimeOverride = normalizeOptionalString(agentHarnessRuntimeOverride);
+  const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
   const harnessPolicy = resolveAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.model,
@@ -378,14 +406,20 @@ async function assertModelFallbackCandidateHarnessAvailable(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  const agentRuntime = agentRuntimeOverride ?? harnessPolicy.runtime;
-  const agentRuntimeSource = agentRuntimeOverride ? "model" : harnessPolicy.runtimeSource;
+  const agentRuntime =
+    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
+      ? agentRuntimeOverride
+      : harnessPolicy.runtime;
+  const agentRuntimeSource =
+    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
+      ? "model"
+      : harnessPolicy.runtimeSource;
   if (isCliAgentRuntime(agentRuntime, params.cfg)) {
     return;
   }
   if (
     agentRuntime === "auto" ||
-    agentRuntime === "pi" ||
+    agentRuntime === "openclaw" ||
     (agentRuntime === "codex" && agentRuntimeSource === "implicit")
   ) {
     return;
@@ -395,7 +429,12 @@ async function assertModelFallbackCandidateHarnessAvailable(
     model: params.model,
     agentHarnessRuntimeOverride,
   });
-  if (!getRegisteredAgentHarness(agentRuntime)) {
+  if (
+    agentRuntime !== "auto" &&
+    agentRuntime !== "openclaw" &&
+    !(agentRuntime === "codex" && agentRuntimeSource === "implicit") &&
+    !getRegisteredAgentHarness(agentRuntime)
+  ) {
     throw new MissingAgentHarnessError(agentRuntime);
   }
 }
@@ -706,23 +745,29 @@ function resolveFallbackCandidateCacheKey(
   }
   const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
   const env = process.env;
-  if (
-    isPluginProvidersLoadInFlight({
-      config: params.cfg,
-      workspaceDir,
-      env,
-      activate: false,
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
-    })
-  ) {
-    return null;
-  }
   const pluginMetadata = getCurrentPluginMetadataSnapshot({
     env,
     workspaceDir,
     allowWorkspaceScopedSnapshot: true,
   });
+  const providerLoadMetadata = getCurrentPluginMetadataSnapshot({
+    config: params.cfg,
+    env,
+    workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  if (
+    isPluginProvidersLoadInFlight({
+      config: params.cfg,
+      workspaceDir,
+      env,
+      ...(providerLoadMetadata ? { pluginMetadataSnapshot: providerLoadMetadata } : {}),
+      activate: false,
+      bundledProviderVitestCompat: true,
+    })
+  ) {
+    return null;
+  }
   const registryState = getPluginRegistryState();
   return JSON.stringify({
     provider: params.provider,
@@ -1056,6 +1101,7 @@ export async function runWithModelFallback<T>(
     onFallbackStep?: ModelFallbackStepHandler;
     classifyResult?: ModelFallbackResultClassifier<T>;
     skipAuthProfileRuntime?: boolean;
+    abortSignal?: AbortSignal;
   } & ModelManifestNormalizationContext,
 ): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
@@ -1298,6 +1344,7 @@ export async function runWithModelFallback<T>(
       attempt: i + 1,
       total: candidates.length,
       attribution: { sessionId: params.sessionId, lane: params.lane },
+      abortSignal: params.abortSignal,
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
