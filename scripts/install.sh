@@ -470,7 +470,7 @@ run_with_spinner() {
             GUM_STATUS="skipped"
             GUM_REASON="gum raw mode unavailable"
             ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-            "$@"
+            "$@" < /dev/null
             return $?
         fi
         if [[ -s "$gum_err" ]]; then
@@ -479,7 +479,9 @@ run_with_spinner() {
         return "$gum_status"
     fi
 
-    "$@"
+    # Redirect stdin from /dev/null so subprocesses cannot consume the script
+    # stream when the installer is piped via curl | bash.
+    "$@" < /dev/null
 }
 
 run_quiet_step() {
@@ -508,7 +510,7 @@ run_quiet_step() {
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
         showed_progress=true
-        if "$@" >"$log" 2>&1; then
+        if "$@" < /dev/null >"$log" 2>&1; then
             return 0
         fi
     fi
@@ -867,7 +869,7 @@ run_npm_global_install() {
     LAST_NPM_INSTALL_CMD="${cmd_display% }"
 
     if [[ "$VERBOSE" == "1" ]]; then
-        "${cmd[@]}" 2>&1 | tee "$log"
+        "${cmd[@]}" < /dev/null 2>&1 | tee "$log"
         return $?
     fi
 
@@ -881,7 +883,7 @@ run_npm_global_install() {
     fi
 
     ui_info "Installing OpenClaw package"
-    "${cmd[@]}" >"$log" 2>&1
+    "${cmd[@]}" < /dev/null >"$log" 2>&1
 }
 
 extract_npm_debug_log_path() {
@@ -1974,7 +1976,7 @@ fix_npm_permissions() {
     ui_warn "The installer will switch npm's user prefix to ${HOME}/.npm-global; npm normally writes that setting to ~/.npmrc."
     ui_info "Configuring npm for user-local installs"
     mkdir -p "$HOME/.npm-global"
-    npm config set prefix "$HOME/.npm-global"
+    npm config set prefix "$HOME/.npm-global" < /dev/null
     ui_warn "Avoid sudo npm i -g for future OpenClaw updates; use npm i -g openclaw@latest so npm keeps using this user prefix instead of a different global prefix."
 
     persist_shell_path_prepend "$HOME/.npm-global/bin" "\$HOME/.npm-global/bin" || true
@@ -2820,7 +2822,7 @@ maybe_open_dashboard() {
     if ! "$claw" dashboard --help >/dev/null 2>&1; then
         return 0
     fi
-    "$claw" dashboard || true
+    "$claw" dashboard < /dev/null || true
 }
 
 resolve_workspace_dir() {
@@ -2879,7 +2881,7 @@ run_bootstrap_onboarding_if_needed() {
         return
     fi
 
-    "$claw" onboard || {
+    "$claw" onboard < /dev/tty || {
         local user_claw
         user_claw="$(openclaw_command_for_user "$claw")"
         ui_error "Onboarding failed; run ${user_claw} onboard to retry"
@@ -3268,7 +3270,7 @@ main() {
             fi
             if (( doctor_ok )); then
                 ui_info "Updating plugins"
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all || true
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all < /dev/null || true
             else
                 ui_warn "Doctor failed; skipping plugin updates"
             fi
@@ -3325,7 +3327,7 @@ main() {
                 ui_info "Gateway daemon detected; would restart (openclaw daemon restart)"
             else
                 ui_info "Gateway daemon detected; restarting"
-                if OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" daemon restart >/dev/null 2>&1; then
+                if OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" daemon restart < /dev/null >/dev/null 2>&1; then
                     ui_success "Gateway restarted"
                 else
                     ui_warn "Gateway restart failed; try: openclaw daemon restart"
