@@ -201,6 +201,11 @@ describe("createOpenRouterCostReconciliationWrapper", () => {
       async result() {
         return message;
       },
+      // Stream contract surface used by EventStream-backed implementations;
+      // the wrapper only consumes the iterator + result(), so these are inert
+      // for this test.
+      push() {},
+      end() {},
     };
 
     const fetchSpy = vi.fn(async () => jsonResponse({ data: { total_cost: 0.99 } }));
