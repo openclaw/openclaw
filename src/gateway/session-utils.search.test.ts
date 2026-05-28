@@ -336,23 +336,6 @@ describe("listSessionsFromStore search", () => {
     expect(missing?.totalTokensFresh).toBe(false);
   });
 
-  test("omits malformed legacy goal slots from session rows", () => {
-    const result = listSessionsFromStore({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions.json",
-      store: {
-        "agent:main:legacy-goal": {
-          sessionId: "sess-legacy-goal",
-          updatedAt: Date.now(),
-          goal: { plugin: "owned" },
-        } as unknown as SessionEntry,
-      },
-      opts: {},
-    });
-
-    expect(result.sessions[0]?.goal).toBeUndefined();
-  });
-
   test("includes estimated session cost when model pricing is configured", () => {
     const cfg = {
       session: { mainKey: "main" },

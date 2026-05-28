@@ -29,14 +29,6 @@ type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
 
 export const MODEL_UPDATABLE_SESSION_GOAL_STATUSES = ["complete", "blocked"] as const;
 
-const SESSION_GOAL_STATUSES = new Set<SessionGoalStatus>([
-  "active",
-  "paused",
-  "blocked",
-  "usage_limited",
-  "budget_limited",
-  "complete",
-]);
 const TERMINAL_GOAL_STATUSES = new Set<SessionGoalStatus>(["complete"]);
 
 function nowMs(value: number | undefined): number {
@@ -70,94 +62,6 @@ function cloneGoal(goal: SessionGoal): SessionGoal {
   return { ...goal };
 }
 
-function hasOwnGoalSlot(entry: Pick<SessionEntry, "goal">): boolean {
-  return Object.prototype.hasOwnProperty.call(entry, "goal");
-}
-
-function isNonNegativeNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-function isOptionalNonNegativeNumber(value: unknown): boolean {
-  return value === undefined || isNonNegativeNumber(value);
-}
-
-function isSessionGoal(value: unknown): value is SessionGoal {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const goal = value as Partial<SessionGoal>;
-  return (
-    goal.schemaVersion === 1 &&
-    typeof goal.id === "string" &&
-    goal.id.length > 0 &&
-    typeof goal.objective === "string" &&
-    goal.objective.length > 0 &&
-    typeof goal.status === "string" &&
-    SESSION_GOAL_STATUSES.has(goal.status) &&
-    isNonNegativeNumber(goal.createdAt) &&
-    isNonNegativeNumber(goal.updatedAt) &&
-    isNonNegativeNumber(goal.tokenStart) &&
-    (goal.tokenStartFresh === undefined || typeof goal.tokenStartFresh === "boolean") &&
-    isNonNegativeNumber(goal.tokensUsed) &&
-    (goal.tokenBudget === undefined ||
-      (isNonNegativeNumber(goal.tokenBudget) && goal.tokenBudget > 0)) &&
-    isNonNegativeNumber(goal.continuationTurns) &&
-    (goal.lastStatusNote === undefined || typeof goal.lastStatusNote === "string") &&
-    isOptionalNonNegativeNumber(goal.pausedAt) &&
-    isOptionalNonNegativeNumber(goal.blockedAt) &&
-    isOptionalNonNegativeNumber(goal.completedAt) &&
-    isOptionalNonNegativeNumber(goal.usageLimitedAt) &&
-    isOptionalNonNegativeNumber(goal.budgetLimitedAt)
-  );
-}
-
-function getCoreGoal(entry: Pick<SessionEntry, "goal">): SessionGoal | undefined {
-  const value = (entry as { goal?: unknown }).goal;
-  return isSessionGoal(value) ? value : undefined;
-}
-
-function pruneLegacyGoalSlotKeys(
-  slotKeys: SessionEntry["pluginExtensionSlotKeys"],
-): SessionEntry["pluginExtensionSlotKeys"] | undefined {
-  if (!slotKeys) {
-    return undefined;
-  }
-  let changed = false;
-  const next: NonNullable<SessionEntry["pluginExtensionSlotKeys"]> = {};
-  for (const [pluginId, namespaceSlots] of Object.entries(slotKeys)) {
-    const keptSlots: Record<string, string> = {};
-    for (const [namespace, slotKey] of Object.entries(namespaceSlots)) {
-      if (slotKey.trim() === "goal") {
-        changed = true;
-        continue;
-      }
-      keptSlots[namespace] = slotKey;
-    }
-    if (Object.keys(keptSlots).length > 0) {
-      next[pluginId] = keptSlots;
-    } else {
-      changed = true;
-    }
-  }
-  if (!changed) {
-    return slotKeys;
-  }
-  return Object.keys(next).length > 0 ? next : undefined;
-}
-
-function buildLegacyGoalCleanupPatch(
-  entry: Pick<SessionEntry, "goal" | "pluginExtensionSlotKeys">,
-): Partial<SessionEntry> | null {
-  if (!hasOwnGoalSlot(entry) || getCoreGoal(entry)) {
-    return null;
-  }
-  return {
-    goal: undefined,
-    pluginExtensionSlotKeys: pruneLegacyGoalSlotKeys(entry.pluginExtensionSlotKeys),
-  };
-}
-
 export function resolveSessionGoalDisplayState(
   entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh">,
   now?: number,
@@ -171,7 +75,9 @@ function accountGoalUsage(
   now: number,
   options?: { adoptFreshBaseline?: boolean },
 ): SessionGoal | undefined {
-  const goal = getCoreGoal(entry);
+  // `goal` is introduced here as a core-owned slot; no shipped plugin-owned
+  // goal state exists to migrate, and plugin slot registration now reserves it.
+  const goal = entry.goal;
   if (!goal) {
     return undefined;
   }
@@ -267,11 +173,10 @@ export async function getSessionGoal(
     update: (entry) => {
       const accounted = accountGoalUsage(entry, now);
       goal = accounted ? cloneGoal(accounted) : undefined;
-      const cleanupPatch = buildLegacyGoalCleanupPatch(entry);
       if (!accounted || goalsEqual(accounted, entry.goal)) {
-        return cleanupPatch;
+        return null;
       }
-      return { ...cleanupPatch, goal: accounted };
+      return { goal: accounted };
     },
   });
   if (!result || !goal) {
@@ -292,10 +197,9 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
     storePath: options.storePath,
     fallbackEntry: options.fallbackEntry,
     update: (entry) => {
-      if (getCoreGoal(entry)) {
+      if (entry.goal) {
         throw new Error("goal already exists");
       }
-      const cleanupPatch = buildLegacyGoalCleanupPatch(entry);
       const tokenBudget = normalizeTokenBudget(options.tokenBudget);
       const tokenStartFresh = resolveEntryFreshTotalTokens(entry) !== undefined;
       created = {
@@ -311,7 +215,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
         ...(tokenBudget ? { tokenBudget } : {}),
         continuationTurns: 0,
       };
-      return { ...cleanupPatch, goal: created };
+      return { goal: created };
     },
   });
   if (!result || !created) {
@@ -333,10 +237,6 @@ export async function updateSessionGoalStatus(
       foundSession = true;
       const accounted = accountGoalUsage(entry, now);
       if (!accounted) {
-        const cleanupPatch = buildLegacyGoalCleanupPatch(entry);
-        if (cleanupPatch) {
-          return cleanupPatch;
-        }
         throw new Error("goal not found");
       }
       if (TERMINAL_GOAL_STATUSES.has(accounted.status) && accounted.status !== options.status) {
@@ -378,14 +278,11 @@ export async function clearSessionGoal(options: SessionGoalStoreOptions): Promis
     sessionKey: options.sessionKey,
     storePath: options.storePath,
     update: (entry) => {
-      if (!hasOwnGoalSlot(entry)) {
+      if (!entry.goal) {
         return null;
       }
       removed = true;
-      return {
-        goal: undefined,
-        pluginExtensionSlotKeys: pruneLegacyGoalSlotKeys(entry.pluginExtensionSlotKeys),
-      };
+      return { goal: undefined };
     },
   });
   return Boolean(result && removed);
