@@ -1348,7 +1348,9 @@ describe("chat session controls", () => {
     input!.dispatchEvent(new Event("input", { bubbles: true }));
     expect(state.chatSessionPickerQuery).toBe(" telegram ");
     expect(submit?.disabled).toBe(false);
-    submit!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    submit!.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }),
+    );
     await vi.waitFor(() => expect(state.chatSessionPickerAppliedQuery).toBe("telegram"));
     render(renderChatSessionSelect(state), container);
 
@@ -1451,7 +1453,9 @@ describe("chat session controls", () => {
 
     input!.value = "telegram";
     input!.dispatchEvent(new Event("input", { bubbles: true }));
-    submit!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    submit!.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }),
+    );
     await vi.waitFor(() => expect(state.chatSessionPickerAppliedQuery).toBe("telegram"));
     expect(state.chatSessionPickerResult?.sessions).toHaveLength(2);
 
@@ -1503,7 +1507,9 @@ describe("chat session controls", () => {
 
     input!.value = "telegram";
     input!.dispatchEvent(new Event("input", { bubbles: true }));
-    submit!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    submit!.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }),
+    );
     await vi.waitFor(() =>
       expect(state.chatSessionPickerResult?.sessions.map((row) => row.key)).toEqual([
         "agent:main:telegram",
@@ -1652,7 +1658,9 @@ describe("chat session controls", () => {
     await flushTasks();
     expect(request).not.toHaveBeenCalled();
 
-    loadMore!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    loadMore!.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }),
+    );
     await vi.waitFor(() => expect(state.chatSessionPickerResult?.sessions).toHaveLength(4));
 
     expect(state.sessionsResult).toBe(originalSessionsResult);
@@ -1732,7 +1740,7 @@ describe("chat session controls", () => {
 
     container
       .querySelector<HTMLButtonElement>('button[data-chat-session-load-more="true"]')!
-      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      .dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
 
     await vi.waitFor(() =>
       expect(state.chatSessionPickerResult?.sessions.map((row) => row.key)).toEqual([
