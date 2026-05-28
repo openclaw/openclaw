@@ -58,6 +58,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
+import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -1041,9 +1042,17 @@ export function loadPluginManifestRegistry(
         });
         continue;
       }
-      const packagePluginApiRange = normalizeOptionalString(
-        candidate.packageManifest?.compat?.pluginApi,
-      );
+      const packagePluginApiRangeCheck = resolvePackagePluginApiRange(candidate.packageManifest);
+      if (!packagePluginApiRangeCheck.ok) {
+        diagnostics.push({
+          level: "error",
+          pluginId: manifest.id,
+          source: packageManifestSource,
+          message: `plugin manifest invalid | ${packagePluginApiRangeCheck.error}`,
+        });
+        continue;
+      }
+      const packagePluginApiRange = packagePluginApiRangeCheck.range;
       if (
         packagePluginApiRange &&
         !satisfiesPluginApiRange(currentHostVersion, packagePluginApiRange)

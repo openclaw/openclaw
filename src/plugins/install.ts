@@ -60,6 +60,7 @@ import {
   type OpenClawPackageManifest,
   type PackageManifest as PluginPackageManifest,
 } from "./manifest.js";
+import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import {
   linkOpenClawPeerDependencies,
@@ -111,6 +112,7 @@ export const PLUGIN_INSTALL_ERROR_CODE = {
   UNKNOWN_HOST_VERSION: "unknown_host_version",
   INCOMPATIBLE_HOST_VERSION: "incompatible_host_version",
   INCOMPATIBLE_PLUGIN_API: "incompatible_plugin_api",
+  INVALID_PLUGIN_API: "invalid_plugin_api",
   MISSING_OPENCLAW_EXTENSIONS: "missing_openclaw_extensions",
   MISSING_PLUGIN_MANIFEST: "missing_plugin_manifest",
   EMPTY_OPENCLAW_EXTENSIONS: "empty_openclaw_extensions",
@@ -144,7 +146,15 @@ function validateOpenClawPackageCompatibility(params: {
   currentHostVersion: string;
   packageMetadata?: OpenClawPackageManifest;
 }): PluginInstallFailureResult | null {
-  const pluginApiRange = normalizeOptionalString(params.packageMetadata?.compat?.pluginApi);
+  const pluginApiRangeCheck = resolvePackagePluginApiRange(params.packageMetadata);
+  if (!pluginApiRangeCheck.ok) {
+    return {
+      ok: false,
+      error: `invalid package.json openclaw.compat.pluginApi: ${pluginApiRangeCheck.error}`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
+    };
+  }
+  const pluginApiRange = pluginApiRangeCheck.range;
   if (pluginApiRange && !satisfiesPluginApiRange(params.currentHostVersion, pluginApiRange)) {
     return {
       ok: false,

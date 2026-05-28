@@ -1559,6 +1559,42 @@ describe("discoverOpenClawPlugins", () => {
     });
   });
 
+  it("skips malformed non-bundled package plugin API candidates during discovery", () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    const pluginDir = path.join(globalExt, "malformed-channel");
+    mkdirSafe(pluginDir);
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/malformed-channel",
+        openclaw: {
+          extensions: ["./index.js"],
+          plugin: { id: "malformed-channel" },
+          compat: { pluginApi: 20260527 },
+        },
+      }),
+      "utf-8",
+    );
+    writePluginEntry(path.join(pluginDir, "index.js"));
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      env: buildDiscoveryEnvWithOverrides(stateDir, {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.27",
+      }),
+    });
+
+    expectCandidateIds(candidates, { excludes: ["malformed-channel"] });
+    expectDiagnostic({
+      diagnostics,
+      level: "warn",
+      pluginId: "malformed-channel",
+      source: path.join(pluginDir, "package.json"),
+      messageIncludes:
+        "invalid package plugin API metadata: package.json openclaw.compat.pluginApi must be a string; skipping discovery",
+    });
+  });
+
   it("checks non-bundled package plugin API before package entry validation", () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions");

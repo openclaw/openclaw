@@ -270,7 +270,7 @@ function setPluginMinHostVersion(pluginDir: string, minHostVersion: string) {
   fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
 }
 
-function setPluginPackageCompatibility(pluginDir: string, pluginApiRange: string) {
+function setPluginPackageCompatibility(pluginDir: string, pluginApiRange: unknown) {
   const packageJsonPath = path.join(pluginDir, "package.json");
   const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
     openclaw?: { compat?: Record<string, unknown> };
@@ -3637,6 +3637,24 @@ describe("installPluginFromDir", () => {
         "runtime exposes 2026.5.10-beta.1",
         "install a compatible plugin version",
       ],
+    });
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("rejects plugins whose package plugin API metadata is malformed", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.27");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    setPluginPackageCompatibility(pluginDir, 20260527);
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectFailedInstallResult({
+      result,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
+      messageIncludes: ["openclaw.compat.pluginApi", "must be a string"],
     });
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });

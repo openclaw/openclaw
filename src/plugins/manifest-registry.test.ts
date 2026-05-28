@@ -253,7 +253,7 @@ function loadRegistryForMinHostVersionCase(params: {
 
 function loadRegistryForPluginApiCase(params: {
   rootDir: string;
-  pluginApi: string;
+  pluginApi: unknown;
   env?: NodeJS.ProcessEnv;
   origin?: "bundled" | "global" | "workspace" | "config";
   idHint?: string;
@@ -272,7 +272,7 @@ function loadRegistryForPluginApiCase(params: {
             minHostVersion: ">=2026.4.25",
           },
           compat: {
-            pluginApi: params.pluginApi,
+            pluginApi: params.pluginApi as string,
           },
         },
       }),
@@ -2276,6 +2276,24 @@ describe("loadPluginManifestRegistry", () => {
       "plugin requires plugin API >=2026.5.27, but this host is 2026.5.10-beta.1",
     );
     expect(registry.diagnostics.map((diag) => diag.level)).toContain("warn");
+  });
+
+  it("skips installed plugins whose package plugin API metadata is malformed", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "synology-chat", configSchema: { type: "object" } });
+
+    const registry = loadRegistryForPluginApiCase({
+      rootDir: dir,
+      pluginApi: 20260527,
+      env: { OPENCLAW_VERSION: "2026.5.27" } as NodeJS.ProcessEnv,
+    });
+
+    expect(registry.plugins).toStrictEqual([]);
+    expectRegistryDiagnosticContains(
+      registry,
+      "plugin manifest invalid | package.json openclaw.compat.pluginApi must be a string",
+    );
+    expect(registry.diagnostics.map((diag) => diag.level)).toContain("error");
   });
 
   it("loads installed plugins when a beta host is on the package plugin API floor", () => {

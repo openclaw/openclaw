@@ -30,6 +30,7 @@ import {
   type PackageExtensionResolution,
   type PackageManifest,
 } from "./manifest.js";
+import { resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   resolvePackageRuntimeExtensionSources,
   resolvePackageSetupSource,
@@ -879,7 +880,20 @@ function shouldSkipIncompatiblePackagePluginApi(params: {
     return false;
   }
   const packageManifest = getPackageManifestMetadata(params.manifest ?? undefined);
-  const packagePluginApiRange = normalizeOptionalString(packageManifest?.compat?.pluginApi);
+  const packagePluginApiRangeCheck = resolvePackagePluginApiRange(packageManifest);
+  if (!packagePluginApiRangeCheck.ok) {
+    const pluginId =
+      normalizeOptionalString(packageManifest?.plugin?.id) ??
+      derivePackagePluginIdHint({ packageName: params.manifest?.name });
+    params.diagnostics.push({
+      level: "warn",
+      source: path.join(params.packageDir, "package.json"),
+      message: `invalid package plugin API metadata: ${packagePluginApiRangeCheck.error}; skipping discovery`,
+      ...(pluginId ? { pluginId } : {}),
+    });
+    return true;
+  }
+  const packagePluginApiRange = packagePluginApiRangeCheck.range;
   if (!packagePluginApiRange) {
     return false;
   }
