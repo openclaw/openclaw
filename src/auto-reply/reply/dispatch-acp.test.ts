@@ -482,6 +482,120 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("routes ACP session-store assistant output when the stream produced no visible text", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
+        await onEvent?.({ type: "done" });
+      },
+    );
+    sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
+      cfg: createAcpTestConfig(),
+      storePath: "/tmp/openclaw-acp-session.json",
+      sessionKey,
+      storeSessionKey: sessionKey,
+      entry: {
+        messages: [
+          { User: { content: [{ Text: "上海的天气怎么样" }] } },
+          { Agent: { content: [{ Text: "上海今天多云，气温大约 20 到 25 度。" }] } },
+        ],
+      } as never,
+      acp: createAcpSessionMeta(),
+    });
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "上海的天气怎么样",
+      dispatcher,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "8524721791",
+      ctxOverrides: {
+        Provider: "telegram",
+        Surface: "telegram",
+        AccountId: "solbi",
+        SenderId: "8524721791",
+      },
+    });
+
+    expect(result?.queuedFinal).toBe(true);
+    expect(result?.counts.final).toBe(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(routeCall().channel).toBe("telegram");
+    expect(routeCall().to).toBe("8524721791");
+    expect(routePayload().text).toBe("上海今天多云，气温大约 20 到 25 度。");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("routes ACPX runtime assistant output when only ACP metadata is in the OpenClaw session store", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
+        await onEvent?.({ type: "done" });
+      },
+    );
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-fallback-"));
+    const sessionsDir = path.join(stateDir, "workspace", "state", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionsDir, `${encodeURIComponent(sessionKey)}.json`),
+      JSON.stringify({
+        messages: [
+          { User: { content: [{ Text: "hello" }] } },
+          { Agent: { content: [{ Text: "runtime fallback reply" }] } },
+        ],
+      }),
+      "utf8",
+    );
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
+      cfg: createAcpTestConfig(),
+      storePath: "/tmp/openclaw-agent-session-store.json",
+      sessionKey,
+      storeSessionKey: sessionKey,
+      entry: {
+        acp: createAcpSessionMeta({
+          identity: {
+            state: "resolved",
+            acpxRecordId: sessionKey,
+            source: "status",
+            lastUpdatedAt: Date.now(),
+          },
+        }),
+        sessionId: "agent-store-session",
+        updatedAt: Date.now(),
+      },
+      acp: createAcpSessionMeta({
+        identity: {
+          state: "resolved",
+          acpxRecordId: sessionKey,
+          source: "status",
+          lastUpdatedAt: Date.now(),
+        },
+      }),
+    });
+
+    try {
+      const result = await runDispatch({
+        bodyForAgent: "hello",
+        shouldRouteToOriginating: true,
+        originatingChannel: "telegram",
+        originatingTo: "8524721791",
+      });
+
+      expect(result?.queuedFinal).toBe(true);
+      expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+      expect(routePayload().text).toBe("runtime fallback reply");
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+  });
+
   it("persists ACP transcript when routed delivery fails", async () => {
     setReadyAcpResolution();
     mockRoutedTextTurn("hello");

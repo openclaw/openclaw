@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { formatAcpRuntimeErrorText } from "../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../acp/runtime/errors.js";
@@ -7,6 +9,7 @@ import {
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -169,6 +172,149 @@ export type AcpDispatchAttemptResult = {
 };
 
 const ACP_STALE_BINDING_UNBIND_REASON = "acp-session-init-failed";
+
+function extractAcpTextContent(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const parts: string[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const text =
+      typeof record.Text === "string"
+        ? record.Text
+        : typeof record.text === "string" && record.type === "text"
+          ? record.text
+          : undefined;
+    if (text?.trim()) {
+      parts.push(text);
+    }
+  }
+  return parts;
+}
+
+function extractLatestAcpAssistantTextFromEntry(entry: unknown): string {
+  if (!entry || typeof entry !== "object") {
+    return "";
+  }
+  const messages = (entry as Record<string, unknown>).messages;
+  if (!Array.isArray(messages)) {
+    return "";
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    const acpxAgent = record.Agent;
+    if (acpxAgent && typeof acpxAgent === "object") {
+      const text = extractAcpTextContent((acpxAgent as Record<string, unknown>).content).join("\n");
+      if (text.trim()) {
+        return text;
+      }
+    }
+    if (record.role === "assistant") {
+      const text = extractAcpTextContent(record.content).join("\n");
+      if (text.trim()) {
+        return text;
+      }
+    }
+  }
+  return "";
+}
+
+async function readAcpxRuntimeSessionRecord(recordId: string): Promise<unknown> {
+  const normalizedRecordId = normalizeOptionalString(recordId);
+  if (!normalizedRecordId) {
+    return null;
+  }
+  const filePath = path.join(
+    resolveStateDir(),
+    "workspace",
+    "state",
+    "sessions",
+    `${encodeURIComponent(normalizedRecordId)}.json`,
+  );
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function extractLatestAcpAssistantTextFromSessionStores(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+}): Promise<string> {
+  const { readAcpSessionEntry } = await loadDispatchAcpSessionRuntime();
+  const sessionEntry = readAcpSessionEntry({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
+  const sessionStoreText = extractLatestAcpAssistantTextFromEntry(sessionEntry?.entry);
+  if (sessionStoreText.trim()) {
+    return sessionStoreText;
+  }
+
+  const acpMeta = sessionEntry?.acp;
+  const acpxRecordCandidates = new Set(
+    [acpMeta?.identity?.acpxRecordId, params.sessionKey].flatMap((value) => {
+      const normalized = normalizeOptionalString(value);
+      return normalized ? [normalized] : [];
+    }),
+  );
+  for (const recordId of acpxRecordCandidates) {
+    const runtimeRecord = await readAcpxRuntimeSessionRecord(recordId);
+    const runtimeText = extractLatestAcpAssistantTextFromEntry(runtimeRecord);
+    if (runtimeText.trim()) {
+      return runtimeText;
+    }
+  }
+  return "";
+}
+
+async function maybeDeliverSessionStoreFinalFallback(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  delivery: AcpDispatchDeliveryCoordinator;
+  suppressUserDelivery?: boolean;
+}): Promise<boolean> {
+  if (params.suppressUserDelivery) {
+    return false;
+  }
+  if (
+    params.delivery.hasDeliveredFinalReply() ||
+    params.delivery.hasDeliveredVisibleText() ||
+    params.delivery.getAccumulatedFinalText().trim() ||
+    params.delivery.getAccumulatedBlockText().trim()
+  ) {
+    return false;
+  }
+  try {
+    const text = await extractLatestAcpAssistantTextFromSessionStores({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    });
+    if (!text.trim()) {
+      return false;
+    }
+    logVerbose(
+      `dispatch-acp: delivering session-store final fallback for ${params.sessionKey} after empty stream output`,
+    );
+    return await params.delivery.deliver("final", { text });
+  } catch (error) {
+    logVerbose(
+      `dispatch-acp: session-store final fallback failed for ${params.sessionKey}: ${formatErrorMessage(
+        error,
+      )}`,
+    );
+    return false;
+  }
+}
 
 function isStaleSessionInitError(params: { code: string; message: string }): boolean {
   if (params.code !== "ACP_SESSION_INIT_FAILED") {
@@ -542,6 +688,13 @@ export async function tryDispatchAcpReply(params: {
       params.markIdle("message_aborted");
       return { queuedFinal, counts };
     }
+    queuedFinal =
+      (await maybeDeliverSessionStoreFinalFallback({
+        cfg: params.cfg,
+        sessionKey: canonicalSessionKey,
+        delivery,
+        suppressUserDelivery: params.suppressUserDelivery,
+      })) || queuedFinal;
     try {
       const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
       await persistAcpDispatchTranscript({
