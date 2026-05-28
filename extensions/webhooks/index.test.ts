@@ -1,3 +1,7 @@
+import { createHmac } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
@@ -12,6 +16,8 @@ function createApi(params?: {
   loadAdapter?: ReturnType<typeof vi.fn>;
   openKeyedStore?: ReturnType<typeof vi.fn>;
   registerAgentEventSubscription?: ReturnType<typeof vi.fn>;
+  registerGatewayMethod?: OpenClawPluginApi["registerGatewayMethod"];
+  registerCli?: OpenClawPluginApi["registerCli"];
 }): OpenClawPluginApi {
   return createTestPluginApi({
     id: "webhooks",
@@ -52,6 +58,8 @@ function createApi(params?: {
       },
     } as unknown as OpenClawPluginApi["session"],
     registerHttpRoute: params?.registerHttpRoute ?? vi.fn(),
+    registerGatewayMethod: params?.registerGatewayMethod ?? vi.fn(),
+    registerCli: params?.registerCli ?? vi.fn(),
     logger:
       params?.logger ??
       ({
@@ -63,12 +71,96 @@ function createApi(params?: {
   });
 }
 
+function createJsonRequest(params: {
+  url: string;
+  headers: Record<string, string>;
+  body: unknown;
+}) {
+  const rawBody = JSON.stringify(params.body);
+  return {
+    method: "POST",
+    url: params.url,
+    headers: {
+      "content-type": "application/json",
+      ...params.headers,
+    },
+    socket: { remoteAddress: "127.0.0.1" },
+    on(event: string, handler: (chunk?: Buffer) => void) {
+      if (event === "data") {
+        setImmediate(() => handler(Buffer.from(rawBody)));
+      }
+      if (event === "end") {
+        setImmediate(() => handler());
+      }
+      return this;
+    },
+    removeListener() {
+      return this;
+    },
+    destroy() {
+      return this;
+    },
+  };
+}
+
+function createJsonResponse() {
+  return {
+    statusCode: 0,
+    headers: {} as Record<string, string>,
+    body: "",
+    setHeader(name: string, value: string) {
+      this.headers[name] = value;
+    },
+    end(body?: string) {
+      this.body = body ?? "";
+    },
+  };
+}
+
+async function callGatewayMethod(
+  registerGatewayMethod: ReturnType<typeof vi.fn>,
+  method: string,
+  requestParams: Record<string, unknown>,
+) {
+  const registration = registerGatewayMethod.mock.calls.find(([name]) => name === method);
+  if (!registration) {
+    throw new Error(`gateway method not registered: ${method}`);
+  }
+  let response: { ok: boolean; payload?: unknown; error?: unknown } | undefined;
+  await registration[1]({
+    params: requestParams,
+    respond: (ok: boolean, payload?: unknown, error?: unknown) => {
+      response = { ok, payload, error };
+    },
+  });
+  if (!response) {
+    throw new Error(`gateway method did not respond: ${method}`);
+  }
+  return response;
+}
+
 function requireFirstRouteRegistration(mock: ReturnType<typeof vi.fn>) {
   const [call] = mock.mock.calls;
   if (!call) {
     throw new Error("expected webhook route registration");
   }
   return call[0] as Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
+}
+
+function requireRouteRegistration(mock: ReturnType<typeof vi.fn>, path: string) {
+  const call = mock.mock.calls.find(([params]) => params?.path === path);
+  if (!call) {
+    throw new Error(`expected webhook route registration for ${path}`);
+  }
+  return call[0] as Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
+}
+
+function expectDynamicPrefixRoute(mock: ReturnType<typeof vi.fn>) {
+  const route = requireRouteRegistration(mock, "/plugins/webhooks");
+  expect(route.auth).toBe("plugin");
+  expect(route.match).toBe("prefix");
+  expect(route.replaceExisting).toBe(true);
+  expect(route.handler).toBeTypeOf("function");
 }
 
 function createMemoryKeyedStore<T>() {
@@ -97,6 +189,87 @@ function createMemoryKeyedStore<T>() {
 }
 
 describe("webhooks plugin registration", () => {
+  it("registers Gateway-managed dynamic subscriptions through the prefix HTTP route", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = await mkdtemp(join(tmpdir(), "openclaw-webhook-subscriptions-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const registerHttpRoute = vi.fn();
+      const registerGatewayMethod = vi.fn();
+      const registerCli = vi.fn();
+      const scheduleSessionTurn = vi.fn(async () => ({
+        id: "job-dynamic",
+        pluginId: "webhooks",
+        sessionKey: "agent:webhook-reviewer:webhook-github",
+        kind: "agentTurn",
+      }));
+
+      plugin.register(
+        createApi({
+          pluginConfig: {},
+          registerHttpRoute,
+          registerGatewayMethod,
+          registerCli,
+          scheduleSessionTurn,
+        }),
+      );
+
+      expect(registerGatewayMethod).toHaveBeenCalledWith(
+        "webhooks.subscribe",
+        expect.any(Function),
+        { scope: "operator.write" },
+      );
+      expect(registerCli).toHaveBeenCalledTimes(1);
+      expect(registerHttpRoute).toHaveBeenCalledTimes(1);
+      const prefixRoute = requireRouteRegistration(registerHttpRoute, "/plugins/webhooks");
+
+      const subscribe = await callGatewayMethod(registerGatewayMethod, "webhooks.subscribe", {
+        name: "github-pr-review",
+        agentId: "webhook-reviewer",
+        sessionKey: "agent:webhook-reviewer:webhook-github",
+        eventHeader: "x-github-event",
+        events: ["pull_request"],
+        idempotencyHeader: "x-github-delivery",
+        prompt: "Review GitHub PR {body.pull_request.html_url}. Payload: {__raw__}",
+      });
+      expect(subscribe.ok).toBe(true);
+      const secret = (subscribe.payload as { secret: string }).secret;
+      expect(secret).toBeTypeOf("string");
+
+      const body = { pull_request: { html_url: "https://github.com/openclaw/test/pull/1" } };
+      const rawBody = JSON.stringify(body);
+      const signature = createHmac("sha256", secret).update(rawBody).digest("hex");
+      const req = createJsonRequest({
+        url: "/plugins/webhooks/github-pr-review",
+        body,
+        headers: {
+          "x-openclaw-webhook-signature-256": `sha256=${signature}`,
+          "x-github-event": "pull_request",
+          "x-github-delivery": "delivery-1",
+        },
+      });
+      const res = createJsonResponse();
+
+      await prefixRoute.handler(req as never, res as never);
+
+      expect(res.statusCode).toBe(202);
+      expect(scheduleSessionTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:webhook-reviewer:webhook-github",
+          agentId: "webhook-reviewer",
+          message: expect.stringContaining("https://github.com/openclaw/test/pull/1"),
+        }),
+      );
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("registers SecretRef-backed routes synchronously", () => {
     const registerHttpRoute = vi.fn();
 
@@ -119,13 +292,14 @@ describe("webhooks plugin registration", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(registerHttpRoute).toHaveBeenCalledTimes(1);
-    const route = requireFirstRouteRegistration(registerHttpRoute);
+    expect(registerHttpRoute).toHaveBeenCalledTimes(2);
+    const route = requireRouteRegistration(registerHttpRoute, "/plugins/webhooks/zapier");
     expect(route.path).toBe("/plugins/webhooks/zapier");
     expect(route.auth).toBe("plugin");
     expect(route.match).toBe("exact");
     expect(route.replaceExisting).toBe(true);
     expect(route.handler).toBeTypeOf("function");
+    expectDynamicPrefixRoute(registerHttpRoute);
   });
 
   it("registers ack-only routes without binding TaskFlow sessions", () => {
@@ -152,11 +326,12 @@ describe("webhooks plugin registration", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(registerHttpRoute).toHaveBeenCalledTimes(1);
+    expect(registerHttpRoute).toHaveBeenCalledTimes(2);
     expect(bindSession).not.toHaveBeenCalled();
-    const route = requireFirstRouteRegistration(registerHttpRoute);
+    const route = requireRouteRegistration(registerHttpRoute, "/plugins/webhooks/alerts");
     expect(route.path).toBe("/plugins/webhooks/alerts");
     expect(route.handler).toBeTypeOf("function");
+    expectDynamicPrefixRoute(registerHttpRoute);
   });
 
   it("registers agent routes without binding TaskFlow sessions", () => {
@@ -186,11 +361,12 @@ describe("webhooks plugin registration", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(registerHttpRoute).toHaveBeenCalledTimes(1);
+    expect(registerHttpRoute).toHaveBeenCalledTimes(2);
     expect(bindSession).not.toHaveBeenCalled();
-    const route = requireFirstRouteRegistration(registerHttpRoute);
+    const route = requireRouteRegistration(registerHttpRoute, "/plugins/webhooks/incidents");
     expect(route.path).toBe("/plugins/webhooks/incidents");
     expect(route.handler).toBeTypeOf("function");
+    expectDynamicPrefixRoute(registerHttpRoute);
   });
 
   it("registers completion delivery for agent routes and binds webhook context to started runs", async () => {
@@ -377,11 +553,12 @@ describe("webhooks plugin registration", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(registerHttpRoute).toHaveBeenCalledTimes(1);
+    expect(registerHttpRoute).toHaveBeenCalledTimes(2);
     expect(bindSession).not.toHaveBeenCalled();
-    const route = requireFirstRouteRegistration(registerHttpRoute);
+    const route = requireRouteRegistration(registerHttpRoute, "/plugins/webhooks/alerts");
     expect(route.path).toBe("/plugins/webhooks/alerts");
     expect(route.handler).toBeTypeOf("function");
+    expectDynamicPrefixRoute(registerHttpRoute);
   });
 
   it("opens the persistent idempotency store when any route enables dedupe", () => {

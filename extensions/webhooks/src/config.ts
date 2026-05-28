@@ -130,24 +130,6 @@ const webhookIdempotencyConfigSchema = z
   })
   .strict();
 
-const webhookRelayConfigSchema = z
-  .object({
-    enabled: z.boolean().optional().default(true),
-    mode: z.literal("websocket").default("websocket"),
-    url: z.string().trim().url(),
-    token: secretInputSchema.optional(),
-    tokenHeader: z.string().trim().min(1).optional(),
-    reconnect: z
-      .object({
-        minDelayMs: z.number().int().positive().optional(),
-        maxDelayMs: z.number().int().positive().optional(),
-      })
-      .strict()
-      .optional(),
-    ack: z.boolean().optional(),
-  })
-  .strict();
-
 const webhookRouteConfigSchema = z
   .object({
     enabled: z.boolean().optional().default(true),
@@ -200,7 +182,6 @@ type RawWebhookRouteConfig = z.infer<typeof webhookRouteConfigSchema>;
 const webhooksPluginConfigSchema = z
   .object({
     routes: z.record(z.string().trim().min(1), webhookRouteConfigSchema).default({}),
-    relay: webhookRelayConfigSchema.optional(),
   })
   .strict();
 
@@ -293,18 +274,6 @@ export type ConfiguredWebhookDeliveryConfig =
       timeoutMs?: number;
     };
 
-export type ConfiguredWebhookRelayConfig = {
-  mode: "websocket";
-  url: string;
-  token?: WebhookSecretInput;
-  tokenHeader: string;
-  reconnect: {
-    minDelayMs: number;
-    maxDelayMs: number;
-  };
-  ack: boolean;
-};
-
 type ConfiguredWebhookRouteBase = {
   routeId: string;
   path: string;
@@ -348,7 +317,6 @@ export type ConfiguredWebhookRouteConfig =
 
 export type ConfiguredWebhooksPluginConfig = {
   routes: ConfiguredWebhookRouteConfig[];
-  relay?: ConfiguredWebhookRelayConfig;
 };
 
 function resolveRawDispatchMode(route: {
@@ -554,27 +522,6 @@ function normalizeAgentDispatchConfig(
   };
 }
 
-function normalizeRelayConfig(
-  raw: z.infer<typeof webhookRelayConfigSchema> | undefined,
-): ConfiguredWebhookRelayConfig | undefined {
-  if (!raw?.enabled) {
-    return undefined;
-  }
-  const minDelayMs = raw.reconnect?.minDelayMs ?? 1_000;
-  const maxDelayMs = raw.reconnect?.maxDelayMs ?? 30_000;
-  return {
-    mode: "websocket",
-    url: raw.url,
-    ...(raw.token ? { token: raw.token } : {}),
-    tokenHeader: raw.tokenHeader ?? "authorization",
-    reconnect: {
-      minDelayMs,
-      maxDelayMs: Math.max(minDelayMs, maxDelayMs),
-    },
-    ack: raw.ack ?? true,
-  };
-}
-
 export function resolveWebhooksPluginConfig(params: {
   pluginConfig: unknown;
 }): ConfiguredWebhookRouteConfig[] {
@@ -661,9 +608,7 @@ export function resolveWebhooksPluginConfig(params: {
 export function resolveWebhooksPluginRuntimeConfig(params: {
   pluginConfig: unknown;
 }): ConfiguredWebhooksPluginConfig {
-  const parsed = webhooksPluginConfigSchema.parse(params.pluginConfig ?? {});
   return {
     routes: resolveWebhooksPluginConfig(params),
-    ...(parsed.relay ? { relay: normalizeRelayConfig(parsed.relay) } : {}),
   };
 }

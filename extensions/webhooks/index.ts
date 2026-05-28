@@ -1,4 +1,5 @@
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
+import { registerWebhooksCli } from "./src/cli.js";
 import {
   type CompletionRunContext,
   openCompletionContextStore,
@@ -9,15 +10,16 @@ import {
   type ConfiguredWebhookIdempotencyConfig,
   resolveWebhooksPluginRuntimeConfig,
 } from "./src/config.js";
+import { registerWebhooksGatewayMethods } from "./src/gateway.js";
 import { createTaskFlowWebhookRequestHandler } from "./src/http.js";
-import { createWebhookRelayConnector } from "./src/relay.js";
+import { createWebhookSubscriptionStore } from "./src/subscriptions.js";
 import { buildWebhookTargets } from "./src/targets.js";
 
 function hasIdempotency(routes: { idempotency?: ConfiguredWebhookIdempotencyConfig }[]): boolean {
   return routes.some((route) => route.idempotency);
 }
 
-function openIdempotencyStore(api: OpenClawPluginApi) {
+function openIdempotencyStore(api: OpenClawPluginApi, opts?: { warnOnFailure?: boolean }) {
   try {
     return api.runtime.state?.openKeyedStore<{
       routeId: string;
@@ -29,11 +31,13 @@ function openIdempotencyStore(api: OpenClawPluginApi) {
       defaultTtlMs: 24 * 60 * 60 * 1000,
     });
   } catch (error) {
-    api.logger.warn?.(
-      `[webhooks] persistent idempotency store unavailable; falling back to in-process dedupe: ${String(
-        error instanceof Error ? error.message : error,
-      )}`,
-    );
+    if (opts?.warnOnFailure) {
+      api.logger.warn?.(
+        `[webhooks] persistent idempotency store unavailable; falling back to in-process dedupe: ${String(
+          error instanceof Error ? error.message : error,
+        )}`,
+      );
+    }
     return undefined;
   }
 }
@@ -41,11 +45,12 @@ function openIdempotencyStore(api: OpenClawPluginApi) {
 function registerWebhookRoutes(api: OpenClawPluginApi): void {
   const runtimeConfig = resolveWebhooksPluginRuntimeConfig({ pluginConfig: api.pluginConfig });
   const routes = runtimeConfig.routes;
-  if (routes.length === 0) {
-    return;
-  }
 
   const targetsByPath = buildWebhookTargets({ api, routes });
+  const subscriptionStore = createWebhookSubscriptionStore({
+    api,
+    staticRoutes: routes,
+  });
   const pendingCompletionBySessionKey = new Map<string, CompletionRunContext>();
   const completionContextStore = routes.some(
     (route) => route.dispatchMode === "agent" && route.agent.onCompletion,
@@ -55,7 +60,11 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
   const handler = createTaskFlowWebhookRequestHandler({
     cfg: api.config,
     targetsByPath,
-    ...(hasIdempotency(routes) ? { idempotencyStore: openIdempotencyStore(api) } : {}),
+    resolveTargetsByPath: async () => {
+      const dynamicTargetsByPath = await subscriptionStore.loadTargets();
+      return new Map([...dynamicTargetsByPath, ...targetsByPath]);
+    },
+    idempotencyStore: openIdempotencyStore(api, { warnOnFailure: hasIdempotency(routes) }),
     scheduleSessionTurn: api.session?.workflow?.scheduleSessionTurn ?? api.scheduleSessionTurn,
     onAgentCompletionDispatch: async (dispatch) => {
       await storeCompletionDispatch({
@@ -68,6 +77,28 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
       api.runtime.channel.outbound,
     ),
     logger: api.logger,
+  });
+
+  registerWebhooksGatewayMethods({
+    api,
+    cfg: api.config,
+    store: subscriptionStore,
+    scheduleSessionTurn: api.session?.workflow?.scheduleSessionTurn ?? api.scheduleSessionTurn,
+    onAgentCompletionDispatch: async (dispatch) => {
+      await storeCompletionDispatch({
+        store: completionContextStore,
+        fallback: pendingCompletionBySessionKey,
+        dispatch,
+      });
+    },
+    loadChannelOutboundAdapter: api.runtime.channel?.outbound?.loadAdapter?.bind(
+      api.runtime.channel.outbound,
+    ),
+    logger: api.logger,
+  });
+
+  api.registerCli(({ program }) => registerWebhooksCli({ program }), {
+    commands: ["webhook", "webhooks"],
   });
 
   if (routes.some((route) => route.dispatchMode === "agent" && route.agent.onCompletion)) {
@@ -88,40 +119,20 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
     });
   }
 
+  api.registerHttpRoute({
+    path: "/plugins/webhooks",
+    auth: "plugin",
+    match: "prefix",
+    replaceExisting: true,
+    handler,
+  });
+
   for (const route of routes) {
     const sessionSuffix =
       route.dispatchMode === "taskflow" ? ` for session ${route.sessionKey}` : "";
     api.logger.info?.(
       `[webhooks] registered route ${route.routeId} on ${route.path}${sessionSuffix}`,
     );
-  }
-
-  if (runtimeConfig.relay) {
-    const relay = createWebhookRelayConnector({
-      cfg: api.config,
-      relay: runtimeConfig.relay,
-      targetsByPath,
-      ...(hasIdempotency(routes) ? { idempotencyStore: openIdempotencyStore(api) } : {}),
-      scheduleSessionTurn: api.session?.workflow?.scheduleSessionTurn ?? api.scheduleSessionTurn,
-      onAgentCompletionDispatch: async (dispatch) => {
-        await storeCompletionDispatch({
-          store: completionContextStore,
-          fallback: pendingCompletionBySessionKey,
-          dispatch,
-        });
-      },
-      loadChannelOutboundAdapter: api.runtime.channel?.outbound?.loadAdapter?.bind(
-        api.runtime.channel.outbound,
-      ),
-      logger: api.logger,
-    });
-    relay.start();
-    api.lifecycle.registerRuntimeLifecycle({
-      id: "webhook-relay",
-      description: "Webhooks relay connector cleanup.",
-      cleanup: () => relay.stop(),
-    });
-    api.logger.info?.(`[webhooks] relay websocket connector started`);
   }
 }
 

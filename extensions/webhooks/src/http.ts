@@ -384,6 +384,7 @@ function writeEnvelopeResult(res: ServerResponse, result: WebhookEnvelopeResult)
 export function createTaskFlowWebhookRequestHandler(params: {
   cfg: OpenClawConfig;
   targetsByPath: Map<string, WebhookTarget[]>;
+  resolveTargetsByPath?: () => Promise<Map<string, WebhookTarget[]>>;
   inFlightLimiter?: WebhookInFlightLimiter;
   idempotencyStore?: WebhookIdempotencyStore;
   scheduleSessionTurn?: ScheduleSessionTurn;
@@ -405,10 +406,13 @@ export function createTaskFlowWebhookRequestHandler(params: {
   const idempotencyRecords = createInMemoryIdempotencyRecords();
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
+    const targetsByPath = params.resolveTargetsByPath
+      ? await params.resolveTargetsByPath()
+      : params.targetsByPath;
     return await withResolvedWebhookRequestPipeline({
       req,
       res,
-      targetsByPath: params.targetsByPath,
+      targetsByPath,
       allowMethods: ["POST"],
       requireJsonContentType: true,
       rateLimiter,

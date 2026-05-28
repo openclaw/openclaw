@@ -284,55 +284,18 @@ describe("resolveWebhooksPluginConfig", () => {
     });
   });
 
-  it("normalizes websocket relay config separately from routes", () => {
-    const config = resolveWebhooksPluginRuntimeConfig({
-      pluginConfig: {
-        relay: {
-          mode: "websocket",
-          url: "wss://relay.example.test/openclaw/webhooks",
-          token: {
-            source: "env",
-            provider: "relay",
-            id: "WEBHOOK_RELAY_TOKEN",
+  it("rejects standalone relay connector config", () => {
+    expect(() =>
+      resolveWebhooksPluginRuntimeConfig({
+        pluginConfig: {
+          relay: {
+            mode: "websocket",
+            url: "wss://relay.example.test/openclaw/webhooks",
           },
-          reconnect: {
-            minDelayMs: 500,
-            maxDelayMs: 10_000,
-          },
+          routes: {},
         },
-        routes: {
-          codebase: {
-            sessionKey: "agent:reviewer:codebase",
-            auth: {
-              mode: "header",
-              header: "x-vecode-hook-id",
-              secret: "hook-secret",
-            },
-            dispatch: { mode: "agent" },
-          },
-        },
-      },
-    });
-
-    expect(config.relay).toEqual({
-      mode: "websocket",
-      url: "wss://relay.example.test/openclaw/webhooks",
-      token: {
-        source: "env",
-        provider: "relay",
-        id: "WEBHOOK_RELAY_TOKEN",
-      },
-      tokenHeader: "authorization",
-      reconnect: {
-        minDelayMs: 500,
-        maxDelayMs: 10_000,
-      },
-      ack: true,
-    });
-    expect(config.routes[0]).toMatchObject({
-      routeId: "codebase",
-      dispatchMode: "agent",
-    });
+      }),
+    ).toThrow(/Unrecognized key/);
   });
 
   it("normalizes exec completion delivery routes", () => {
