@@ -548,6 +548,10 @@ function shouldPreservePluginApiPrereleaseFloor(target: string): boolean {
 }
 
 function normalizePluginApiVersionForComparator(version: string, target: string): string {
+  const normalizedCorrection = normalizeCalVerNumericCorrectionForPluginApi(version);
+  if (normalizedCorrection) {
+    return normalizedCorrection;
+  }
   return shouldPreservePluginApiPrereleaseFloor(target)
     ? version
     : normalizeCalVerCorrectionForPluginApi(version);
@@ -611,6 +615,13 @@ function satisfiesSemverRange(version: string, range: string): boolean {
 
 const OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN =
   /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})(?:-\d+|-(?:alpha|beta|rc)\.\d+)$/i;
+const OPENCLAW_CALVER_NUMERIC_CORRECTION_PATTERN = /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})-\d+$/;
+
+function normalizeCalVerNumericCorrectionForPluginApi(
+  pluginApiVersion: string,
+): string | undefined {
+  return OPENCLAW_CALVER_NUMERIC_CORRECTION_PATTERN.exec(pluginApiVersion.trim())?.[1];
+}
 
 function normalizeCalVerCorrectionForPluginApi(pluginApiVersion: string): string {
   const match = OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN.exec(pluginApiVersion.trim());
