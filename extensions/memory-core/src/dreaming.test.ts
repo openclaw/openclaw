@@ -2331,16 +2331,16 @@ describe("short-term dreaming trigger", () => {
       ],
     });
 
-    const narrativeMessages = [{ role: "assistant", content: "A diary entry." }];
+    const getNarrativeSessionMessages = vi.fn(async () => ({
+      messages: [{ role: "assistant", content: "A diary entry." }],
+    }));
+    const getSessionKey = "getSession";
+
     const subagent = {
       run: vi.fn(async (_params: { model?: string }) => ({ runId: "narrative-run-1" })),
       waitForRun: vi.fn(async () => ({ status: "ok" as const })),
-      getSessionMessages: vi.fn(async () => ({
-        messages: narrativeMessages,
-      })),
-      getSession: vi.fn(async () => ({
-        messages: narrativeMessages,
-      })),
+      getSessionMessages: getNarrativeSessionMessages,
+      [getSessionKey]: getNarrativeSessionMessages,
       deleteSession: vi.fn(async () => {}),
     };
 
