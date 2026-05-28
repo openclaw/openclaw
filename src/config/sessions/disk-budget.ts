@@ -16,6 +16,7 @@ import {
   isTrajectorySessionArtifactName,
 } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
+import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -88,6 +89,25 @@ function buildStoreEntryChunkSizeMap(store: Record<string, SessionEntry>): Map<s
     out.set(key, measureStoreEntryChunkBytes(key, entry));
   }
   return out;
+}
+
+function resolveProjectedPromptBlobHash(entry: SessionEntry | undefined): string | undefined {
+  const ref = entry?.skillsSnapshot?.promptRef;
+  return ref?.algorithm === "sha256" && typeof ref.hash === "string" ? ref.hash : undefined;
+}
+
+function buildProjectedPromptBlobRefCounts(
+  store: Record<string, SessionEntry>,
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const entry of Object.values(store)) {
+    const hash = resolveProjectedPromptBlobHash(entry);
+    if (!hash) {
+      continue;
+    }
+    counts.set(hash, (counts.get(hash) ?? 0) + 1);
+  }
+  return counts;
 }
 
 function getEntryUpdatedAt(entry?: SessionEntry): number {
@@ -375,9 +395,26 @@ export async function enforceSessionDiskBudget(params: {
   const simulatedRemovedPaths = new Set<string>();
   const resolvedStorePath = canonicalizePathForComparison(params.storePath);
   const storeFile = files.find((file) => file.canonicalPath === resolvedStorePath);
-  let projectedStoreBytes = measureStoreBytes(params.store);
+  const projectedPersistence = projectSessionStoreForPersistence({
+    storePath: params.storePath,
+    store: params.store,
+  });
+  const projectedStore = projectedPersistence.store;
+  let projectedStoreBytes = measureStoreBytes(projectedStore);
+  const projectedPromptBlobBytesByHash = new Map<string, number>();
+  for (const [hash, blob] of projectedPersistence.promptBlobs) {
+    projectedPromptBlobBytesByHash.set(hash, blob.ref.bytes);
+  }
+  const projectedPromptBlobRefCounts = buildProjectedPromptBlobRefCounts(projectedStore);
+  const projectedPromptBlobBytes = [...projectedPromptBlobBytesByHash.values()].reduce(
+    (sum, bytes) => sum + bytes,
+    0,
+  );
   let total =
-    files.reduce((sum, file) => sum + file.size, 0) - (storeFile?.size ?? 0) + projectedStoreBytes;
+    files.reduce((sum, file) => sum + file.size, 0) -
+    (storeFile?.size ?? 0) +
+    projectedStoreBytes +
+    projectedPromptBlobBytes;
   const totalBefore = total;
   if (total <= maxBytes) {
     return {
@@ -449,7 +486,7 @@ export async function enforceSessionDiskBudget(params: {
   if (total > highWaterBytes) {
     const activeSessionKey = normalizeOptionalLowercaseString(params.activeSessionKey);
     const sessionIdRefCounts = buildSessionIdRefCounts(params.store);
-    const entryChunkBytesByKey = buildStoreEntryChunkSizeMap(params.store);
+    const entryChunkBytesByKey = buildStoreEntryChunkSizeMap(projectedStore);
     const keys = Object.keys(params.store).toSorted((a, b) => {
       const aTime = getEntryUpdatedAt(params.store[a]);
       const bTime = getEntryUpdatedAt(params.store[b]);
@@ -470,16 +507,28 @@ export async function enforceSessionDiskBudget(params: {
         continue;
       }
       const previousProjectedBytes = projectedStoreBytes;
+      const projectedEntry = projectedStore[key];
+      const promptBlobHash = resolveProjectedPromptBlobHash(projectedEntry);
       delete params.store[key];
+      delete projectedStore[key];
       const chunkBytes = entryChunkBytesByKey.get(key);
       entryChunkBytesByKey.delete(key);
       if (typeof chunkBytes === "number" && Number.isFinite(chunkBytes) && chunkBytes >= 0) {
         // Removing any one pretty-printed top-level entry always removes the entry chunk plus ",\n" (2 bytes).
         projectedStoreBytes = Math.max(2, projectedStoreBytes - (chunkBytes + 2));
       } else {
-        projectedStoreBytes = measureStoreBytes(params.store);
+        projectedStoreBytes = measureStoreBytes(projectedStore);
       }
       total += projectedStoreBytes - previousProjectedBytes;
+      if (promptBlobHash) {
+        const nextRefCount = (projectedPromptBlobRefCounts.get(promptBlobHash) ?? 1) - 1;
+        if (nextRefCount > 0) {
+          projectedPromptBlobRefCounts.set(promptBlobHash, nextRefCount);
+        } else {
+          projectedPromptBlobRefCounts.delete(promptBlobHash);
+          total -= projectedPromptBlobBytesByHash.get(promptBlobHash) ?? 0;
+        }
+      }
       removedEntries += 1;
 
       const sessionId = entry.sessionId;

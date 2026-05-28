@@ -16,6 +16,16 @@ type PersistedSessionStore = {
   changed: boolean;
 };
 
+export type SessionSkillPromptBlobProjection = {
+  ref: SessionSkillPromptRef;
+  path: string | null;
+  prompt: string;
+};
+
+export type SessionStorePersistenceProjection = PersistedSessionStore & {
+  promptBlobs: Map<string, SessionSkillPromptBlobProjection>;
+};
+
 function hashPrompt(prompt: string): string {
   return crypto.createHash(PROMPT_BLOB_ALGORITHM).update(prompt).digest("hex");
 }
@@ -24,7 +34,7 @@ function isSha256Hex(value: string): boolean {
   return /^[a-f0-9]{64}$/u.test(value);
 }
 
-function resolvePromptBlobPath(storePath: string, hash: string): string | null {
+export function resolveSessionSkillPromptBlobPath(storePath: string, hash: string): string | null {
   if (!isSha256Hex(hash)) {
     return null;
   }
@@ -63,7 +73,7 @@ function readValidPromptBlob(storePath: string, ref: SessionSkillPromptRef): str
   ) {
     return null;
   }
-  const blobPath = resolvePromptBlobPath(storePath, ref.hash);
+  const blobPath = resolveSessionSkillPromptBlobPath(storePath, ref.hash);
   if (!blobPath) {
     return null;
   }
@@ -83,7 +93,7 @@ function readValidPromptBlob(storePath: string, ref: SessionSkillPromptRef): str
 
 async function ensurePromptBlob(storePath: string, prompt: string): Promise<SessionSkillPromptRef> {
   const ref = buildPromptRef(prompt);
-  const blobPath = resolvePromptBlobPath(storePath, ref.hash);
+  const blobPath = resolveSessionSkillPromptBlobPath(storePath, ref.hash);
   if (!blobPath) {
     return ref;
   }
@@ -110,25 +120,42 @@ function stripPromptForPersistence(entry: SessionEntry, ref: SessionSkillPromptR
   };
 }
 
-export async function prepareSessionStoreForPersistence(params: {
+export function projectSessionStoreForPersistence(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
-}): Promise<PersistedSessionStore> {
+}): SessionStorePersistenceProjection {
   let persisted = params.store;
   let changed = false;
+  const promptBlobs = new Map<string, SessionSkillPromptBlobProjection>();
   for (const [key, entry] of Object.entries(params.store)) {
     const prompt = entry.skillsSnapshot?.prompt;
     if (!prompt || !shouldStorePromptAsBlob(prompt)) {
       continue;
     }
-    const promptRef = await ensurePromptBlob(params.storePath, prompt);
+    const promptRef = buildPromptRef(prompt);
+    promptBlobs.set(promptRef.hash, {
+      ref: promptRef,
+      path: resolveSessionSkillPromptBlobPath(params.storePath, promptRef.hash),
+      prompt,
+    });
     if (persisted === params.store) {
       persisted = { ...params.store };
     }
     persisted[key] = stripPromptForPersistence(entry, promptRef);
     changed = true;
   }
-  return { store: persisted, changed };
+  return { store: persisted, changed, promptBlobs };
+}
+
+export async function prepareSessionStoreForPersistence(params: {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+}): Promise<PersistedSessionStore> {
+  const projected = projectSessionStoreForPersistence(params);
+  for (const blob of projected.promptBlobs.values()) {
+    await ensurePromptBlob(params.storePath, blob.prompt);
+  }
+  return projected;
 }
 
 function parsePromptRef(value: unknown): SessionSkillPromptRef | null {

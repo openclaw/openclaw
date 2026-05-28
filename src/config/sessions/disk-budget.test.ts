@@ -183,6 +183,45 @@ describe("enforceSessionDiskBudget", () => {
     });
   });
 
+  it("accounts for deduped skills prompt blobs before evicting sessions", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const prompt = `<available_skills>\n${"shared prompt\n".repeat(200)}</available_skills>`;
+      const now = Date.now();
+      const store: Record<string, SessionEntry> = Object.fromEntries(
+        Array.from({ length: 12 }, (_, index) => [
+          `agent:main:${index}`,
+          {
+            sessionId: `session-${index}`,
+            updatedAt: now + index,
+            skillsSnapshot: {
+              prompt,
+              skills: [{ name: "demo" }],
+              version: 1,
+            },
+          } satisfies SessionEntry,
+        ]),
+      );
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+      const inlineBytes = Buffer.byteLength(JSON.stringify(store, null, 2), "utf8");
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: {
+          maxDiskBytes: Math.floor(inlineBytes / 2),
+          highWaterBytes: Math.floor(inlineBytes / 3),
+        },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(result.overBudget).toBe(false);
+      expect(result.removedEntries).toBe(0);
+      expect(Object.keys(store)).toHaveLength(12);
+    });
+  });
+
   it("removes unreferenced compaction checkpoint artifacts under pressure", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
