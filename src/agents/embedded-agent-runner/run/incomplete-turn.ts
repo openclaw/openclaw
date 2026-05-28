@@ -206,6 +206,8 @@ export const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+export const INCOMPLETE_TOOL_CALL_RETRY_INSTRUCTION =
+  "Your previous response was truncated before the tool call completed. Please retry with a single, focused tool call rather than multiple simultaneous calls. Keep the call simple and direct.";
 export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
   "The latest user message is a short approval to proceed. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
 export const STRICT_AGENTIC_BLOCKED_TEXT =
@@ -627,6 +629,29 @@ export function resolveEmptyResponseRetryInstruction(params: {
   }
 
   return null;
+}
+
+export function resolveIncompleteToolCallRetryInstruction(params: {
+  payloadCount: number;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): string | null {
+  if (
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.clientToolCalls ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError ||
+    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
+  ) {
+    return null;
+  }
+  if (params.payloadCount !== 0) return null;
+  const stopReason = params.attempt.lastAssistant?.stopReason;
+  if (stopReason !== "toolUse") return null;
+  return INCOMPLETE_TOOL_CALL_RETRY_INSTRUCTION;
 }
 
 function shouldApplyPlanningOnlyRetryGuard(params: {

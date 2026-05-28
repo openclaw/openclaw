@@ -165,6 +165,7 @@ import {
   resolveAttemptReplayMetadata,
   extractPlanningOnlyPlanDetails,
   resolveEmptyResponseRetryInstruction,
+  resolveIncompleteToolCallRetryInstruction,
   resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
@@ -1082,6 +1083,7 @@ export async function runEmbeddedAgent(
       const maxPlanningOnlyRetryAttempts = resolvePlanningOnlyRetryLimit(executionContract);
       const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
       const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
+      const maxIncompleteToolCallRetryAttempts = 2;
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
@@ -1105,6 +1107,7 @@ export async function runEmbeddedAgent(
       let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
+      let incompleteToolCallRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
       // Cost-runaway breaker for #76293. State lives at the run-loop level
@@ -1140,6 +1143,7 @@ export async function runEmbeddedAgent(
       let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
+      let incompleteToolCallRetryInstruction: string | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
@@ -1407,6 +1411,7 @@ export async function runEmbeddedAgent(
             planningOnlyRetryInstruction,
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
+            incompleteToolCallRetryInstruction,
             compactionContinuationRetryInstruction,
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
@@ -3000,6 +3005,14 @@ export async function runEmbeddedAgent(
                 timedOut,
                 attempt,
               });
+          const nextIncompleteToolCallRetryInstruction = emptyAssistantReplyIsSilent
+            ? null
+            : resolveIncompleteToolCallRetryInstruction({
+                payloadCount,
+                aborted,
+                timedOut,
+                attempt,
+              });
           if (
             nextPlanningOnlyRetryInstruction &&
             planningOnlyRetryAttempts < maxPlanningOnlyRetryAttempts
@@ -3073,6 +3086,21 @@ export async function runEmbeddedAgent(
               `empty response detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} ` +
                 `with visible-answer continuation`,
+            );
+            continue;
+          }
+          if (
+            !nextPlanningOnlyRetryInstruction &&
+            !nextReasoningOnlyRetryInstruction &&
+            !nextEmptyResponseRetryInstruction &&
+            nextIncompleteToolCallRetryInstruction &&
+            incompleteToolCallRetryAttempts < maxIncompleteToolCallRetryAttempts
+          ) {
+            incompleteToolCallRetryAttempts += 1;
+            incompleteToolCallRetryInstruction = nextIncompleteToolCallRetryInstruction;
+            log.warn(
+              `incomplete tool call (payloads=0 stopReason=toolUse) detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${incompleteToolCallRetryAttempts}/${maxIncompleteToolCallRetryAttempts} with simplified-call steer`,
             );
             continue;
           }
