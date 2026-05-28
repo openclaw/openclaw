@@ -302,6 +302,22 @@ function isUnreferencedSessionArtifactFile(
 // atomic write (those rename within milliseconds), so it is safe to reclaim
 // regardless of the general unreferenced-artifact age threshold (#56827).
 const SESSION_STORE_TEMP_STALE_MS = 5 * 60 * 1000;
+// Prompt blobs are written or mtime-refreshed before sessions.json points at
+// them. Treat fresh unreferenced blobs as in-flight so cleanup cannot strand a
+// durable promptRef that is about to be committed by another writer.
+const SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS = SESSION_STORE_TEMP_STALE_MS;
+
+function isUnreferencedPromptBlobFileRemovable(
+  file: Pick<SessionsDirFileStat, "name" | "mtimeMs">,
+  projectedPromptBlobRefCounts: ReadonlyMap<string, number>,
+  cutoffMs: number,
+): boolean {
+  if (file.mtimeMs > cutoffMs) {
+    return false;
+  }
+  const hash = resolvePromptBlobFileHash(file);
+  return hash ? !projectedPromptBlobRefCounts.has(hash) : false;
+}
 
 function isDiskBudgetRemovableSessionFile(
   file: Pick<SessionsDirFileStat, "canonicalPath" | "name" | "mtimeMs">,
@@ -387,6 +403,8 @@ export async function pruneUnreferencedSessionArtifacts(params: {
   );
   const cutoffMs = Date.now() - olderThanMs;
   const tempCutoffMs = Date.now() - SESSION_STORE_TEMP_STALE_MS;
+  const promptBlobCutoffMs =
+    Date.now() - Math.max(olderThanMs, SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS);
   const storeBasename = path.basename(params.storePath);
   const removableStoreFiles = files.filter((file) => {
     if (params.excludeCanonicalPaths?.has(file.canonicalPath)) {
@@ -406,11 +424,11 @@ export async function pruneUnreferencedSessionArtifacts(params: {
     if (isSessionPromptBlobTempArtifactName(file.name)) {
       return file.mtimeMs <= tempCutoffMs;
     }
-    if (file.mtimeMs > cutoffMs) {
-      return false;
-    }
-    const hash = resolvePromptBlobFileHash(file);
-    return hash ? !projectedPromptBlobRefCounts.has(hash) : false;
+    return isUnreferencedPromptBlobFileRemovable(
+      file,
+      projectedPromptBlobRefCounts,
+      promptBlobCutoffMs,
+    );
   });
   const removableFiles = [...removableStoreFiles, ...removablePromptBlobFiles]
     .filter((file) => {
@@ -541,14 +559,18 @@ export async function enforceSessionDiskBudget(params: {
     store: params.store,
   });
   const tempStaleCutoffMs = Date.now() - SESSION_STORE_TEMP_STALE_MS;
+  const promptBlobOrphanCutoffMs = Date.now() - SESSION_PROMPT_BLOB_UNREFERENCED_GRACE_MS;
   const storeBasename = path.basename(params.storePath);
   const unreferencedPromptBlobQueue = promptBlobFiles
     .filter((file) => {
       if (isSessionPromptBlobTempArtifactName(file.name)) {
         return file.mtimeMs <= tempStaleCutoffMs;
       }
-      const hash = resolvePromptBlobFileHash(file);
-      return hash ? !projectedPromptBlobRefCounts.has(hash) : false;
+      return isUnreferencedPromptBlobFileRemovable(
+        file,
+        projectedPromptBlobRefCounts,
+        promptBlobOrphanCutoffMs,
+      );
     })
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
   for (const file of unreferencedPromptBlobQueue) {
@@ -644,7 +666,14 @@ export async function enforceSessionDiskBudget(params: {
             total -= virtualBlobBytes;
           } else {
             const blobFile = existingPromptBlobFilesByHash.get(promptBlobHash);
-            if (blobFile) {
+            if (
+              blobFile &&
+              isUnreferencedPromptBlobFileRemovable(
+                blobFile,
+                projectedPromptBlobRefCounts,
+                promptBlobOrphanCutoffMs,
+              )
+            ) {
               const deletedBytes = await removeFileForBudget({
                 filePath: blobFile.path,
                 canonicalPath: blobFile.canonicalPath,

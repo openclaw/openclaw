@@ -96,14 +96,24 @@ async function ensurePromptBlob(storePath: string, prompt: string): Promise<Sess
   if (!blobPath) {
     return ref;
   }
-  if (readValidPromptBlob(storePath, ref) !== prompt) {
-    await fs.promises.mkdir(path.dirname(blobPath), { recursive: true });
-    await writeTextAtomic(blobPath, prompt, {
-      durable: false,
-      mode: 0o600,
-      tempPrefix: path.basename(blobPath),
-    });
+  if (readValidPromptBlob(storePath, ref) === prompt) {
+    try {
+      const now = new Date();
+      // Saving a store can reference an existing content-addressed blob before
+      // sessions.json is replaced. Refresh its mtime so orphan cleanup does not
+      // reclaim the blob while the store write is still in flight.
+      await fs.promises.utimes(blobPath, now, now);
+      return ref;
+    } catch {
+      // A concurrent cleanup may have removed it; rewrite below.
+    }
   }
+  await fs.promises.mkdir(path.dirname(blobPath), { recursive: true });
+  await writeTextAtomic(blobPath, prompt, {
+    durable: false,
+    mode: 0o600,
+    tempPrefix: path.basename(blobPath),
+  });
   return ref;
 }
 

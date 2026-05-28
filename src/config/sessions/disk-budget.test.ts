@@ -273,6 +273,8 @@ describe("enforceSessionDiskBudget", () => {
       );
       await expectPathExists(oldBlob);
       await expectPathExists(activeBlob);
+      const staleBlobTime = new Date(Date.now() - 10 * 60 * 1000);
+      await fs.utimes(oldBlob, staleBlobTime, staleBlobTime);
 
       const result = await enforceSessionDiskBudget({
         store,
@@ -290,6 +292,37 @@ describe("enforceSessionDiskBudget", () => {
       expect(store).toHaveProperty(activeKey);
       await expectPathMissing(oldBlob);
       await expectPathExists(activeBlob);
+    });
+  });
+
+  it("preserves fresh unreferenced skills prompt blobs under pressure", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-fresh-prompt-blob-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const store: Record<string, SessionEntry> = {
+        "agent:main:active": { sessionId: "active", updatedAt: Date.now() },
+      };
+      const hash = "b".repeat(64);
+      const blobDir = path.join(dir, "skills-prompts", "sha256", hash.slice(0, 2));
+      const blobPath = path.join(blobDir, `${hash}.txt`);
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.mkdir(blobDir, { recursive: true });
+      await fs.writeFile(blobPath, "fresh unreferenced prompt blob".repeat(200), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: "agent:main:active",
+        maintenance: {
+          maxDiskBytes: 1,
+          highWaterBytes: 1,
+        },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(result.overBudget).toBe(true);
+      expect(result.removedFiles).toBe(0);
+      await expectPathExists(blobPath);
     });
   });
 
@@ -568,7 +601,7 @@ describe("pruneUnreferencedSessionArtifacts", () => {
       );
       await expectPathExists(oldBlob);
       await expectPathExists(keepBlob);
-      const oldMtime = new Date(Date.now() - 2 * 60 * 1000);
+      const oldMtime = new Date(Date.now() - 10 * 60 * 1000);
       await fs.utimes(oldBlob, oldMtime, oldMtime);
       delete store[oldKey];
 
@@ -581,6 +614,27 @@ describe("pruneUnreferencedSessionArtifacts", () => {
       await expectPathMissing(oldBlob);
       await expectPathExists(keepBlob);
       expect(result.removedFiles).toBe(1);
+    });
+  });
+
+  it("preserves fresh unreferenced skills prompt blobs during normal artifact cleanup", async () => {
+    await withTempDir({ prefix: "openclaw-prune-fresh-prompt-blob-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const hash = "c".repeat(64);
+      const blobDir = path.join(dir, "skills-prompts", "sha256", hash.slice(0, 2));
+      const blobPath = path.join(blobDir, `${hash}.txt`);
+      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf-8");
+      await fs.mkdir(blobDir, { recursive: true });
+      await fs.writeFile(blobPath, "fresh unreferenced prompt blob".repeat(200), "utf-8");
+
+      const result = await pruneUnreferencedSessionArtifacts({
+        store: {},
+        storePath,
+        olderThanMs: 0,
+      });
+
+      await expectPathExists(blobPath);
+      expect(result.removedFiles).toBe(0);
     });
   });
 
