@@ -312,29 +312,6 @@ function addModelRefProviderId(target: Set<string>, value: unknown): void {
   addStringValue(target, value.slice(0, slashIndex));
 }
 
-function addModelConfigProviderIds(target: Set<string>, value: unknown): void {
-  if (typeof value === "string") {
-    addModelRefProviderId(target, value);
-    return;
-  }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return;
-  }
-  const config = value as { primary?: unknown; fallbacks?: unknown };
-  addModelRefProviderId(target, config.primary);
-  if (Array.isArray(config.fallbacks)) {
-    for (const fallback of config.fallbacks) {
-      addModelRefProviderId(target, fallback);
-    }
-  }
-}
-
-function collectRequestedVoiceModelProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
-  const requested = new Set<string>();
-  addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);
-  return requested;
-}
-
 function collectRequestedSpeechProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
   const requested = new Set<string>();
   const tts =
@@ -344,9 +321,6 @@ function collectRequestedSpeechProviderIds(cfg: OpenClawConfig | undefined): Set
   addStringValue(requested, tts?.provider);
   addObjectKeys(requested, tts?.providers);
   addObjectKeys(requested, cfg?.models?.providers);
-  for (const providerId of collectRequestedVoiceModelProviderIds(cfg)) {
-    requested.add(providerId);
-  }
   return requested;
 }
 
@@ -380,14 +354,25 @@ function collectRequestedCapabilityProviderIds(params: {
   switch (params.key) {
     case "speechProviders":
       return collectRequestedSpeechProviderIds(params.cfg);
-    case "realtimeTranscriptionProviders":
-    case "realtimeVoiceProviders":
-      return collectRequestedVoiceModelProviderIds(params.cfg);
     case "mediaUnderstandingProviders":
       return collectRequestedMediaUnderstandingProviderIds(params.cfg);
     default:
       return undefined;
   }
+}
+
+function nonEmptyRequestedProviders(requested: Set<string> | undefined): Set<string> | undefined {
+  return requested && requested.size > 0 ? requested : undefined;
+}
+
+function shouldScopeCapabilityLoadToRequestedProviders(
+  key: CapabilityProviderRegistryKey,
+): boolean {
+  return (
+    key === "speechProviders" ||
+    key === "realtimeTranscriptionProviders" ||
+    key === "realtimeVoiceProviders"
+  );
 }
 
 function removeActiveProviderIds(requested: Set<string>, entries: readonly unknown[]): void {
@@ -593,7 +578,9 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   const activeProviders = activeRegistry?.[params.key] ?? [];
   const missingRequestedProviders =
     activeProviders.length > 0
-      ? collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg })
+      ? nonEmptyRequestedProviders(
+          collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg }),
+        )
       : undefined;
   if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
     if (!missingRequestedProviders && !shouldMergeManifestProvidersWhenActive(params.key)) {
@@ -606,20 +593,29 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
       }
     }
   }
-  let requestedProviders: Set<string> | undefined;
-  if (params.key === "speechProviders") {
-    requestedProviders =
-      missingRequestedProviders ??
-      (activeProviders.length === 0
-        ? collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg })
-        : undefined);
-  }
+  const requestedProviders =
+    missingRequestedProviders ??
+    (activeProviders.length === 0
+      ? nonEmptyRequestedProviders(
+          collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg }),
+        )
+      : undefined);
+  const requestedProviderLoadScope =
+    requestedProviders && shouldScopeCapabilityLoadToRequestedProviders(params.key)
+      ? requestedProviders
+      : undefined;
+  const requestedPluginIds = resolveRequestedCapabilityPluginIds({
+    key: params.key,
+    cfg: params.cfg,
+    requested: requestedProviderLoadScope,
+  });
+  const requestedProviderFilter =
+    requestedProviders &&
+    (!shouldScopeCapabilityLoadToRequestedProviders(params.key) || requestedPluginIds)
+      ? requestedProviders
+      : undefined;
   const pluginIds =
-    resolveRequestedCapabilityPluginIds({
-      key: params.key,
-      cfg: params.cfg,
-      requested: requestedProviders,
-    }) ??
+    requestedPluginIds ??
     resolveCapabilityPluginIds({
       key: params.key,
       cfg: params.cfg,
@@ -638,17 +634,24 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     cfg: params.cfg,
     bundledCompatPluginIds: pluginIds.bundledCompatPluginIds,
     loadOptions,
-    requested: requestedProviders,
+    requested: requestedProviderFilter,
   });
   if (params.key !== "memoryEmbeddingProviders") {
+    const requestedLoadedProviders = requestedProviderFilter
+      ? filterLoadedProvidersForRequestedConfig({
+          key: params.key,
+          requested: requestedProviderFilter,
+          entries: loadedProviders,
+        })
+      : loadedProviders;
     const mergeLoadedProviders =
       activeProviders.length > 0 && missingRequestedProviders
         ? filterLoadedProvidersForRequestedConfig({
             key: params.key,
             requested: missingRequestedProviders,
-            entries: loadedProviders,
+            entries: requestedLoadedProviders,
           })
-        : loadedProviders;
+        : requestedLoadedProviders;
     return mergeCapabilityProviders(activeProviders, mergeLoadedProviders);
   }
   return mergeCapabilityProviders(activeProviders, loadedProviders);

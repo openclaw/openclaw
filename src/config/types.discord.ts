@@ -157,7 +157,11 @@ export type DiscordVoiceRealtimeConfig = {
   provider?: string;
   /** Provider realtime session model, for example "gpt-realtime-2". */
   model?: string;
-  /** Provider realtime output voice, for example "cedar". */
+  /** Provider realtime output voice name, for example "cedar". */
+  speakerVoice?: string;
+  /** Provider realtime output voice id. */
+  speakerVoiceId?: string;
+  /** @deprecated Use speakerVoice. */
   voice?: string;
   /** System instructions passed to the realtime provider. */
   instructions?: string;

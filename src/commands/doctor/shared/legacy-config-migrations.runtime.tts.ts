@@ -128,12 +128,19 @@ function hasLegacyTtsSpeakerSelectionInChannelLocations(value: unknown): boolean
     if (hasLegacyTtsSpeakerSelection(getRecord(channel?.tts))) {
       return true;
     }
+    if (hasLegacyTtsSpeakerSelection(getRecord(getRecord(channel?.voice)?.tts))) {
+      return true;
+    }
     const accounts = getRecord(channel?.accounts);
     for (const [accountId, accountValue] of Object.entries(accounts ?? {})) {
       if (isBlockedObjectKey(accountId)) {
         continue;
       }
-      if (hasLegacyTtsSpeakerSelection(getRecord(getRecord(accountValue)?.tts))) {
+      const account = getRecord(accountValue);
+      if (
+        hasLegacyTtsSpeakerSelection(getRecord(account?.tts)) ||
+        hasLegacyTtsSpeakerSelection(getRecord(getRecord(account?.voice)?.tts))
+      ) {
         return true;
       }
     }
@@ -175,12 +182,19 @@ function hasLegacyTtsEnabledInChannelLocations(value: unknown): boolean {
     if (hasLegacyTtsEnabled(getRecord(channel?.tts))) {
       return true;
     }
+    if (hasLegacyTtsEnabled(getRecord(getRecord(channel?.voice)?.tts))) {
+      return true;
+    }
     const accounts = getRecord(channel?.accounts);
     for (const [accountId, accountValue] of Object.entries(accounts ?? {})) {
       if (isBlockedObjectKey(accountId)) {
         continue;
       }
-      if (hasLegacyTtsEnabled(getRecord(getRecord(accountValue)?.tts))) {
+      const account = getRecord(accountValue);
+      if (
+        hasLegacyTtsEnabled(getRecord(account?.tts)) ||
+        hasLegacyTtsEnabled(getRecord(getRecord(account?.voice)?.tts))
+      ) {
         return true;
       }
     }
@@ -425,14 +439,17 @@ function visitKnownTtsConfigLocations(
     }
     const channel = getRecord(channelValue);
     visit(getRecord(channel?.tts), `channels.${channelId}.tts`);
+    visit(getRecord(getRecord(channel?.voice)?.tts), `channels.${channelId}.voice.tts`);
     const accounts = getRecord(channel?.accounts);
     for (const [accountId, accountValue] of Object.entries(accounts ?? {})) {
       if (isBlockedObjectKey(accountId)) {
         continue;
       }
+      const account = getRecord(accountValue);
+      visit(getRecord(account?.tts), `channels.${channelId}.accounts.${accountId}.tts`);
       visit(
-        getRecord(getRecord(accountValue)?.tts),
-        `channels.${channelId}.accounts.${accountId}.tts`,
+        getRecord(getRecord(account?.voice)?.tts),
+        `channels.${channelId}.accounts.${accountId}.voice.tts`,
       );
     }
   }

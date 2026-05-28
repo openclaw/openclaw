@@ -210,6 +210,8 @@ describe("validateTalkConfigResult", () => {
                 },
               },
               model: "gpt-realtime",
+              speakerVoice: "alloy",
+              speakerVoiceId: "voice-123",
               voice: "alloy",
               instructions: "Speak with crisp diction.",
               mode: "realtime",

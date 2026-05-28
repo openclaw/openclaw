@@ -263,6 +263,12 @@ function resolveModelOverridePolicy(
 type VoiceModelRef = {
   provider: string;
   model: string;
+  timeoutMs?: number;
+};
+
+type TtsProviderCandidate = {
+  provider: TtsProvider;
+  voiceModel?: VoiceModelRef;
 };
 
 function parseVoiceModelRef(value: unknown): VoiceModelRef | undefined {
@@ -289,38 +295,109 @@ function resolveConfiguredVoiceModelRefs(cfg: OpenClawConfig | undefined): Voice
   if (typeof voiceModel !== "object" || voiceModel === null || Array.isArray(voiceModel)) {
     return [];
   }
+  const timeoutMs = resolvePositiveTimeoutMs((voiceModel as { timeoutMs?: number }).timeoutMs);
   const primary = parseVoiceModelRef(voiceModel.primary);
   if (primary) {
-    refs.push(primary);
+    refs.push({ ...primary, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
   }
   if (Array.isArray(voiceModel.fallbacks)) {
     for (const fallback of voiceModel.fallbacks) {
       const parsed = parseVoiceModelRef(fallback);
       if (parsed) {
-        refs.push(parsed);
+        refs.push({ ...parsed, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
       }
     }
   }
   return refs;
 }
 
-function resolveConfiguredVoiceModelForProvider(
+function resolveConfiguredVoiceModelsForProvider(
   cfg: OpenClawConfig | undefined,
   providerId: string,
-): VoiceModelRef | undefined {
+): VoiceModelRef[] {
   const canonicalProviderId = canonicalizeSpeechProviderId(providerId, cfg) ?? providerId;
-  return resolveConfiguredVoiceModelRefs(cfg).find((ref) => {
+  return resolveConfiguredVoiceModelRefs(cfg).filter((ref) => {
     const refProvider = canonicalizeSpeechProviderId(ref.provider, cfg) ?? ref.provider;
     return refProvider === canonicalProviderId;
   });
+}
+
+function speechProviderSupportsVoiceModel(
+  provider: { defaultModel?: string; models?: readonly string[] } | undefined,
+  voiceModel: VoiceModelRef,
+): boolean {
+  if (!provider) {
+    return false;
+  }
+  const model = normalizeOptionalString(voiceModel.model);
+  return [provider.defaultModel, ...(provider.models ?? [])].some(
+    (candidate) => normalizeOptionalString(candidate) === model,
+  );
+}
+
+function resolveConfiguredSpeechVoiceModelsForProvider(params: {
+  cfg: OpenClawConfig | undefined;
+  providerId: string;
+  provider?: { defaultModel?: string; models?: readonly string[] };
+}): VoiceModelRef[] {
+  const canonicalProviderId =
+    canonicalizeSpeechProviderId(params.providerId, params.cfg) ?? params.providerId;
+  const provider = params.provider ?? getSpeechProvider(canonicalProviderId, params.cfg);
+  return resolveConfiguredVoiceModelsForProvider(params.cfg, canonicalProviderId).filter((ref) =>
+    speechProviderSupportsVoiceModel(provider, ref),
+  );
+}
+
+function resolveConfiguredSpeechVoiceModelRefs(cfg: OpenClawConfig | undefined): VoiceModelRef[] {
+  const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : undefined;
+  const refs: VoiceModelRef[] = [];
+  for (const ref of resolveConfiguredVoiceModelRefs(effectiveCfg)) {
+    const provider = canonicalizeSpeechProviderId(ref.provider, effectiveCfg) ?? ref.provider;
+    const resolvedProvider = getSpeechProvider(provider, effectiveCfg);
+    const voiceModel = {
+      provider,
+      model: ref.model,
+      ...(ref.timeoutMs === undefined ? {} : { timeoutMs: ref.timeoutMs }),
+    };
+    if (speechProviderSupportsVoiceModel(resolvedProvider, voiceModel)) {
+      refs.push(voiceModel);
+    }
+  }
+  return refs;
+}
+
+function resolveConfiguredSpeechVoiceModelForProvider(params: {
+  cfg: OpenClawConfig | undefined;
+  providerId: string;
+  provider?: { defaultModel?: string; models?: readonly string[] };
+  voiceModel?: VoiceModelRef;
+}): VoiceModelRef | undefined {
+  const provider = params.provider ?? getSpeechProvider(params.providerId, params.cfg);
+  if (params.voiceModel) {
+    return speechProviderSupportsVoiceModel(provider, params.voiceModel)
+      ? params.voiceModel
+      : undefined;
+  }
+  return resolveConfiguredSpeechVoiceModelsForProvider({
+    cfg: params.cfg,
+    providerId: params.providerId,
+    provider,
+  })[0];
 }
 
 function applyVoiceModelToSpeechProviderConfig(params: {
   cfg: OpenClawConfig | undefined;
   providerId: string;
   providerConfig: SpeechProviderConfig;
+  provider?: { defaultModel?: string; models?: readonly string[] };
+  voiceModel?: VoiceModelRef;
 }): SpeechProviderConfig {
-  const voiceModel = resolveConfiguredVoiceModelForProvider(params.cfg, params.providerId);
+  const voiceModel = resolveConfiguredSpeechVoiceModelForProvider({
+    cfg: params.cfg,
+    providerId: params.providerId,
+    provider: params.provider,
+    voiceModel: params.voiceModel,
+  });
   if (!voiceModel) {
     return params.providerConfig;
   }
@@ -366,14 +443,14 @@ function withSpeakerSelectionCompat(config: SpeechProviderConfig): SpeechProvide
   const voice = normalizeOptionalString(config.voice);
   const voiceName = normalizeOptionalString(config.voiceName);
   const voiceId = normalizeOptionalString(config.voiceId);
+  const canonicalVoice = speakerVoice ?? voice ?? voiceName;
+  const canonicalVoiceId = speakerVoiceId ?? voiceId;
   return {
     ...config,
-    ...(speakerVoice && !voice ? { voice: speakerVoice } : {}),
-    ...(speakerVoice && !voiceName ? { voiceName: speakerVoice } : {}),
-    ...(speakerVoiceId && !voiceId ? { voiceId: speakerVoiceId } : {}),
-    ...(voice && !speakerVoice ? { speakerVoice: voice } : {}),
-    ...(voiceName && !speakerVoice ? { speakerVoice: voiceName } : {}),
-    ...(voiceId && !speakerVoiceId ? { speakerVoiceId: voiceId } : {}),
+    ...(canonicalVoice
+      ? { speakerVoice: canonicalVoice, voice: canonicalVoice, voiceName: canonicalVoice }
+      : {}),
+    ...(canonicalVoiceId ? { speakerVoiceId: canonicalVoiceId, voiceId: canonicalVoiceId } : {}),
   };
 }
 
@@ -480,10 +557,11 @@ function resolveLazyProviderConfig(
   config: ResolvedTtsConfig,
   providerId: string,
   cfg?: OpenClawConfig,
+  voiceModel?: VoiceModelRef,
 ): SpeechProviderConfig {
   const canonical =
     normalizeConfiguredSpeechProviderId(providerId) ?? normalizeLowercaseStringOrEmpty(providerId);
-  const existing = config.providerConfigs[canonical];
+  const existing = voiceModel ? undefined : config.providerConfigs[canonical];
   const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : config.sourceConfig;
   if (existing && !effectiveCfg) {
     return existing;
@@ -491,17 +569,48 @@ function resolveLazyProviderConfig(
   const rawConfig = resolveRawProviderConfig(config.rawConfig, canonical);
   const rawBaseConfig = config.rawConfig as Record<string, unknown> | undefined;
   const rawProviders = asProviderConfigMap(config.rawConfig?.providers);
-  const rawProviderConfig = rawProviders[canonical] ?? rawBaseConfig?.[canonical];
-  const compatRawProviderConfig = withSpeakerSelectionCompat(asProviderConfig(rawProviderConfig));
+  const resolvedProvider = getSpeechProvider(canonical, effectiveCfg);
+  let hasRawProviderConfig =
+    Object.hasOwn(rawProviders, canonical) ||
+    (rawBaseConfig ? Object.hasOwn(rawBaseConfig, canonical) : false);
+  let rawProviderConfig = rawProviders[canonical] ?? rawBaseConfig?.[canonical];
+  if (!hasRawProviderConfig) {
+    for (const alias of resolvedProvider?.aliases ?? []) {
+      const normalizedAlias = normalizeConfiguredSpeechProviderId(alias);
+      if (!normalizedAlias) {
+        continue;
+      }
+      if (Object.hasOwn(rawProviders, normalizedAlias)) {
+        hasRawProviderConfig = true;
+        rawProviderConfig = rawProviders[normalizedAlias];
+        break;
+      }
+      if (rawBaseConfig && Object.hasOwn(rawBaseConfig, normalizedAlias)) {
+        hasRawProviderConfig = true;
+        rawProviderConfig = rawBaseConfig[normalizedAlias];
+        break;
+      }
+    }
+  }
+  const compatRawProviderConfig = applyVoiceModelToSpeechProviderConfig({
+    cfg: effectiveCfg,
+    providerId: canonical,
+    providerConfig: withSpeakerSelectionCompat(asProviderConfig(rawProviderConfig)),
+    provider: resolvedProvider,
+    voiceModel,
+  });
+  const shouldInjectCanonicalProviderConfig =
+    hasRawProviderConfig || Boolean(voiceModel) || Object.keys(rawProviders).length === 0;
   const rawConfigForProvider = {
     ...rawBaseConfig,
-    providers: {
-      ...rawProviders,
-      [canonical]: compatRawProviderConfig,
-    },
-    [canonical]: compatRawProviderConfig,
+    providers: shouldInjectCanonicalProviderConfig
+      ? {
+          ...rawProviders,
+          [canonical]: compatRawProviderConfig,
+        }
+      : rawProviders,
+    ...(shouldInjectCanonicalProviderConfig ? { [canonical]: compatRawProviderConfig } : {}),
   };
-  const resolvedProvider = getSpeechProvider(canonical, effectiveCfg);
   const next = withSpeakerSelectionCompat(
     effectiveCfg && resolvedProvider?.resolveConfig
       ? resolvedProvider.resolveConfig({
@@ -509,9 +618,17 @@ function resolveLazyProviderConfig(
           rawConfig: rawConfigForProvider,
           timeoutMs: resolveSpeechProviderTimeoutMs({ config, provider: resolvedProvider }),
         })
-      : rawConfig,
+      : applyVoiceModelToSpeechProviderConfig({
+          cfg: effectiveCfg,
+          providerId: canonical,
+          providerConfig: rawConfig,
+          provider: resolvedProvider,
+          voiceModel,
+        }),
   );
-  config.providerConfigs[canonical] = next;
+  if (!voiceModel) {
+    config.providerConfigs[canonical] = next;
+  }
   return next;
 }
 
@@ -560,6 +677,23 @@ export function getResolvedSpeechProviderConfig(
     normalizeConfiguredSpeechProviderId(providerId) ??
     normalizeLowercaseStringOrEmpty(providerId);
   return resolveLazyProviderConfig(config, canonical, effectiveCfg);
+}
+
+function getResolvedSpeechProviderConfigForVoiceModel(params: {
+  config: ResolvedTtsConfig;
+  providerId: string;
+  cfg: OpenClawConfig;
+  voiceModel?: VoiceModelRef;
+}): SpeechProviderConfig {
+  if (!params.voiceModel) {
+    return getResolvedSpeechProviderConfig(params.config, params.providerId, params.cfg);
+  }
+  const effectiveCfg = resolveTtsRuntimeConfig(params.cfg);
+  const canonical =
+    canonicalizeSpeechProviderId(params.providerId, effectiveCfg) ??
+    normalizeConfiguredSpeechProviderId(params.providerId) ??
+    normalizeLowercaseStringOrEmpty(params.providerId);
+  return resolveLazyProviderConfig(params.config, canonical, effectiveCfg, params.voiceModel);
 }
 
 export function resolveTtsConfig(
@@ -748,7 +882,8 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (config.providerSource === "config") {
     return normalizeConfiguredSpeechProviderId(config.provider) ?? config.provider;
   }
-  const configuredVoiceProvider = resolveConfiguredVoiceModelRefs(config.sourceConfig)[0]?.provider;
+  const configuredVoiceProvider = resolveConfiguredSpeechVoiceModelRefs(config.sourceConfig)[0]
+    ?.provider;
   if (configuredVoiceProvider && getSpeechProvider(configuredVoiceProvider, config.sourceConfig)) {
     return configuredVoiceProvider;
   }
@@ -980,6 +1115,55 @@ export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConf
   return [...ordered];
 }
 
+function resolveTtsProviderCandidates(
+  primary: TtsProvider,
+  cfg?: OpenClawConfig,
+): TtsProviderCandidate[] {
+  const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : undefined;
+  const normalizedPrimary = canonicalizeSpeechProviderId(primary, effectiveCfg) ?? primary;
+  const candidates: TtsProviderCandidate[] = [];
+  const seenProviders = new Set<TtsProvider>();
+
+  const addCandidate = (candidate: TtsProviderCandidate) => {
+    candidates.push(candidate);
+    seenProviders.add(candidate.provider);
+  };
+
+  const voiceModelRefs = resolveConfiguredSpeechVoiceModelRefs(effectiveCfg);
+  const primaryVoiceModels = voiceModelRefs.filter((ref) => ref.provider === normalizedPrimary);
+  for (const voiceModel of primaryVoiceModels) {
+    addCandidate({ provider: normalizedPrimary, voiceModel });
+  }
+  if (primaryVoiceModels.length === 0) {
+    addCandidate({ provider: normalizedPrimary });
+  }
+
+  for (const voiceModel of voiceModelRefs) {
+    if (voiceModel.provider !== normalizedPrimary) {
+      addCandidate({ provider: voiceModel.provider, voiceModel });
+    }
+  }
+  for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg)) {
+    if (!seenProviders.has(provider.id)) {
+      addCandidate({ provider: provider.id });
+    }
+  }
+  return candidates;
+}
+
+function resolvePrimaryTtsProviderCandidate(
+  primary: TtsProvider,
+  cfg?: OpenClawConfig,
+): TtsProviderCandidate {
+  const effectiveCfg = cfg ? resolveTtsRuntimeConfig(cfg) : undefined;
+  const provider = canonicalizeSpeechProviderId(primary, effectiveCfg) ?? primary;
+  const voiceModel = resolveConfiguredSpeechVoiceModelForProvider({
+    cfg: effectiveCfg,
+    providerId: provider,
+  });
+  return voiceModel ? { provider, voiceModel } : { provider };
+}
+
 export function isTtsProviderConfigured(
   config: ResolvedTtsConfig,
   provider: TtsProvider,
@@ -1054,6 +1238,7 @@ function resolveReadySpeechProvider(params: {
   cfg: OpenClawConfig;
   config: ResolvedTtsConfig;
   persona?: ResolvedTtsPersona;
+  voiceModel?: VoiceModelRef;
   requireTelephony?: boolean;
 }): TtsProviderReadyResolution {
   const resolvedProvider = getSpeechProvider(params.provider, params.cfg);
@@ -1064,17 +1249,14 @@ function resolveReadySpeechProvider(params: {
       message: `${params.provider}: no provider registered`,
     };
   }
-  const providerConfig = getResolvedSpeechProviderConfig(
-    params.config,
-    resolvedProvider.id,
-    params.cfg,
-  );
+  const providerConfig = getResolvedSpeechProviderConfigForVoiceModel({
+    config: params.config,
+    providerId: resolvedProvider.id,
+    cfg: params.cfg,
+    voiceModel: params.voiceModel,
+  });
   const merged = mergeProviderConfigWithPersona({
-    providerConfig: applyVoiceModelToSpeechProviderConfig({
-      cfg: params.cfg,
-      providerId: resolvedProvider.id,
-      providerConfig,
-    }),
+    providerConfig,
     persona: params.persona,
     providerId: resolvedProvider.id,
   });
@@ -1179,7 +1361,7 @@ function resolveTtsRequestSetup(params: {
       cfg: OpenClawConfig;
       config: ResolvedTtsConfig;
       persona?: ResolvedTtsPersona;
-      providers: TtsProvider[];
+      providers: TtsProviderCandidate[];
     }
   | {
       error: string;
@@ -1203,7 +1385,9 @@ function resolveTtsRequestSetup(params: {
     cfg,
     config,
     persona: getTtsPersona(config, prefsPath),
-    providers: params.disableFallback ? [provider] : resolveTtsProviderOrder(provider, cfg),
+    providers: params.disableFallback
+      ? [resolvePrimaryTtsProviderCandidate(provider, cfg)]
+      : resolveTtsProviderCandidates(provider, cfg),
   };
 }
 
@@ -1384,12 +1568,17 @@ export async function synthesizeSpeech(params: {
   const errors: string[] = [];
   const attemptedProviders: string[] = [];
   const attempts: TtsProviderAttempt[] = [];
-  const primaryProvider = providers[0];
+  const primaryProvider = providers[0]?.provider;
   logVerbose(
-    `TTS: starting with provider ${primaryProvider}, fallbacks: ${providers.slice(1).join(", ") || "none"}`,
+    `TTS: starting with provider ${primaryProvider}, fallbacks: ${
+      providers
+        .slice(1)
+        .map((entry) => entry.provider)
+        .join(", ") || "none"
+    }`,
   );
 
-  for (const provider of providers) {
+  for (const { provider, voiceModel } of providers) {
     attemptedProviders.push(provider);
     const providerStart = Date.now();
     try {
@@ -1398,6 +1587,7 @@ export async function synthesizeSpeech(params: {
         cfg,
         config,
         persona,
+        voiceModel,
       });
       if (resolvedProvider.kind === "skip") {
         errors.push(resolvedProvider.message);
@@ -1415,7 +1605,7 @@ export async function synthesizeSpeech(params: {
         continue;
       }
       const timeoutMs = resolveSpeechProviderTimeoutMs({
-        timeoutMs: params.timeoutMs,
+        timeoutMs: params.timeoutMs ?? voiceModel?.timeoutMs,
         config,
         provider: resolvedProvider.provider,
       });
@@ -1527,12 +1717,17 @@ export async function streamSpeech(params: {
   const errors: string[] = [];
   const attemptedProviders: string[] = [];
   const attempts: TtsProviderAttempt[] = [];
-  const primaryProvider = providers[0];
+  const primaryProvider = providers[0]?.provider;
   logVerbose(
-    `TTS stream: starting with provider ${primaryProvider}, fallbacks: ${providers.slice(1).join(", ") || "none"}`,
+    `TTS stream: starting with provider ${primaryProvider}, fallbacks: ${
+      providers
+        .slice(1)
+        .map((entry) => entry.provider)
+        .join(", ") || "none"
+    }`,
   );
 
-  for (const provider of providers) {
+  for (const { provider, voiceModel } of providers) {
     attemptedProviders.push(provider);
     const providerStart = Date.now();
     try {
@@ -1541,6 +1736,7 @@ export async function streamSpeech(params: {
         cfg,
         config,
         persona,
+        voiceModel,
       });
       if (resolvedProvider.kind === "skip") {
         errors.push(resolvedProvider.message);
@@ -1572,7 +1768,7 @@ export async function streamSpeech(params: {
         continue;
       }
       const timeoutMs = resolveSpeechProviderTimeoutMs({
-        timeoutMs: params.timeoutMs,
+        timeoutMs: params.timeoutMs ?? voiceModel?.timeoutMs,
         config,
         provider: resolvedProvider.provider,
       });
@@ -1684,6 +1880,7 @@ export async function textToSpeechTelephony(params: {
   cfg: OpenClawConfig;
   prefsPath?: string;
   overrides?: TtsDirectiveOverrides;
+  timeoutMs?: number;
 }): Promise<TtsTelephonyResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
@@ -1699,12 +1896,17 @@ export async function textToSpeechTelephony(params: {
   const errors: string[] = [];
   const attemptedProviders: string[] = [];
   const attempts: TtsProviderAttempt[] = [];
-  const primaryProvider = providers[0];
+  const primaryProvider = providers[0]?.provider;
   logVerbose(
-    `TTS telephony: starting with provider ${primaryProvider}, fallbacks: ${providers.slice(1).join(", ") || "none"}`,
+    `TTS telephony: starting with provider ${primaryProvider}, fallbacks: ${
+      providers
+        .slice(1)
+        .map((entry) => entry.provider)
+        .join(", ") || "none"
+    }`,
   );
 
-  for (const provider of providers) {
+  for (const { provider, voiceModel } of providers) {
     attemptedProviders.push(provider);
     const providerStart = Date.now();
     try {
@@ -1713,6 +1915,7 @@ export async function textToSpeechTelephony(params: {
         cfg,
         config,
         persona,
+        voiceModel,
         requireTelephony: true,
       });
       if (resolvedProvider.kind === "skip") {
@@ -1731,6 +1934,7 @@ export async function textToSpeechTelephony(params: {
         continue;
       }
       const timeoutMs = resolveSpeechProviderTimeoutMs({
+        timeoutMs: params.timeoutMs ?? voiceModel?.timeoutMs,
         config,
         provider: resolvedProvider.provider,
       });

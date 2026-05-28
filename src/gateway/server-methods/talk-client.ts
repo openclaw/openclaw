@@ -112,6 +112,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         providerConfigs: realtimeConfig.providers,
         cfg: runtimeConfig,
         cfgForResolve: runtimeConfig,
+        defaultModel: realtimeConfig.model,
         noRegisteredProviderMessage: "No realtime voice provider registered",
       });
       const launchOptions = buildRealtimeVoiceLaunchOptions({

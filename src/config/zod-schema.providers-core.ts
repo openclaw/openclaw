@@ -580,6 +580,8 @@ const DiscordVoiceRealtimeSchema = z
   .object({
     provider: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    speakerVoice: z.string().min(1).optional(),
+    speakerVoiceId: z.string().min(1).optional(),
     voice: z.string().min(1).optional(),
     instructions: z.string().min(1).optional(),
     toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),

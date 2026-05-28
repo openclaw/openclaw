@@ -650,6 +650,77 @@ describe("resolvePluginCapabilityProviders", () => {
     expectActiveRegistryLookup(["openai"]);
   });
 
+  it.each([
+    {
+      key: "realtimeTranscriptionProviders" as const,
+      seedLoadedProviders(registry: ReturnType<typeof createEmptyPluginRegistry>) {
+        registry.realtimeTranscriptionProviders.push(
+          {
+            pluginId: "openai",
+            pluginName: "OpenAI",
+            source: "test",
+            provider: { id: "openai", label: "OpenAI" },
+          } as never,
+          {
+            pluginId: "google",
+            pluginName: "Google",
+            source: "test",
+            provider: { id: "google", label: "Google" },
+          } as never,
+        );
+      },
+    },
+    {
+      key: "realtimeVoiceProviders" as const,
+      seedLoadedProviders(registry: ReturnType<typeof createEmptyPluginRegistry>) {
+        registry.realtimeVoiceProviders.push(
+          {
+            pluginId: "openai",
+            pluginName: "OpenAI",
+            source: "test",
+            provider: { id: "openai", label: "OpenAI" },
+          } as never,
+          {
+            pluginId: "google",
+            pluginName: "Google",
+            source: "test",
+            provider: { id: "google", label: "Google" },
+          } as never,
+        );
+      },
+    },
+  ])(
+    "does not filter cold-loaded %s entries to a generic voiceModel provider",
+    ({ key, seedLoadedProviders }) => {
+      const loaded = createEmptyPluginRegistry();
+      seedLoadedProviders(loaded);
+      const cfg = {
+        agents: {
+          defaults: {
+            voiceModel: {
+              primary: "google/gemini-live-2.5-flash-preview-native-audio",
+            },
+          },
+        },
+      } as OpenClawConfig;
+      mocks.loadPluginManifestRegistry.mockReturnValue({
+        plugins: [
+          { id: "openai", origin: "bundled", contracts: { [key]: ["openai"] } },
+          { id: "google", origin: "bundled", contracts: { [key]: ["google"] } },
+        ] as never,
+        diagnostics: [],
+      });
+      mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+        params === undefined ? undefined : loaded,
+      );
+
+      const providers = resolvePluginCapabilityProviders({ key, cfg });
+
+      expectResolvedCapabilityProviderIds(providers, ["openai", "google"]);
+      expectActiveRegistryLookup(["google", "openai"]);
+    },
+  );
+
   it("cold-loads enabled external manifest-contract providers missing from startup registry", () => {
     const loaded = createEmptyPluginRegistry();
     loaded.speechProviders.push({

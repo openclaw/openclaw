@@ -442,7 +442,18 @@ describe("speech-core native voice-note routing", () => {
   it("uses agents.defaults.voiceModel as the default speech provider and model", async () => {
     installSpeechProviders([
       createMockSpeechProvider("mock", { autoSelectOrder: 1 }),
-      createMockSpeechProvider("openai", { autoSelectOrder: 10 }),
+      createMockSpeechProvider("openai", {
+        autoSelectOrder: 10,
+        models: ["gpt-4o-mini-tts"],
+        resolveConfig: ({ rawConfig }) => {
+          const providers = requireRecord(rawConfig.providers, "raw provider configs");
+          return {
+            model: "provider-default-model",
+            modelId: "provider-default-model",
+            ...requireRecord(providers.openai, "raw openai provider config"),
+          };
+        },
+      }),
     ]);
 
     const result = await synthesizeSpeech({
@@ -450,7 +461,7 @@ describe("speech-core native voice-note routing", () => {
       cfg: {
         agents: {
           defaults: {
-            voiceModel: { primary: "openai/gpt-4o-mini-tts" },
+            voiceModel: { primary: "openai/gpt-4o-mini-tts", timeoutMs: 12_345 },
           },
         },
         messages: {
@@ -460,6 +471,7 @@ describe("speech-core native voice-note routing", () => {
           },
         },
       } as OpenClawConfig,
+      disableFallback: true,
     });
 
     expect(result.success).toBe(true);
@@ -470,6 +482,7 @@ describe("speech-core native voice-note routing", () => {
       model: "gpt-4o-mini-tts",
       modelId: "gpt-4o-mini-tts",
     });
+    expect(request.timeoutMs).toBe(12_345);
   });
 
   it("tries voiceModel fallbacks before auto-selected speech providers", async () => {
@@ -477,9 +490,13 @@ describe("speech-core native voice-note routing", () => {
       createMockSpeechProvider("mock", { autoSelectOrder: 1 }),
       createMockSpeechProvider("openai", {
         autoSelectOrder: 10,
+        models: ["gpt-4o-mini-tts"],
         isConfigured: () => false,
       }),
-      createMockSpeechProvider("elevenlabs", { autoSelectOrder: 99 }),
+      createMockSpeechProvider("elevenlabs", {
+        autoSelectOrder: 99,
+        models: ["eleven_multilingual_v2"],
+      }),
     ]);
 
     const result = await synthesizeSpeech({
@@ -508,6 +525,140 @@ describe("speech-core native voice-note routing", () => {
     expect(result.providerModel).toBe("eleven_multilingual_v2");
   });
 
+  it("tries same-provider voiceModel fallbacks as separate model attempts", async () => {
+    const synthesize = vi.fn(async (request: SpeechSynthesisRequest) => {
+      if (request.providerConfig.model === "bad-tts") {
+        throw new Error("unavailable model");
+      }
+      return {
+        audioBuffer: Buffer.from("voice"),
+        fileExtension: ".ogg",
+        outputFormat: "ogg",
+        voiceCompatible: request.target === "voice-note",
+      };
+    });
+    installSpeechProviders([
+      createMockSpeechProvider("openai", {
+        autoSelectOrder: 10,
+        models: ["bad-tts", "good-tts"],
+        synthesize,
+      }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "Use same-provider fallback model.",
+      cfg: {
+        agents: {
+          defaults: {
+            voiceModel: {
+              primary: "openai/bad-tts",
+              fallbacks: ["openai/good-tts"],
+            },
+          },
+        },
+        messages: {
+          tts: {
+            enabled: true,
+            prefsPath: "/tmp/openclaw-speech-core-same-provider-voice-model-fallback-test.json",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.provider).toBe("openai");
+    expect(result.providerModel).toBe("good-tts");
+    expect(result.attemptedProviders).toEqual(["openai", "openai"]);
+    expect(synthesize.mock.calls.map(([request]) => request.providerConfig.model)).toEqual([
+      "bad-tts",
+      "good-tts",
+    ]);
+  });
+
+  it("ignores voiceModel refs that are not speech models", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("openai", {
+        autoSelectOrder: 10,
+        defaultModel: "gpt-4o-mini-tts",
+        models: ["gpt-4o-mini-tts"],
+        resolveConfig: ({ rawConfig }) => {
+          const providers = requireRecord(rawConfig.providers, "raw provider configs");
+          return {
+            model: "gpt-4o-mini-tts",
+            modelId: "gpt-4o-mini-tts",
+            ...requireRecord(providers.openai, "raw openai provider config"),
+          };
+        },
+      }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "Use speech provider default for unsupported realtime model.",
+      cfg: {
+        agents: {
+          defaults: {
+            voiceModel: { primary: "openai/gpt-realtime-2" },
+          },
+        },
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "openai",
+            prefsPath: "/tmp/openclaw-speech-core-realtime-voice-model-ignored-test.json",
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.provider).toBe("openai");
+    expect(result.providerModel).toBe("gpt-4o-mini-tts");
+    const request = requireFirstSynthesisRequest("speech model fallback request");
+    expect(request.providerConfig).toMatchObject({
+      model: "gpt-4o-mini-tts",
+      modelId: "gpt-4o-mini-tts",
+    });
+  });
+
+  it("uses the first speech-supported voiceModel fallback as the default provider", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("openai", {
+        autoSelectOrder: 1,
+        models: ["gpt-4o-mini-tts"],
+      }),
+      createMockSpeechProvider("elevenlabs", {
+        autoSelectOrder: 99,
+        models: ["eleven_multilingual_v2"],
+      }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "Use first speech-supported voice model.",
+      cfg: {
+        agents: {
+          defaults: {
+            voiceModel: {
+              primary: "openai/gpt-realtime-2",
+              fallbacks: ["elevenlabs/eleven_multilingual_v2"],
+            },
+          },
+        },
+        messages: {
+          tts: {
+            enabled: true,
+            prefsPath: "/tmp/openclaw-speech-core-supported-voice-model-provider-test.json",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.provider).toBe("elevenlabs");
+    expect(result.providerModel).toBe("eleven_multilingual_v2");
+    expect(result.attemptedProviders).toEqual(["elevenlabs"]);
+  });
+
   it("maps speakerVoice provider config to provider-compatible voice fields", async () => {
     const result = await synthesizeSpeech({
       text: "Use the configured speaker.",
@@ -520,6 +671,9 @@ describe("speech-core native voice-note routing", () => {
               mock: {
                 speakerVoice: "cedar",
                 speakerVoiceId: "voice-123",
+                voice: "legacy-voice",
+                voiceName: "legacy-name",
+                voiceId: "legacy-id",
               },
             },
           },
@@ -538,6 +692,38 @@ describe("speech-core native voice-note routing", () => {
       speakerVoiceId: "voice-123",
       voiceId: "voice-123",
     });
+  });
+
+  it("preserves alias-keyed provider config when resolving canonical providers", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("xiaomi", {
+        aliases: ["mimo"],
+        resolveConfig: ({ rawConfig }) => {
+          const providers = requireRecord(rawConfig.providers, "raw provider configs");
+          return requireRecord(providers.xiaomi ?? providers.mimo, "raw xiaomi provider config");
+        },
+      }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "Use alias provider config.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "xiaomi",
+            providers: {
+              mimo: { apiKey: "mimo-key" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    const request = requireFirstSynthesisRequest("alias provider synthesis request");
+    expect(request.providerConfig).toMatchObject({ apiKey: "mimo-key" });
   });
 
   it("maps speakerVoice persona provider config to provider-compatible voice fields", async () => {

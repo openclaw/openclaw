@@ -2216,7 +2216,7 @@ describe("DiscordVoiceManager", () => {
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
-          voice: "cedar",
+          speakerVoice: "cedar",
           debounceMs: 1,
         },
       },
@@ -2702,7 +2702,7 @@ describe("DiscordVoiceManager", () => {
         mode: "agent-proxy",
         realtime: {
           model: "gpt-realtime-2",
-          voice: "cedar",
+          speakerVoiceId: "cedar",
           minBargeInAudioEndMs: 500,
           providers: {
             openai: { model: "provider-default", voice: "marin" },

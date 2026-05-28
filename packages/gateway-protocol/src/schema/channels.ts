@@ -558,6 +558,8 @@ const TalkRealtimeConfigSchema = Type.Object(
     provider: Type.Optional(Type.String()),
     providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
     model: Type.Optional(Type.String()),
+    speakerVoice: Type.Optional(Type.String()),
+    speakerVoiceId: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
     instructions: Type.Optional(Type.String()),
     mode: Type.Optional(TalkModeSchema),

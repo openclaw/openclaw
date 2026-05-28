@@ -210,6 +210,15 @@ describe("legacy migrate provider-shaped config", () => {
               },
             },
           },
+          voice: {
+            tts: {
+              providers: {
+                openai: {
+                  voice: "verse",
+                },
+              },
+            },
+          },
           accounts: {
             primary: {
               tts: {
@@ -217,6 +226,15 @@ describe("legacy migrate provider-shaped config", () => {
                   gradium: {
                     voiceId: "voice-2",
                     speakerVoiceId: "voice-current",
+                  },
+                },
+              },
+              voice: {
+                tts: {
+                  providers: {
+                    openai: {
+                      voiceId: "nested-voice",
+                    },
                   },
                 },
               },
@@ -248,7 +266,9 @@ describe("legacy migrate provider-shaped config", () => {
       "Moved messages.tts.personas.narrator.providers.google.voiceName → messages.tts.personas.narrator.providers.google.speakerVoice.",
       "Removed agents.defaults.tts.providers.openai.voice because agents.defaults.tts.providers.openai.speakerVoice is already set.",
       "Moved channels.discord.tts.providers.microsoft.voice → channels.discord.tts.providers.microsoft.speakerVoice.",
+      "Moved channels.discord.voice.tts.providers.openai.voice → channels.discord.voice.tts.providers.openai.speakerVoice.",
       "Removed channels.discord.accounts.primary.tts.providers.gradium.voiceId because channels.discord.accounts.primary.tts.providers.gradium.speakerVoiceId is already set.",
+      "Moved channels.discord.accounts.primary.voice.tts.providers.openai.voiceId → channels.discord.accounts.primary.voice.tts.providers.openai.speakerVoiceId.",
       "Moved plugins.entries.voice-call.config.tts.providers.xai.voiceId → plugins.entries.voice-call.config.tts.providers.xai.speakerVoiceId.",
     ]);
     expect(res.config?.messages?.tts).toEqual({
@@ -277,7 +297,13 @@ describe("legacy migrate provider-shaped config", () => {
           channels?: {
             discord?: {
               tts?: Record<string, unknown>;
-              accounts?: { primary?: { tts?: Record<string, unknown> } };
+              voice?: { tts?: Record<string, unknown> };
+              accounts?: {
+                primary?: {
+                  tts?: Record<string, unknown>;
+                  voice?: { tts?: Record<string, unknown> };
+                };
+              };
             };
           };
           plugins?: {
@@ -299,10 +325,24 @@ describe("legacy migrate provider-shaped config", () => {
         },
       },
     });
+    expect(migratedConfig?.channels?.discord?.voice?.tts).toEqual({
+      providers: {
+        openai: {
+          speakerVoice: "verse",
+        },
+      },
+    });
     expect(migratedConfig?.channels?.discord?.accounts?.primary?.tts).toEqual({
       providers: {
         gradium: {
           speakerVoiceId: "voice-current",
+        },
+      },
+    });
+    expect(migratedConfig?.channels?.discord?.accounts?.primary?.voice?.tts).toEqual({
+      providers: {
+        openai: {
+          speakerVoiceId: "nested-voice",
         },
       },
     });
