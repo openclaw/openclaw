@@ -408,6 +408,43 @@ describe("resolveAnnounceTarget", () => {
     });
   });
 
+  it("hydrates announce delivery from explicit external context over stale webchat session fields", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:feishu:direct:ou_user",
+          channel: "webchat",
+          lastChannel: "webchat",
+          lastTo: "session:dashboard",
+          route: {
+            channel: "webchat",
+            target: { to: "session:dashboard" },
+          },
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_user",
+          },
+          origin: {
+            provider: "feishu",
+            accountId: "work",
+            threadId: "thread-77",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:feishu:direct:ou_user",
+      displayKey: "agent:main:feishu:direct:ou_user",
+    });
+    expect(target).toEqual({
+      channel: "feishu",
+      to: "user:ou_user",
+      accountId: "work",
+      threadId: "thread-77",
+    });
+  });
+
   it("preserves threaded Slack session keys when sessions.list lacks stored thread metadata", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
