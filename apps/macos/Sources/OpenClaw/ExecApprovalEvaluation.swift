@@ -40,13 +40,44 @@ enum ExecDenylistEvaluator {
         pattern: #"(?:^|[;&|()<>])\s*(?:[^\s;&|()<>]*[\\/])?(?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>$])"#,
         options: [.caseInsensitive])
     private static let defaultShellNetworkFetchLeadingExpansionRegex = try? NSRegularExpression(
-        pattern: #"""
-            (?:^|[;&|()<>])\s*
-            (?:(?:\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)|%[A-Za-z_][A-Za-z0-9_]*%|![A-Za-z_][A-Za-z0-9_]*!)\s*)+
-            (?:[^\s;&|()<>]*[\\/])?(?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>$])
-            """#,
-        options: [.caseInsensitive, .allowCommentsAndWhitespace])
+        pattern: #"(?:^|[;&|()<>])\s*(?:(?:\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)|%[A-Za-z_][A-Za-z0-9_]*%|![A-Za-z_][A-Za-z0-9_]*!)\s*)+(?:[^\s;&|()<>]*[\\/])?(?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>$])"#,
+        options: [.caseInsensitive])
     private static let shellCommandSeparators = Set<Character>([";", "&", "|", "(", ")", "<", ">"])
+    private static let sudoNonExecutingOptions = Set([
+        "-K",
+        "-l",
+        "-V",
+        "-v",
+        "-e",
+        "--edit",
+        "--help",
+        "--list",
+        "--remove-timestamp",
+        "--validate",
+        "--version",
+    ])
+    private static let sudoOptionsWithValue = Set([
+        "-C",
+        "-D",
+        "-g",
+        "-h",
+        "-p",
+        "-R",
+        "-T",
+        "-U",
+        "-u",
+        "--chdir",
+        "--chroot",
+        "--close-from",
+        "--command-timeout",
+        "--group",
+        "--host",
+        "--other-user",
+        "--prompt",
+        "--role",
+        "--type",
+        "--user",
+    ])
 
     static func denied(
         command: [String],
@@ -426,7 +457,8 @@ enum ExecDenylistEvaluator {
                         (index + 1 < argv.count ? argv[index + 1] : "")
                     let trailingIndex = clusteredSplit.consumesNext ? index + 2 : index + 1
                     let split = self.splitShellWords(payload)
-                    return split.isEmpty ? nil : split + Array(argv.suffix(from: min(trailingIndex, argv.count)))
+                    if split.isEmpty { return nil }
+                    return split + Array(argv.suffix(from: min(trailingIndex, argv.count)))
                 }
                 if ["-S", "-s", "--split-string"].contains(option) || option.hasPrefix("--split-string=") {
                     let payload = token.contains("=")
@@ -434,12 +466,14 @@ enum ExecDenylistEvaluator {
                         : (index + 1 < argv.count ? argv[index + 1] : "")
                     let trailingIndex = token.contains("=") ? index + 1 : index + 2
                     let split = self.splitShellWords(payload)
-                    return split.isEmpty ? nil : split + Array(argv.suffix(from: min(trailingIndex, argv.count)))
+                    if split.isEmpty { return nil }
+                    return split + Array(argv.suffix(from: min(trailingIndex, argv.count)))
                 }
-                if (token.hasPrefix("-S") || token.hasPrefix("-s")), token.count > 2 {
+                if token.hasPrefix("-S") || token.hasPrefix("-s"), token.count > 2 {
                     let payload = String(token.dropFirst(2))
                     let split = self.splitShellWords(payload)
-                    return split.isEmpty ? nil : split + Array(argv.suffix(from: min(index + 1, argv.count)))
+                    if split.isEmpty { return nil }
+                    return split + Array(argv.suffix(from: min(index + 1, argv.count)))
                 }
                 if ["-i", "-0", "--ignore-environment", "--null"].contains(option) {
                     index += 1
@@ -491,15 +525,11 @@ enum ExecDenylistEvaluator {
                 break
             }
             let option = token.components(separatedBy: "=").first ?? token
-            if executable == "sudo", ["-K", "-l", "-V", "-v", "-e", "--edit", "--help", "--list",
-                                      "--remove-timestamp", "--validate", "--version"].contains(option)
-            {
+            if executable == "sudo", self.sudoNonExecutingOptions.contains(option) {
                 return nil
             }
             let consumesValue = executable == "sudo"
-                ? ["-C", "-D", "-g", "-h", "-p", "-R", "-T", "-U", "-u", "--chdir", "--chroot",
-                   "--close-from", "--command-timeout", "--group", "--host", "--other-user",
-                   "--prompt", "--role", "--type", "--user"].contains(option)
+                ? self.sudoOptionsWithValue.contains(option)
                 : ["-a", "-C", "-u"].contains(option)
             index += consumesValue && !token.contains("=") ? 2 : 1
         }
