@@ -789,9 +789,10 @@ describe("createTaskFlowWebhookRequestHandler", () => {
       result: {
         action: "agent_dispatch",
         sessionKey: "agent:main:main",
-        jobId: "job-1",
+        accepted: true,
       },
     });
+    await vi.waitFor(() => expect(scheduleSessionTurn).toHaveBeenCalledTimes(1));
     expect(scheduleSessionTurn).toHaveBeenCalledTimes(1);
     expect(scheduleSessionTurn).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
@@ -1407,9 +1408,10 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         result: {
           action: "agent_dispatch",
           sessionKey: "agent:main:main",
-          jobId: `job-${app.routeId}`,
+          accepted: true,
         },
       });
+      await vi.waitFor(() => expect(scheduleSessionTurn, app.routeId).toHaveBeenCalledTimes(1));
       expect(scheduleSessionTurn, app.routeId).toHaveBeenCalledTimes(1);
       expect(scheduleSessionTurn.mock.calls[0]?.[0], app.routeId).toMatchObject({
         sessionKey: "agent:main:main",

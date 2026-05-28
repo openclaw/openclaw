@@ -1352,6 +1352,7 @@ async function executeAgentDispatch(params: {
   target: AgentWebhookTarget;
   context: WebhookDispatchContext;
   scheduleSessionTurn?: ScheduleSessionTurn;
+  logger?: WebhookLogger;
 }): Promise<{ statusCode: number; body: unknown }> {
   const { target, context } = params;
   const message =
@@ -1372,7 +1373,7 @@ async function executeAgentDispatch(params: {
       },
     };
   }
-  const handle = await scheduler({
+  const scheduleRequest = {
     sessionKey: target.sessionKey,
     message: applySkillHint(message, target.skills),
     deliveryMode: target.agent.deliveryMode,
@@ -1381,18 +1382,36 @@ async function executeAgentDispatch(params: {
     ...(target.agent.agentId ? { agentId: target.agent.agentId } : {}),
     ...(name ? { name } : {}),
     ...(tag ? { tag } : {}),
-  });
-  if (!handle) {
-    return {
-      statusCode: 503,
-      body: {
-        ok: false,
+  };
+  void scheduler(scheduleRequest).then(
+    (handle) => {
+      if (!handle) {
+        params.logger?.warn?.("[webhooks] agent dispatch was rejected", {
+          routeId: target.routeId,
+          sessionKey: target.sessionKey,
+          ...(context.eventType ? { eventType: context.eventType } : {}),
+          ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
+        });
+        return;
+      }
+      params.logger?.info?.("[webhooks] agent dispatch scheduled", {
         routeId: target.routeId,
-        code: "agent_dispatch_rejected",
-        error: "Agent dispatch was not scheduled.",
-      },
-    };
-  }
+        sessionKey: handle.sessionKey,
+        jobId: handle.id,
+        ...(context.eventType ? { eventType: context.eventType } : {}),
+        ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
+      });
+    },
+    (error) => {
+      params.logger?.warn?.("[webhooks] agent dispatch failed", {
+        routeId: target.routeId,
+        sessionKey: target.sessionKey,
+        ...(context.eventType ? { eventType: context.eventType } : {}),
+        ...(context.idempotencyKey ? { idempotencyKey: context.idempotencyKey } : {}),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
   return {
     statusCode: 202,
     body: {
@@ -1400,8 +1419,8 @@ async function executeAgentDispatch(params: {
       routeId: target.routeId,
       result: {
         action: "agent_dispatch",
-        sessionKey: handle.sessionKey,
-        jobId: handle.id,
+        sessionKey: target.sessionKey,
+        accepted: true,
       },
     },
   };
@@ -1713,6 +1732,7 @@ export function createTaskFlowWebhookRequestHandler(params: {
               target,
               context: dispatchContext,
               scheduleSessionTurn: params.scheduleSessionTurn,
+              logger: params.logger,
             });
             writeJson(res, outcome.statusCode, outcome.body);
             return true;
