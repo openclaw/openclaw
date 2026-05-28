@@ -1,4 +1,6 @@
 import { logError } from "openclaw/plugin-sdk/logging-core";
+import type { ModalSubmitLabelComponent } from "discord-api-types/v10";
+import { ComponentType } from "discord-api-types/v10";
 import {
   parseDiscordComponentCustomId,
   parseDiscordModalCustomId,
@@ -139,6 +141,42 @@ export function mapSelectValues(entry: DiscordComponentEntry, values: string[]):
   return values;
 }
 
+/**
+ * Read a RadioGroup's selected value directly from the raw interaction payload.
+ * Carbon's FieldsHandler reads `.values` (array) for non-TextInput components,
+ * but Discord's RadioGroup submission uses `.value` (singular string | null).
+ * This bypasses Carbon to read the correct field.
+ */
+function resolveRadioGroupValueFromRaw(
+  interaction: ModalInteraction,
+  fieldId: string,
+): string | null {
+  const components =
+    interaction.rawData &&
+    typeof interaction.rawData === "object" &&
+    "data" in interaction.rawData &&
+    interaction.rawData.data &&
+    typeof interaction.rawData.data === "object" &&
+    "components" in interaction.rawData.data
+      ? (interaction.rawData.data as { components?: unknown[] }).components
+      : undefined;
+  for (const component of components ?? []) {
+    if (
+      component &&
+      typeof component === "object" &&
+      "type" in component &&
+      (component as { type: unknown }).type === ComponentType.Label
+    ) {
+      const sub = (component as ModalSubmitLabelComponent).component;
+      if (sub?.custom_id === fieldId && sub.type === ComponentType.RadioGroup) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Discord API type mismatch: .value is not in @types yet
+        return (sub as any).value ?? null;
+      }
+    }
+  }
+  return null;
+}
+
 export function resolveModalFieldValues(
   field: DiscordModalEntry["fields"][number],
   interaction: ModalInteraction,
@@ -155,9 +193,15 @@ export function resolveModalFieldValues(
         const value = required ? fields.getText(field.id, true) : fields.getText(field.id);
         return value ? [value] : [];
       }
-      case "select":
-      case "checkbox":
       case "radio": {
+        const value = resolveRadioGroupValueFromRaw(interaction, field.id);
+        if (required && !value) {
+          throw new Error(`Missing required field: ${field.id}`);
+        }
+        return value ? mapOptionLabels(optionLabels, [value]) : [];
+      }
+      case "select":
+      case "checkbox": {
         const values = required
           ? fields.getStringSelect(field.id, true)
           : (fields.getStringSelect(field.id) ?? []);
