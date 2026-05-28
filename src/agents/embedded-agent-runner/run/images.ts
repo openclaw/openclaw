@@ -394,13 +394,13 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     if (seen.has(dedupeKey)) {
       continue;
     }
-    seen.add(dedupeKey);
     // Use fileURLToPath for proper handling (e.g., file://localhost/path)
     try {
       const resolved = safeFileURLToPath(raw);
       if (isOpenClawCliImageCachePath(resolved)) {
         continue;
       }
+      seen.add(dedupeKey);
       refs.push({ raw, type: "path", resolved });
     } catch {
       // Skip malformed file:// URLs
