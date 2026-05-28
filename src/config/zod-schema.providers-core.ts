@@ -913,6 +913,11 @@ export const SlackDmSchema = z
     groupEnabled: z.boolean().optional(),
     groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
     replyToMode: ReplyToModeSchema.optional(),
+    // When true, DM messages wrapped in Slack's assistant_app_thread are routed
+    // to the user's base DM session instead of a thread-scoped session. Default
+    // false preserves the documented behavior where Slack assistant threads
+    // produce their own OpenClaw thread sessions.
+    collapseAssistantThreads: z.boolean().optional(),
   })
   .strict();
 

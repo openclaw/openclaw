@@ -28,13 +28,18 @@ import { resolveSlackRoutingContext, type SlackRoutingContextDeps } from "./prep
 function buildCtx(overrides?: {
   replyToMode?: "all" | "first" | "off" | "batched";
   dmScope?: "main" | "per-sender" | "per-channel-peer";
+  collapseAssistantThreads?: boolean;
 }) {
   const replyToMode = overrides?.replyToMode ?? "all";
+  const dm =
+    overrides?.collapseAssistantThreads !== undefined
+      ? { collapseAssistantThreads: overrides.collapseAssistantThreads }
+      : undefined;
   return {
     cfg: {
       session: { dmScope: overrides?.dmScope },
       channels: {
-        slack: { enabled: true, replyToMode },
+        slack: { enabled: true, replyToMode, ...(dm ? { dm } : {}) },
       },
     } as OpenClawConfig,
     teamId: "T1",
@@ -583,6 +588,37 @@ describe("thread-level session keys", () => {
 
     expect(routing.sessionKey).toBe("agent:main:slack:direct:u3:thread:1770408530.000000");
     expect(routing.threadContext.messageThreadId).toBe("1770408530.000000");
+  });
+
+  it("collapses assistant DM threads to the base DM session when channels.slack.dm.collapseAssistantThreads=true", () => {
+    const ctx = buildCtx({
+      replyToMode: "all",
+      dmScope: "per-channel-peer",
+      collapseAssistantThreads: true,
+    });
+    const account = buildAccount("all");
+
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "assistant reply",
+        ts: "1770408540.000000",
+        thread_ts: "1770408530.000000",
+        parent_user_id: "B1",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+      assistantThreadTs: "1770408530.000000",
+    });
+
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3");
+    expect(routing.sessionKey).not.toContain(":thread:");
   });
 
   it("routes DM thread replies through explicit runtime conversation bindings", () => {
