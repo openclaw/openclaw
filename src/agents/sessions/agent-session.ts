@@ -369,6 +369,7 @@ export class AgentSession {
   // Base system prompt (without extension appends) - used to apply fresh appends each turn
   private baseSystemPrompt = "";
   private baseSystemPromptOptions!: BuildSystemPromptOptions;
+  private exactBaseSystemPrompt: string | undefined;
 
   constructor(config: AgentSessionConfig) {
     this.agent = config.agent;
@@ -889,6 +890,20 @@ export class AgentSession {
     this.agent.state.systemPrompt = this.baseSystemPrompt;
   }
 
+  /** Set an exact base prompt owned by the current runtime. */
+  setBaseSystemPrompt(systemPrompt: string): void {
+    this.exactBaseSystemPrompt = systemPrompt;
+    this.baseSystemPrompt = systemPrompt;
+    this.baseSystemPromptOptions = {
+      cwd: this.cwd,
+      selectedTools: this.getActiveToolNames(),
+      toolSnippets: {},
+      promptGuidelines: [],
+      customPrompt: systemPrompt,
+    };
+    this.agent.state.systemPrompt = systemPrompt;
+  }
+
   /** Whether compaction or branch summarization is currently running */
   get isCompacting(): boolean {
     return (
@@ -983,6 +998,18 @@ export class AgentSession {
       if (toolGuidelines) {
         promptGuidelines.push(...toolGuidelines);
       }
+    }
+
+    if (this.exactBaseSystemPrompt !== undefined) {
+      this.baseSystemPromptOptions = {
+        ...this.baseSystemPromptOptions,
+        cwd: this.cwd,
+        customPrompt: this.exactBaseSystemPrompt,
+        selectedTools: validToolNames,
+        toolSnippets,
+        promptGuidelines,
+      };
+      return this.exactBaseSystemPrompt;
     }
 
     const loaderSystemPrompt = this.sessionResourceLoader.getSystemPrompt();

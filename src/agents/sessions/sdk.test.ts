@@ -95,6 +95,36 @@ describe("createAgentSession tool defaults", () => {
     expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
   });
 
+  it("preserves an exact base system prompt when active tools change", async () => {
+    const customTool: ToolDefinition = {
+      name: "custom_lookup",
+      label: "Custom Lookup",
+      description: "Looks up a test value.",
+      parameters: Type.Object({}),
+      execute: async () => ({
+        content: [{ type: "text", text: "ok" }],
+        details: {},
+      }),
+    };
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      noTools: "builtin",
+      customTools: [customTool],
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+    const systemPrompt = "You are a personal assistant running inside OpenClaw.";
+
+    session.setBaseSystemPrompt(systemPrompt);
+    session.setActiveToolsByName(["bash", "custom_lookup"]);
+
+    expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
+    expect(session.systemPrompt).toBe(systemPrompt);
+  });
+
   it("runs session message persistence under the configured write lock", async () => {
     const events: string[] = [];
     const sessionManager = SessionManager.inMemory();
