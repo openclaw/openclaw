@@ -1467,6 +1467,7 @@ describe("chat session controls", () => {
     render(renderChatSessionSelect(state, onSwitchSession), container);
 
     expect(state.chatSessionPickerResult).toBe(pickerResultBefore);
+    expect(state.chatSessionPickerAppliedQuery).toBe("");
     expect(state.chatSessionPickerOpen).toBe(true);
     expect(request).toHaveBeenCalledTimes(requestCountBefore);
     const options = container.querySelectorAll<HTMLButtonElement>(
