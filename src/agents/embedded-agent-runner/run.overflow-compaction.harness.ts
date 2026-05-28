@@ -529,6 +529,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../cli-backends.js", async () => {
     const actual = await vi.importActual<typeof import("../cli-backends.js")>("../cli-backends.js");
+    type ResolveBindingParams = Parameters<typeof actual.resolveCliRuntimeModelBackendBinding>[0];
+    type ProviderCheckParams = Parameters<typeof actual.isCliRuntimeModelBackendForProvider>[0];
     const claudeBinding = {
       provider: "anthropic",
       runtime: "claude-cli",
@@ -549,17 +551,15 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
           ),
       ]),
       listCliRuntimeProviderIds: vi.fn(() => ["claude-cli"]),
-      resolveCliRuntimeModelBackendBinding: vi.fn(
-        (params: { provider?: string; runtime?: string }) =>
-          params.provider === claudeBinding.provider && params.runtime === claudeBinding.runtime
-            ? claudeBinding
-            : actual.resolveCliRuntimeModelBackendBinding(params),
+      resolveCliRuntimeModelBackendBinding: vi.fn((params: ResolveBindingParams) =>
+        params.provider === claudeBinding.provider && params.runtime === claudeBinding.runtime
+          ? claudeBinding
+          : actual.resolveCliRuntimeModelBackendBinding(params),
       ),
-      isCliRuntimeModelBackendForProvider: vi.fn(
-        (params: { provider?: string; runtime?: string }) =>
-          params.provider === claudeBinding.provider && params.runtime === claudeBinding.runtime
-            ? true
-            : actual.isCliRuntimeModelBackendForProvider(params),
+      isCliRuntimeModelBackendForProvider: vi.fn((params: ProviderCheckParams) =>
+        params.provider === claudeBinding.provider && params.runtime === claudeBinding.runtime
+          ? true
+          : actual.isCliRuntimeModelBackendForProvider(params),
       ),
     };
   });
