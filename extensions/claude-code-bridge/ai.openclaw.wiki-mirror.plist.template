@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd plist template for the OpenClaw cloud-mirror daemon.
+
+  Installs a LaunchAgent that keeps cloud-mirror.mjs running in the
+  background so the local ~/.openclaw/wiki/main vault is mirrored to
+  benchagi.com in near-real-time.
+
+  INSTALL:
+    1. Copy this file to ~/Library/LaunchAgents/ai.openclaw.wiki-mirror.plist
+    2. Replace placeholders:
+         __HOME__           -> /Users/coryshelton (or your $HOME)
+         __NODE_BIN__       -> absolute path to node (likely /opt/homebrew/bin/node)
+         __INGEST_KEY__     -> super-admin API key pulled from 1Password
+       1Password CLI one-liner for the key:
+         op item get "Bench Wiki Ingest Key" --fields label=password
+    3. Load it:
+         launchctl unload ~/Library/LaunchAgents/ai.openclaw.wiki-mirror.plist 2>/dev/null
+         launchctl load   ~/Library/LaunchAgents/ai.openclaw.wiki-mirror.plist
+         launchctl list | grep ai.openclaw.wiki-mirror
+    4. Tail logs:
+         tail -f ~/.openclaw/logs/wiki-mirror.log
+
+  REMOVE:
+    launchctl unload ~/Library/LaunchAgents/ai.openclaw.wiki-mirror.plist
+    rm ~/Library/LaunchAgents/ai.openclaw.wiki-mirror.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.openclaw.wiki-mirror</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__NODE_BIN__</string>
+        <string>__HOME__/clawd/openclaw/extensions/claude-code-bridge/cloud-mirror.mjs</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>BENCH_WIKI_INGEST_URL</key>
+        <string>https://benchagi.com/api/v1/wiki/ingest</string>
+        <key>BENCH_WIKI_INGEST_KEY</key>
+        <string>__INGEST_KEY__</string>
+        <key>BENCH_WIKI_MIRROR_DEBOUNCE_MS</key>
+        <string>2000</string>
+        <key>BENCH_WIKI_MIRROR_BATCH_SIZE</key>
+        <string>50</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/.openclaw/logs/wiki-mirror.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.openclaw/logs/wiki-mirror.stderr.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>__HOME__/.openclaw</string>
+</dict>
+</plist>
