@@ -604,6 +604,7 @@ function renderChatSessionPickerPopover(
           title=${t("common.search")}
           aria-label=${t("common.search")}
           ?disabled=${controlsDisabled}
+          @mousedown=${(e: MouseEvent) => { if (e.button === 0) e.preventDefault(); }}
           @click=${() => void applyChatSessionPickerSearch(state)}
         >
           ${icons.search}
@@ -616,6 +617,7 @@ function renderChatSessionPickerPopover(
               title=${t("chat.selectors.clearSessionSearch")}
               aria-label=${t("chat.selectors.clearSessionSearch")}
               ?disabled=${controlsDisabled}
+              @mousedown=${(e: MouseEvent) => { if (e.button === 0) e.preventDefault(); }}
               @click=${() => clearChatSessionPickerSearch(state)}
             >
               ${icons.x}
@@ -652,6 +654,7 @@ function renderChatSessionPickerPopover(
                 aria-selected=${selected ? "true" : "false"}
                 title=${label}
                 type="button"
+                @mousedown=${(e: MouseEvent) => { if (e.button === 0) e.preventDefault(); }}
                 @click=${() => {
                   closeChatSessionPicker(state);
                   if (row.key !== state.sessionKey) {
@@ -681,6 +684,7 @@ function renderChatSessionPickerPopover(
               data-chat-session-load-more="true"
               type="button"
               ?disabled=${loadMoreDisabled}
+              @mousedown=${(e: MouseEvent) => { if (e.button === 0) e.preventDefault(); }}
               @click=${() => void loadMoreChatSessionPickerResults(state)}
             >
               ${t("chat.selectors.loadMoreSessions")}
