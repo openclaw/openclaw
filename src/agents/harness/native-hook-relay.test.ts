@@ -913,7 +913,12 @@ describe("native hook relay registry", () => {
         expiresAtMs: Date.now() - 1,
       },
     );
-    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => pid === 9_999_992);
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid !== 9_999_992) {
+        throw Object.assign(new Error("unexpected process"), { code: "ESRCH" });
+      }
+      return true;
+    });
 
     registerNativeHookRelay({
       provider: "codex",
@@ -935,7 +940,12 @@ describe("native hook relay registry", () => {
         expiresAtMs: Date.now() + 60_000,
       },
     );
-    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => pid === 9_999_993);
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid !== 9_999_993) {
+        throw Object.assign(new Error("unexpected process"), { code: "ESRCH" });
+      }
+      return true;
+    });
 
     try {
       registerNativeHookRelay({
