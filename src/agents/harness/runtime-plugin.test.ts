@@ -116,6 +116,41 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledTimes(1);
   });
 
+  it("does not reuse a scoped Codex harness plugin load after global plugin enablement changes", async () => {
+    const baseParams = {
+      provider: "openai-codex",
+      modelId: "gpt-5.5-pro",
+      workspaceDir: "/tmp/workspace",
+    };
+
+    await ensureSelectedAgentHarnessPlugin({
+      ...baseParams,
+      config: {
+        plugins: {
+          enabled: false,
+          allow: ["codex"],
+          entries: {
+            codex: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+    await ensureSelectedAgentHarnessPlugin({
+      ...baseParams,
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["codex"],
+          entries: {
+            codex: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledTimes(2);
+  });
+
   it("widens a scoped harness allowlist with the provider owner for openai-codex models", async () => {
     await ensureSelectedAgentHarnessPlugin({
       provider: "openai-codex",

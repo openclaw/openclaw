@@ -50,6 +50,7 @@ function buildHarnessPluginCacheKey(params: {
       allow: params.config?.plugins?.allow,
       bundledDiscovery: params.config?.plugins?.bundledDiscovery,
       deny: params.config?.plugins?.deny,
+      enabled: params.config?.plugins?.enabled,
       load: params.config?.plugins?.load,
       entries: Object.fromEntries(
         Object.entries(params.config?.plugins?.entries ?? {}).map(([id, entry]) => [
