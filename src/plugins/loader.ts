@@ -1567,6 +1567,15 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (requestedOnlyPluginIdSet && requestedOnlyPluginIdSet.size === 0) {
     const emptyRegistry = createEmptyPluginRegistry();
     if (options.activate !== false) {
+      // An empty plugin scope must not tear down agent harnesses that a prior
+      // load registered. clearActivatedPluginRuntimeState() clears the global
+      // harness registry (including bundled provider harnesses such as
+      // `claude-cli`), and the empty registry never re-registers them — so
+      // without this snapshot/restore the harness stays gone until the gateway
+      // process restarts, surfacing as MissingAgentHarnessError on the
+      // Discord/cron/autonomous paths. Mirror the rollback restore used by the
+      // main load path below.
+      const previousAgentHarnesses = listRegisteredAgentHarnesses();
       clearActivatedPluginRuntimeState();
       activatePluginRegistry(
         emptyRegistry,
@@ -1574,6 +1583,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         resolveRuntimeSubagentMode(options.runtimeOptions),
         options.workspaceDir,
       );
+      restoreRegisteredAgentHarnesses(previousAgentHarnesses);
     }
     return emptyRegistry;
   }

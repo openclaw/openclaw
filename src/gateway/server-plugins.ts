@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import {
+  listRegisteredAgentHarnesses,
+  restoreRegisteredAgentHarnesses,
+} from "../agents/harness/registry.js";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -678,9 +682,17 @@ export function loadGatewayPlugins(params: {
   ];
   const pluginIdsMs = performance.now() - started;
   if (pluginIds.length === 0) {
+    // A gateway (re)load that resolves to zero plugin ids must not wipe agent
+    // harnesses registered by a previous load. Without this snapshot/restore,
+    // bundled provider harnesses such as `claude-cli` are cleared here and never
+    // re-registered, so autonomous paths (Discord, cron) fail with
+    // MissingAgentHarnessError until the gateway process restarts. See loader.ts
+    // for the matching fix on the empty-plugin-scope path.
+    const previousAgentHarnesses = listRegisteredAgentHarnesses();
     clearActivatedPluginRuntimeState();
     const pluginRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
+    restoreRegisteredAgentHarnesses(previousAgentHarnesses);
     params.startupTrace?.detail("plugins.gateway-load", [
       ["autoEnableMs", autoEnableMs],
       ["resolvedConfigMs", resolvedConfigMs],

@@ -2499,6 +2499,52 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(listAgentHarnessIds()).toStrictEqual([]);
   });
 
+  it("preserves agent harnesses across an empty-plugin-scope reload", () => {
+    // Regression: a reload that resolves to an empty plugin scope
+    // (onlyPluginIds: []) used to clearActivatedPluginRuntimeState() and
+    // activate an empty registry without restoring harnesses, wiping bundled
+    // provider harnesses such as `claude-cli`. They were never re-registered
+    // until the gateway process restarted, surfacing as
+    // MissingAgentHarnessError on the Discord/cron/autonomous paths.
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "codex-harness-keep",
+      filename: "codex-harness-keep.cjs",
+      body: `module.exports = {
+        id: "codex-harness-keep",
+        register(api) {
+          api.registerAgentHarness({
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => ({ ok: false, error: "unused" }),
+          });
+        },
+      };`,
+    });
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["codex-harness-keep"],
+        },
+      },
+      onlyPluginIds: ["codex-harness-keep"],
+    });
+    expect(listAgentHarnessIds()).toEqual(["codex"]);
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      onlyPluginIds: [],
+      config: { plugins: {} },
+    });
+    expect(listAgentHarnessIds()).toEqual(["codex"]);
+  });
+
   it("rejects malformed plugin agent harness registrations", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
