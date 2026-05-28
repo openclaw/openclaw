@@ -1656,17 +1656,24 @@ export async function handleFeishuMessage(params: {
       });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-      
-      // Defensive check: ensure channel runtime is fully initialized
-      if (!core.channel?.inbound?.run) {
-        throw new Error(
-          `Feishu channel runtime not fully initialized. ` +
-          `Expected core.channel.inbound.run to be a function, but got: ${typeof core.channel?.inbound?.run}. ` +
-          `Channel keys: ${JSON.stringify(Object.keys(core.channel || {}))}. ` +
-          `This may indicate a plugin loading order issue or a regression in v2026.5.27.`
+
+      // Validate channel runtime binding before dispatch.
+      // Issue #87646: core.channel.inbound.run can be undefined when the feishu
+      // plugin receives a message before the gateway finishes wiring the channel
+      // runtime via createRuntimeChannel(). This happens during cold starts or
+      // when the plugin's message listener fires before setFeishuRuntime()
+      // receives a fully-constructed PluginRuntime object.
+      if (typeof core.channel?.inbound?.run !== "function") {
+        const channelKeys = core.channel ? Object.keys(core.channel) : [];
+        const inboundKeys = core.channel?.inbound ? Object.keys(core.channel.inbound) : [];
+        log(
+          `feishu[${account.accountId}]: channel runtime not ready ` +
+          `(channel=[${channelKeys}], inbound=[${inboundKeys}]); ` +
+          `dropping message ${ctx.messageId} to prevent crash`,
         );
+        return;
       }
-      
+
       const turnResult = await core.channel.inbound.run({
         channel: "feishu",
         accountId: route.accountId,

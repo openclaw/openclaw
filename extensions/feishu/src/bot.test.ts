@@ -915,6 +915,42 @@ describe("handleFeishuMessage ACP routing", () => {
     );
     expect(dispatcherOptions.allowReasoningPreview).toBe(true);
   });
+
+  it("drops message gracefully when channel runtime inbound is not wired", async () => {
+    // Simulate issue #87646: runtime exists but channel.inbound.run is missing.
+    // This can happen during cold starts when the gateway hasn't finished
+    // wiring createRuntimeChannel() into the feishu plugin's runtime store.
+    const incompleteRuntime = createFeishuBotRuntime({
+      channel: { inbound: undefined } as never,
+    });
+    setFeishuRuntime(incompleteRuntime);
+
+    const logSpy = vi.fn();
+    vi.spyOn(await import("./runtime.js"), "getFeishuRuntime").mockReturnValue(incompleteRuntime);
+
+    // Should not throw — message is dropped with a log warning.
+    await expect(
+      dispatchMessage({
+        cfg: {
+          session: { mainKey: "main", scope: "per-sender" },
+          channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+        },
+        event: {
+          sender: { sender_id: { open_id: "ou_sender_1" } },
+          message: {
+            message_id: "msg-runtime-missing",
+            chat_id: "oc_dm",
+            chat_type: "p2p",
+            message_type: "text",
+            content: JSON.stringify({ text: "hello" }),
+          },
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    // inbound.run should NOT have been called.
+    expect(incompleteRuntime.channel.inbound.run).toBeUndefined();
+  });
 });
 
 describe("handleFeishuMessage command authorization", () => {
