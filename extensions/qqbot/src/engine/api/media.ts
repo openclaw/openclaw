@@ -62,7 +62,10 @@ function assertDirectUploadDownloadHostAllowed(hostname: string): void {
   }
 }
 
-export async function downloadDirectUploadUrl(url: string): Promise<Buffer> {
+export async function downloadDirectUploadUrl(
+  url: string,
+  opts: { maxBytes?: number } = {},
+): Promise<Buffer> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -84,7 +87,7 @@ export async function downloadDirectUploadUrl(url: string): Promise<Buffer> {
     if (!response.ok) {
       throw new Error(`Direct-upload media URL returned HTTP ${response.status}`);
     }
-    return await readResponseWithLimit(response, MAX_UPLOAD_SIZE, {
+    return await readResponseWithLimit(response, opts.maxBytes ?? MAX_UPLOAD_SIZE, {
       chunkTimeoutMs: DIRECT_UPLOAD_READ_IDLE_TIMEOUT_MS,
     });
   } finally {

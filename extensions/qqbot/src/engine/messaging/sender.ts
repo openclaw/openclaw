@@ -41,7 +41,7 @@ import {
   type OutboundMeta,
   type UploadMediaResponse,
 } from "../types.js";
-import { LARGE_FILE_THRESHOLD } from "../utils/file-utils.js";
+import { getMaxUploadSize, LARGE_FILE_THRESHOLD } from "../utils/file-utils.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError, debugWarn } from "../utils/log.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
@@ -654,7 +654,9 @@ async function dispatchUpload(
 ): Promise<UploadMediaResponse> {
   switch (source.kind) {
     case "url": {
-      const buffer = await downloadDirectUploadUrl(source.url);
+      const buffer = await downloadDirectUploadUrl(source.url, {
+        maxBytes: getMaxUploadSize(fileType),
+      });
       if (buffer.length >= LARGE_FILE_THRESHOLD) {
         return ctx.chunkedMediaApi.uploadChunked({
           scope,
