@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Default checkout pollution guard.
+# Blocks commits from the default checkout (main branch at repo root).
+# Write work must happen in isolated worktrees.
+#
+# Bypass: set DEFAULT_CHECKOUT_ALLOW_COMMIT=1 for controlled sync/release work.
+
+set -euo pipefail
+
+if [[ "${DEFAULT_CHECKOUT_ALLOW_COMMIT:-}" == "1" ]]; then
+  exit 0
+fi
+
+BRANCH="$(git symbolic-ref --short HEAD 2>/dev/null || echo "DETACHED")"
+
+# Only guard the main branch at the repo root (the default mirror checkout)
+if [[ "$BRANCH" != "main" ]]; then
+  exit 0
+fi
+
+# Check if we're in a worktree (worktrees have their own .git file, not dir)
+GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo ".git")"
+if [[ -f "$GIT_DIR" ]]; then
+  # This is a worktree, allow commits
+  exit 0
+fi
+
+# Check for readonly fence
+FENCE_FILE="$(git rev-parse --show-toplevel)/.default-checkout-fence"
+if [[ -f "$FENCE_FILE" ]]; then
+  echo "❌ DEFAULT CHECKOUT READONLY FENCE IS ACTIVE" >&2
+  echo "The default checkout is locked. Use:" >&2
+  echo "  node scripts/default-checkout-readonly-fence.mjs unlock" >&2
+  echo "to temporarily allow writes." >&2
+  exit 1
+fi
+
+echo "⚠️  DEFAULT CHECKOUT POLLUTION GUARD" >&2
+echo "" >&2
+echo "You are trying to commit directly to the default checkout (main)." >&2
+echo "The default checkout must stay as a clean origin/main mirror." >&2
+echo "" >&2
+echo "Options:" >&2
+echo "  1. Use an isolated worktree: scripts/worktree-start.sh <task-slug>" >&2
+echo "  2. Bypass for controlled sync: DEFAULT_CHECKOUT_ALLOW_COMMIT=1 git commit ..." >&2
+echo "" >&2
+echo "If this is intentional (sync/release work), re-run with the bypass." >&2
+exit 1

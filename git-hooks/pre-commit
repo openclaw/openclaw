@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+# Default checkout pollution guard
+"$ROOT_DIR/git-hooks/default-checkout-guard"
+
 RUN_NODE_TOOL="$ROOT_DIR/scripts/pre-commit/run-node-tool.sh"
 FILTER_FILES="$ROOT_DIR/scripts/pre-commit/filter-staged-files.mjs"
 
@@ -16,9 +19,6 @@ if [[ ! -f "$FILTER_FILES" ]]; then
   exit 1
 fi
 
-# Security: avoid option-injection from malicious file names (e.g. "--all", "--force").
-# Robustness: NUL-delimited file list handles spaces/newlines safely.
-# Compatibility: use read loops instead of `mapfile` so this runs on macOS Bash 3.x.
 files=()
 while IFS= read -r -d '' file; do
   files+=("$file")
