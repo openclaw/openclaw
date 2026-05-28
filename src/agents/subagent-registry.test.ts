@@ -197,6 +197,8 @@ describe("subagent registry seam flow", () => {
       onSubagentEnded: mocks.onSubagentEnded,
     });
     mocks.scheduleOrphanRecovery.mockReset();
+    mocks.resolveAgentTimeoutMs.mockReturnValue(1_000);
+    mocks.restoreSubagentRunsFromDisk.mockReturnValue(0);
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
         return {
@@ -395,6 +397,172 @@ describe("subagent registry seam flow", () => {
       expect(waitAttempts).toBeGreaterThanOrEqual(2);
       expect(completedRun?.endedAt).toBe(222);
       expectRecordFields(completedRun?.outcome, { status: "ok" }, "completed run outcome");
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("terminally times out explicit runTimeoutSeconds when agent.wait has no terminal snapshot", async () => {
+    const startedAt = Date.now();
+    let waitAttempts = 0;
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        waitAttempts += 1;
+        return { status: "timeout" };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: startedAt,
+        status: "running",
+      },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-explicit-timeout",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "respect explicit timeout",
+      cleanup: "keep",
+      runTimeoutSeconds: 1,
+    });
+
+    await waitForFast(() => {
+      expect(waitAttempts).toBeGreaterThanOrEqual(1);
+    });
+    const activeRun = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-explicit-timeout");
+    expect(activeRun?.endedAt).toBeUndefined();
+    expect(activeRun?.outcome).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await waitForFast(() => {
+      const completedRun = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-explicit-timeout");
+      expect(waitAttempts).toBeGreaterThanOrEqual(2);
+      expect(completedRun?.endedAt).toBe(startedAt + 1_000);
+      expectRecordFields(
+        completedRun?.outcome,
+        {
+          status: "timeout",
+          startedAt,
+          endedAt: startedAt + 1_000,
+          elapsedMs: 1_000,
+        },
+        "explicit run timeout outcome",
+      );
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats boundary agent.wait timeouts as explicit run timeouts before child abort errors win", async () => {
+    const startedAt = Date.now();
+    let waitAttempts = 0;
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        waitAttempts += 1;
+        vi.setSystemTime(startedAt + 999);
+        return { status: "timeout" };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: startedAt,
+        status: "running",
+      },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-boundary-timeout",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deadline skew should still timeout",
+      cleanup: "keep",
+      runTimeoutSeconds: 1,
+    });
+
+    await waitForFast(() => {
+      const completedRun = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-boundary-timeout");
+      expect(waitAttempts).toBe(1);
+      expect(completedRun?.endedAt).toBe(startedAt + 1_000);
+      expectRecordFields(
+        completedRun?.outcome,
+        {
+          status: "timeout",
+          startedAt,
+          endedAt: startedAt + 1_000,
+          elapsedMs: 1_000,
+        },
+        "boundary explicit run timeout outcome",
+      );
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps restored waits to the remaining explicit run timeout", async () => {
+    const startedAt = Date.parse("2026-03-24T11:59:00Z");
+    const runTimeoutSeconds = 60;
+    vi.setSystemTime(startedAt + 59_000);
+    mocks.resolveAgentTimeoutMs.mockReturnValue(60_000);
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, unknown>;
+      mergeOnly?: boolean;
+    }) => {
+      params.runs.set("run-resumed-near-deadline", {
+        runId: "run-resumed-near-deadline",
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "resume near explicit timeout",
+        cleanup: "keep",
+        runTimeoutSeconds,
+        createdAt: startedAt,
+        startedAt,
+        sessionStartedAt: startedAt,
+      });
+      return 1;
+    }) as never);
+    const waitTimeouts: unknown[] = [];
+    mocks.callGateway.mockImplementation(async (request: {
+      method?: string;
+      params?: Record<string, unknown>;
+    }) => {
+      if (request.method === "agent.wait") {
+        waitTimeouts.push(request.params?.timeoutMs);
+        vi.setSystemTime(startedAt + 60_000);
+        return { status: "timeout" };
+      }
+      return {};
+    });
+
+    mod.initSubagentRegistry();
+
+    await waitForFast(() => {
+      expect(waitTimeouts).toEqual([1_000]);
+      const completedRun = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-resumed-near-deadline");
+      expect(completedRun?.endedAt).toBe(startedAt + 60_000);
+      expectRecordFields(
+        completedRun?.outcome,
+        {
+          status: "timeout",
+          startedAt,
+          endedAt: startedAt + 60_000,
+          elapsedMs: 60_000,
+        },
+        "restored explicit run timeout outcome",
+      );
     });
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });

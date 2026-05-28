@@ -674,7 +674,7 @@ function resumeSubagentRun(runId: string) {
   // Wait for completion again after restart.
   const cfg = subagentRegistryDeps.getRuntimeConfig();
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, entry.runTimeoutSeconds);
-  void subagentRunManager.waitForSubagentCompletion(runId, waitTimeoutMs, entry);
+  void subagentRunManager.waitForSubagentCompletion(runId, waitTimeoutMs, entry, true);
   resumedRuns.add(runId);
 }
 
