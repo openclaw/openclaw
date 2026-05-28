@@ -262,7 +262,9 @@ export async function updateSessionGoalStatus(
       }
       const resetsBudgetWindow =
         options.status === "active" &&
-        (accounted.status === "budget_limited" || accounted.status === "usage_limited");
+        (accounted.status === "budget_limited" ||
+          accounted.status === "usage_limited" ||
+          (accounted.tokenBudget !== undefined && accounted.tokensUsed >= accounted.tokenBudget));
       const freshTokenStart = resetsBudgetWindow ? resolveEntryFreshTotalTokens(entry) : undefined;
       const next: SessionGoal = {
         ...accounted,
@@ -279,6 +281,14 @@ export async function updateSessionGoalStatus(
         next.tokensUsed = 0;
         delete next.budgetLimitedAt;
         delete next.usageLimitedAt;
+      }
+      if (
+        next.status === "active" &&
+        next.tokenBudget !== undefined &&
+        next.tokensUsed >= next.tokenBudget
+      ) {
+        next.status = "budget_limited";
+        next.budgetLimitedAt = now;
       }
       updated = next;
       return { goal: updated };

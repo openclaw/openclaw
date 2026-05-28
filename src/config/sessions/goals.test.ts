@@ -28,7 +28,14 @@ describe("session goals", () => {
   }
 
   it("creates core-owned goal state on the session entry", async () => {
-    await writeSession(100);
+    await upsertSessionEntry({
+      storePath: fixture.storePath(),
+      sessionKey,
+      entry: {
+        ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
+        totalTokens: 100,
+      },
+    });
 
     const goal = await createSessionGoal({
       storePath: fixture.storePath(),
@@ -281,6 +288,43 @@ describe("session goals", () => {
 
     expect(resumed.status).toBe("active");
     expect(resumed.lastStatusNote).toBe("waiting on CI");
+  });
+
+  it("resumes paused goals with a fresh budget window after usage passes the budget", async () => {
+    await writeSession(0);
+    await createSessionGoal({
+      storePath: fixture.storePath(),
+      sessionKey,
+      objective: "ship",
+      tokenBudget: 20,
+      now: 10,
+    });
+    await updateSessionGoalStatus({
+      storePath: fixture.storePath(),
+      sessionKey,
+      status: "paused",
+      now: 20,
+    });
+    await upsertSessionEntry({
+      storePath: fixture.storePath(),
+      sessionKey,
+      entry: {
+        ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
+        totalTokens: 100,
+      },
+    });
+
+    const resumed = await updateSessionGoalStatus({
+      storePath: fixture.storePath(),
+      sessionKey,
+      status: "active",
+      now: 30,
+    });
+
+    expect(resumed.status).toBe("active");
+    expect(resumed.tokenStart).toBe(100);
+    expect(resumed.tokensUsed).toBe(0);
+    expect(resumed.budgetLimitedAt).toBeUndefined();
   });
 
   it("formats a readable status summary with command hints", () => {
