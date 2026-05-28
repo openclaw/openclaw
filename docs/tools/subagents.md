@@ -27,6 +27,8 @@ default. For heavy or repetitive tasks, set a cheaper model for sub-agents
 and keep your main agent on a higher-quality model. Configure via
 `agents.defaults.subagents.model` or per-agent overrides; set either to
 `"inherit"` when children should follow each requester's active session model.
+Model aliases are resolved first, so an existing alias named `"inherit"` still
+selects that concrete model.
 When a child genuinely needs the requester's current transcript, the agent can
 request `context: "fork"` on that one spawn. Thread-bound subagent sessions
 default to `context: "fork"` because they branch the current conversation into a
@@ -144,7 +146,8 @@ session to confirm the effective tool list.
   OpenClaw checks `agents.list[].subagents.model`, then
   `agents.defaults.subagents.model`, then the target-agent/global model
   defaults. Use `"inherit"` in the tool override or sub-agent model config to
-  follow the requester session's active model.
+  follow the requester session's active model, unless a model alias named
+  `"inherit"` is configured; aliases keep their concrete-model meaning.
 - **Thinking:** inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
 - **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
@@ -204,7 +207,7 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
   ACP-only. Streams ACP run output to the parent session when `runtime: "acp"`; omit for native sub-agent spawns.
 </ParamField>
 <ParamField path="model" type="string">
-  Override the sub-agent model. Use `"inherit"` to follow the requester session's active model. Invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result.
+  Override the sub-agent model. Use `"inherit"` to follow the requester session's active model unless `"inherit"` is a configured model alias. Invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result.
 </ParamField>
 <ParamField path="thinking" type="string">
   Override thinking level for the sub-agent run.

@@ -331,11 +331,20 @@ export function resolveSubagentConfiguredModelSelection(params: {
   agentId: string;
   inheritedModel?: unknown;
 }): string | undefined {
+  const runtimeDefault = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: runtimeDefault.provider,
+  });
   const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
   const inheritedModel = normalizeModelSelection(params.inheritedModel);
   const agentSubagentModel = resolveConfiguredSubagentModelCandidate({
     selection: normalizeModelSelection(agentConfig?.subagents?.model),
     inheritedModel,
+    aliasIndex,
   });
   if (agentSubagentModel) {
     return agentSubagentModel;
@@ -343,6 +352,7 @@ export function resolveSubagentConfiguredModelSelection(params: {
   const defaultsSubagentModel = resolveConfiguredSubagentModelCandidate({
     selection: normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model),
     inheritedModel,
+    aliasIndex,
   });
   if (defaultsSubagentModel) {
     return defaultsSubagentModel;
@@ -353,27 +363,32 @@ export function resolveSubagentConfiguredModelSelection(params: {
 function resolveConfiguredSubagentModelCandidate(params: {
   selection?: string;
   inheritedModel?: string;
+  aliasIndex: ModelAliasIndex;
 }): string | undefined {
   if (!params.selection) {
     return undefined;
   }
-  if (isSubagentModelInheritSelection(params.selection)) {
+  const resolvedSelection = resolveModelThroughAliases(params.selection, params.aliasIndex);
+  if (isSubagentModelInheritSelection(resolvedSelection)) {
     return params.inheritedModel;
   }
-  return params.selection;
+  return resolvedSelection;
 }
 
 function resolveSubagentModelCandidate(params: {
   selection?: string;
   inheritedModel?: string;
+  aliasIndex: ModelAliasIndex;
+  unresolvedInheritFallback?: string;
 }): string | undefined {
   if (!params.selection) {
     return undefined;
   }
-  if (isSubagentModelInheritSelection(params.selection)) {
-    return params.inheritedModel ?? SUBAGENT_MODEL_INHERIT;
+  const resolvedSelection = resolveModelThroughAliases(params.selection, params.aliasIndex);
+  if (isSubagentModelInheritSelection(resolvedSelection)) {
+    return params.inheritedModel ?? params.unresolvedInheritFallback;
   }
-  return params.selection;
+  return resolvedSelection;
 }
 
 export function shouldResolveInheritedSubagentModel(params: {
@@ -381,12 +396,26 @@ export function shouldResolveInheritedSubagentModel(params: {
   agentId: string;
   modelOverride?: unknown;
 }): boolean {
+  const runtimeDefault = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: runtimeDefault.provider,
+  });
   const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
   return [
     params.modelOverride,
     agentConfig?.subagents?.model,
     params.cfg.agents?.defaults?.subagents?.model,
-  ].some(isSubagentModelInheritSelection);
+  ].some((selection) => {
+    const normalized = normalizeModelSelection(selection);
+    return Boolean(
+      normalized &&
+      isSubagentModelInheritSelection(resolveModelThroughAliases(normalized, aliasIndex)),
+    );
+  });
 }
 
 /**
@@ -413,32 +442,23 @@ function resolveSubagentSpawnRawModelSelection(params: {
   cfg: OpenClawConfig;
   agentId: string;
   modelOverride?: unknown;
-  inheritedModel?: unknown;
 }): string {
   const runtimeDefault = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  const inheritedModel = normalizeModelSelection(params.inheritedModel);
-  const explicitModel = resolveSubagentModelCandidate({
-    selection: normalizeModelSelection(params.modelOverride),
-    inheritedModel,
-  });
+  const explicitModel = normalizeModelSelection(params.modelOverride);
   if (explicitModel) {
     return explicitModel;
   }
   const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
-  const agentSubagentModel = resolveSubagentModelCandidate({
-    selection: normalizeModelSelection(agentConfig?.subagents?.model),
-    inheritedModel,
-  });
+  const agentSubagentModel = normalizeModelSelection(agentConfig?.subagents?.model);
   if (agentSubagentModel) {
     return agentSubagentModel;
   }
-  const defaultsSubagentModel = resolveSubagentModelCandidate({
-    selection: normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model),
-    inheritedModel,
-  });
+  const defaultsSubagentModel = normalizeModelSelection(
+    params.cfg.agents?.defaults?.subagents?.model,
+  );
   if (defaultsSubagentModel) {
     return defaultsSubagentModel;
   }
@@ -459,15 +479,19 @@ export function resolveSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  const raw = resolveSubagentSpawnRawModelSelection(params);
-  if (isSubagentModelInheritSelection(raw)) {
-    return SUBAGENT_MODEL_INHERIT;
-  }
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: runtimeDefault.provider,
   });
-  return resolveModelThroughAliases(raw, aliasIndex);
+  const raw = resolveSubagentSpawnRawModelSelection(params);
+  return (
+    resolveSubagentModelCandidate({
+      selection: raw,
+      inheritedModel: normalizeModelSelection(params.inheritedModel),
+      aliasIndex,
+      unresolvedInheritFallback: SUBAGENT_MODEL_INHERIT,
+    }) ?? SUBAGENT_MODEL_INHERIT
+  );
 }
 
 export function buildAllowedModelSet(

@@ -45,7 +45,7 @@ export function describeSessionsSpawnTool(options?: {
       ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound, only when requester channel supports thread bindings.'
       : '`mode="run"` one-shot background work.',
     "Subagents inherit parent workspace.",
-    '`model="inherit"` makes native subagent runs follow the requester session model.',
+    '`model="inherit"` makes native subagent runs follow the requester session model unless that model alias exists.',
     "Native subagents get task in first visible `[Subagent Task]` message.",
     'Native only: `context="fork"` only when child needs current transcript; else omit or `isolated`.',
     "Use for fresh child-session work.",
