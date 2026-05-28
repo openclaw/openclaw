@@ -24,6 +24,7 @@ describe("Codex app-server attempt diagnostics", () => {
       },
       codeModeOnly: false,
       requestTimeoutMs: 60_000,
+      startupTimeoutMs: 120_000,
       turnCompletionIdleTimeoutMs: 60_000,
       approvalPolicy: "never" as const,
       approvalsReviewer: "user" as const,
