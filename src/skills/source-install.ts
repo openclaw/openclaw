@@ -7,11 +7,11 @@ import { writeJson } from "../infra/json-files.js";
 import { parseGitPluginSpec } from "../plugins/git-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { parseFrontmatter } from "../skills/frontmatter.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
-import { installExtractedSkillRoot, validateRequestedSkillSlug } from "./skills-archive-install.js";
-import { untrackClawHubSkill } from "./skills-clawhub.js";
+import { installExtractedSkillRoot, validateRequestedSkillSlug } from "./archive-install.js";
+import { untrackClawHubSkill } from "./clawhub.js";
+import { parseFrontmatter } from "./frontmatter.js";
 
 type Logger = {
   info?: (message: string) => void;

@@ -6,11 +6,11 @@ import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
-} from "../skills/home-env.test-support.js";
-import { buildWorkspaceSkillsPrompt } from "../skills/workspace.js";
-import { writeSkill } from "./skills.test-helpers.js";
+} from "./home-env.test-support.js";
+import { writeSkill } from "./test-helpers.js";
+import { buildWorkspaceSkillsPrompt } from "./workspace.js";
 
-vi.mock("../skills/plugin-skills.js", () => ({
+vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
 }));
 

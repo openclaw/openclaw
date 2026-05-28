@@ -3,13 +3,13 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { buildWorkspaceSkillsPrompt, syncSkillsToWorkspace } from "../skills/workspace.js";
-import { writeSkill } from "./skills.e2e-test-helpers.js";
+import { writeSkill } from "./e2e-test-helpers.js";
+import { buildWorkspaceSkillsPrompt, syncSkillsToWorkspace } from "./workspace.js";
 
 // Mock resolvePluginSkillDirs to return our test plugin skill directories
 const mockResolvePluginSkillDirs = vi.hoisted(() => vi.fn(() => [] as string[]));
 
-vi.mock("../skills/plugin-skills.js", () => ({
+vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: mockResolvePluginSkillDirs,
 }));
 

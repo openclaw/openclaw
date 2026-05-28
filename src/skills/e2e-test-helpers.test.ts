@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { writeSkill } from "./skills.e2e-test-helpers.js";
+import { writeSkill } from "./e2e-test-helpers.js";
 
 const tempDirs: string[] = [];
 

@@ -7,7 +7,7 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
   installExtractedSkillRoot,
-} from "./skills-archive-install.js";
+} from "./archive-install.js";
 
 const tempDirs = createTrackedTempDirs();
 

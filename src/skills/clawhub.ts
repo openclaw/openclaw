@@ -18,7 +18,7 @@ import {
   normalizeTrackedSkillSlug,
   resolveWorkspaceSkillInstallDir,
   validateRequestedSkillSlug,
-} from "./skills-archive-install.js";
+} from "./archive-install.js";
 
 const DOT_DIR = ".clawhub";
 const LEGACY_DOT_DIR = ".clawdhub";

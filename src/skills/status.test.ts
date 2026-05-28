@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { SkillEntry } from "../skills/types.js";
-import { readLocalSkillCardContentSync } from "./skills-clawhub.js";
-import { buildWorkspaceSkillStatus } from "./skills-status.js";
-import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
+import { readLocalSkillCardContentSync } from "./clawhub.js";
+import { buildWorkspaceSkillStatus } from "./status.js";
+import { createCanonicalFixtureSkill } from "./test-helpers.js";
+import type { SkillEntry } from "./types.js";
 
 type SkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number];
 

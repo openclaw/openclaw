@@ -2,13 +2,13 @@ import os from "node:os";
 import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createCanonicalFixtureSkill } from "../skills.test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "./home-env.test-support.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { createCanonicalFixtureSkill } from "./test-helpers.js";
 import type { SkillEntry } from "./types.js";
 import {
   formatSkillsCompact,

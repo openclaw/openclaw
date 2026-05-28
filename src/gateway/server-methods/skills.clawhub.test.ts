@@ -23,17 +23,17 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: vi.fn(() => undefined),
 }));
 
-vi.mock("../../agents/skills-clawhub.js", () => ({
+vi.mock("../../skills/clawhub.js", () => ({
   installSkillFromClawHub: (...args: unknown[]) => installSkillFromClawHubMock(...args),
   readLocalSkillCardContentSync: (...args: unknown[]) => readLocalSkillCardContentSyncMock(...args),
   updateSkillsFromClawHub: (...args: unknown[]) => updateSkillsFromClawHubMock(...args),
 }));
 
-vi.mock("../../agents/skills-status.js", () => ({
+vi.mock("../../skills/status.js", () => ({
   buildWorkspaceSkillStatus: (...args: unknown[]) => buildWorkspaceSkillStatusMock(...args),
 }));
 
-vi.mock("../../agents/skills-install.js", () => ({
+vi.mock("../../skills/install.js", () => ({
   installSkill: (...args: unknown[]) => installSkillMock(...args),
 }));
 

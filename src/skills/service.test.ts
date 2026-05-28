@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { writeWorkspaceSkills } from "../agents/skills.e2e-test-helpers.js";
+import { writeWorkspaceSkills } from "./e2e-test-helpers.js";
 import { SkillsService } from "./service.js";
 import { buildWorkspaceSkillSnapshot as buildLegacyWorkspaceSkillSnapshot } from "./workspace.js";
 

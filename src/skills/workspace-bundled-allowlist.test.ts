@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildWorkspaceSkillsPrompt } from "../skills/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
-import { writeSkill } from "./skills.e2e-test-helpers.js";
+import { writeSkill } from "./e2e-test-helpers.js";
+import { buildWorkspaceSkillsPrompt } from "./workspace.js";
 
 describe("buildWorkspaceSkillsPrompt", () => {
   it("applies bundled allowlist without affecting workspace skills", async () => {

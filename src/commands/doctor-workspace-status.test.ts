@@ -22,7 +22,7 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
 }));
 
-vi.mock("../agents/skills-status.js", () => ({
+vi.mock("../skills/status.js", () => ({
   buildWorkspaceSkillStatus: (...args: unknown[]) => mocks.buildWorkspaceSkillStatus(...args),
 }));
 

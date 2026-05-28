@@ -13,15 +13,15 @@ import {
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { writeSkill, writeWorkspaceSkills } from "./e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
-} from "../skills/home-env.test-support.js";
-import { readSkillFrontmatterSafe } from "../skills/local-loader.js";
-import { loadWorkspaceSkillEntries } from "../skills/workspace.js";
-import { writeSkill, writeWorkspaceSkills } from "./skills.e2e-test-helpers.js";
-import { writePluginWithSkill } from "./test-helpers/skill-plugin-fixtures.js";
+} from "./home-env.test-support.js";
+import { readSkillFrontmatterSafe } from "./local-loader.js";
+import { writePluginWithSkill } from "./skill-plugin-fixtures.test-support.js";
+import { loadWorkspaceSkillEntries } from "./workspace.js";
 
 vi.mock("../plugins/manifest-registry.js", async () => {
   const fs = await import("node:fs");

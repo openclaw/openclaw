@@ -6,16 +6,13 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "../skills/frontmatter.js";
-import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "../skills/local-loader.js";
-import type { SkillEntry } from "../skills/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
-import { installSkill, testing as skillsInstallTesting } from "./skills-install.js";
-import {
-  runCommandWithTimeoutMock,
-  scanDirectoryWithSummaryMock,
-} from "./skills-install.test-mocks.js";
+import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import { runCommandWithTimeoutMock, scanDirectoryWithSummaryMock } from "./install-test-mocks.js";
+import { installSkill, testing as skillsInstallTesting } from "./install.js";
+import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
+import type { SkillEntry } from "./types.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -25,7 +22,7 @@ vi.mock("../security/skill-scanner.js", () => ({
   scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
 }));
 
-vi.mock("../skills/plugin-skills.js", () => ({
+vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
 }));
 

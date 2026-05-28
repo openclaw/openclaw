@@ -38,7 +38,7 @@ const {
   resolveClawHubSkillVerificationTarget,
   searchSkillsFromClawHub,
   updateSkillsFromClawHub,
-} = await import("./skills-clawhub.js");
+} = await import("./clawhub.js");
 
 function expectInstallPackageSourceDir(sourceDir: string) {
   const call = installPackageDirMock.mock.calls.at(0);

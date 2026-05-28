@@ -11,6 +11,7 @@ import {
   type SkillInstallSpecMetadata,
 } from "../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
+import { resolveUserPath } from "../utils.js";
 import {
   hasBinary as defaultHasBinary,
   loadWorkspaceSkillEntries as defaultLoadWorkspaceSkillEntries,
@@ -18,12 +19,11 @@ import {
   type SkillEntry,
   type SkillInstallSpec,
   type SkillsInstallPreferences,
-} from "../skills/index.js";
-import { resolveSkillSource } from "../skills/source.js";
-import { resolveUserPath } from "../utils.js";
-import { installDownloadSpec } from "./skills-install-download.js";
-import { formatInstallFailureMessage } from "./skills-install-output.js";
-import type { SkillInstallResult } from "./skills-install.types.js";
+} from "./index.js";
+import { installDownloadSpec } from "./install-download.js";
+import { formatInstallFailureMessage } from "./install-output.js";
+import type { SkillInstallResult } from "./install-types.js";
+import { resolveSkillSource } from "./source.js";
 
 export type SkillInstallRequest = InstallSafetyOverrides & {
   workspaceDir: string;
@@ -32,7 +32,7 @@ export type SkillInstallRequest = InstallSafetyOverrides & {
   timeoutMs?: number;
   config?: OpenClawConfig;
 };
-export type { SkillInstallResult } from "./skills-install.types.js";
+export type { SkillInstallResult } from "./install-types.js";
 
 type SkillsInstallDeps = {
   hasBinary: (bin: string) => boolean;

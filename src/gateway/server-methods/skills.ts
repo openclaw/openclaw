@@ -17,14 +17,6 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
-import {
-  installSkillFromClawHub,
-  readLocalSkillCardContentSync,
-  searchSkillsFromClawHub,
-  updateSkillsFromClawHub,
-} from "../../agents/skills-clawhub.js";
-import { installSkill } from "../../agents/skills-install.js";
-import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import {
@@ -37,7 +29,15 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  installSkillFromClawHub,
+  readLocalSkillCardContentSync,
+  searchSkillsFromClawHub,
+  updateSkillsFromClawHub,
+} from "../../skills/clawhub.js";
 import { loadWorkspaceSkillEntries, type SkillEntry } from "../../skills/index.js";
+import { installSkill } from "../../skills/install.js";
+import { buildWorkspaceSkillStatus } from "../../skills/status.js";
 import { updateSkillConfigEntry } from "./skills-config-mutations.js";
 import { installUploadedSkillArchive, skillsUploadHandlers } from "./skills-upload.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";

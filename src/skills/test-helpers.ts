@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createSyntheticSourceInfo, type Skill } from "../skills/skill-contract.js";
+import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
 
 export async function writeSkill(params: {
   dir: string;

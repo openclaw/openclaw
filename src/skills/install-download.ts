@@ -12,13 +12,13 @@ import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import type { SkillEntry, SkillInstallSpec } from "../skills/index.js";
-import { resolveSkillToolsRootDir } from "../skills/tools-dir.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
-import { formatInstallFailureMessage } from "./skills-install-output.js";
-import type { SkillInstallResult } from "./skills-install.types.js";
+import type { SkillEntry, SkillInstallSpec } from "./index.js";
+import { formatInstallFailureMessage } from "./install-output.js";
+import type { SkillInstallResult } from "./install-types.js";
+import { resolveSkillToolsRootDir } from "./tools-dir.js";
 
-const extractModuleLoader = createLazyImportLoader(() => import("./skills-install-extract.js"));
+const extractModuleLoader = createLazyImportLoader(() => import("./install-extract.js"));
 
 async function loadExtractModule() {
   return await extractModuleLoader.load();

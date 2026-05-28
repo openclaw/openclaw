@@ -3,8 +3,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { installSkillFromSource } from "./skills-source-install.js";
-import { buildWorkspaceSkillStatus } from "./skills-status.js";
+import { installSkillFromSource } from "./source-install.js";
+import { buildWorkspaceSkillStatus } from "./status.js";
 
 async function writeSkill(dir: string, params: { name?: string; description?: string } = {}) {
   await fs.mkdir(dir, { recursive: true });
