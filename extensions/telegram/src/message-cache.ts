@@ -458,12 +458,12 @@ function mergeCachedMessageNode(
   const reusableExistingMedia =
     normalized.mediaRef && existing.mediaRef === normalized.mediaRef ? existing : undefined;
   const mediaPath = incoming.mediaPath ?? reusableExistingMedia?.mediaPath;
-  const mediaType =
-    mediaPath === incoming.mediaPath
-      ? (incoming.mediaType ?? normalized.mediaType)
-      : mediaPath === reusableExistingMedia?.mediaPath
-        ? (reusableExistingMedia.mediaType ?? normalized.mediaType)
-        : normalized.mediaType;
+  let mediaType = normalized.mediaType;
+  if (mediaPath === incoming.mediaPath) {
+    mediaType = incoming.mediaType ?? normalized.mediaType;
+  } else if (reusableExistingMedia && mediaPath === reusableExistingMedia.mediaPath) {
+    mediaType = reusableExistingMedia.mediaType ?? normalized.mediaType;
+  }
   return {
     ...normalized,
     ...(mediaPath ? { mediaPath } : {}),
