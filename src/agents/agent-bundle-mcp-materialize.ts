@@ -27,16 +27,20 @@ function toAgentToolResult(params: {
   const content = Array.isArray(params.result.content)
     ? (params.result.content as AgentToolResult<unknown>["content"])
     : [];
+  const structuredContentBlock =
+    params.result.structuredContent !== undefined
+      ? ({
+          type: "text",
+          text: `structuredContent:\n${JSON.stringify(params.result.structuredContent, null, 2)}`,
+        } as const)
+      : null;
   const normalizedContent: AgentToolResult<unknown>["content"] =
     content.length > 0
-      ? content
-      : params.result.structuredContent !== undefined
-        ? [
-            {
-              type: "text",
-              text: JSON.stringify(params.result.structuredContent, null, 2),
-            },
-          ]
+      ? structuredContentBlock
+        ? [...content, structuredContentBlock]
+        : content
+      : structuredContentBlock
+        ? [structuredContentBlock]
         : ([
             {
               type: "text",
