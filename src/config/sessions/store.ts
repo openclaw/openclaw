@@ -226,6 +226,9 @@ function updateSessionStoreWriteCaches(params: {
     serialized: params.cloneSerialized,
     takeOwnership: params.takeOwnership,
   });
+  if (params.cloneSerialized === undefined) {
+    setSerializedSessionStore(params.storePath, params.serialized, fileStat?.sizeBytes);
+  }
   dropSessionStoreSnapshotCache(params.storePath);
 }
 

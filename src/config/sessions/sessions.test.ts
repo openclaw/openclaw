@@ -530,6 +530,43 @@ describe("session store writer queue", () => {
     writeSpy.mockRestore();
   });
 
+  it("skips unchanged writes after persisting blobbed skills prompts", async () => {
+    const key = "agent:main:no-op-blobbed-save";
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "s-noop-blobbed",
+        updatedAt: Date.now(),
+        skillsSnapshot: {
+          prompt: `<available_skills>\n${"shared prompt\n".repeat(200)}</available_skills>`,
+          skills: [{ name: "demo" }],
+          version: 1,
+        },
+      },
+    });
+
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    await updateSessionStore(
+      storePath,
+      async (store) => {
+        store[key]!.displayName = "saved once";
+      },
+      { skipMaintenance: true },
+    );
+    writeSpy.mockClear();
+
+    await updateSessionStore(
+      storePath,
+      async () => {
+        // Intentionally no-op mutation after the disk JSON has prompt refs.
+      },
+      { skipMaintenance: true },
+    );
+
+    const storeWrites = writeSpy.mock.calls.filter(([targetPath]) => targetPath === storePath);
+    expect(storeWrites).toHaveLength(0);
+    writeSpy.mockRestore();
+  });
+
   it("caches unchanged session stores from persisted JSON shape", async () => {
     const key = "agent:main:no-op-cache";
     const { storePath } = await makeTmpStore({
