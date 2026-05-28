@@ -508,13 +508,11 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         typeof entry.claimHash === "string" && entry.claimHash.trim().length > 0
           ? entry.claimHash.trim()
           : undefined;
-      const snippet =
-        typeof entry.snippet === "string"
-          ? truncateShortTermSnippet(normalizeSnippet(entry.snippet))
-          : "";
-      if (snippet && isContaminatedDreamingSnippet(snippet)) {
+      const fullSnippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
+      if (fullSnippet && isContaminatedDreamingSnippet(fullSnippet)) {
         continue;
       }
+      const snippet = truncateShortTermSnippet(fullSnippet);
       const queryHashes = Array.isArray(entry.queryHashes)
         ? normalizeDistinctStrings(entry.queryHashes, MAX_QUERY_HASHES)
         : [];
@@ -530,7 +528,7 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
             ),
             MAX_CONCEPT_TAGS,
           )
-        : deriveConceptTags({ path: entryPath, snippet });
+        : deriveConceptTags({ path: entryPath, snippet: fullSnippet });
 
       const normalizedKey =
         key || buildEntryKey({ path: entryPath, startLine, endLine, source, claimHash });

@@ -2053,6 +2053,51 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("rejects long contaminated legacy recall entries before truncating snippets", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              contaminated: {
+                key: "contaminated",
+                path: "memory/2026-04-01.md",
+                startLine: 1,
+                endLine: 1,
+                source: "memory",
+                snippet: `Candidate: ${"x".repeat(maxSnippetChars + 100)} confidence: 9 evidence: memory/.dreams/session-corpus/2026-04-01.txt status: staged recalls: 1`,
+                recallCount: 1,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 1,
+                maxScore: 0.75,
+                firstRecalledAt: "2026-04-01T00:00:00.000Z",
+                lastRecalledAt: "2026-04-01T00:00:00.000Z",
+                queryHashes: ["q"],
+                recallDays: ["2026-04-01"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(repair.changed).toBe(true);
+      expect(repair.removedInvalidEntries).toBe(1);
+      expect(await readRecallStoreEntries(workspaceDir)).toEqual({});
+    });
+  });
+
   it("repairs empty recall-store files without throwing", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
