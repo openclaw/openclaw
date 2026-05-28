@@ -10,6 +10,8 @@ const mockState = vi.hoisted(() => ({
     oneose?: () => void;
     onclose?: (reason: string[]) => void;
   } | null,
+  subscribeMany: vi.fn(),
+  close: vi.fn(),
   verifyEvent: vi.fn(() => true),
   decrypt: vi.fn(() => "plaintext"),
   publishProfile: vi.fn(async () => ({
@@ -23,14 +25,15 @@ const mockState = vi.hoisted(() => ({
 vi.mock("nostr-tools", () => {
   class MockSimplePool {
     subscribeMany(
-      _relays: string[],
-      _filters: unknown,
+      relays: string[],
+      filters: unknown,
       handlers: {
         onevent: (event: Record<string, unknown>) => void | Promise<void>;
         oneose?: () => void;
         onclose?: (reason: string[]) => void;
       },
     ) {
+      mockState.subscribeMany(relays, filters, handlers);
       mockState.handlers = handlers;
       return {
         close: vi.fn(),
@@ -38,6 +41,10 @@ vi.mock("nostr-tools", () => {
     }
 
     publish = vi.fn(async () => {});
+
+    close(relays: string[]) {
+      mockState.close(relays);
+    }
   }
 
   return {
@@ -91,6 +98,8 @@ async function emitEvent(event: Record<string, unknown>) {
 describe("startNostrBus inbound guards", () => {
   beforeEach(() => {
     mockState.handlers = null;
+    mockState.subscribeMany.mockClear();
+    mockState.close.mockClear();
     mockState.verifyEvent.mockClear();
     mockState.verifyEvent.mockReturnValue(true);
     mockState.decrypt.mockClear();
@@ -99,6 +108,40 @@ describe("startNostrBus inbound guards", () => {
 
   afterEach(() => {
     mockState.handlers = null;
+  });
+
+  it("subscribes to DMs with a single Nostr filter object", async () => {
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage: vi.fn(async () => {}),
+      onMetric: () => {},
+    });
+
+    expect(mockState.subscribeMany).toHaveBeenCalledTimes(1);
+    const filters = mockState.subscribeMany.mock.calls[0]?.[1];
+    expect(Array.isArray(filters)).toBe(false);
+    expect(filters).toMatchObject({
+      kinds: [4],
+      "#p": [BOT_PUBKEY],
+      since: 0,
+    });
+
+    bus.close();
+  });
+
+  it("closes the relay pool when the bus closes", async () => {
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      relays: ["wss://relay.example"],
+      onMessage: vi.fn(async () => {}),
+      onMetric: () => {},
+    });
+
+    bus.close();
+
+    await vi.waitFor(() => {
+      expect(mockState.close).toHaveBeenCalledWith(["wss://relay.example"]);
+    });
   });
 
   it("checks sender authorization after verify and before decrypt", async () => {
