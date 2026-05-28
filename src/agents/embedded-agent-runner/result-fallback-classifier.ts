@@ -80,6 +80,9 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (hasOutboundDeliveryEvidence(params.result)) {
     return null;
   }
+  if (params.result.meta.error?.kind === "hook_block") {
+    return null;
+  }
 
   const harnessClassification = classifyHarnessResult({
     provider: params.provider,

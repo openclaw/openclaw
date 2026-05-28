@@ -46,6 +46,30 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("preserves hook block results with auth-like error payload text", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "custom",
+      model: "gpt-5.5",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: "Access denied by policy",
+          },
+        ],
+        meta: {
+          durationMs: 42,
+          error: {
+            kind: "hook_block",
+            message: "Access denied by policy",
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("does not retry unclassified non-GPT error payloads", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
