@@ -1045,6 +1045,30 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     }
   });
 
+  it("keeps upgrade survivor mutable state off the host-mounted artifact tree", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+
+    for (const script of [runner, publishedRunner]) {
+      expect(script).toContain("openclaw-upgrade-survivor-runtime");
+      expect(script).toContain("OPENCLAW_UPGRADE_SURVIVOR_TMPDIR");
+      expect(script).toContain("OPENCLAW_UPGRADE_SURVIVOR_TEST_STATE_TMPDIR");
+      expect(script).toContain(
+        'export npm_config_cache="${OPENCLAW_UPGRADE_SURVIVOR_NPM_CACHE:-$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT/npm-cache}"',
+      );
+      expect(script).toContain('export NPM_CONFIG_CACHE="$npm_config_cache"');
+      expect(script).toContain('chmod 700 "$npm_config_cache" || true');
+      expect(script).not.toContain('export TMPDIR="$ARTIFACT_ROOT/tmp"');
+      expect(script).not.toContain(
+        'export TMPDIR="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/tmp"',
+      );
+      expect(script).not.toContain('export npm_config_cache="$ARTIFACT_ROOT/npm-cache"');
+      expect(script).not.toContain(
+        'export npm_config_cache="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/npm-cache"',
+      );
+    }
+  });
+
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {
     const paths = [
       CODEX_ON_DEMAND_DOCKER_E2E_PATH,

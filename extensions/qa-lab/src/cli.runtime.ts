@@ -521,21 +521,26 @@ function printQaCredentialListTable(credentials: QaCredentialRecord[]) {
   }
   const rows = credentials.map((credential) => ({
     credentialId: credential.credentialId,
+    fingerprint: credential.credentialFingerprint ?? "",
     kind: credential.kind,
     status: credential.status,
     leased: formatQaCredentialLeaseState(credential),
     note: credential.note ?? "",
   }));
   const idWidth = Math.max("credentialId".length, ...rows.map((row) => row.credentialId.length));
+  const fingerprintWidth = Math.max(
+    "fingerprint".length,
+    ...rows.map((row) => row.fingerprint.length),
+  );
   const kindWidth = Math.max("kind".length, ...rows.map((row) => row.kind.length));
   const statusWidth = Math.max("status".length, ...rows.map((row) => row.status.length));
   const leaseWidth = Math.max("leased".length, ...rows.map((row) => row.leased.length));
   process.stdout.write(
-    `${"credentialId".padEnd(idWidth)}  ${"kind".padEnd(kindWidth)}  ${"status".padEnd(statusWidth)}  ${"leased".padEnd(leaseWidth)}  note\n`,
+    `${"credentialId".padEnd(idWidth)}  ${"fingerprint".padEnd(fingerprintWidth)}  ${"kind".padEnd(kindWidth)}  ${"status".padEnd(statusWidth)}  ${"leased".padEnd(leaseWidth)}  note\n`,
   );
   for (const row of rows) {
     process.stdout.write(
-      `${row.credentialId.padEnd(idWidth)}  ${row.kind.padEnd(kindWidth)}  ${row.status.padEnd(statusWidth)}  ${row.leased.padEnd(leaseWidth)}  ${row.note}\n`,
+      `${row.credentialId.padEnd(idWidth)}  ${row.fingerprint.padEnd(fingerprintWidth)}  ${row.kind.padEnd(kindWidth)}  ${row.status.padEnd(statusWidth)}  ${row.leased.padEnd(leaseWidth)}  ${row.note}\n`,
     );
   }
 }

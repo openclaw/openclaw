@@ -28,6 +28,7 @@ import {
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
+  CROSS_OS_FETCH_BODY_MAX_CHARS,
   CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
@@ -51,6 +52,7 @@ import {
   parseArgs,
   packageHasScript,
   readInstalledVersion,
+  readBoundedCrossOsResponseText,
   readRunnerOverrideEnv,
   resolveCrossOsAgentTurnOptional,
   runCommand,
@@ -85,6 +87,17 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("keeps dashboard smoke patient enough for cold packaged gateway startup", () => {
     expect(CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000);
     expect(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+  });
+
+  it("bounds cross-OS fetched response bodies", async () => {
+    const tail = "tail-sentinel-should-not-appear";
+    const response = new Response(`${"x".repeat(5000)}${tail}`);
+
+    const text = await readBoundedCrossOsResponseText(response, 128);
+
+    expect(text).toContain("[truncated]");
+    expect(text).not.toContain(tail);
+    expect(CROSS_OS_FETCH_BODY_MAX_CHARS).toBeGreaterThan(1024);
   });
 
   it("keeps gateway RPC status probes patient enough for live release startup", () => {

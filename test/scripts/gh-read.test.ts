@@ -5,6 +5,7 @@ import {
   normalizeRepo,
   parsePermissionKeys,
   parseRepoArg,
+  readBoundedGitHubErrorText,
   resolveGitHubFetchTimeoutMs,
 } from "../../scripts/gh-read.js";
 
@@ -78,6 +79,19 @@ describe("gh-read helpers", () => {
     });
 
     await expect(request).rejects.toThrow(/GitHub API GET \/app\/installations exceeded timeout/u);
+  });
+
+  it("bounds GitHub API error response bodies", async () => {
+    const tail = "tail-sentinel-should-not-appear";
+    const response = new Response(`${"x".repeat(5000)}${tail}`, {
+      status: 500,
+    });
+
+    const text = await readBoundedGitHubErrorText(response);
+
+    expect(text).toContain("[truncated]");
+    expect(text).not.toContain(tail);
+    expect(text.length).toBeLessThan(4200);
   });
 
   it("rejects invalid GitHub API timeout values", () => {

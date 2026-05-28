@@ -2054,6 +2054,8 @@ export type OpenClawPluginCommandDefinition = {
   requireAuth?: boolean;
   /** Operator scopes required by gateway clients; command owners may satisfy this on chat surfaces. */
   requiredScopes?: OperatorScope[];
+  /** Whether a trusted bundled handler needs owner status for subcommand-level authorization. */
+  exposeSenderIsOwner?: boolean;
   /**
    * Allows a bundled plugin to claim a command name that is otherwise reserved
    * by core. External plugins cannot use this field.

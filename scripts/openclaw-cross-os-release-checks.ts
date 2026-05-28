@@ -120,6 +120,7 @@ const OMITTED_QA_EXTENSION_PREFIXES = [
 ];
 export const CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS = 120_000;
 export const CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS = 10_000;
+export const CROSS_OS_FETCH_BODY_MAX_CHARS = 1024 * 1024;
 export const CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS = 30_000;
 export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
@@ -2462,6 +2463,45 @@ async function configureDiscordSmoke(params) {
   });
 }
 
+export async function readBoundedCrossOsResponseText(
+  response: Response,
+  maxChars = CROSS_OS_FETCH_BODY_MAX_CHARS,
+): Promise<string> {
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let truncated = false;
+
+  try {
+    while (text.length <= maxChars) {
+      const { done, value } = await reader.read();
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+
+      text += decoder.decode(value, { stream: true });
+      if (text.length > maxChars) {
+        text = text.slice(0, maxChars);
+        truncated = true;
+        break;
+      }
+    }
+  } finally {
+    if (truncated) {
+      await reader.cancel().catch(() => undefined);
+    } else {
+      reader.releaseLock();
+    }
+  }
+
+  return truncated ? `${text}\n[truncated]` : text;
+}
+
 async function waitForDiscordMessage(params) {
   const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() < deadline) {
@@ -2473,7 +2513,7 @@ async function waitForDiscordMessage(params) {
         },
       },
     );
-    const text = await response.text();
+    const text = await readBoundedCrossOsResponseText(response);
     if (!response.ok) {
       await sleep(2_000);
       continue;
@@ -2501,7 +2541,7 @@ async function postDiscordMessage(params) {
       }),
     },
   );
-  const text = await response.text();
+  const text = await readBoundedCrossOsResponseText(response);
   if (!response.ok) {
     throw new Error(`Failed to post Discord smoke message: ${text}`);
   }
@@ -3292,7 +3332,7 @@ async function runDashboardSmoke(params) {
         const response = await fetch(dashboardUrl, {
           signal: AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS),
         });
-        const html = await response.text();
+        const html = await readBoundedCrossOsResponseText(response);
         if (
           response.ok &&
           html.includes("<title>OpenClaw Control</title>") &&

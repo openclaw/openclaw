@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mjs";
 import {
+  appendBoundedShellCapture,
   canStartSchedulerLane,
   describeDockerSchedulerLimits,
   dockerPreflightContainerNames,
   parseDockerAllCliArgs,
+  SHELL_CAPTURE_MAX_CHARS,
 } from "../../scripts/test-docker-all.mjs";
 
 const limits = {
@@ -275,6 +277,15 @@ postgres Created
       "openclaw-openwebui-gateway-567",
       "openclaw-openwebui-678",
     ]);
+  });
+
+  it("bounds captured preflight command output while keeping the newest tail", () => {
+    const first = appendBoundedShellCapture("abc", "def", 8);
+    expect(first).toEqual({ text: "abcdef", truncated: false });
+
+    const second = appendBoundedShellCapture(first.text, "ghijkl", 8);
+    expect(second).toEqual({ text: "efghijkl", truncated: true });
+    expect(SHELL_CAPTURE_MAX_CHARS).toBeGreaterThan(1024);
   });
 
   it("describes effective scheduler limits for operator errors", () => {

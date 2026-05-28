@@ -225,6 +225,7 @@ jobs:
       - name: Checkout harness ref
         uses: actions/checkout@v6
         with:
+          ref: main
           persist-credentials: false
           fetch-depth: 0
 

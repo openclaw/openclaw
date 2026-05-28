@@ -489,13 +489,7 @@ async function readSessionLogSnapshot(params: {
       snapshot.byteSize = Math.floor(scannedSize);
       return snapshot;
     }
-    try {
-      const stat = await fs.promises.stat(logPath);
-      const size = Math.floor(stat.size);
-      snapshot.byteSize = Number.isFinite(size) && size >= 0 ? size : undefined;
-    } catch {
-      snapshot.byteSize = undefined;
-    }
+    snapshot.byteSize = await readSessionLogByteSize(logPath);
   }
 
   return snapshot;
@@ -506,6 +500,20 @@ type SessionLogUsageScan = {
   trailingBytes?: number;
   byteSize: number;
 };
+
+async function readSessionLogByteSize(logPath: string): Promise<number | undefined> {
+  let handle: fs.promises.FileHandle | undefined;
+  try {
+    handle = await fs.promises.open(logPath, "r");
+    const stat = await handle.stat();
+    const size = Math.floor(stat.size);
+    return Number.isFinite(size) && size >= 0 ? size : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close();
+  }
+}
 
 async function readLastNonzeroUsageFromSessionLog(logPath: string): Promise<SessionLogUsageScan> {
   const handle = await fs.promises.open(logPath, "r");

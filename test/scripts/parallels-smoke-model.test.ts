@@ -510,7 +510,8 @@ if (isPrlctl) {
   it("passes aggregate model overrides into each OS fresh lane", () => {
     const script = readFileSync(TS_PATHS.npmUpdate, "utf8");
 
-    expect(script).toContain("scripts/e2e/parallels/${platform}-smoke.ts");
+    expect(script).toContain("scripts/e2e/parallels-${platform}-smoke.sh");
+    expect(script).toContain('this.formatRerun("bash", args, env)');
     expect(script).toContain('"--model"');
     expect(script).toContain("auth.modelId");
     expect(script).toContain("authForPlatform");
