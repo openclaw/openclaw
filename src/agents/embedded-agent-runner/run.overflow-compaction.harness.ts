@@ -457,6 +457,17 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("../model-runtime-aliases.js", () => ({
+    isCliRuntimeAliasForProvider: ({
+      runtime,
+      provider,
+    }: {
+      runtime?: string;
+      provider?: string;
+    }) =>
+      (provider?.trim().toLowerCase() === "anthropic" &&
+        runtime?.trim().toLowerCase() === "claude-cli") ||
+      (provider?.trim().toLowerCase() === "openai" &&
+        runtime?.trim().toLowerCase() === "codex-cli"),
     resolveCliRuntimeExecutionProvider: ({
       provider,
       cfg,

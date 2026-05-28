@@ -1124,7 +1124,7 @@ describe("CLI attempt execution", () => {
         agents: {
           defaults: {
             models: {
-              "openai/gpt-5.4": { agentRuntime: { id: "codex-cli" } },
+              "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
             },
           },
         },
