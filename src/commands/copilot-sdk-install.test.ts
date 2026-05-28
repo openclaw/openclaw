@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -9,6 +10,7 @@ import {
   ensureCopilotSdkForModelSelection,
   installCopilotSdk,
   isCopilotSdkInstalled,
+  resolveCopilotSdkFallbackDir,
   selectedModelShouldEnsureCopilotSdk,
   verifyCopilotSdkInstall,
 } from "./copilot-sdk-install.js";
@@ -440,6 +442,15 @@ describe("installCopilotSdk", () => {
 describe("constants", () => {
   it("exports fallback dir under ~/.openclaw/npm-runtime/copilot", () => {
     expect(COPILOT_SDK_FALLBACK_DIR).toMatch(/\.openclaw[\\/]+npm-runtime[\\/]+copilot$/);
+  });
+
+  it("resolves fallback dir from OPENCLAW_STATE_DIR when the profile is relocated", () => {
+    expect(
+      resolveCopilotSdkFallbackDir({
+        ...process.env,
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
+      }),
+    ).toBe(path.join("/tmp/openclaw-state", "npm-runtime", "copilot"));
   });
 
   it("pins SDK spec to @github/copilot-sdk@1.0.0-beta.4", () => {

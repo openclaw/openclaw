@@ -7,6 +7,7 @@ import {
   COPILOT_SDK_SPEC,
   resetCopilotSdkCacheForTests,
   loadCopilotSdk,
+  resolveCopilotSdkFallbackDir,
 } from "./sdk-loader.js";
 
 const FAKE_SDK = {
@@ -200,6 +201,15 @@ describe("sdk-loader", () => {
 
   it("default fallback dir points at ~/.openclaw/npm-runtime/copilot", () => {
     expect(COPILOT_SDK_FALLBACK_DIR).toMatch(/\.openclaw[\\/]+npm-runtime[\\/]+copilot$/);
+  });
+
+  it("resolves the fallback dir from OPENCLAW_STATE_DIR for relocated profiles", () => {
+    expect(
+      resolveCopilotSdkFallbackDir({
+        ...process.env,
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
+      }),
+    ).toBe(path.join("/tmp/openclaw-state", "npm-runtime", "copilot"));
   });
 
   afterEach(() => {

@@ -1,11 +1,15 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type * as Sdk from "@github/copilot-sdk";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
-export const COPILOT_SDK_FALLBACK_DIR = path.join(homedir(), ".openclaw", "npm-runtime", "copilot");
+export function resolveCopilotSdkFallbackDir(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), "npm-runtime", "copilot");
+}
+
+export const COPILOT_SDK_FALLBACK_DIR = resolveCopilotSdkFallbackDir();
 
 export const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.0-beta.4";
 
@@ -40,7 +44,7 @@ export function resetCopilotSdkCacheForTests(): void {
 }
 
 async function doLoad(options: LoadCopilotSdkOptions): Promise<typeof Sdk> {
-  const fallbackDir = options.fallbackDir ?? COPILOT_SDK_FALLBACK_DIR;
+  const fallbackDir = options.fallbackDir ?? resolveCopilotSdkFallbackDir();
   const primaryImport = options.primaryImport ?? (async () => await import("@github/copilot-sdk"));
 
   let primaryErr: unknown;

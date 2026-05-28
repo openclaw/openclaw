@@ -1139,9 +1139,9 @@ export const fr: TranslationMap = {
       sendMessage: "Send message",
     },
     queue: {
-      retry: "Retry",
-      retrySend: "Retry send",
-      retryQueuedMessage: "Retry queued message",
+      retry: "Réessayer",
+      retrySend: "Réessayer l’envoi",
+      retryQueuedMessage: "Réessayer le message en file d’attente",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

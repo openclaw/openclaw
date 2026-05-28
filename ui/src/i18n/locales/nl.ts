@@ -1131,9 +1131,9 @@ export const nl: TranslationMap = {
       sendMessage: "Send message",
     },
     queue: {
-      retry: "Retry",
-      retrySend: "Retry send",
-      retryQueuedMessage: "Retry queued message",
+      retry: "Opnieuw proberen",
+      retrySend: "Verzenden opnieuw proberen",
+      retryQueuedMessage: "Bericht in wachtrij opnieuw proberen",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

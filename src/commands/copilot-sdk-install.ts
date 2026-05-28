@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { modelSelectionShouldEnsureCopilotSdk as routingShouldEnsure } from "../agents/copilot-routing.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -23,11 +23,14 @@ import type { WizardPrompter } from "../wizard/prompts.js";
  * package (the SDK) rather than a full openclaw plugin, so the install
  * machinery here is much smaller than `ensureCodexRuntimePluginForModelSelection`.
  *
- * The constants `COPILOT_SDK_FALLBACK_DIR` and `COPILOT_SDK_SPEC` are
- * mirrored in the copilot extension's sdk-loader module; a contract test
- * in that file asserts equality so the two never drift.
+ * The fallback-dir resolver and `COPILOT_SDK_SPEC` are mirrored in the
+ * copilot extension's sdk-loader module; contract tests keep them aligned.
  */
-export const COPILOT_SDK_FALLBACK_DIR = path.join(homedir(), ".openclaw", "npm-runtime", "copilot");
+export function resolveCopilotSdkFallbackDir(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), "npm-runtime", "copilot");
+}
+
+export const COPILOT_SDK_FALLBACK_DIR = resolveCopilotSdkFallbackDir();
 
 export const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.0-beta.4";
 
@@ -66,7 +69,9 @@ export function selectedModelShouldEnsureCopilotSdk(params: {
   return routingShouldEnsure({ config: params.cfg, model: params.model });
 }
 
-export function isCopilotSdkInstalled(fallbackDir: string = COPILOT_SDK_FALLBACK_DIR): boolean {
+export function isCopilotSdkInstalled(
+  fallbackDir: string = resolveCopilotSdkFallbackDir(),
+): boolean {
   const sdkPath = path.join(fallbackDir, "node_modules", "@github", "copilot-sdk");
   return existsSync(sdkPath);
 }
@@ -207,7 +212,7 @@ export function verifyCopilotSdkInstall(
 export async function installCopilotSdk(
   options: InstallCopilotSdkOptions = {},
 ): Promise<InstallCopilotSdkResult> {
-  const fallbackDir = options.fallbackDir ?? COPILOT_SDK_FALLBACK_DIR;
+  const fallbackDir = options.fallbackDir ?? resolveCopilotSdkFallbackDir();
   const spec = options.spec ?? COPILOT_SDK_SPEC;
   const logger = options.logger ?? (() => undefined);
   const manifestDir = options.manifestDir ?? COPILOT_SDK_INSTALL_MANIFEST_DIR;
@@ -307,7 +312,8 @@ export async function ensureCopilotSdkForModelSelection(params: {
 
   const isInstalled =
     params.isInstalled ??
-    (() => verifyCopilotSdkInstall(COPILOT_SDK_FALLBACK_DIR, COPILOT_SDK_INSTALL_MANIFEST_DIR).ok);
+    (() =>
+      verifyCopilotSdkInstall(resolveCopilotSdkFallbackDir(), COPILOT_SDK_INSTALL_MANIFEST_DIR).ok);
   if (isInstalled()) {
     return {
       cfg: params.cfg,

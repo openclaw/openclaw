@@ -1096,9 +1096,9 @@ export const th: TranslationMap = {
       sendMessage: "Send message",
     },
     queue: {
-      retry: "Retry",
-      retrySend: "Retry send",
-      retryQueuedMessage: "Retry queued message",
+      retry: "ลองอีกครั้ง",
+      retrySend: "ลองส่งอีกครั้ง",
+      retryQueuedMessage: "ลองส่งข้อความในคิวอีกครั้ง",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
