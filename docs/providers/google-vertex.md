@@ -118,6 +118,11 @@ Choose the auth method that matches your environment.
         gcloud services enable aiplatform.googleapis.com
         ```
       </Step>
+      <Step title="Verify">
+        ```bash
+        openclaw models list --provider google-vertex
+        ```
+      </Step>
     </Steps>
   </Tab>
 </Tabs>
@@ -133,6 +138,13 @@ After onboarding, your `openclaw.json` will include:
       model: { primary: "google-vertex/gemini-flash-latest" },
     },
   },
+  models: {
+    providers: {
+      "google-vertex": {
+        models: [{ id: "gemini-flash-latest", name: "Gemini Flash (latest)" }],
+      },
+    },
+  },
   env: {
     GOOGLE_CLOUD_PROJECT: "your-project-id",
     GOOGLE_CLOUD_LOCATION: "global",
@@ -144,7 +156,7 @@ After onboarding, your `openclaw.json` will include:
 
 | Variable | Required | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `GOOGLE_CLOUD_PROJECT` | Yes | Auto-detected on GCE/GKE | GCP project ID |
+| `GOOGLE_CLOUD_PROJECT` | Yes (auto-detected during onboarding on GCE/GKE) | None | GCP project ID |
 | `GOOGLE_CLOUD_LOCATION` | No | `global` | Vertex AI endpoint region |
 | `GOOGLE_APPLICATION_CREDENTIALS` | No | Auto-detected | Path to service account key file |
 | `GOOGLE_CLOUD_API_KEY` | No | None | Vertex AI Express API key (alternative to ADC) |
@@ -163,7 +175,8 @@ Use the `google-vertex/` prefix with any Gemini model available on Vertex AI.
 ### Latest aliases (recommended)
 
 These auto-updating aliases always point to the latest stable version of each
-model family. Recommended for most users:
+model family. Recommended for most users. The onboarding wizard sets
+`gemini-flash-latest` as the default model.
 
 | Model | ID |
 | :--- | :--- |
@@ -227,10 +240,11 @@ automatically (e.g. `gemini-3.1-pro` resolves to `gemini-3.1-pro-preview`).
   </Accordion>
 
   <Accordion title="Requests go to OpenAI instead of Vertex AI">
-    This can happen if the model config is missing the `api` transport type.
     OpenClaw defaults the `google-vertex` provider to the correct Vertex AI
-    transport automatically. If you have a custom provider config, make sure it
-    includes `"api": "google-vertex"`.
+    transport automatically for standard configurations. If you have a custom
+    provider config in `models.providers`, make sure it includes
+    `"api": "google-vertex"` so requests are routed to the Vertex AI endpoint
+    instead of the default OpenAI-compatible path.
   </Accordion>
 </AccordionGroup>
 
