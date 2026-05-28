@@ -490,7 +490,9 @@ function resolveGuardedFetchImpl(params: {
   ) {
     return params.fetchFn;
   }
-  return undefined;
+  throw new Error(
+    "MSTeams attachment fetchFn must set fetchFnSupportsDispatcher to use guarded DNS pinning",
+  );
 }
 
 export function resolveAttachmentFetchPolicy(params?: {

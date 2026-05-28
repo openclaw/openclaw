@@ -190,6 +190,24 @@ describe("safeFetch", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("fails explicitly for custom fetch functions that cannot receive the pinned dispatcher", async () => {
+    let called = false;
+    const customFetch = async () => {
+      called = true;
+      return new Response("ok", { status: 200 });
+    };
+
+    await expect(
+      safeFetch({
+        url: "https://teams.sharepoint.com/file.pdf",
+        allowHosts: ["sharepoint.com"],
+        fetchFn: customFetch as typeof fetch,
+        resolveFn: publicResolve,
+      }),
+    ).rejects.toThrow("fetchFnSupportsDispatcher");
+    expect(called).toBe(false);
+  });
+
   it("returns the redirect response when dispatcher is provided by an outer guard", async () => {
     const redirectedTo = "https://cdn.sharepoint.com/storage/file.pdf";
     const fetchMock = mockFetchWithRedirect({
