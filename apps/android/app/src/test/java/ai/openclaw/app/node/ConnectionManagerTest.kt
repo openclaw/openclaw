@@ -123,6 +123,22 @@ class ConnectionManagerTest {
   }
 
   @Test
+  fun resolveTlsParamsForEndpoint_manualPrivateLanPreservesStoredPin() {
+    val endpoint = GatewayEndpoint.manual(host = "192.168.1.20", port = 18789)
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = "pinned",
+        manualTlsEnabled = false,
+      )
+
+    assertEquals(true, params?.required)
+    assertEquals("pinned", params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
+  }
+
+  @Test
   fun resolveTlsParamsForEndpoint_discoveryTailnetWithoutHintsStillRequiresTls() {
     val endpoint =
       GatewayEndpoint(
