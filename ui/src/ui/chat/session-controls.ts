@@ -604,7 +604,7 @@ function renderChatSessionPickerPopover(
           title=${t("common.search")}
           aria-label=${t("common.search")}
           ?disabled=${controlsDisabled}
-          @click=${() => void applyChatSessionPickerSearch(state)}
+          @mousedown=${(t: MouseEvent) => { if (t.button === 0) { t.preventDefault(); void applyChatSessionPickerSearch(state); } }}
         >
           ${icons.search}
         </button>
@@ -616,7 +616,7 @@ function renderChatSessionPickerPopover(
               title=${t("chat.selectors.clearSessionSearch")}
               aria-label=${t("chat.selectors.clearSessionSearch")}
               ?disabled=${controlsDisabled}
-              @click=${() => clearChatSessionPickerSearch(state)}
+              @mousedown=${(t: MouseEvent) => { if (t.button === 0) { t.preventDefault(); clearChatSessionPickerSearch(state); } }}
             >
               ${icons.x}
             </button>`
@@ -652,12 +652,7 @@ function renderChatSessionPickerPopover(
                 aria-selected=${selected ? "true" : "false"}
                 title=${label}
                 type="button"
-                @click=${() => {
-                  closeChatSessionPicker(state);
-                  if (row.key !== state.sessionKey) {
-                    onSwitchSession(state, row.key);
-                  }
-                }}
+                @mousedown=${(t: MouseEvent) => { if (t.button === 0) { t.preventDefault(); closeChatSessionPicker(state); if (row.key !== state.sessionKey) { onSwitchSession(state, row.key); } } }}
               >
                 <span class="chat-session-picker__option-main">
                   <span class="chat-session-picker__option-label">${label}</span>
@@ -681,7 +676,7 @@ function renderChatSessionPickerPopover(
               data-chat-session-load-more="true"
               type="button"
               ?disabled=${loadMoreDisabled}
-              @click=${() => void loadMoreChatSessionPickerResults(state)}
+              @mousedown=${(t: MouseEvent) => { if (t.button === 0) { t.preventDefault(); void loadMoreChatSessionPickerResults(state); } }}
             >
               ${t("chat.selectors.loadMoreSessions")}
             </button>`
