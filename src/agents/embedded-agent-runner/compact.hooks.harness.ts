@@ -35,6 +35,10 @@ export const hookRunner = {
 };
 
 export const ensureRuntimePluginsLoaded: Mock<(params?: unknown) => void> = vi.fn();
+export const sessionLockReleaseMock: Mock<() => Promise<void>> = vi.fn(async () => {});
+export const repairSessionFileIfNeededMock: Mock<(params?: unknown) => Promise<void>> = vi.fn(
+  async () => {},
+);
 export const resolveContextEngineMock = vi.fn(async () => ({
   info: { ownsCompaction: true as boolean },
   compact: contextEngineCompactMock,
@@ -308,6 +312,10 @@ export function resetCompactHooksHarnessMocks(): void {
   hookRunner.runAfterCompaction.mockResolvedValue(undefined);
 
   ensureRuntimePluginsLoaded.mockReset();
+  sessionLockReleaseMock.mockReset();
+  sessionLockReleaseMock.mockResolvedValue(undefined);
+  repairSessionFileIfNeededMock.mockReset();
+  repairSessionFileIfNeededMock.mockResolvedValue(undefined);
 
   resolveContextEngineMock.mockReset();
   resolveContextEngineMock.mockResolvedValue({
@@ -524,11 +532,11 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../session-file-repair.js", () => ({
-    repairSessionFileIfNeeded: vi.fn(async () => {}),
+    repairSessionFileIfNeeded: repairSessionFileIfNeededMock,
   }));
 
   vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+    acquireSessionWriteLock: vi.fn(async () => ({ release: sessionLockReleaseMock })),
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
     resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
     resolveSessionWriteLockOptions: vi.fn(() => ({

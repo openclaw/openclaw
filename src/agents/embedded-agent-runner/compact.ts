@@ -637,6 +637,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
   let compactionSessionManager: unknown = null;
   let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
   let checkpointSnapshotRetained = false;
+  let releaseSessionLockOnce: (() => Promise<void>) | undefined;
   try {
     const skillsSnapshotForRun =
       sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? undefined : params.skillsSnapshot;
@@ -1021,6 +1022,17 @@ async function compactEmbeddedAgentSessionDirectOnce(
         }),
       }),
     });
+    // Idempotent so outer finally is safe after happy-path release (#84193).
+    let sessionLockReleased = false;
+    releaseSessionLockOnce = async (): Promise<void> => {
+      if (sessionLockReleased) {
+        return;
+      }
+      sessionLockReleased = true;
+      await sessionLock.release().catch((err) => {
+        log.warn(`failed to release compaction session lock: ${formatErrorMessage(err)}`);
+      });
+    };
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -1476,7 +1488,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       } catch {
         /* best-effort */
       }
-      await sessionLock.release();
+      await releaseSessionLockOnce();
     }
   } catch (err) {
     const reason = resolveCompactionFailureReason({
@@ -1485,6 +1497,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     });
     return fail(reason, err);
   } finally {
+    await releaseSessionLockOnce?.();
     if (!checkpointSnapshotRetained) {
       await cleanupCompactionCheckpointSnapshot(checkpointSnapshot);
     }

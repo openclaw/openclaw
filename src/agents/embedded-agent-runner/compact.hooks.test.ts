@@ -18,6 +18,7 @@ import {
   maybeCompactAgentHarnessSessionMock,
   resolveAgentHarnessPolicyMock,
   registerProviderStreamForModelMock,
+  repairSessionFileIfNeededMock,
   resolveContextWindowInfoMock,
   resolveContextEngineMock,
   resolveEmbeddedAgentStreamFnMock,
@@ -30,6 +31,7 @@ import {
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
   sessionAbortCompactionMock,
+  sessionLockReleaseMock,
   sessionMessages,
   sessionCompactImpl,
   triggerInternalHook,
@@ -832,6 +834,25 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       code: "rate_limit_exceeded",
       rawError: "primary compaction rate limited",
     });
+  });
+
+  it("releases the session write lock when the compaction body throws (#84193)", async () => {
+    repairSessionFileIfNeededMock.mockImplementationOnce(async () => {
+      throw new Error("synthetic compaction failure");
+    });
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expectRecordFields(result, {
+      ok: false,
+      compacted: false,
+    });
+    expect(sessionLockReleaseMock).toHaveBeenCalledTimes(1);
   });
 
   it("emits internal + plugin compaction hooks with counts", async () => {
