@@ -662,7 +662,7 @@
     "providers": [
       {
         "id": "google-vertex",
-        "authMethods": ["api-key"],
+        "authMethods": ["adc"],
         "envVars": ["GOOGLE_CLOUD_API_KEY"],
         "authEvidence": [
           {
