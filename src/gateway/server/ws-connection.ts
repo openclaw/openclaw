@@ -31,6 +31,7 @@ import { broadcastPresenceSnapshot } from "./presence-events.js";
 import {
   buildHandshakeAuthLogKey,
   HandshakeAuthLogLimiter,
+  shouldLimitMissingCredentialAuthLog,
 } from "./ws-connection/handshake-auth-log-limiter.js";
 import type {
   GatewayWsMessageHandlerParams,
@@ -400,7 +401,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         const authReason = stringMetaValue(closeMeta, "authReason");
         const shouldLimitMissingAuthClose =
           closeCause === "unauthorized" &&
-          (authReason === "token_missing" || authReason === "password_missing");
+          shouldLimitMissingCredentialAuthLog({
+            reason: authReason,
+            authProvided: "none",
+          });
         const closeLogDecision = shouldLimitMissingAuthClose
           ? unauthorizedCloseBeforeConnectLogLimiter.register(
               buildHandshakeAuthLogKey({

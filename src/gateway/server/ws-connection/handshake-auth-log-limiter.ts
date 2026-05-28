@@ -66,3 +66,13 @@ export function buildHandshakeAuthLogKey(params: {
     params.authProvided ?? "?",
   ].join("|");
 }
+
+export function shouldLimitMissingCredentialAuthLog(params: {
+  reason?: string;
+  authProvided?: string;
+}): boolean {
+  return (
+    params.authProvided === "none" &&
+    (params.reason === "token_missing" || params.reason === "password_missing")
+  );
+}

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildHandshakeAuthLogKey, HandshakeAuthLogLimiter } from "./handshake-auth-log-limiter.js";
+import {
+  buildHandshakeAuthLogKey,
+  HandshakeAuthLogLimiter,
+  shouldLimitMissingCredentialAuthLog,
+} from "./handshake-auth-log-limiter.js";
 
 describe("HandshakeAuthLogLimiter", () => {
-  it("suppresses repeated auth failures for the same client key within the interval", () => {
+  it("suppresses repeated selected failures for the same client key within the interval", () => {
     const limiter = new HandshakeAuthLogLimiter({ intervalMs: 1_000 });
     const key = buildHandshakeAuthLogKey({
       reason: "token_missing",
@@ -41,5 +45,41 @@ describe("HandshakeAuthLogLimiter", () => {
       shouldLog: true,
       suppressedSinceLastLog: 0,
     });
+  });
+
+  it("only rate-limits benign missing-credential startup retries", () => {
+    expect(
+      shouldLimitMissingCredentialAuthLog({
+        reason: "token_missing",
+        authProvided: "none",
+      }),
+    ).toBe(true);
+    expect(
+      shouldLimitMissingCredentialAuthLog({
+        reason: "password_missing",
+        authProvided: "none",
+      }),
+    ).toBe(true);
+
+    for (const reason of [
+      "token_mismatch",
+      "password_mismatch",
+      "device_token_mismatch",
+      "rate_limited",
+      "token_missing_config",
+    ]) {
+      expect(
+        shouldLimitMissingCredentialAuthLog({
+          reason,
+          authProvided: "none",
+        }),
+      ).toBe(false);
+    }
+    expect(
+      shouldLimitMissingCredentialAuthLog({
+        reason: "token_missing",
+        authProvided: "token",
+      }),
+    ).toBe(false);
   });
 });

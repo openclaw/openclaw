@@ -152,7 +152,11 @@ import {
   shouldAllowSilentLocalPairing,
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
-import { buildHandshakeAuthLogKey, HandshakeAuthLogLimiter } from "./handshake-auth-log-limiter.js";
+import {
+  buildHandshakeAuthLogKey,
+  HandshakeAuthLogLimiter,
+  shouldLimitMissingCredentialAuthLog,
+} from "./handshake-auth-log-limiter.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -761,15 +765,20 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             scopeCount: scopes.length,
             hasDeviceIdentity: Boolean(device),
           });
-          const authLogDecision = unauthorizedHandshakeLogLimiter.register(
-            buildHandshakeAuthLogKey({
-              reason: failedAuth.reason,
-              remoteAddr,
-              client: clientLabel,
-              mode: connectParams.client.mode,
-              authProvided,
-            }),
-          );
+          const authLogDecision = shouldLimitMissingCredentialAuthLog({
+            reason: failedAuth.reason,
+            authProvided,
+          })
+            ? unauthorizedHandshakeLogLimiter.register(
+                buildHandshakeAuthLogKey({
+                  reason: failedAuth.reason,
+                  remoteAddr,
+                  client: clientLabel,
+                  mode: connectParams.client.mode,
+                  authProvided,
+                }),
+              )
+            : { shouldLog: true, suppressedSinceLastLog: 0 };
           if (authLogDecision.shouldLog) {
             const suppressedText =
               authLogDecision.suppressedSinceLastLog > 0
