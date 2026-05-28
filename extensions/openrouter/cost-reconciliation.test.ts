@@ -1,7 +1,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type {
   AssistantMessage,
-  AssistantMessageEventStream,
+  AssistantMessageEventStreamContract,
   Context,
   Model,
   Usage,
@@ -68,9 +68,10 @@ describe("reconcileOpenRouterUsageCost", () => {
     expect(outcome).toEqual({ status: "updated", previousCost: 0.13342, updatedCost: 0.53366 });
     expect(message.usage.cost.total).toBe(0.53366);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://openrouter.ai/api/v1/generation?id=gen-1234567890abcdef");
-    expect((init.headers as Record<string, string>)?.Authorization).toBe("Bearer sk-or-test");
+    const firstCall = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(firstCall[0]).toBe("https://openrouter.ai/api/v1/generation?id=gen-1234567890abcdef");
+    const headers = firstCall[1]?.headers as Record<string, string> | undefined;
+    expect(headers?.Authorization).toBe("Bearer sk-or-test");
   });
 
   it("accepts a flat /generation payload (no `data` wrapper) for forward compatibility", async () => {
@@ -183,7 +184,7 @@ describe("createOpenRouterCostReconciliationWrapper", () => {
       { type: "done", reason: "stop", message },
     ] as const;
 
-    const baseStream: AssistantMessageEventStream = {
+    const baseStream: AssistantMessageEventStreamContract = {
       [Symbol.asyncIterator]() {
         let cursor = 0;
         return {
