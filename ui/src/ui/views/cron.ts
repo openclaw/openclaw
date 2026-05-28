@@ -9,6 +9,7 @@ import type {
   CronJobsScheduleKindFilter,
 } from "../controllers/cron.ts";
 import { getCronJobPayload } from "../cron-payload.ts";
+import { resolveCronJobLastRunStatus } from "../cron-status.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { pathForTab } from "../navigation.ts";
@@ -1751,7 +1752,7 @@ function formatRunNextLabel(nextRunAtMs: number, nowMs = Date.now()) {
 }
 
 function renderJobState(job: CronJob) {
-  const rawStatus = job.state?.lastRunStatus ?? job.state?.lastStatus;
+  const rawStatus = resolveCronJobLastRunStatus(job);
   const statusClass =
     rawStatus === "ok"
       ? "cron-job-status-ok"
