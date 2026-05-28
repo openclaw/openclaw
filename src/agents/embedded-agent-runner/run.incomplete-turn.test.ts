@@ -1340,6 +1340,23 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         }),
       }),
     ).toBe(false);
+    expect(
+      shouldRetryMissingAssistantTurn({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          lastAssistant: undefined,
+          currentAttemptAssistant: undefined,
+          itemLifecycle: {
+            startedCount: 1,
+            completedCount: 0,
+            activeCount: 1,
+          },
+        }),
+      }),
+    ).toBe(false);
   });
 
   it("detects tool-use terminal turn with pre-tool text as incomplete (#76477)", () => {

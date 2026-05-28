@@ -46,6 +46,7 @@ type IncompleteTurnAttempt = Pick<
   | "messagingToolSentTargets"
   | "lastToolError"
   | "lastAssistant"
+  | "itemLifecycle"
   | "replayMetadata"
   | "promptErrorSource"
   | "timedOutDuringCompaction"
@@ -345,6 +346,13 @@ export function shouldRetryMissingAssistantTurn(params: {
   }
 
   if (hasAsyncStartedToolActivity(params.attempt.toolMetas)) {
+    return false;
+  }
+
+  if (
+    (params.attempt.itemLifecycle?.startedCount ?? 0) > 0 ||
+    (params.attempt.itemLifecycle?.activeCount ?? 0) > 0
+  ) {
     return false;
   }
 
