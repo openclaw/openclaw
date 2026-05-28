@@ -720,8 +720,13 @@ describe("VoiceCallWebhookServer replay handling", () => {
     }
   });
 
-  it("returns realtime TwiML for replayed inbound twilio webhooks", async () => {
+  it("replayed inbound Twilio webhook returns cached or empty TwiML and does not mint a new token", async () => {
     const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
+    const buildTwiMLPayload = vi.fn(() => ({
+      statusCode: 200,
+      headers: { "Content-Type": "text/xml" },
+      body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
+    }));
     const twilioProvider: VoiceCallProvider = {
       ...provider,
       name: "twilio",
@@ -743,11 +748,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
     });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
     server.setRealtimeHandler({
-      buildTwiMLPayload: () => ({
-        statusCode: 200,
-        headers: { "Content-Type": "text/xml" },
-        body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
-      }),
+      buildTwiMLPayload,
       getStreamPathPattern: () => "/voice/stream/realtime",
       handleWebSocketUpgrade: () => {},
       registerToolHandler: () => {},
@@ -764,7 +765,11 @@ describe("VoiceCallWebhookServer replay handling", () => {
       );
 
       expect(response.status).toBe(200);
-      expect(await response.text()).toContain("<Connect><Stream");
+      const text = await response.text();
+      // No new stream token should be issued for a replay — we return cached
+      // TwiML when available or a safe Reject fallback.
+      expect(text).toContain("<Reject");
+      expect(buildTwiMLPayload).not.toHaveBeenCalled();
       expect(parseWebhookEvent).not.toHaveBeenCalled();
       expect(processEvent).not.toHaveBeenCalled();
     } finally {

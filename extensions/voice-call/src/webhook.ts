@@ -174,6 +174,15 @@ function buildRealtimeRejectedTwiML(): WebhookResponsePayload {
 }
 
 /**
+ * Minimal TwiML response used for replay fallbacks when no cached TwiML exists.
+ * Returns a string body (not the full WebhookResponsePayload) so callers can
+ * store the exact TwiML returned to Twilio in the replay cache.
+ */
+function buildEmptyTwiML(): string {
+  return '<?xml version="1.0" encoding="UTF-8"?><Response><Reject /></Response>';
+}
+
+/**
  * HTTP server for receiving voice call webhooks from providers.
  * Supports WebSocket upgrades for media streams when streaming is enabled.
  */
@@ -195,6 +204,10 @@ export class VoiceCallWebhookServer {
   private mediaStreamHandler: MediaStreamHandler | null = null;
   /** Delayed auto-hangup timers keyed by provider call ID after stream disconnect. */
   private pendingDisconnectHangups = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Replay TwiML cache keyed by verifiedRequestKey. Stores TwiML body and expiry. */
+  private replayTwiMLCache = new Map<string, { body: string; expiry: number }>();
+  private readonly REPLAY_CACHE_TTL_MS = 120_000; // 2 minutes
+  private readonly REPLAY_CACHE_MAX = 1000;
   /** Realtime voice handler for duplex provider bridges. */
   private realtimeHandler: RealtimeCallHandler | null = null;
 
@@ -716,6 +729,20 @@ export class VoiceCallWebhookServer {
         return { statusCode: 401, body: "Unauthorized" };
       }
 
+      // ✅ NEW: Enforce replay rejection BEFORE any token-minting path
+      if (verification.isReplay) {
+        console.warn("[voice-call] Replay detected; returning cached or empty TwiML");
+        const cached = this.getReplayTwiML(verification.verifiedRequestKey);
+        return {
+          statusCode: 200,
+          headers: { "Content-Type": "application/xml" },
+          body: cached ?? buildEmptyTwiML(),
+        };
+      }
+
+      // INVARIANT: verification.isReplay is false at this point.
+      // The early replay guard above returns for all replayed requests so
+      // `consumeInitialTwiML` must only run for fresh, non-replayed requests.
       const initialTwiML = this.provider.consumeInitialTwiML?.(ctx);
       if (initialTwiML !== undefined && initialTwiML !== null) {
         const params = new URLSearchParams(ctx.rawBody);
@@ -740,7 +767,18 @@ export class VoiceCallWebhookServer {
         console.log(
           `[voice-call] Serving realtime TwiML for Twilio call ${realtimeParams.get("CallSid") ?? "unknown"} (direction=${direction ?? "unknown"})`,
         );
-        return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams);
+        // Build the TwiML payload via the realtime handler, then cache the
+        // exact body so replayed requests can return the identical response
+        // without issuing a new stream token.
+        const twimlResp = this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams);
+        try {
+          if (verification.verifiedRequestKey && typeof twimlResp.body === "string") {
+            this.storeReplayTwiML(verification.verifiedRequestKey, twimlResp.body);
+          }
+        } catch (err) {
+          console.warn("[voice-call] Failed to store TwiML in replay cache:", err);
+        }
+        return twimlResp;
       }
 
       const parsed = this.provider.parseWebhookEvent(ctx, {
@@ -802,6 +840,34 @@ export class VoiceCallWebhookServer {
     } catch {
       return false;
     }
+  }
+
+  private getReplayTwiML(key: string | undefined): string | undefined {
+    if (!key) return undefined;
+    const entry = this.replayTwiMLCache.get(key);
+    if (!entry) return undefined;
+    if (Date.now() > entry.expiry) {
+      this.replayTwiMLCache.delete(key);
+      return undefined;
+    }
+    return entry.body;
+  }
+
+  private storeReplayTwiML(key: string, body: string): void {
+    // Purge expired entries opportunistically
+    const now = Date.now();
+    for (const [k, v] of this.replayTwiMLCache) {
+      if (v.expiry <= now) {
+        this.replayTwiMLCache.delete(k);
+      }
+    }
+
+    if (this.replayTwiMLCache.size >= this.REPLAY_CACHE_MAX) {
+      // evict oldest
+      const firstKey = this.replayTwiMLCache.keys().next().value;
+      if (firstKey) this.replayTwiMLCache.delete(firstKey);
+    }
+    this.replayTwiMLCache.set(key, { body, expiry: now + this.REPLAY_CACHE_TTL_MS });
   }
 
   private getRealtimeTwimlParams(ctx: WebhookContext): URLSearchParams | null {
