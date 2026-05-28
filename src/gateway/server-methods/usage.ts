@@ -897,13 +897,16 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     // Optimization: If a specific key is requested, skip full directory scan
     if (specificKey) {
+      // When specificKey is provided, effectiveAgentId is guaranteed to be a string
+      // (either from requestedAgentId, specificKeyAgentId, or resolveDefaultAgentId)
+      const effectiveAgentIdForKey = effectiveAgentId as string;
       const scopedSpecificKey = resolveStoredSessionKeyForAgentStore({
         cfg: config,
-        agentId: effectiveAgentId,
+        agentId: effectiveAgentIdForKey,
         sessionKey: specificKey,
       });
       const scopedParsed = parseAgentSessionKey(scopedSpecificKey);
-      const agentIdFromKey = scopedParsed?.agentId ?? effectiveAgentId;
+      const agentIdFromKey: string = scopedParsed?.agentId ?? effectiveAgentIdForKey;
       const keyRest = scopedParsed?.rest ?? specificKey;
 
       // Prefer the store entry when available, even if the caller provides a discovered key
