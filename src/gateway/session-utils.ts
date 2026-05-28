@@ -226,6 +226,10 @@ export function deriveSessionTitle(
     return undefined;
   }
 
+  if (normalizeOptionalString(entry.autoTitle)) {
+    return normalizeOptionalString(entry.autoTitle);
+  }
+
   if (normalizeOptionalString(entry.displayName)) {
     return normalizeOptionalString(entry.displayName);
   }

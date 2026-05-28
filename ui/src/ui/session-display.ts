@@ -93,8 +93,12 @@ export function resolveSessionDisplayName(
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 
+  const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
   if (label && label !== key) {
     return applyTypedPrefix(label);
+  }
+  if (derivedTitle && derivedTitle !== key) {
+    return applyTypedPrefix(derivedTitle);
   }
   if (displayName && displayName !== key) {
     return applyTypedPrefix(displayName);
