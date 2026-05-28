@@ -621,7 +621,7 @@ describe("exec approvals", () => {
     expect(runCwd).toBeUndefined();
   });
 
-  it("does not apply the gateway denylist before routing host=node", async () => {
+  it("forwards caller denylist policy to node system.run", async () => {
     await writeExecApprovalsConfig({
       version: 1,
       agents: {
@@ -631,14 +631,16 @@ describe("exec approvals", () => {
       },
     });
     const calls: string[] = [];
+    const runParams: Record<string, unknown>[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
       if (method === "node.invoke") {
-        const invoke = params as { command?: string };
+        const invoke = params as { command?: string; params?: Record<string, unknown> };
         if (invoke.command === "system.run.prepare") {
           return buildPreparedSystemRunPayload(params);
         }
         if (invoke.command === "system.run") {
+          runParams.push(invoke.params ?? {});
           return { payload: { success: true, stdout: "node-ok" } };
         }
       }
@@ -659,6 +661,8 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("node-ok");
     expect(calls).toContain("node.invoke");
+    expect(runParams).toHaveLength(1);
+    expect(runParams[0]).toMatchObject({ requestedSecurity: "denylist", requestedAsk: "off" });
   });
 
   it("routes explicit host=node to node invoke when elevated default is on under auto host", async () => {

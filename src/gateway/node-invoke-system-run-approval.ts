@@ -32,6 +32,8 @@ type SystemRunParamsLike = {
   turnSourceThreadId?: unknown;
   approved?: unknown;
   approvalDecision?: unknown;
+  requestedSecurity?: unknown;
+  requestedAsk?: unknown;
   runId?: unknown;
   suppressNotifyOnExit?: unknown;
 };
@@ -204,6 +206,8 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
     "needsScreenRecording",
     "agentId",
     "sessionKey",
+    "requestedSecurity",
+    "requestedAsk",
     "runId",
     "suppressNotifyOnExit",
   ]) {

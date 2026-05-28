@@ -12,6 +12,8 @@ export type SystemRunParams = {
   sessionKey?: string | null;
   approved?: boolean | null;
   approvalDecision?: string | null;
+  requestedSecurity?: string | null;
+  requestedAsk?: string | null;
   runId?: string | null;
   suppressNotifyOnExit?: boolean | null;
 };
