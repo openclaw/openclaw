@@ -231,7 +231,7 @@ export function deriveSessionTitle(
   }
 
   if (normalizeOptionalString(entry.autoTitle)) {
-    return normalizeOptionalString(entry.autoTitle);
+    return truncateTitle(normalizeOptionalString(entry.autoTitle)!, DERIVED_TITLE_MAX_LEN);
   }
 
   if (normalizeOptionalString(entry.subject)) {
