@@ -1294,8 +1294,27 @@ export async function onTimer(state: CronServiceState) {
       }
     };
 
+    const unappliedDueJobIds = new Set(dueJobs.map((due) => due.id));
+    const applyCompletedResult = async (result: TimedCronRunOutcome) => {
+      await locked(state, async () => {
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+        applyOutcomeToStoredJob(state, result);
+
+        // Use maintenance-only recompute to avoid advancing past-due
+        // nextRunAtMs values that became due between findDueJobs and this
+        // locked block.  The full recomputeNextRuns would silently skip
+        // those jobs (advancing nextRunAtMs without execution), causing
+        // daily cron schedules to jump 48 h instead of 24 h (#17852).
+        // Jobs from the current due batch keep their running markers until
+        // their own outcomes are applied; otherwise a long batch can cross the
+        // stuck-run threshold and make queued/running jobs look idle on disk.
+        recomputeNextRunsForMaintenance(state, { preserveRunningJobIds: unappliedDueJobIds });
+        await persist(state);
+      });
+      unappliedDueJobIds.delete(result.jobId);
+    };
+
     const concurrency = Math.min(resolveRunConcurrency(state), Math.max(1, dueJobs.length));
-    const results: (TimedCronRunOutcome | undefined)[] = Array.from({ length: dueJobs.length });
     let cursor = 0;
     const workers = Array.from({ length: concurrency }, async () => {
       for (;;) {
@@ -1307,31 +1326,10 @@ export async function onTimer(state: CronServiceState) {
         if (!due) {
           return;
         }
-        results[index] = await runDueJob(due);
+        await applyCompletedResult(await runDueJob(due));
       }
     });
     await Promise.all(workers);
-
-    const completedResults: TimedCronRunOutcome[] = results.filter(
-      (entry): entry is TimedCronRunOutcome => entry !== undefined,
-    );
-
-    if (completedResults.length > 0) {
-      await locked(state, async () => {
-        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-        for (const result of completedResults) {
-          applyOutcomeToStoredJob(state, result);
-        }
-
-        // Use maintenance-only recompute to avoid advancing past-due
-        // nextRunAtMs values that became due between findDueJobs and this
-        // locked block.  The full recomputeNextRuns would silently skip
-        // those jobs (advancing nextRunAtMs without execution), causing
-        // daily cron schedules to jump 48 h instead of 24 h (#17852).
-        recomputeNextRunsForMaintenance(state);
-        await persist(state);
-      });
-    }
   } finally {
     // Piggyback session reaper on timer tick (self-throttled to every 5 min).
     // Placed in `finally` so the reaper runs even when a long-running job keeps

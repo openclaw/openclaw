@@ -458,7 +458,12 @@ export function recordScheduleComputeError(params: {
   return true;
 }
 
-function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; nowMs: number }): {
+function normalizeJobTickState(params: {
+  state: CronServiceState;
+  job: CronJob;
+  nowMs: number;
+  preserveRunningJobIds?: ReadonlySet<string>;
+}): {
   changed: boolean;
   skip: boolean;
 } {
@@ -503,6 +508,9 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
 
   const runningAt = job.state.runningAtMs;
   if (typeof runningAt === "number" && nowMs - runningAt > STUCK_RUN_MS) {
+    if (params.preserveRunningJobIds?.has(job.id)) {
+      return { changed, skip: false };
+    }
     state.deps.log.warn(
       { jobId: job.id, runningAtMs: runningAt },
       "cron: clearing stuck running marker",
@@ -523,13 +531,19 @@ function walkSchedulableJobs(
   state: CronServiceState,
   fn: (params: { job: CronJob; nowMs: number }) => boolean,
   nowMs = state.deps.nowMs(),
+  opts?: { preserveRunningJobIds?: ReadonlySet<string> },
 ): boolean {
   if (!state.store) {
     return false;
   }
   let changed = false;
   for (const job of state.store.jobs) {
-    const tick = normalizeJobTickState({ state, job, nowMs });
+    const tick = normalizeJobTickState({
+      state,
+      job,
+      nowMs,
+      preserveRunningJobIds: opts?.preserveRunningJobIds,
+    });
     if (tick.changed) {
       changed = true;
     }
@@ -610,7 +624,12 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
  */
 export function recomputeNextRunsForMaintenance(
   state: CronServiceState,
-  opts?: { recomputeExpired?: boolean; nowMs?: number; repairFutureCronNextRunAtMs?: boolean },
+  opts?: {
+    recomputeExpired?: boolean;
+    nowMs?: number;
+    repairFutureCronNextRunAtMs?: boolean;
+    preserveRunningJobIds?: ReadonlySet<string>;
+  },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
@@ -647,6 +666,7 @@ export function recomputeNextRunsForMaintenance(
       return changed;
     },
     opts?.nowMs,
+    { preserveRunningJobIds: opts?.preserveRunningJobIds },
   );
 }
 
