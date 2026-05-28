@@ -175,14 +175,6 @@ export const TelegramGroupSchema = z
   })
   .strict();
 
-const TelegramDmThreadRepliesSchema = z.enum(["off", "inbound", "always"]);
-
-const TelegramDmSchema = z
-  .object({
-    threadReplies: TelegramDmThreadRepliesSchema.optional(),
-  })
-  .strict();
-
 const AutoTopicLabelSchema = z
   .union([
     z.boolean(),
@@ -198,7 +190,6 @@ const AutoTopicLabelSchema = z
 export const TelegramDirectSchema = z
   .object({
     dmPolicy: DmPolicySchema.optional(),
-    threadReplies: z.enum(["off", "inbound", "always"]).optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
@@ -265,7 +256,6 @@ export const TelegramAccountSchemaBase = z
     botToken: SecretInputSchema.optional().register(sensitive),
     tokenFile: z.string().optional(),
     replyToMode: ReplyToModeSchema.optional(),
-    dm: TelegramDmSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     defaultTo: z.union([z.string(), z.number()]).optional(),
@@ -570,6 +560,12 @@ const DiscordVoiceRealtimeBootstrapContextFileSchema = z.enum([
   "USER.md",
   "SOUL.md",
 ]);
+const DiscordVoiceRealtimeWakeNameSchema = z
+  .string()
+  .min(1)
+  .regex(/^\s*[^a-z0-9]*[a-z0-9]+(?:[^a-z0-9]+[a-z0-9]+)?[^a-z0-9]*\s*$/i, {
+    message: "Discord realtime wake names must be one or two words.",
+  });
 const DiscordVoiceRealtimeSchema = z
   .object({
     provider: z.string().min(1).optional(),
@@ -579,7 +575,7 @@ const DiscordVoiceRealtimeSchema = z
     toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
     consultPolicy: DiscordVoiceRealtimeConsultPolicySchema.optional(),
     requireWakeName: z.boolean().optional(),
-    wakeNames: z.array(z.string().min(1)).optional(),
+    wakeNames: z.array(DiscordVoiceRealtimeWakeNameSchema).min(1).optional(),
     bootstrapContextFiles: z.array(DiscordVoiceRealtimeBootstrapContextFileSchema).optional(),
     bargeIn: z.boolean().optional(),
     minBargeInAudioEndMs: z.number().int().min(0).max(10_000).optional(),

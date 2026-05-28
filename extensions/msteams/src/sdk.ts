@@ -3,6 +3,12 @@ import * as fs from "node:fs";
 // but tsgo cannot resolve the chain. Use the dist subpath directly (type-only import).
 import type { IHttpServerAdapter } from "@microsoft/teams.apps/dist/http/index.js";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  BOT_FRAMEWORK_SERVICE_URL_SSRF_POLICY,
+  normalizeBotFrameworkServiceUrl,
+  tryNormalizeBotFrameworkServiceUrl,
+} from "./bot-framework-service-url.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
@@ -262,7 +268,8 @@ function createApiClient(
   serviceUrl: string,
   getToken: () => Promise<string | undefined>,
 ) {
-  return new sdk.Client(serviceUrl, {
+  const normalizedServiceUrl = normalizeBotFrameworkServiceUrl(serviceUrl);
+  return new sdk.Client(normalizedServiceUrl, {
     token: async () => (await getToken()) || undefined,
     headers: { "User-Agent": buildUserAgent() },
   } as Record<string, unknown>);
@@ -294,9 +301,10 @@ function createSendContext(params: {
   /** Target user's Azure AD object ID; included as the recipient on personal DMs. */
   recipientAadObjectId?: string;
 }): MSTeamsSendContext {
+  const normalizedServiceUrl = tryNormalizeBotFrameworkServiceUrl(params.serviceUrl);
   const apiClient =
-    params.serviceUrl && params.conversationId
-      ? createApiClient(params.sdk, params.serviceUrl, params.getToken)
+    normalizedServiceUrl && params.conversationId
+      ? createApiClient(params.sdk, normalizedServiceUrl, params.getToken)
       : undefined;
 
   return {
@@ -304,6 +312,9 @@ function createSendContext(params: {
       const msg = normalizeOutboundActivity(textOrActivity);
       if (params.treatInvokeResponseAsNoop && msg.type === "invokeResponse") {
         return { id: "invokeResponse" };
+      }
+      if (params.serviceUrl && !normalizedServiceUrl) {
+        normalizeBotFrameworkServiceUrl(params.serviceUrl);
       }
       if (!apiClient || !params.conversationId) {
         return { id: "unknown" };
@@ -367,8 +378,9 @@ function createSendContext(params: {
       if (!params.serviceUrl || !params.conversationId) {
         return { id: "unknown" };
       }
+      const serviceUrl = normalizeBotFrameworkServiceUrl(params.serviceUrl);
       return await updateActivityViaRest({
-        serviceUrl: params.serviceUrl,
+        serviceUrl,
         conversationId: params.conversationId,
         activityId,
         activity: nextActivity,
@@ -383,8 +395,9 @@ function createSendContext(params: {
       if (!params.serviceUrl || !params.conversationId) {
         return;
       }
+      const serviceUrl = normalizeBotFrameworkServiceUrl(params.serviceUrl);
       await deleteActivityViaRest({
-        serviceUrl: params.serviceUrl,
+        serviceUrl,
         conversationId: params.conversationId,
         activityId,
         token: await params.getToken(),
@@ -448,7 +461,7 @@ async function updateActivityViaRest(params: {
   token?: string;
 }): Promise<{ id?: string }> {
   const { serviceUrl, conversationId, activityId, activity, token } = params;
-  const baseUrl = serviceUrl.replace(/\/+$/, "");
+  const baseUrl = normalizeBotFrameworkServiceUrl(serviceUrl);
   const url = `${baseUrl}/v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(activityId)}`;
 
   const headers: Record<string, string> = {
@@ -473,6 +486,7 @@ async function updateActivityViaRest(params: {
       }),
     },
     auditContext: "msteams-update-activity",
+    policy: BOT_FRAMEWORK_SERVICE_URL_SSRF_POLICY,
   });
 
   try {
@@ -500,7 +514,7 @@ async function deleteActivityViaRest(params: {
   token?: string;
 }): Promise<void> {
   const { serviceUrl, conversationId, activityId, token } = params;
-  const baseUrl = serviceUrl.replace(/\/+$/, "");
+  const baseUrl = normalizeBotFrameworkServiceUrl(serviceUrl);
   const url = `${baseUrl}/v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(activityId)}`;
 
   const headers: Record<string, string> = {
@@ -519,6 +533,7 @@ async function deleteActivityViaRest(params: {
       headers,
     },
     auditContext: "msteams-delete-activity",
+    policy: BOT_FRAMEWORK_SERVICE_URL_SSRF_POLICY,
   });
 
   try {
@@ -544,10 +559,11 @@ async function deleteActivityViaRest(params: {
 export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MSTeamsAdapter {
   return {
     async continueConversation(_appId, reference, logic) {
-      const serviceUrl = reference.serviceUrl;
-      if (!serviceUrl) {
+      const rawServiceUrl = reference.serviceUrl;
+      if (!rawServiceUrl) {
         throw new Error("Missing serviceUrl in conversation reference");
       }
+      const serviceUrl = normalizeBotFrameworkServiceUrl(rawServiceUrl);
 
       const conversationId = reference.conversation?.id;
       if (!conversationId) {
@@ -683,10 +699,9 @@ function getAudienceClaims(payload: unknown): string[] {
     return trimmed ? [trimmed] : [];
   }
   if (Array.isArray(audience)) {
-    return audience
-      .filter((value): value is string => typeof value === "string")
-      .map((value) => value.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(
+      audience.filter((value): value is string => typeof value === "string"),
+    );
   }
   return [];
 }

@@ -23,11 +23,18 @@ export type DiagnosticSessionRecoveryNoopReason = "no_active_work";
 export type StuckSessionRecoveryRequest = {
   sessionId?: string;
   sessionKey?: string;
+  sessionFile?: string;
   ageMs: number;
   queueDepth?: number;
   allowActiveAbort?: boolean;
   expectedState?: DiagnosticSessionState;
   stateGeneration?: number;
+  /**
+   * Resolved no-forward-progress age (from `diagnostics.stuckSessionAbortMs`) after
+   * which an "active" run with queued work is treated as a leaked/dead handle and
+   * reclaimed. Honors an operator-raised threshold; falls back to a safe floor.
+   */
+  staleActiveProgressAbortMs?: number;
 };
 
 type DiagnosticSessionRecoveryBaseOutcome = {

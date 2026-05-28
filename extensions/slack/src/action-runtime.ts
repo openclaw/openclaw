@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
@@ -492,6 +492,7 @@ export async function handleSlackAction(
             placeholder: downloaded.placeholder,
             media: {
               mediaUrl: downloaded.path,
+              outbound: false,
               ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
             },
           });
@@ -504,6 +505,7 @@ export async function handleSlackAction(
             fileId,
             path: downloaded.path,
             ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
+            media: { outbound: false },
           },
         });
       }

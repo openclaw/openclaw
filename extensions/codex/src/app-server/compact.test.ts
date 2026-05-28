@@ -36,7 +36,9 @@ function maybeCompactCodexAppServerSession(
   );
 }
 
-async function writeTestBinding(options: { authProfileId?: string } = {}): Promise<string> {
+async function writeTestBinding(
+  options: Partial<Parameters<typeof writeCodexAppServerBinding>[1]> = {},
+): Promise<string> {
   const sessionFile = path.join(tempDir, "session.jsonl");
   await writeCodexAppServerBinding(sessionFile, {
     threadId: "thread-1",
@@ -52,6 +54,7 @@ function startCompaction(sessionFile: string, options: { currentTokenCount?: num
     sessionKey: "agent:main:session-1",
     sessionFile,
     workspaceDir: tempDir,
+    trigger: "manual",
     ...options,
   });
 }
@@ -62,6 +65,7 @@ function startSandboxedCompaction(sessionFile: string) {
     sessionKey: "agent:main:session-1",
     sessionFile,
     workspaceDir: tempDir,
+    trigger: "manual",
     config: { agents: { defaults: { sandbox: { mode: "all" } } } },
   });
 }
@@ -72,6 +76,7 @@ function startNodeExecCompaction(sessionFile: string) {
     sessionKey: "agent:main:session-1",
     sessionFile,
     workspaceDir: tempDir,
+    trigger: "manual",
     config: { tools: { exec: { host: "node", node: "worker-1" } } },
   });
 }
@@ -119,6 +124,63 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.threadId).toBe("thread-1");
     expect(details.signal).toBe("thread/compact/start");
     expect(details.pending).toBe(true);
+  });
+
+  it("skips native app-server compaction for automatic budget triggers", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "budget",
+        currentTokenCount: 456,
+      }),
+    );
+
+    expect(fake.request).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("codex app-server owns automatic compaction");
+    expect(result.result?.tokensBefore).toBe(456);
+    expect(compactDetails(result)).toMatchObject({
+      backend: "codex-app-server",
+      skipped: true,
+      reason: "non_manual_trigger",
+      trigger: "budget",
+    });
+  });
+
+  it("skips native app-server compaction when trigger is omitted", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        currentTokenCount: 789,
+      }),
+    );
+
+    expect(fake.request).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("codex app-server owns automatic compaction");
+    expect(result.result?.tokensBefore).toBe(789);
+    expect(compactDetails(result)).toMatchObject({
+      backend: "codex-app-server",
+      skipped: true,
+      reason: "non_manual_trigger",
+      trigger: "unknown",
+    });
   });
 
   it("blocks native app-server compaction when the current OpenClaw session is sandboxed", async () => {
@@ -211,18 +273,30 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.result).toBeUndefined();
   });
 
-  it("clears stale thread bindings and reports failed native compaction", async () => {
+  it("preserves stale thread binding metadata for recovery and reports failed native compaction", async () => {
     const fake = createFakeCodexClient();
     fake.request.mockRejectedValueOnce(new Error("thread not found: thread-1"));
     setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const sessionFile = await writeTestBinding();
+    const sessionFile = await writeTestBinding({
+      authProfileId: "openai-codex:work",
+      model: "gpt-5.5-mini",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      serviceTier: "priority",
+    });
 
     const result = requireCompactResult(
       await startCompaction(sessionFile, { currentTokenCount: 456 }),
     );
 
     expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
-    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+    const preservedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(preservedBinding?.threadId).toBe("thread-1");
+    expect(preservedBinding?.authProfileId).toBe("openai-codex:work");
+    expect(preservedBinding?.model).toBe("gpt-5.5-mini");
+    expect(preservedBinding?.approvalPolicy).toBe("on-request");
+    expect(preservedBinding?.sandbox).toBe("workspace-write");
+    expect(preservedBinding?.serviceTier).toBe("priority");
     expect(result.ok).toBe(false);
     expect(result.compacted).toBe(false);
     expect(result.reason).toBe("thread not found: thread-1");
@@ -264,6 +338,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       sessionKey: "agent:main:session-1",
       sessionFile,
       workspaceDir: tempDir,
+      trigger: "manual",
       config: {
         agents: {
           defaults: {
@@ -299,6 +374,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       sessionKey: "agent:sara:session-1",
       sessionFile,
       workspaceDir: tempDir,
+      trigger: "manual",
       config: {
         agents: {
           list: [
@@ -340,6 +416,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       sessionKey: "agent:nik:session-1",
       sessionFile,
       workspaceDir: tempDir,
+      trigger: "manual",
       config: {
         agents: {
           defaults: {
@@ -388,6 +465,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       sessionKey: "agent:lossless:session-1",
       sessionFile,
       workspaceDir: tempDir,
+      trigger: "manual",
       contextEngine,
       config: {
         plugins: {
@@ -441,6 +519,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       sessionKey: "agent:lossless-child:session-1",
       sessionFile,
       workspaceDir: tempDir,
+      trigger: "manual",
       contextEngine,
       config: {
         plugins: {
@@ -497,6 +576,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       sessionKey: "agent:main:session-1",
       sessionFile,
       workspaceDir: tempDir,
+      trigger: "manual",
       authProfileId: "openai-codex:runtime",
     });
 

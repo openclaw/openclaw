@@ -684,7 +684,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
 });
 
 describe("resolveIMessageReactionContext", () => {
-  it("detects legacy tapback text without treating normal prose as a reaction", () => {
+  it("detects legacy tapback text without treating normal prose as a reaction", async () => {
     expect(resolveIMessageReactionContext({}, "Loved “Hello”")).toStrictEqual({
       action: "added",
       emoji: "❤️",
@@ -693,7 +693,7 @@ describe("resolveIMessageReactionContext", () => {
     expect(resolveIMessageReactionContext({}, "Loved the movie")).toBeNull();
   });
 
-  it("detects imsg tapback flags and associated message types", () => {
+  it("detects imsg tapback flags and associated message types", async () => {
     expect(
       resolveIMessageReactionContext(
         { is_tapback: true, reaction_emoji: "👍", reacted_to_guid: "target" },
@@ -734,7 +734,7 @@ describe("resolveIMessageReactionContext", () => {
 });
 
 describe("describeIMessageEchoDropLog", () => {
-  it("includes message id when available", () => {
+  it("includes message id when available", async () => {
     expect(
       describeIMessageEchoDropLog({
         messageText: "Reasoning:\n_step_",
@@ -776,7 +776,7 @@ describe("buildIMessageInboundContext", () => {
       return;
     }
 
-    const { ctxPayload } = buildIMessageInboundContext({
+    const { ctxPayload } = await buildIMessageInboundContext({
       cfg: {} as OpenClawConfig,
       decision,
       message: {
@@ -793,6 +793,62 @@ describe("buildIMessageInboundContext", () => {
 
     expect(ctxPayload.MessageSid).toBe("1");
     expect(ctxPayload.MessageSidFull).toBe("p:0/GUID-current");
+  });
+
+  it("prepends direct-message history when supplied", async () => {
+    const decision = await resolveIMessageInboundDecision({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+      message: {
+        id: 12346,
+        guid: "p:0/GUID-current-history",
+        sender: "+15555550123",
+        text: "current",
+        is_from_me: false,
+        is_group: false,
+      },
+      opts: undefined,
+      messageText: "current",
+      bodyText: "current",
+      allowFrom: ["*"],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      selfChatCache: undefined,
+      logVerbose: undefined,
+    });
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+
+    const { ctxPayload, inboundHistory } = await buildIMessageInboundContext({
+      cfg: {} as OpenClawConfig,
+      decision,
+      message: {
+        id: 12346,
+        guid: "p:0/GUID-current-history",
+        sender: "+15555550123",
+        text: "current",
+        is_from_me: false,
+        is_group: false,
+      },
+      historyLimit: 0,
+      groupHistories: new Map(),
+      dmHistory: {
+        body: "[iMessage from +15555550123]\nprevious\n[/iMessage]",
+        inboundHistory: [{ sender: "+15555550123", body: "previous" }],
+      },
+    });
+
+    expect(ctxPayload.Body).toContain("previous");
+    expect(ctxPayload.Body).toContain("current");
+    expect(ctxPayload.InboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
+    expect(inboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
   });
 });
 
@@ -866,7 +922,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
       return;
     }
 
-    const { ctxPayload } = buildIMessageInboundContext({
+    const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
       decision,
       message: {
@@ -906,7 +962,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
     expect(decision.commandAuthorized).toBe(true);
     expect(decision.hasControlCommand).toBe(false);
 
-    const { ctxPayload } = buildIMessageInboundContext({
+    const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
       decision,
       message: {
@@ -984,27 +1040,29 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     } as unknown as Parameters<typeof buildIMessageInboundContext>[0];
   }
 
-  it("uses the gateway-allocated shortId when the inbound has a guid", () => {
-    const { ctxPayload } = buildIMessageInboundContext(
+  it("uses the gateway-allocated shortId when the inbound has a guid", async () => {
+    const { ctxPayload } = await buildIMessageInboundContext(
       buildParams({ id: 999, guid: "FAB-INBOUND-1" }),
     );
     // First inbound → shortId "1". The chat.db rowid 999 must NOT leak.
     expect(ctxPayload.MessageSid).toBe("1");
   });
 
-  it("does not leak chat.db ROWIDs as MessageSid when the guid is missing", () => {
+  it("does not leak chat.db ROWIDs as MessageSid when the guid is missing", async () => {
     // Pre-fix bug: when rememberedMessage was nil/empty, MessageSid fell
     // back to `String(message.id)` — leaking chat.db ROWID into the agent's
     // short-id namespace. Agent then tried to react to a phantom shortId
     // that the resolver couldn't find ("13 is no longer available").
-    const { ctxPayload } = buildIMessageInboundContext(buildParams({ id: 13, guid: undefined }));
+    const { ctxPayload } = await buildIMessageInboundContext(
+      buildParams({ id: 13, guid: undefined }),
+    );
     expect(ctxPayload.MessageSid).toBeUndefined();
     // Critically: never the rowid as a string.
     expect(ctxPayload.MessageSid).not.toBe("13");
   });
 
-  it("does not leak chat.db ROWIDs even when the guid is whitespace", () => {
-    const { ctxPayload } = buildIMessageInboundContext(buildParams({ id: 13, guid: "   " }));
+  it("does not leak chat.db ROWIDs even when the guid is whitespace", async () => {
+    const { ctxPayload } = await buildIMessageInboundContext(buildParams({ id: 13, guid: "   " }));
     expect(ctxPayload.MessageSid).toBeUndefined();
   });
 });

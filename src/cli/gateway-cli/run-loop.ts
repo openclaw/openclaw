@@ -12,8 +12,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
@@ -459,7 +459,7 @@ export async function runGatewayLoop(params: {
             "restart.drain",
             async () => {
               const {
-                abortEmbeddedPiRun,
+                abortEmbeddedAgentRun,
                 getRuntimeConfig,
                 getInspectableActiveTaskRestartBlockers,
                 getActiveEmbeddedRunCount,
@@ -545,7 +545,7 @@ export async function runGatewayLoop(params: {
               // Best-effort abort for compacting runs so long compaction operations
               // don't hold session write locks across restart boundaries.
               if (activeRuns > 0) {
-                abortEmbeddedPiRun(undefined, { mode: "compacting" });
+                abortEmbeddedAgentRun(undefined, { mode: "compacting" });
               }
 
               if (activeTasks > 0 || activeRuns > 0) {
@@ -563,7 +563,7 @@ export async function runGatewayLoop(params: {
                   await markActiveMainSessionsForRestart(
                     restartIntent.reason ?? "forced gateway restart",
                   );
-                  abortEmbeddedPiRun(undefined, { mode: "all" });
+                  abortEmbeddedAgentRun(undefined, { mode: "all" });
                 } else {
                   const stillPendingDrainLogger = createStillPendingDrainLogger();
                   let abortedAfterRunTimeout = false;
@@ -582,7 +582,7 @@ export async function runGatewayLoop(params: {
                       gatewayLog.warn(
                         "active embedded run drain timeout reached; aborting active run(s) before restart",
                       );
-                      abortEmbeddedPiRun(undefined, { mode: "all" });
+                      abortEmbeddedAgentRun(undefined, { mode: "all" });
                       abortedAfterRunTimeout = true;
                     }
                     tasksDrain = await tasksDrainPromise;
@@ -598,7 +598,7 @@ export async function runGatewayLoop(params: {
                     // Final best-effort abort to avoid carrying active runs into the
                     // next lifecycle when drain time budget is exhausted.
                     if (!abortedAfterRunTimeout) {
-                      abortEmbeddedPiRun(undefined, { mode: "all" });
+                      abortEmbeddedAgentRun(undefined, { mode: "all" });
                     }
                   }
                 }
@@ -797,6 +797,7 @@ export async function runGatewayLoop(params: {
         resetGatewayRestartStateForInProcessRestart,
       } = await loadGatewayLifecycleRuntimeModule();
       resetAllLanes();
+      clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();
       reloadTaskRegistryFromStore();
       markGatewayRestartTrace("restart.next-start");

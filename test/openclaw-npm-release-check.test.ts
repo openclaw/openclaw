@@ -32,6 +32,21 @@ const REQUIRED_PACKED_PATHS = [
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
 
+describe("workspace template package paths", () => {
+  it("keeps the runtime heartbeat template in the npm pack guard", () => {
+    expect(WORKSPACE_TEMPLATE_PACK_PATHS).toContain("src/agents/templates/HEARTBEAT.md");
+    expect(WORKSPACE_TEMPLATE_PACK_PATHS).not.toContain("docs/reference/templates/HEARTBEAT.md");
+  });
+
+  it("keeps runtime heartbeat templates allowlisted in package.json", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf-8")) as {
+      files?: unknown;
+    };
+
+    expect(packageJson.files).toContain("src/agents/templates/");
+  });
+});
+
 describe("parseReleaseVersion", () => {
   it("parses stable CalVer releases", () => {
     expect(parseReleaseVersion("2026.3.10")).toStrictEqual({
@@ -570,12 +585,12 @@ describe("collectPackedTestCargoErrors", () => {
       collectPackedTestCargoErrors([
         "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts",
         "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js",
-        "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap",
+        "dist/extensions/whatsapp/node_modules/example-codec/src/__snapshots__/codec.test.ts.snap",
         "dist/index.js",
       ]),
     ).toEqual([
       'npm package must not include test cargo "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts".',
-      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap".',
+      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/example-codec/src/__snapshots__/codec.test.ts.snap".',
       'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js".',
     ]);
   });

@@ -1,16 +1,32 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { accessSync, constants, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const repoLocal = resolveCrabboxBinary(process.env, process.platform);
+const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
+const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.env, process.platform);
 const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
 const binary =
-  repoLocal ?? pathLocal ?? resolveGitCommonCrabboxBinary(process.env, process.platform) ?? "crabbox";
+  repoLocal ??
+  pathLocal ??
+  resolveGitCommonCrabboxBinary(process.env, process.platform) ??
+  "crabbox";
 const args = process.argv.slice(2);
 
 if (args[0] === "--") {
@@ -109,6 +125,28 @@ function spawnInvocation(command, commandArgs, env, platform) {
 }
 
 const cmdMetaCharactersRe = /([()\][%!^"`<>&|;, *?])/g;
+const jsRuntimeEntrypoints = new Set(["pnpm", "npm", "npx", "corepack", "node", "yarn", "bun"]);
+const awsMacosCorepackEntrypoints = new Set(["pnpm", "yarn", "corepack"]);
+const shellControlCommandPrefixes = new Set([
+  "if",
+  "while",
+  "until",
+  "then",
+  "do",
+  "else",
+  "elif",
+  "!",
+]);
+const shellCommandExecutionPrefixes = new Set(["exec"]);
+const shellInlineCommandInterpreters = new Set(["bash", "dash", "ksh", "sh", "zsh"]);
+const shellInlineCommandOptionsWithNextValue = new Set([
+  "+O",
+  "+o",
+  "-O",
+  "-o",
+  "--init-file",
+  "--rcfile",
+]);
 
 function escapeBatchCommand(command) {
   return `${command}`.replace(cmdMetaCharactersRe, "^$1");
@@ -140,6 +178,7 @@ function checkedOutput(command, commandArgs) {
   return {
     status: result.status ?? 1,
     text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
+    stdout: (result.stdout ?? "").trim(),
   };
 }
 
@@ -159,11 +198,15 @@ function gitOutput(commandArgs) {
   };
 }
 
-function configuredProvider() {
+function envProvider() {
   const envProvider = process.env.CRABBOX_PROVIDER?.trim();
   if (envProvider) {
     return envProvider;
   }
+  return "";
+}
+
+function configProvider() {
   try {
     const config = readFileSync(resolve(repoRoot, ".crabbox.yaml"), "utf8");
     const match = config.match(/^provider:\s*([^\s#]+)/m);
@@ -171,6 +214,10 @@ function configuredProvider() {
   } catch {
     return "aws";
   }
+}
+
+function configuredProvider() {
+  return envProvider() || configProvider();
 }
 
 const runValueOptions = new Set([
@@ -353,8 +400,57 @@ function commandProvider(commandArgs) {
   return "";
 }
 
-function selectedProvider(commandArgs) {
-  return commandProvider(commandArgs) || configuredProvider();
+function selectedProvider(commandArgs, advertisedProviders = []) {
+  const explicitProvider = commandProvider(commandArgs);
+  if (explicitProvider) {
+    return explicitProvider;
+  }
+  if (shouldPreferAzureForWindows(commandArgs, advertisedProviders)) {
+    return "azure";
+  }
+  return configuredProvider();
+}
+
+function shouldRequireBrokeredAws(commandArgs, providerName) {
+  if (process.env.OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS === "1") {
+    return false;
+  }
+  const canonicalProvider = providerAliases.get(providerName) ?? providerName;
+  if (canonicalProvider !== "aws") {
+    return false;
+  }
+  if (commandArgs[0] === "run" || commandArgs[0] === "warmup") {
+    return true;
+  }
+  return commandArgs[0] === "actions" && commandArgs[1] === "hydrate";
+}
+
+function brokerAuthConfigured() {
+  const config = checkedOutput(binary, ["config", "show", "--json"]);
+  if (config.status !== 0) {
+    return false;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(config.stdout || config.text);
+  } catch {
+    return false;
+  }
+  return Boolean(parsed?.coordinator && parsed?.brokerAuth === "configured");
+}
+
+function enforceBrokeredAws(commandArgs, providerName) {
+  if (!shouldRequireBrokeredAws(commandArgs, providerName) || brokerAuthConfigured()) {
+    return;
+  }
+  console.error(
+    [
+      "[crabbox] provider=aws requires a configured Crabbox broker for OpenClaw proof.",
+      "[crabbox] run `crabbox login --url https://crabbox.openclaw.ai --provider aws`, then retry.",
+      "[crabbox] for intentional direct AWS provider debugging, set OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS=1.",
+    ].join("\n"),
+  );
+  process.exit(2);
 }
 
 function optionValue(commandArgs, name) {
@@ -393,6 +489,28 @@ function commandOptionEnd(commandArgs) {
   }
   const delimiter = commandArgs.indexOf("--");
   return delimiter >= 0 ? delimiter : commandArgs.length;
+}
+
+function shouldPreferAzureForWindows(commandArgs, advertisedProviders = []) {
+  return (
+    ["run", "warmup"].includes(commandArgs[0]) &&
+    isWindowsRemoteTarget(commandArgs) &&
+    !commandProvider(commandArgs) &&
+    !envProvider() &&
+    !hasOption(commandArgs, "--id") &&
+    advertisedProviders.includes("azure")
+  );
+}
+
+function ensureAzureWindowsProvider(commandArgs, providerName, advertisedProviders = []) {
+  if (providerName !== "azure" || !shouldPreferAzureForWindows(commandArgs, advertisedProviders)) {
+    return commandArgs;
+  }
+
+  const optionEnd = commandOptionEnd(commandArgs);
+  const normalizedArgs = [...commandArgs];
+  normalizedArgs.splice(optionEnd, 0, "--provider", "azure");
+  return normalizedArgs;
 }
 
 function ensureAwsMacOnDemandMarket(commandArgs, providerName) {
@@ -470,6 +588,57 @@ function absolutizeLocalRunPaths(commandArgs) {
   return normalizedArgs;
 }
 
+function pathExists(path) {
+  try {
+    statSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function preserveTemporaryCrabboxRuns() {
+  if (childCwd === repoRoot) {
+    return;
+  }
+
+  const sourceRuns = resolve(childCwd, ".crabbox", "runs");
+  if (!pathExists(sourceRuns)) {
+    return;
+  }
+
+  const targetRuns = resolve(repoRoot, ".crabbox", "runs");
+  mkdirSync(targetRuns, { recursive: true });
+  let preserved = 0;
+  for (const entry of readdirSync(sourceRuns)) {
+    cpSync(resolve(sourceRuns, entry), resolve(targetRuns, entry), {
+      recursive: true,
+      force: true,
+    });
+    preserved += 1;
+  }
+  if (preserved > 0) {
+    console.error(
+      `[crabbox] preserved ${preserved} temporary run artifact ${preserved === 1 ? "directory" : "directories"} under ${relative(repoRoot, targetRuns)}`,
+    );
+  }
+}
+
+function shellQuote(value) {
+  const text = `${value}`;
+  if (text === "") {
+    return "''";
+  }
+  if (/^[A-Za-z0-9_./:=@%+-]+$/u.test(text)) {
+    return text;
+  }
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+function shellJoin(commandArgs) {
+  return commandArgs.map(shellQuote).join(" ");
+}
+
 function isLocalContainerProvider(providerName) {
   return ["local-container", "docker", "container", "local-docker"].includes(providerName);
 }
@@ -481,12 +650,6 @@ function runCommandArgs(commandArgs) {
 
 function normalizedCommandWords(commandArgs) {
   const words = commandArgs.length === 1 ? commandArgs[0].split(/\s+/u) : [...commandArgs];
-  while (words[0] === "env") {
-    words.shift();
-    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) {
-      words.shift();
-    }
-  }
   while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) {
     words.shift();
   }
@@ -494,13 +657,89 @@ function normalizedCommandWords(commandArgs) {
 }
 
 function commandRuntimeEntrypoint(commandArgs) {
+  if (commandArgs.length === 1) {
+    for (const candidateWords of shellCommandWordCandidates(commandArgs[0])) {
+      const shellRuntime = commandWordsRuntimeEntrypoint(candidateWords);
+      if (shellRuntime) {
+        return shellRuntime;
+      }
+    }
+    return "";
+  }
   const words = normalizedCommandWords(commandArgs);
+  const directRuntime = commandWordsRuntimeEntrypoint(words);
+  if (directRuntime) {
+    return directRuntime;
+  }
+  return "";
+}
+
+function commandWordsRuntimeEntrypoint(words) {
+  words = normalizeExecutableWords(words);
   const first = (words[0] ?? "").split("/").pop();
-  return ["pnpm", "npm", "npx", "corepack", "node", "yarn", "bun"].includes(first) ? first : "";
+  if (jsRuntimeEntrypoints.has(first)) {
+    return first;
+  }
+
+  const inlineCommand = shellInlineCommand(words);
+  if (!inlineCommand) {
+    return "";
+  }
+  for (const candidateWords of shellCommandWordCandidates(inlineCommand)) {
+    const shellRuntime = commandWordsRuntimeEntrypoint(candidateWords);
+    if (shellRuntime) {
+      return shellRuntime;
+    }
+  }
+  return "";
+}
+
+function commandNeedsAwsMacosPackageManager(commandArgs) {
+  if (isChangedGateCommand(commandArgs)) {
+    return true;
+  }
+  if (commandArgs.length === 1) {
+    return shellCommandWordCandidates(commandArgs[0]).some(commandWordsNeedAwsMacosPackageManager);
+  }
+  return commandWordsNeedAwsMacosPackageManager(normalizedCommandWords(commandArgs));
+}
+
+function commandWordsNeedAwsMacosPackageManager(words) {
+  words = normalizeExecutableWords(words);
+  const first = (words[0] ?? "").split("/").pop();
+  if (awsMacosCorepackEntrypoints.has(first)) {
+    return true;
+  }
+
+  const inlineCommand = shellInlineCommand(words);
+  if (!inlineCommand) {
+    return false;
+  }
+  return shellCommandWordCandidates(inlineCommand).some(commandWordsNeedAwsMacosPackageManager);
 }
 
 function isChangedGateCommand(commandArgs) {
+  if (commandArgs.length === 1) {
+    return shellCommandWordCandidates(commandArgs[0]).some(isChangedGateCommandWords);
+  }
   const words = normalizedCommandWords(commandArgs);
+  return isChangedGateCommandWords(words);
+}
+
+function isChangedGateCommandWords(words) {
+  words = normalizeExecutableWords(words);
+  if (isChangedGateWords(words)) {
+    return true;
+  }
+
+  const inlineCommand = shellInlineCommand(words);
+  return inlineCommand
+    ? shellCommandWordCandidates(inlineCommand).some(isChangedGateCommandWords)
+    : false;
+}
+
+function isChangedGateWords(words) {
+  words = normalizeExecutableWords(words);
   if (words[0] === "corepack") {
     words.shift();
   }
@@ -511,20 +750,917 @@ function isChangedGateCommand(commandArgs) {
   );
 }
 
-function headInRemoteRefs() {
-  const refs = gitOutput([
-    "for-each-ref",
-    "--contains",
-    "HEAD",
-    "--format=%(refname)",
-    "refs/remotes",
-  ]);
-  return refs.status === 0 && refs.stdout !== "";
+function shellInlineCommand(words) {
+  const command = shellWordBasename(words[0]);
+  if (!shellInlineCommandInterpreters.has(command)) {
+    return "";
+  }
+
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "--") {
+      return "";
+    }
+    if (!word.startsWith("-") && !word.startsWith("+")) {
+      return "";
+    }
+    if (word === "-c" || /^-[^-]*c/u.test(word)) {
+      return words[index + 1] ?? "";
+    }
+    if (shellInlineCommandOptionConsumesNextValue(word)) {
+      index += 1;
+    }
+  }
+  return "";
+}
+
+function shellInlineCommandOptionConsumesNextValue(word) {
+  return shellInlineCommandOptionsWithNextValue.has(word) || /^[+-][^-+]*[oO]$/u.test(word);
+}
+
+function shellCommandWordCandidates(command) {
+  return shellCommandSegments(stripHeredocBodies(command.replace(/\\\r?\n/gu, " ")));
+}
+
+function pushShellCandidate(candidates, segment) {
+  const words = normalizedShellSegmentWords(segment);
+  if (words.length > 0) {
+    candidates.push(words);
+  }
+}
+
+function normalizedShellSegmentWords(segment) {
+  const trimmed = segment.trim().replace(/^[({]\s*/u, "");
+  if (!trimmed || trimmed.startsWith("#")) {
+    return [];
+  }
+  const words = normalizedCommandWords(splitShellWords(trimmed));
+  while (shellControlCommandPrefixes.has(words[0])) {
+    words.shift();
+  }
+  const normalizedWords = normalizedCommandWords(words);
+  return normalizedCommandWords(stripShellExecutionPrefixes(normalizedWords));
+}
+
+function normalizeExecutableWords(words) {
+  return normalizedCommandWords(stripShellExecutionPrefixes(words));
+}
+
+function stripShellExecutionPrefixes(words) {
+  words = [...words];
+  for (;;) {
+    const first = shellWordBasename(words[0]);
+    if (shellCommandExecutionPrefixes.has(first)) {
+      words.shift();
+      continue;
+    }
+    if (first === "command") {
+      words.shift();
+      if (!stripCommandBuiltinOptions(words)) {
+        return words;
+      }
+      continue;
+    }
+    if (first === "env") {
+      if (!stripEnvCommandOptions(words, { canShimIgnoreEnvironment: false })) {
+        return words;
+      }
+      continue;
+    }
+    if (first === "time") {
+      words.shift();
+      stripTimeOptions(words);
+      continue;
+    }
+    if (first === "timeout") {
+      stripTimeoutOptions(words);
+      continue;
+    }
+    return words;
+  }
+}
+
+function stripEnvCommandOptions(words, { canShimIgnoreEnvironment = true } = {}) {
+  const originalWords = [...words];
+  const envCommand = words.shift() ?? "";
+  let ignoresEnvironment = false;
+  for (;;) {
+    const word = words[0] ?? "";
+    if (!word) {
+      words.splice(0, words.length, ...originalWords);
+      return false;
+    }
+    if (word === "--") {
+      words.shift();
+      return true;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
+      words.shift();
+      continue;
+    }
+    if (word === "-S" || word === "--split-string") {
+      if (ignoresEnvironment) {
+        words.splice(0, words.length, ...originalWords);
+        return false;
+      }
+      words.shift();
+      const split = splitShellWords(words.shift() ?? "");
+      words.unshift(...split);
+      return words.length > 0;
+    }
+    if (word.startsWith("-S") && word !== "-S") {
+      if (ignoresEnvironment) {
+        words.splice(0, words.length, ...originalWords);
+        return false;
+      }
+      words.shift();
+      words.unshift(...splitShellWords(word.slice(2)));
+      return words.length > 0;
+    }
+    if (word.startsWith("--split-string=")) {
+      if (ignoresEnvironment) {
+        words.splice(0, words.length, ...originalWords);
+        return false;
+      }
+      words.shift();
+      words.unshift(...splitShellWords(word.slice("--split-string=".length)));
+      return words.length > 0;
+    }
+    if (word === "-i" || word === "--ignore-environment") {
+      if (!canShimIgnoreEnvironment || envCommand.includes("/")) {
+        words.splice(0, words.length, ...originalWords);
+        return false;
+      }
+      ignoresEnvironment = true;
+      words.shift();
+      continue;
+    }
+    if (word === "-u" || word === "--unset" || word === "-C" || word === "--chdir") {
+      words.shift();
+      if (words[0]) {
+        words.shift();
+      }
+      continue;
+    }
+    if (word.startsWith("--unset=") || word.startsWith("--chdir=")) {
+      words.shift();
+      continue;
+    }
+    if (word.startsWith("-") && word !== "-") {
+      if (word.includes("i")) {
+        if (!canShimIgnoreEnvironment || envCommand.includes("/")) {
+          words.splice(0, words.length, ...originalWords);
+          return false;
+        }
+        ignoresEnvironment = true;
+      }
+      words.shift();
+      continue;
+    }
+    if (ignoresEnvironment && (!canShimIgnoreEnvironment || envCommand.includes("/"))) {
+      words.splice(0, words.length, ...originalWords);
+      return false;
+    }
+    return true;
+  }
+}
+
+function shellWordBasename(word) {
+  return (word ?? "").split("/").pop() ?? "";
+}
+
+function stripCommandBuiltinOptions(words) {
+  for (;;) {
+    if (words[0] === "--") {
+      words.shift();
+      return true;
+    }
+    if (words[0] === "-p") {
+      words.shift();
+      continue;
+    }
+    return words[0] !== "-v" && words[0] !== "-V";
+  }
+}
+
+function stripTimeOptions(words) {
+  while ((words[0] ?? "").startsWith("-")) {
+    if (words[0] === "--") {
+      words.shift();
+      return;
+    }
+    words.shift();
+  }
+}
+
+function stripTimeoutOptions(words) {
+  words.shift();
+  for (;;) {
+    const word = words[0] ?? "";
+    if (!word) {
+      return;
+    }
+    if (word === "--") {
+      words.shift();
+      break;
+    }
+    if (word === "-k" || word === "--kill-after" || word === "-s" || word === "--signal") {
+      words.shift();
+      if (words[0]) {
+        words.shift();
+      }
+      continue;
+    }
+    if (word.startsWith("--kill-after=") || word.startsWith("--signal=")) {
+      words.shift();
+      continue;
+    }
+    if (word.startsWith("-") && word !== "-") {
+      words.shift();
+      continue;
+    }
+    break;
+  }
+  if (words[0]) {
+    words.shift();
+  }
+}
+
+function splitShellWords(value) {
+  const words = [];
+  let word = "";
+  let quote = "";
+  let escaped = false;
+  for (const char of value) {
+    if (escaped) {
+      word += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      } else {
+        word += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/u.test(char)) {
+      if (word) {
+        words.push(word);
+        word = "";
+      }
+      continue;
+    }
+    word += char;
+  }
+  if (word) {
+    words.push(word);
+  }
+  return words;
+}
+
+function stripHeredocBodies(command) {
+  const lines = command.split("\n");
+  const kept = [];
+  const pendingDelimiters = [];
+  for (const line of lines) {
+    if (pendingDelimiters.length > 0) {
+      const current = pendingDelimiters[0];
+      const candidate = current.stripTabs ? line.replace(/^\t+/u, "") : line;
+      if (candidate === current.delimiter) {
+        pendingDelimiters.shift();
+      } else if (current.expand) {
+        kept.push(...extractCommandSubstitutionBodies(line));
+      }
+      continue;
+    }
+    kept.push(line);
+    pendingDelimiters.push(...lineHeredocDelimiters(line));
+  }
+  return kept.join("\n");
+}
+
+function lineHeredocDelimiters(line) {
+  const delimiters = [];
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1] ?? "";
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char !== "<" || next !== "<" || line[index + 2] === "<") {
+      continue;
+    }
+    let delimiterStart = index + 2;
+    const stripTabs = line[delimiterStart] === "-";
+    if (stripTabs) {
+      delimiterStart += 1;
+    }
+    while (/\s/u.test(line[delimiterStart] ?? "")) {
+      delimiterStart += 1;
+    }
+    const parsed = readHeredocDelimiter(line, delimiterStart);
+    if (parsed.delimiter) {
+      delimiters.push({ delimiter: parsed.delimiter, stripTabs, expand: !parsed.quoted });
+      index = parsed.endIndex;
+    }
+  }
+  return delimiters;
+}
+
+function readHeredocDelimiter(line, startIndex) {
+  let delimiter = "";
+  let quote = "";
+  let escaped = false;
+  let quoted = false;
+  let index = startIndex;
+  for (; index < line.length; index += 1) {
+    const char = line[index];
+    if (escaped) {
+      delimiter += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      quoted = true;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      } else {
+        delimiter += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quoted = true;
+      quote = char;
+      continue;
+    }
+    if (/\s/u.test(char) || /[;&|()<>]/u.test(char)) {
+      break;
+    }
+    delimiter += char;
+  }
+  return { delimiter, endIndex: Math.max(startIndex, index), quoted };
+}
+
+function extractCommandSubstitutionBodies(line) {
+  const substitutions = [];
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1] ?? "";
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "$" && next === "(" && line[index + 2] !== "(") {
+      const substitution = readCommandSubstitution(line, index + 2);
+      substitutions.push(substitution.content);
+      index = substitution.endIndex;
+    }
+  }
+  return substitutions;
+}
+
+function shellCommandSegments(command) {
+  const segments = [];
+  let segment = "";
+  let quote = "";
+  let escaped = false;
+  let inCase = false;
+  let readingCasePattern = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    const next = command[index + 1] ?? "";
+    if (escaped) {
+      segment += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      segment += char;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (quote === '"' && char === "$" && next === "(" && command[index + 2] !== "(") {
+        const substitution = readCommandSubstitution(command, index + 2);
+        segments.push(...shellCommandWordCandidates(substitution.content));
+        index = substitution.endIndex;
+        segment += "$()";
+        continue;
+      }
+      if (char === quote) {
+        quote = "";
+      }
+      segment += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      segment += char;
+      continue;
+    }
+    if (char === "#" && (segment.trim() === "" || /\s$/u.test(segment))) {
+      index = skipUntilNewline(command, index);
+      pushShellCandidate(segments, segment);
+      segment = "";
+      continue;
+    }
+    if (char === "$" && next === "(" && command[index + 2] !== "(") {
+      const substitution = readCommandSubstitution(command, index + 2);
+      segments.push(...shellCommandWordCandidates(substitution.content));
+      index = substitution.endIndex;
+      segment += "$()";
+      continue;
+    }
+    if (segment.trim() === "" && startsShellReservedWord(command, index, "case")) {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      inCase = true;
+      readingCasePattern = true;
+      index += "case".length - 1;
+      continue;
+    }
+    if (inCase && segment.trim() === "" && startsShellReservedWord(command, index, "esac")) {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      inCase = false;
+      readingCasePattern = false;
+      index += "esac".length - 1;
+      continue;
+    }
+    if (inCase && readingCasePattern) {
+      if (char === ")") {
+        segment = "";
+        readingCasePattern = false;
+        continue;
+      }
+      segment += char;
+      continue;
+    }
+    if (inCase && char === ";" && next === ";") {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      readingCasePattern = true;
+      index += 1;
+      continue;
+    }
+    if (char === "\n" || char === ";" || char === ")") {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      continue;
+    }
+    if ((char === "&" && next === "&") || (char === "|" && next === "|")) {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      index += 1;
+      continue;
+    }
+    if (char === "&" && next !== ">" && command[index - 1] !== ">") {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      continue;
+    }
+    if (char === "|") {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      if (next === "&") {
+        index += 1;
+      }
+      continue;
+    }
+    segment += char;
+  }
+  pushShellCandidate(segments, segment);
+  return segments;
+}
+
+function readCommandSubstitution(command, startIndex) {
+  let depth = 1;
+  let quote = "";
+  let escaped = false;
+  let inCase = false;
+  let readingCasePattern = false;
+  let content = "";
+  for (let index = startIndex; index < command.length; index += 1) {
+    const char = command[index];
+    const next = command[index + 1] ?? "";
+    if (escaped) {
+      content += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      content += char;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      }
+      content += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      content += char;
+      continue;
+    }
+    if (!inCase && startsShellToken(command, index, "case")) {
+      inCase = true;
+      readingCasePattern = true;
+    } else if (inCase && startsShellToken(command, index, "esac")) {
+      inCase = false;
+      readingCasePattern = false;
+    }
+    if (char === "$" && next === "(") {
+      depth += 1;
+      content += "$(";
+      index += 1;
+      continue;
+    }
+    if (char === "(") {
+      depth += 1;
+      content += char;
+      continue;
+    }
+    if (inCase && char === ";" && next === ";") {
+      readingCasePattern = true;
+      content += ";;";
+      index += 1;
+      continue;
+    }
+    if (inCase && readingCasePattern && depth === 1 && char === ")") {
+      readingCasePattern = false;
+      content += char;
+      continue;
+    }
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return { content, endIndex: index };
+      }
+    }
+    content += char;
+  }
+  return { content, endIndex: command.length - 1 };
+}
+
+function startsShellReservedWord(command, index, word) {
+  if (!command.startsWith(word, index)) {
+    return false;
+  }
+  const after = command[index + word.length] ?? "";
+  return !after || /\s|[;&|()<>]/u.test(after);
+}
+
+function startsShellToken(command, index, word) {
+  if (!command.startsWith(word, index)) {
+    return false;
+  }
+  const before = command[index - 1] ?? "";
+  const after = command[index + word.length] ?? "";
+  return (!before || /\s|[;&|()<>]/u.test(before)) && (!after || /\s|[;&|()<>]/u.test(after));
+}
+
+function skipUntilNewline(command, index) {
+  const newlineIndex = command.indexOf("\n", index);
+  return newlineIndex < 0 ? command.length - 1 : newlineIndex;
 }
 
 function mergeBaseForChangedGate() {
   const base = gitOutput(["merge-base", "origin/main", "HEAD"]);
   return base.status === 0 && base.stdout ? base.stdout : "origin/main";
+}
+
+function remoteGitBootstrapForChangedGate(changedGateBase) {
+  const quotedBase = shellQuote(changedGateBase);
+  return [
+    "if ! git status --short >/dev/null 2>&1; then",
+    "rm -rf .git;",
+    "git init -q;",
+    "git remote add origin https://github.com/openclaw/openclaw.git 2>/dev/null || git remote set-url origin https://github.com/openclaw/openclaw.git;",
+    `git fetch -q --depth=1 origin ${quotedBase}:refs/remotes/origin/main;`,
+    "git reset --mixed --quiet refs/remotes/origin/main;",
+    "git add -A;",
+    "if ! git diff --cached --quiet; then git -c user.name=OpenClaw -c user.email=ci@openclaw.local commit -q --no-gpg-sign -m remote-changed-gate-tree; fi;",
+    "fi",
+  ].join(" ");
+}
+
+function isWindowsRemoteTarget(commandArgs) {
+  return (
+    optionValue(commandArgs, "--target") === "windows" || hasOption(commandArgs, "--windows-mode")
+  );
+}
+
+function isAwsMacosRemoteTarget(commandArgs, providerName) {
+  return (
+    commandArgs[0] === "run" &&
+    providerName === "aws" &&
+    optionValue(commandArgs, "--target") === "macos"
+  );
+}
+
+function injectRemoteChangedGateGitBootstrap(commandArgs, changedGateBase) {
+  if (!changedGateBase || commandArgs[0] !== "run" || isWindowsRemoteTarget(commandArgs)) {
+    return commandArgs;
+  }
+
+  const { start, optionEnd } = runCommandBounds(commandArgs);
+  if (start < 0) {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const remoteCommand = normalizedArgs.slice(start);
+  const originalShellCommand =
+    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
+      ? remoteCommand[0]
+      : shellJoin(remoteCommand);
+  const shellCommand = `${remoteGitBootstrapForChangedGate(changedGateBase)} && ${originalShellCommand}`;
+
+  if (!hasOption(normalizedArgs, "--shell")) {
+    normalizedArgs.splice(optionEnd, 0, "--shell");
+  }
+
+  const updatedBounds = runCommandBounds(normalizedArgs);
+  normalizedArgs.splice(
+    updatedBounds.start,
+    normalizedArgs.length - updatedBounds.start,
+    shellCommand,
+  );
+  return normalizedArgs;
+}
+
+function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
+  const nodeVersion = process.env.OPENCLAW_CRABBOX_MACOS_NODE_VERSION?.trim() || "24.15.0";
+  const bootstrap = [
+    "openclaw_crabbox_bootstrap_macos_js() {",
+    'tool_root="${OPENCLAW_CRABBOX_MACOS_TOOLCHAIN_DIR:-$HOME/.openclaw-crabbox-toolchain}";',
+    `node_version=${shellQuote(nodeVersion)};`,
+    'arch="$(uname -m)";',
+    'case "$arch" in arm64) node_arch=arm64 ;; x86_64) node_arch=x64 ;; *) echo "unsupported macOS arch: $arch" >&2; return 2 ;; esac;',
+    'if [ -z "${TMPDIR:-}" ]; then export TMPDIR="/tmp"; fi;',
+    'if [ ! -d "$TMPDIR" ]; then mkdir -p "$TMPDIR" 2>/dev/null || export TMPDIR="/tmp"; fi;',
+    'if [ ! -d "$TMPDIR" ]; then echo "usable TMPDIR not found: $TMPDIR" >&2; return 1; fi;',
+    'node_dir="$tool_root/node-v${node_version}-darwin-${node_arch}";',
+    'export PATH="$node_dir/bin:$PATH";',
+    'if [ ! -x "$node_dir/bin/node" ]; then',
+    'tmp_dir="$(mktemp -d)" || return 1;',
+    'pkg="node-v${node_version}-darwin-${node_arch}.tar.gz";',
+    'base_url="https://nodejs.org/dist/v${node_version}";',
+    'mkdir -p "$tool_root" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
+    'curl -fsSLo "$tmp_dir/$pkg" "$base_url/$pkg" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
+    'curl -fsSLo "$tmp_dir/SHASUMS256.txt" "$base_url/SHASUMS256.txt" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
+    '(cd "$tmp_dir" && grep " $pkg$" SHASUMS256.txt | shasum -a 256 -c -) || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
+    'rm -rf "$node_dir" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
+    'tar -xzf "$tmp_dir/$pkg" -C "$tool_root" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
+    'rm -rf "$tmp_dir";',
+    "fi;",
+    "node --version >&2 || return 1;",
+    "openclaw_crabbox_env() {",
+    "openclaw_env_args=();",
+    "openclaw_env_ignore=0;",
+    "openclaw_env_path_seen=0;",
+    'while [ "$#" -gt 0 ]; do',
+    'case "$1" in',
+    '-i|--ignore-environment) openclaw_env_ignore=1; openclaw_env_args+=("$1"); shift ;;',
+    '-S|--split-string|-S*|--split-string=*) command env "${openclaw_env_args[@]}" "$@"; return ;;',
+    '-[!-]*i*) openclaw_env_ignore=1; openclaw_env_args+=("$1"); shift ;;',
+    '-u|--unset|-C|--chdir) openclaw_env_args+=("$1"); shift; if [ "$#" -gt 0 ]; then openclaw_env_args+=("$1"); shift; fi ;;',
+    '--unset=*|--chdir=*) openclaw_env_args+=("$1"); shift ;;',
+    'PATH=*) if [ "$openclaw_env_ignore" = "1" ]; then openclaw_env_args+=("PATH=$PATH:${1#PATH=}"); else openclaw_env_args+=("$1"); fi; openclaw_env_path_seen=1; shift ;;',
+    '[A-Za-z_]*=*) openclaw_env_args+=("$1"); shift ;;',
+    '--) openclaw_env_args+=("--"); shift; break ;;',
+    "*) break ;;",
+    "esac;",
+    "done;",
+    'if [ "$openclaw_env_ignore" = "1" ] && [ "$openclaw_env_path_seen" = "0" ]; then openclaw_env_args+=("PATH=$PATH"); fi;',
+    'command env "${openclaw_env_args[@]}" "$@";',
+    "};",
+  ];
+  if (packageManager) {
+    bootstrap.push(
+      'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
+      'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
+      'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
+      'export PATH="$PNPM_HOME:$PATH";',
+      'corepack enable --install-directory "$PNPM_HOME" || return 1;',
+      "pnpm --version >&2;",
+    );
+  }
+  bootstrap.push("};", "openclaw_crabbox_bootstrap_macos_js");
+  return bootstrap.join(" ");
+}
+
+function scopedAwsMacosEnvCommand(commandArgs) {
+  if (
+    commandArgs.length <= 1 ||
+    shellWordBasename(commandArgs[0]) !== "env" ||
+    commandArgs[0].includes("/")
+  ) {
+    return null;
+  }
+
+  const targetWords = [...commandArgs];
+  if (!stripEnvCommandOptions(targetWords, { canShimIgnoreEnvironment: true })) {
+    return null;
+  }
+
+  const targetEntrypoint = shellWordBasename(targetWords[0]);
+  if (
+    !jsRuntimeEntrypoints.has(targetEntrypoint) &&
+    !awsMacosCorepackEntrypoints.has(targetEntrypoint)
+  ) {
+    return null;
+  }
+
+  return {
+    runtimeEntrypoint: targetEntrypoint,
+    packageManager: awsMacosCorepackEntrypoints.has(targetEntrypoint),
+    shellCommand: `openclaw_crabbox_env ${shellJoin(commandArgs.slice(1))}`,
+  };
+}
+
+function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
+  const runArgs = runCommandArgs(commandArgs);
+  const directScopedEnvCommand = hasOption(commandArgs, "--shell")
+    ? null
+    : scopedAwsMacosEnvCommand(runArgs);
+  const runtimeEntrypoint =
+    directScopedEnvCommand?.runtimeEntrypoint || commandRuntimeEntrypoint(runArgs);
+  if (!isAwsMacosRemoteTarget(commandArgs, providerName) || !runtimeEntrypoint) {
+    return commandArgs;
+  }
+
+  const { start, optionEnd } = runCommandBounds(commandArgs);
+  if (start < 0) {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const remoteCommand = normalizedArgs.slice(start);
+  const originalShellCommand =
+    directScopedEnvCommand?.shellCommand ??
+    (hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
+      ? remoteCommand[0]
+      : shellJoin(remoteCommand));
+  const shellCommand = `${remoteAwsMacosJsBootstrap({
+    packageManager:
+      directScopedEnvCommand?.packageManager || commandNeedsAwsMacosPackageManager(runArgs),
+  })} && { ${originalShellCommand}\n}`;
+
+  if (!hasOption(normalizedArgs, "--shell")) {
+    normalizedArgs.splice(optionEnd, 0, "--shell");
+  }
+
+  const updatedBounds = runCommandBounds(normalizedArgs);
+  normalizedArgs.splice(
+    updatedBounds.start,
+    normalizedArgs.length - updatedBounds.start,
+    shellCommand,
+  );
+  return normalizedArgs;
+}
+
+function hasRunOption(commandArgs, name) {
+  if (commandArgs[0] !== "run") {
+    return false;
+  }
+  const { optionEnd } = runCommandBounds(commandArgs);
+  const normalizedName = name.replace(/^-+/u, "");
+  for (let index = 1; index < optionEnd; index += 1) {
+    const arg = commandArgs[index];
+    if (arg.startsWith("-") && runOptionName(arg) === normalizedName) {
+      return true;
+    }
+    if (!arg.includes("=") && currentRunValueOptions().has(runOptionName(arg))) {
+      index += 1;
+    }
+  }
+  return false;
+}
+
+function replaceRunFlagWithScript(commandArgs, flagName, scriptPath) {
+  const { optionEnd } = runCommandBounds(commandArgs);
+  const normalizedName = flagName.replace(/^-+/u, "");
+  const normalizedArgs = [...commandArgs];
+  for (let index = 1; index < optionEnd; index += 1) {
+    const arg = normalizedArgs[index];
+    if (arg.startsWith("-") && runOptionName(arg) === normalizedName) {
+      normalizedArgs.splice(index, 1, "--script", scriptPath);
+      return normalizedArgs;
+    }
+    if (!arg.includes("=") && currentRunValueOptions().has(runOptionName(arg))) {
+      index += 1;
+    }
+  }
+  return normalizedArgs;
+}
+
+function prepareAwsMacosScriptStdinBootstrap(commandArgs, providerName) {
+  if (
+    !isAwsMacosRemoteTarget(commandArgs, providerName) ||
+    !hasRunOption(commandArgs, "--script-stdin")
+  ) {
+    return { args: commandArgs, cleanup: () => {}, prepared: false };
+  }
+
+  const scriptRoot = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-macos-script-"));
+  const scriptPath = resolve(scriptRoot, "script.sh");
+  const script = readFileSync(0, "utf8");
+  writeFileSync(scriptPath, createAwsMacosScriptStdinWrapper(script), "utf8");
+  chmodSync(scriptPath, 0o700);
+  return {
+    args: replaceRunFlagWithScript(commandArgs, "--script-stdin", scriptPath),
+    cleanup: () => rmSync(scriptRoot, { recursive: true, force: true }),
+    prepared: true,
+  };
+}
+
+function createAwsMacosScriptStdinWrapper(script) {
+  const packageManager = scriptNeedsAwsMacosPackageManager(script);
+  if (!script.startsWith("#!")) {
+    return `${remoteAwsMacosJsBootstrap({ packageManager })} || exit $?\n${script}`;
+  }
+  const delimiter = uniqueHereDocDelimiter(script);
+  return [
+    `${remoteAwsMacosJsBootstrap({ packageManager })} || exit $?`,
+    'tmp_script="$(mktemp "${TMPDIR:-/tmp}/openclaw-crabbox-script.XXXXXX")" || exit $?',
+    'cleanup_openclaw_crabbox_script() { rm -f "$tmp_script"; }',
+    "trap cleanup_openclaw_crabbox_script EXIT",
+    `cat >"$tmp_script" <<'${delimiter}'`,
+    script.endsWith("\n") ? script.slice(0, -1) : script,
+    delimiter,
+    'chmod 700 "$tmp_script" || exit $?',
+    '"$tmp_script" "$@"',
+    "",
+  ].join("\n");
+}
+
+function scriptNeedsAwsMacosPackageManager(script) {
+  const firstLine = script.match(/^[^\r\n]*/u)?.[0] ?? "";
+  if (firstLine.startsWith("#!")) {
+    let words = firstLine.slice(2).trim().split(/\s+/u).filter(Boolean);
+    if ((words[0] ?? "").split("/").pop() === "env") {
+      words = words.slice(1);
+      while ((words[0] ?? "").startsWith("-")) {
+        words = words.slice(1);
+      }
+    }
+    if (commandWordsNeedAwsMacosPackageManager(words)) {
+      return true;
+    }
+  }
+  return commandNeedsAwsMacosPackageManager([script]);
+}
+
+function uniqueHereDocDelimiter(script) {
+  let index = 0;
+  for (;;) {
+    const delimiter = `OPENCLAW_CRABBOX_SCRIPT_${index}`;
+    if (!new RegExp(`^${delimiter}$`, "mu").test(script)) {
+      return delimiter;
+    }
+    index += 1;
+  }
 }
 
 function isSparseCheckout() {
@@ -541,13 +1677,10 @@ function isWorktreeClean() {
 }
 
 function shouldUseFullCheckoutForCleanSparseRemoteSync(commandArgs, providerName) {
-  if (commandArgs[0] !== "run" || isLocalContainerProvider(providerName)) {
+  if (commandArgs[0] !== "run") {
     return false;
   }
-  if (
-    hasOption(commandArgs, "--no-sync") ||
-    hasOption(commandArgs, "--id")
-  ) {
+  if (hasOption(commandArgs, "--no-sync")) {
     return false;
   }
 
@@ -692,9 +1825,12 @@ function isProviderAdvertised(provider, advertisedProviders) {
 
 const providers = parseProvidersFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
-const provider = selectedProvider(args);
+const provider = selectedProvider(args, providers);
 const commandProviderValue = commandProvider(args);
-const normalizedArgs = ensureAwsMacOnDemandMarket(args, provider);
+let normalizedArgs = ensureAwsMacOnDemandMarket(
+  ensureAzureWindowsProvider(args, provider, providers),
+  provider,
+);
 
 console.error(
   `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} provider=${provider || "unknown"} providers=${providers.join(",") || "unknown"}`,
@@ -718,6 +1854,8 @@ if (provider && !isProviderAdvertised(provider, providers)) {
   process.exit(2);
 }
 
+enforceBrokeredAws(normalizedArgs, provider);
+
 if (provider === "blacksmith-testbox") {
   const envProvider = process.env.CRABBOX_PROVIDER?.trim();
   const source = commandProviderValue
@@ -738,21 +1876,31 @@ if (provider === "blacksmith-testbox") {
 let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let cleanupDone = false;
-if (shouldUseFullCheckoutForCleanSparseRemoteSync(normalizedArgs, provider)) {
-  const runWords = runCommandArgs(normalizedArgs);
-  const changedGateBase =
-    isChangedGateCommand(runWords) && !headInRemoteRefs() ? mergeBaseForChangedGate() : "";
-  const checkout = prepareFullCheckoutForSync({ changedGateBase });
-  childCwd = checkout.dir;
-  cleanupChildCwd = () => checkout.cleanup();
-  console.error(
-    `[crabbox] sparse clean checkout detected; syncing from temporary full checkout ${checkout.dir}`,
-  );
-  if (checkout.changedGateBase) {
+let remoteChangedGateBase = "";
+let scriptStdinPrepared = false;
+const scriptBootstrap = prepareAwsMacosScriptStdinBootstrap(normalizedArgs, provider);
+normalizedArgs = scriptBootstrap.args;
+scriptStdinPrepared = scriptBootstrap.prepared;
+try {
+  if (shouldUseFullCheckoutForCleanSparseRemoteSync(normalizedArgs, provider)) {
+    const runWords = runCommandArgs(normalizedArgs);
+    const changedGateBase = isChangedGateCommand(runWords) ? mergeBaseForChangedGate() : "";
+    const checkout = prepareFullCheckoutForSync({ changedGateBase });
+    childCwd = checkout.dir;
+    cleanupChildCwd = () => checkout.cleanup();
+    remoteChangedGateBase = checkout.changedGateBase;
     console.error(
-      `[crabbox] remote changed gate detected; overlaying local HEAD as worktree changes from ${checkout.changedGateBase}`,
+      `[crabbox] sparse clean checkout detected; syncing from temporary full checkout ${checkout.dir}`,
     );
+    if (checkout.changedGateBase) {
+      console.error(
+        `[crabbox] remote changed gate detected; overlaying local HEAD as worktree changes from ${checkout.changedGateBase}`,
+      );
+    }
   }
+} catch (error) {
+  scriptBootstrap.cleanup();
+  throw error;
 }
 
 function cleanupOnce() {
@@ -760,18 +1908,30 @@ function cleanupOnce() {
     return;
   }
   cleanupDone = true;
+  scriptBootstrap.cleanup();
+  preserveTemporaryCrabboxRuns();
   cleanupChildCwd();
 }
 
 const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(normalizedArgs));
-if (normalizedArgs[0] === "run" && provider === "aws" && runtimeEntrypoint) {
-  const id = optionValue(normalizedArgs, "--id");
-  const hydrate = id
-    ? `pnpm crabbox:hydrate -- --id ${id}`
-    : "pnpm crabbox:warmup, then pnpm crabbox:hydrate -- --id <id>";
-  console.error(
-    `[crabbox] warning: provider=aws raw boxes may lack Node/Corepack/pnpm for ${runtimeEntrypoint}; hydrate first (${hydrate}) or pass --provider blacksmith-testbox for OpenClaw CI-like proof; not switching providers automatically`,
-  );
+if (
+  normalizedArgs[0] === "run" &&
+  provider === "aws" &&
+  (runtimeEntrypoint || scriptStdinPrepared)
+) {
+  if (isAwsMacosRemoteTarget(normalizedArgs, provider)) {
+    console.error(
+      `[crabbox] provider=aws macOS raw boxes may lack Node/Corepack/pnpm for ${runtimeEntrypoint || "--script-stdin"}; bootstrapping a pinned user-local Node toolchain before the command`,
+    );
+  } else {
+    const id = optionValue(normalizedArgs, "--id");
+    const hydrate = id
+      ? `pnpm crabbox:hydrate -- --id ${id}`
+      : "pnpm crabbox:warmup, then pnpm crabbox:hydrate -- --id <id>";
+    console.error(
+      `[crabbox] warning: provider=aws raw boxes may lack Node/Corepack/pnpm for ${runtimeEntrypoint}; hydrate first (${hydrate}) or pass --provider blacksmith-testbox for OpenClaw CI-like proof; not switching providers automatically`,
+    );
+  }
 }
 
 const childEnv = { ...process.env };
@@ -787,7 +1947,7 @@ if (
 }
 if (
   isLocalContainerProvider(provider) &&
-  process.platform !== "win32" &&
+  process.platform === "linux" &&
   !childEnv.CRABBOX_LOCAL_CONTAINER_WORK_ROOT &&
   !hasOption(normalizedArgs, "--local-container-work-root")
 ) {
@@ -797,7 +1957,13 @@ if (
   );
 }
 
-const childArgs = childCwd === repoRoot ? normalizedArgs : absolutizeLocalRunPaths(normalizedArgs);
+const childArgs =
+  childCwd === repoRoot
+    ? injectRemoteAwsMacosJsBootstrap(normalizedArgs, provider)
+    : injectRemoteChangedGateGitBootstrap(
+        injectRemoteAwsMacosJsBootstrap(absolutizeLocalRunPaths(normalizedArgs), provider),
+        remoteChangedGateBase,
+      );
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,

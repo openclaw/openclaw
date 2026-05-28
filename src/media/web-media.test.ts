@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -17,8 +18,8 @@ let loadWebMediaRaw: typeof import("./web-media.js").loadWebMediaRaw;
 let optimizeImageToJpeg: typeof import("./web-media.js").optimizeImageToJpeg;
 let resolveImageCompressionGrid: typeof import("./web-media.js").resolveImageCompressionGrid;
 
-const TINY_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+const TINY_PNG_BUFFER = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
+const TINY_PNG_BASE64 = TINY_PNG_BUFFER.toString("base64");
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 
 let fixtureRoot = "";
@@ -363,9 +364,9 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
-  it("includes resize failure details when image optimization cannot produce a JPEG", async () => {
+  it("surfaces Rastermill decode failures when image optimization cannot produce a JPEG", async () => {
     await expect(optimizeImageToJpeg(Buffer.from("not an image"), 8)).rejects.toThrow(
-      /Failed to optimize image: .+/,
+      /Unable to determine image dimensions/,
     );
   });
 
@@ -439,104 +440,6 @@ describe("loadWebMedia", () => {
     expect(single.qualities).toEqual([80, 70, 60, 50, 40]);
     expect(many.sides[0]).toBe(1280);
     expect(many.qualities).toEqual([70, 60, 50, 40]);
-  });
-
-  async function withUnavailableImageOptimizer<T>(fn: () => Promise<T>): Promise<T> {
-    vi.resetModules();
-    vi.doMock("./media-services.js", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("./media-services.js")>()),
-      convertHeicToJpeg: vi.fn(async (buffer: Buffer) => buffer),
-      hasAlphaChannel: vi.fn(async () => {
-        throw new Error(
-          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
-        );
-      }),
-      isImageProcessorUnavailableError: (err: unknown) =>
-        err instanceof Error && err.message.includes("Optional dependency sharp is required"),
-      optimizeImageToPng: vi.fn(async () => {
-        throw new Error(
-          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
-        );
-      }),
-      resizeToJpeg: vi.fn(async () => {
-        throw new Error(
-          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
-        );
-      }),
-    }));
-    try {
-      return await fn();
-    } finally {
-      vi.doUnmock("./media-services.js");
-      vi.resetModules();
-    }
-  }
-
-  it("sends an in-limit original image when optional sharp optimization is unavailable", async () => {
-    await withUnavailableImageOptimizer(async () => {
-      const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
-      const result = await loadWebMediaWithMissingOptimizer(
-        tinyPngFile,
-        createLocalWebMediaOptions(),
-      );
-      expect(result.kind).toBe("image");
-      expect(result.contentType).toBe("image/png");
-      expect(result.fileName).toBe("tiny.png");
-      expect(result.buffer.equals(Buffer.from(TINY_PNG_BASE64, "base64"))).toBe(true);
-    });
-  });
-
-  it("does not bypass the size cap when optional sharp optimization is unavailable", async () => {
-    await withUnavailableImageOptimizer(async () => {
-      const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
-      await expect(
-        loadWebMediaWithMissingOptimizer(tinyPngFile, { maxBytes: 8, localRoots: [fixtureRoot] }),
-      ).rejects.toThrow(/Optional dependency sharp is required/);
-    });
-  });
-
-  it("sends an in-limit data URL image when optional sharp optimization is unavailable", async () => {
-    await withUnavailableImageOptimizer(async () => {
-      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
-      const buffer = Buffer.from(TINY_PNG_BASE64, "base64");
-      const result = await optimizeImageBufferForWebMedia({
-        buffer,
-        contentType: "image/png",
-        maxBytes: 1024,
-        imageCompression: { models: [{ maxSidePx: 1024 }] },
-      });
-      expect(result.kind).toBe("image");
-      expect(result.contentType).toBe("image/png");
-      expect(result.buffer.equals(buffer)).toBe(true);
-    });
-  });
-
-  it("does not bypass the data URL image cap when optional sharp optimization is unavailable", async () => {
-    await withUnavailableImageOptimizer(async () => {
-      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
-      await expect(
-        optimizeImageBufferForWebMedia({
-          buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
-          contentType: "image/png",
-          maxBytes: 8,
-          imageCompression: { models: [{ maxSidePx: 1024 }] },
-        }),
-      ).rejects.toThrow(/Optional dependency sharp is required/);
-    });
-  });
-
-  it("does not bypass model dimensions when optional sharp optimization is unavailable", async () => {
-    await withUnavailableImageOptimizer(async () => {
-      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
-      await expect(
-        optimizeImageBufferForWebMedia({
-          buffer: createLargeColorBlockPng(1600),
-          contentType: "image/png",
-          maxBytes: 16 * 1024 * 1024,
-          imageCompression: { models: [{ maxSidePx: 512 }] },
-        }),
-      ).rejects.toThrow(/Optional dependency sharp is required/);
-    });
   });
 
   it("preserves in-limit GIF buffers when optimizing direct image buffers", async () => {
@@ -644,17 +547,6 @@ describe("loadWebMedia", () => {
     ).toBe(2048);
   });
 
-  it("does not send original HEIC media when optional sharp conversion is unavailable", async () => {
-    await withUnavailableImageOptimizer(async () => {
-      const heicFile = path.join(fixtureRoot, "photo.heic");
-      await fs.writeFile(heicFile, Buffer.from("heic-source"));
-      const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
-      await expect(
-        loadWebMediaWithMissingOptimizer(heicFile, createLocalWebMediaOptions()),
-      ).rejects.toThrow(/Optional dependency sharp is required/);
-    });
-  });
-
   it("resolves relative local media paths against the provided workspace directory", async () => {
     const result = await loadWebMedia("chart.png", {
       maxBytes: 1024 * 1024,
@@ -758,6 +650,20 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/markdown");
   });
 
+  it("rejects host-read HTML files without a separate security-boundary approval", async () => {
+    const htmlFile = path.join(fixtureRoot, "report.html");
+    await fs.writeFile(htmlFile, "<!doctype html><title>Report</title><h1>Report</h1>\n", "utf8");
+    await expectLoadWebMediaErrorCode(
+      loadWebMedia(htmlFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+      "path-not-allowed",
+    );
+  });
+
   it.each([
     {
       label: "ZIP",
@@ -818,6 +724,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { label: "CSV", fileName: "opaque.csv" },
+    { label: "HTML", fileName: "opaque.html" },
     { label: "Markdown", fileName: "opaque.md" },
   ])("rejects opaque non-NUL binary data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
@@ -839,6 +746,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { label: "CSV", fileName: "prefix-tail.csv" },
+    { label: "HTML", fileName: "prefix-tail.html" },
     { label: "Markdown", fileName: "prefix-tail.md" },
   ])(
     "rejects %s files with a text prefix and binary tail after the old sample window",
@@ -906,6 +814,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { label: "CSV", fileName: "nul-padded.csv" },
+    { label: "HTML", fileName: "nul-padded.html" },
     { label: "Markdown", fileName: "nul-padded.md" },
   ])("rejects NUL-padded binary data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
@@ -929,6 +838,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { label: "CSV", fileName: "bom-binary.csv" },
+    { label: "HTML", fileName: "bom-binary.html" },
     { label: "Markdown", fileName: "bom-binary.md" },
   ])("rejects UTF-16 BOM-prefixed binary data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
@@ -952,6 +862,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { label: "CSV", fileName: "alternating-high.csv" },
+    { label: "HTML", fileName: "alternating-high.html" },
     { label: "Markdown", fileName: "alternating-high.md" },
   ])("rejects alternating ASCII/high-byte data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
@@ -976,6 +887,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { label: "CSV", fileName: "high-bytes.csv" },
+    { label: "HTML", fileName: "high-bytes.html" },
     { label: "Markdown", fileName: "high-bytes.md" },
   ])("rejects high-byte opaque data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);

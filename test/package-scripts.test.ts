@@ -118,6 +118,12 @@ describe("package scripts", () => {
     expect(directNodeEnvScripts).toEqual([]);
   });
 
+  it("enables live cache validation in the package script", () => {
+    expect(readPackageJson().scripts["test:live:cache"]).toBe(
+      "node scripts/run-with-env.mjs OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import tsx scripts/check-live-cache.ts",
+    );
+  });
+
   it("uses the shipped package launcher for npm start", () => {
     expect(readPackageJson().scripts.start).toBe("node openclaw.mjs");
   });
@@ -125,12 +131,6 @@ describe("package scripts", () => {
   it("runs generated module formatting coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/format-generated-module.test.ts",
-    );
-  });
-
-  it("runs native opus installer coverage in Windows CI", () => {
-    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
-      "test/scripts/install-discord-native-opus.test.ts",
     );
   });
 
