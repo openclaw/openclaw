@@ -2,10 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "./shared.js";
 
-function isArrayIndexSegment(segment: string): boolean {
-  return parseArrayIndexSegment(segment) !== undefined;
-}
-
 function looksLikeArrayIndexSegment(segment: string): boolean {
   return /^\d+$/.test(segment);
 }
