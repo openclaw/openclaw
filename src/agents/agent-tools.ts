@@ -770,8 +770,11 @@ export function createOpenClawCodingTools(options?: {
     ? createLazyExecTool({
         ...execDefaults,
         host: options?.exec?.host ?? execConfig.host,
+        mode: options?.exec?.mode ?? execConfig.mode,
         security: options?.exec?.security ?? execConfig.security,
         ask: options?.exec?.ask ?? execConfig.ask,
+        config: options?.exec?.config ?? options?.config,
+        reviewer: options?.exec?.reviewer ?? execConfig.reviewer,
         trigger: options?.trigger,
         node: options?.exec?.node ?? execConfig.node,
         pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,

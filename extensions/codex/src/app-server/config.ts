@@ -426,9 +426,6 @@ export function resolveCodexAppServerRuntimeOptions(
   assertCodexAppServerAllowedForOpenClawExecMode(execMode);
   const explicitPolicyMode =
     resolvePolicyMode(config.mode) ?? resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE);
-  const explicitApprovalPolicy =
-    resolveApprovalPolicy(config.approvalPolicy) ??
-    resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY);
   const configuredSandbox =
     resolveSandbox(config.sandbox) ?? resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX);
   const explicitApprovalsReviewer = resolveApprovalsReviewer(config.approvalsReviewer);
