@@ -1656,6 +1656,17 @@ export async function handleFeishuMessage(params: {
       });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
+      
+      // Defensive check: ensure channel runtime is fully initialized
+      if (!core.channel?.inbound?.run) {
+        throw new Error(
+          `Feishu channel runtime not fully initialized. ` +
+          `Expected core.channel.inbound.run to be a function, but got: ${typeof core.channel?.inbound?.run}. ` +
+          `Channel keys: ${JSON.stringify(Object.keys(core.channel || {}))}. ` +
+          `This may indicate a plugin loading order issue or a regression in v2026.5.27.`
+        );
+      }
+      
       const turnResult = await core.channel.inbound.run({
         channel: "feishu",
         accountId: route.accountId,
