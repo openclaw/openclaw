@@ -63,7 +63,7 @@ function dispatchWithDeliveries(
   dispatcherOptions: {
     beforeDeliver?: ReplyDispatchBeforeDeliver;
     deliver?: (payload: ReplyPayload, info: { kind: Delivery["kind"] }) => Promise<unknown>;
-    onSettled?: () => unknown;
+    onSettled?: () => Promise<unknown> | unknown;
   } = {},
 ) {
   return dispatchInboundMessageWithBufferedDispatcher({
@@ -474,6 +474,61 @@ describe("foreground reply freshness", () => {
       counts: { tool: 0, block: 0, final: 0 },
     });
     expect(deliveries).toEqual([]);
+  });
+
+  it("suppresses an older settled delivery after a newer visible reply", async () => {
+    const deliveries: Delivery[] = [];
+    const beforeDeliverStarted = createDeferred<void>();
+    const releaseBeforeDeliver = createDeferred<ReplyPayload | null>();
+    const beforeDeliver = vi.fn(() => {
+      beforeDeliverStarted.resolve();
+      return releaseBeforeDeliver.promise;
+    });
+    const olderSettled = vi.fn(() => {
+      deliveries.push({ kind: "final", text: "old settled fallback" });
+      return { visibleReplySent: true };
+    });
+
+    hoisted.dispatchReplyFromConfigMock.mockImplementation(
+      async (params: DispatchReplyFromConfigParams) => {
+        if (params.ctx.MessageSid === "old-message") {
+          params.dispatcher.sendFinalReply({ text: "old final" });
+          return queuedFinalResult();
+        }
+        if (params.ctx.MessageSid === "new-message") {
+          params.dispatcher.sendFinalReply({ text: "new final" });
+          return queuedFinalResult();
+        }
+        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
+      },
+    );
+
+    const olderDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "old-message" }),
+      deliveries,
+      { beforeDeliver, onSettled: olderSettled },
+    );
+    await beforeDeliverStarted.promise;
+
+    const newerResult = await dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "new-message" }),
+      deliveries,
+    );
+
+    releaseBeforeDeliver.resolve({ text: "old rewritten final" });
+    const olderResult = await olderDispatch;
+
+    expect(beforeDeliver).toHaveBeenCalledTimes(1);
+    expect(olderSettled).not.toHaveBeenCalled();
+    expect(newerResult).toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    expect(olderResult).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
   });
 
   it("runs the settled delivery hook when dispatch fails after queueing a reply", async () => {

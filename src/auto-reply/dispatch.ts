@@ -220,6 +220,9 @@ async function runForegroundReplyFenceSettledDelivery(
   if (!onSettled) {
     return;
   }
+  if (await shouldCancelForegroundReplyDelivery(snapshot)) {
+    return;
+  }
   try {
     const deliveryResult = await onSettled();
     if (isExplicitlyVisibleDelivery(deliveryResult)) {
