@@ -72,6 +72,7 @@ describe("handshake auth helpers", () => {
         hasBrowserOriginHeader: false,
         isControlUi: false,
         isWebchat: false,
+        isNativeLocalApp: false,
         reason: "not-paired",
       }),
     ).toBe(true);
@@ -81,6 +82,45 @@ describe("handshake auth helpers", () => {
         hasBrowserOriginHeader: false,
         isControlUi: false,
         isWebchat: false,
+        isNativeLocalApp: false,
+        reason: "metadata-upgrade",
+      }),
+    ).toBe(false);
+  });
+
+  it("allows silent metadata-upgrade for native local app clients (macOS/iOS/Android)", () => {
+    // Native app on loopback with OS version bump: should auto-approve
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        isNativeLocalApp: true,
+        reason: "metadata-upgrade",
+      }),
+    ).toBe(true);
+
+    // Remote client (not loopback): must still require manual approval
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: false,
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        isNativeLocalApp: true,
+        reason: "metadata-upgrade",
+      }),
+    ).toBe(false);
+
+    // Browser/webchat client on loopback: must still require manual approval
+    expect(
+      shouldAllowSilentLocalPairing({
+        isLocalClient: true,
+        hasBrowserOriginHeader: true,
+        isControlUi: false,
+        isWebchat: false,
+        isNativeLocalApp: false,
         reason: "metadata-upgrade",
       }),
     ).toBe(false);

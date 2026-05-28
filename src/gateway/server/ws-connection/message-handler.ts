@@ -26,6 +26,7 @@ import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserOperatorUiClient,
   isGatewayCliClient,
+  isNativeAppClient,
   isOperatorUiClient,
   isWebchatClient,
 } from "../../../utils/message-channel.js";
@@ -779,6 +780,7 @@ export function attachGatewayWsMessageHandler(params: {
               hasBrowserOriginHeader,
               isControlUi,
               isWebchat,
+              isNativeLocalApp: isNativeAppClient(connectParams.client),
               reason,
             });
             const pairing = await requestDevicePairing({

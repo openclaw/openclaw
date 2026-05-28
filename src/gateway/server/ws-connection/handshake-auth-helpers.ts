@@ -50,13 +50,26 @@ export function shouldAllowSilentLocalPairing(params: {
   hasBrowserOriginHeader: boolean;
   isControlUi: boolean;
   isWebchat: boolean;
+  isNativeLocalApp: boolean;
   reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
 }): boolean {
-  return (
-    params.isLocalClient &&
-    (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
-    (params.reason === "not-paired" || params.reason === "scope-upgrade")
-  );
+  if (!params.isLocalClient) {
+    return false;
+  }
+  if (params.hasBrowserOriginHeader && !params.isControlUi && !params.isWebchat) {
+    return false;
+  }
+  if (params.reason === "not-paired" || params.reason === "scope-upgrade") {
+    return true;
+  }
+  // For metadata-upgrade (e.g. OS version bump), allow silent re-approval only for
+  // trusted native app clients (macOS/iOS/Android) connecting from loopback.
+  // The device public key is unchanged — only the OS version string differs.
+  // Remote/browser clients still require explicit manual re-approval.
+  if (params.reason === "metadata-upgrade" && params.isNativeLocalApp) {
+    return true;
+  }
+  return false;
 }
 
 function resolveSignatureToken(connectParams: ConnectParams): string | null {

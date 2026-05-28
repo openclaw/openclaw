@@ -56,6 +56,15 @@ export function isInternalMessageChannel(raw?: string | null): raw is InternalMe
   return normalizeMessageChannel(raw) === INTERNAL_MESSAGE_CHANNEL;
 }
 
+export function isNativeAppClient(client?: GatewayClientInfoLike | null): boolean {
+  const clientId = normalizeGatewayClientName(client?.id);
+  return (
+    clientId === GATEWAY_CLIENT_NAMES.MACOS_APP ||
+    clientId === GATEWAY_CLIENT_NAMES.IOS_APP ||
+    clientId === GATEWAY_CLIENT_NAMES.ANDROID_APP
+  );
+}
+
 export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean {
   const mode = normalizeGatewayClientMode(client?.mode);
   if (mode === GATEWAY_CLIENT_MODES.WEBCHAT) {
