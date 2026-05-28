@@ -1,10 +1,17 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
-import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
+import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 export function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
   const normalized = normalizeProviderId(provider ?? "");
   return normalized === "openrouter" || normalized === "kilocode";
+}
+
+// Per-attempt transient failures (#87462): block only the failing model so
+// fallback models on the same auth profile can still try. Other reasons (auth,
+// billing, format, server_error) remain profile-wide.
+export function isModelScopedCooldownReason(reason: AuthProfileFailureReason | undefined): boolean {
+  return reason === "rate_limit" || reason === "timeout";
 }
 
 export function resolveProfileUnusableUntil(
@@ -31,7 +38,7 @@ function shouldBypassModelScopedCooldown(
 ): boolean {
   return Boolean(
     forModel &&
-    stats.cooldownReason === "rate_limit" &&
+    isModelScopedCooldownReason(stats.cooldownReason) &&
     stats.cooldownModel &&
     stats.cooldownModel !== forModel &&
     !isActiveUnusableWindow(stats.disabledUntil, now),
@@ -93,7 +100,7 @@ export function getSoonestCooldownExpiry(
     }
     const matchingModelScopedCooldown =
       options?.forModel &&
-      stats.cooldownReason === "rate_limit" &&
+      isModelScopedCooldownReason(stats.cooldownReason) &&
       stats.cooldownModel === options.forModel &&
       !isActiveUnusableWindow(stats.disabledUntil, ts);
     if (matchingModelScopedCooldown) {
