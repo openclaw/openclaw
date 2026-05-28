@@ -2881,6 +2881,15 @@ describe("config cli", () => {
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
+
+    it("rejects an empty segment before a bracket for config set", async () => {
+      await expect(runConfigCommand(["config", "set", "gateway.[port]", "23456"])).rejects.toThrow(
+        "Invalid path (empty segment): gateway.[port]",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
   });
 
   describe("config unset - issue #6070", () => {
