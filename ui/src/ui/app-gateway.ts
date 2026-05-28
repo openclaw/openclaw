@@ -10,6 +10,7 @@ import {
   hasReconnectableQueuedChatSends,
   markQueuedChatSendsWaitingForReconnect,
   refreshChatAvatar,
+  retryReconnectableQueuedChatSends,
 } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
@@ -583,15 +584,18 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
           clearRunStatus: !hadOrphanedRun,
         },
       );
-      if (
-        shutdownHost.resumeChatQueueAfterReconnect ||
-        hasReconnectableQueuedChatSends(
-          host as unknown as Parameters<typeof hasReconnectableQueuedChatSends>[0],
-        )
-      ) {
+      const hasReconnectableChatSends = hasReconnectableQueuedChatSends(
+        host as unknown as Parameters<typeof hasReconnectableQueuedChatSends>[0],
+      );
+      if (shutdownHost.resumeChatQueueAfterReconnect || hasReconnectableChatSends) {
         // The interrupted run will never emit its terminal event now that the
         // old client is gone, so resume any deferred commands after hello.
         shutdownHost.resumeChatQueueAfterReconnect = false;
+        if (hasReconnectableChatSends) {
+          void retryReconnectableQueuedChatSends(
+            host as unknown as Parameters<typeof retryReconnectableQueuedChatSends>[0],
+          );
+        }
         void flushChatQueueForEvent(
           host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
         );

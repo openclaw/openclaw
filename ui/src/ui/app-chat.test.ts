@@ -49,6 +49,7 @@ let refreshChat: typeof import("./app-chat.ts").refreshChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
+let markQueuedChatSendsWaitingForReconnect: typeof import("./app-chat.ts").markQueuedChatSendsWaitingForReconnect;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -61,6 +62,7 @@ async function loadChatHelpers(): Promise<void> {
     refreshChatAvatar,
     clearPendingQueueItemsForRun,
     removeQueuedMessage,
+    markQueuedChatSendsWaitingForReconnect,
   } = await import("./app-chat.ts"));
 }
 
@@ -132,6 +134,7 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatDraftBeforeHistory: null,
     chatAttachments: [],
     chatQueue: [],
+    chatQueueBySession: {},
     chatRunId: null,
     chatSending: false,
     lastError: null,
@@ -1292,6 +1295,44 @@ describe("handleSendChat", () => {
     expect(userMessage.role).toBe("user");
   });
 
+  it("keeps delayed chat.send ACK effects scoped to the submitted session", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "stay with session A",
+      sessionKey: "agent:a",
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    const queuedRunId = host.chatQueue[0]?.sendRunId;
+    expect(queuedRunId).toEqual(expect.any(String));
+
+    host.chatQueueBySession = { "agent:a": [...host.chatQueue] };
+    host.chatQueue = [];
+    host.sessionKey = "agent:b";
+    host.chatMessages = [];
+    host.chatRunId = null;
+    host.chatStream = null;
+
+    sent.resolve({ runId: queuedRunId, status: "started" });
+    await send;
+
+    expect(host.sessionKey).toBe("agent:b");
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatQueueBySession?.["agent:a"]).toBeUndefined();
+  });
+
   it("keeps a pre-ack socket close recoverable with the same run id", async () => {
     const request = vi.fn((method: string) => {
       if (method === "chat.send") {
@@ -1333,6 +1374,31 @@ describe("handleSendChat", () => {
       sessionKey: "agent:main",
     });
     expect(host.chatQueue[0]?.sendRunId).toEqual(expect.any(String));
+  });
+
+  it("marks saved session queued sends waiting after a disconnect", () => {
+    const host = makeHost({
+      chatQueue: [],
+      chatQueueBySession: {
+        "agent:a": [
+          {
+            id: "pending-send-a",
+            text: "pending",
+            createdAt: 1,
+            sendRunId: "run-a",
+            sendState: "sending",
+            sessionKey: "agent:a",
+          },
+        ],
+      },
+    });
+
+    markQueuedChatSendsWaitingForReconnect(host);
+
+    expect(host.chatQueueBySession?.["agent:a"]?.[0]).toMatchObject({
+      sendRunId: "run-a",
+      sendState: "waiting-reconnect",
+    });
   });
 
   it("marks validation failures visible and restores the composer", async () => {
