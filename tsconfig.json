@@ -20,6 +20,7 @@
     "useDefineForClassFields": false,
     "paths": {
       "openclaw/extension-api": ["./src/extensionAPI.ts"],
+      "openclaw/openclaw-runtime": ["./tools/openclaw_runtime/index.ts"],
       "openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
       "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       "@openclaw/sdk": ["./packages/sdk/src/index.ts"],

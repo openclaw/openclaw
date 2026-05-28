@@ -8,6 +8,7 @@
     "node_modules",
     "dist",
     "**/dist/**",
+    "extensions/**/webapp/**",
     "**/*.test.ts",
     "**/*.test.tsx",
     "**/*test-helpers.ts",

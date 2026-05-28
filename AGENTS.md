@@ -16,6 +16,15 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - New channel/plugin/app/doc surface: update `.github/labeler.yml` + GH labels.
 - New `AGENTS.md`: add sibling `CLAUDE.md` symlink.
 
+## Unified Governance (R8.1)
+
+- Use one shared decision core for OpenClaw, Claude, and Codex: config/openclaw-unified-governance-r8.1.json.
+- Full-module blueprint gate (FMBG) must pass before any ticket execution.
+- Single-ticket execution starts only after blueprint pass; then enforce simulate -> fix -> same-case rerun -> evidence lock.
+- Block completion if P0/P1 is non-zero, evidence is incomplete, or L2 canary/rollback verification is missing.
+- For automation/policy/runtime changes, run: pnpm governance:r8:check and pnpm autonomous:inventory:check.
+- Canonical reference doc: docs/automation/unified-governance-r8.md.
+
 ## Map
 
 - Core TS: `src/`, `ui/`, `packages/`; plugins: `extensions/`; SDK: `src/plugin-sdk/*`; channels: `src/channels/*`; loader: `src/plugins/*`; protocol: `src/gateway/protocol/*`; docs/apps: `docs/`, `apps/`.
@@ -205,3 +214,9 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Connection/provider additions: update all UI surfaces + docs + status/config forms.
 - Provider tool schemas: prefer flat string enum helpers over `Type.Union([Type.Literal(...)])`; some providers reject `anyOf`. Not a repo-wide protocol/schema ban.
 - External messaging: no token-delta channel messages. Follow `docs/concepts/streaming.md`; preview/block streaming uses edits/chunks and preserves final/fallback delivery.
+
+## 使用者語言與命名偏好（Claude / OpenClaw 共同套用）
+
+- 對此使用者的回覆預設使用繁體中文。
+- 回報新增或修改內容時，保留原始檔名/任務名稱，並附上中文說明。
+- 狀態與驗證輸出優先中文化；若保留英文欄位，需補上對應中文說明。

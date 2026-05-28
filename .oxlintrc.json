@@ -129,6 +129,7 @@
     "**/build/**",
     "**/coverage/**",
     "**/dist/**",
+    "**/dist-webapp/**",
     "**/dist-runtime/**",
     "**/node_modules/**"
   ],
