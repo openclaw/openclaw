@@ -660,26 +660,32 @@ export function handleMessageUpdate(
       final: evtType === "text_end",
     });
   }
-  if (next) {
-    if (!wasThinking && ctx.state.partialBlockState.thinking) {
-      openReasoningStream(ctx);
-    }
-    // Detect when thinking block ends (</think> tag processed)
-    if (wasThinking && !ctx.state.partialBlockState.thinking) {
-      emitReasoningEnd(ctx);
-    }
-    const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
-    const finalParsedDelta =
-      evtType === "text_end" ? ctx.consumePartialReplyDirectives("", { final: true }) : null;
-    const parsedStreamDirectives = mergeReplyDirectiveResults(parsedDelta, finalParsedDelta);
+  const isReplacementDelta =
+    !shouldUsePhaseAwareBlockReply && evtType === "text_delta" && assistantRecord?.replace === true;
+  if (isReplacementDelta) {
+    next = visibleDelta.trim();
+    nextRawStreamText = visibleDelta;
+  }
+  if (!wasThinking && ctx.state.partialBlockState.thinking) {
+    openReasoningStream(ctx);
+  }
+  // Detect when thinking block ends (</think> tag processed)
+  if (wasThinking && !ctx.state.partialBlockState.thinking) {
+    emitReasoningEnd(ctx);
+  }
+  const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
+  const finalParsedDelta =
+    evtType === "text_end" ? ctx.consumePartialReplyDirectives("", { final: true }) : null;
+  const parsedStreamDirectives = mergeReplyDirectiveResults(parsedDelta, finalParsedDelta);
+  const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+  const parsedFull = parseReplyDirectives(splitTrailingDirective(next).text);
+  const cleanedText = parsedFull.text;
+  const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
+  const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
+  if (next || hasMedia || hasAudio) {
     if (shouldUsePhaseAwareBlockReply) {
       recordPendingAssistantReplyDirectives(ctx.state, parsedStreamDirectives);
     }
-    const parsedFull = parseReplyDirectives(splitTrailingDirective(next).text);
-    const cleanedText = parsedFull.text;
-    const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
-    const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
-    const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
 
     let shouldEmit = false;
     let deltaText = "";
@@ -687,7 +693,8 @@ export function handleMessageUpdate(
     if (!hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice: hasAudio })) {
       shouldEmit = false;
     } else {
-      replace = Boolean(previousCleaned && !cleanedText.startsWith(previousCleaned));
+      replace =
+        isReplacementDelta || Boolean(previousCleaned && !cleanedText.startsWith(previousCleaned));
       deltaText = replace ? "" : cleanedText.slice(previousCleaned.length);
       shouldEmit = replace
         ? cleanedText !== previousCleaned || hasMedia || hasAudio

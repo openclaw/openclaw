@@ -409,6 +409,90 @@ describe("handleMessageUpdate text signatures", () => {
     ]);
   });
 
+  it("uses replacement text deltas as full streamed text", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      consumePartialReplyDirectives: vi.fn((text: string) => ({ text })),
+      state: { lastStreamedAssistantCleaned: "Final answer", emittedAssistantUpdate: true },
+    });
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "Corrected answer",
+        replace: true,
+        partial: {
+          role: "assistant",
+          content: [],
+          stopReason: "stop",
+          api: "ollama",
+          provider: "ollama",
+          model: "qwen3:32b",
+          usage: {},
+          timestamp: 0,
+        },
+      },
+    } as never);
+
+    expect(firstMockArg(onAgentEvent, "agent event")).toEqual({
+      stream: "assistant",
+      data: {
+        text: "Corrected answer",
+        delta: "",
+        replace: true,
+        mediaUrls: undefined,
+        phase: undefined,
+      },
+    });
+    expect(context.state.lastStreamedAssistantCleaned).toBe("Corrected answer");
+  });
+
+  it("emits media-only unphased streaming directives", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      consumePartialReplyDirectives: vi.fn(() => ({
+        text: "",
+        mediaUrls: ["/tmp/reply.png"],
+      })),
+    });
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "<media>",
+        partial: {
+          role: "assistant",
+          content: [],
+          stopReason: "stop",
+          api: "ollama",
+          provider: "ollama",
+          model: "qwen3:32b",
+          usage: {},
+          timestamp: 0,
+        },
+      },
+    } as never);
+
+    expect(firstMockArg(onAgentEvent, "agent event")).toEqual({
+      stream: "assistant",
+      data: {
+        text: "",
+        delta: "",
+        replace: undefined,
+        mediaUrls: ["/tmp/reply.png"],
+        phase: undefined,
+      },
+    });
+  });
+
   it("treats phased textSignature item changes as assistant-message boundaries", () => {
     const flushBlockReplyBuffer = vi.fn();
     const resetAssistantMessageState = vi.fn();

@@ -376,19 +376,22 @@ function resolveOllamaTopLevelParams(
   return Object.keys(requestParams).length > 0 ? requestParams : undefined;
 }
 
-function resolveStreamingTextDelta(previousText: string, nextText: string): string {
+function resolveStreamingTextDelta(
+  previousText: string,
+  nextText: string,
+): { delta: string; replace: boolean } {
   if (!nextText) {
-    return "";
+    return { delta: "", replace: false };
   }
   if (!previousText) {
-    return nextText;
+    return { delta: nextText, replace: false };
   }
   if (nextText.startsWith(previousText)) {
-    return nextText.slice(previousText.length);
+    return { delta: nextText.slice(previousText.length), replace: false };
   }
   // Sanitizers may rewrite previously accumulated content. Fall back to
   // re-emitting the latest complete text so downstream partial state converges.
-  return nextText;
+  return { delta: nextText, replace: true };
 }
 
 export function createConfiguredOllamaCompatStreamWrapper(
@@ -1227,7 +1230,10 @@ function createRawOllamaStreamFn(
               return;
             }
             const previousVisibleContent = accumulatedVisibleContent;
-            const delta = resolveStreamingTextDelta(previousVisibleContent, nextVisibleContent);
+            const { delta, replace } = resolveStreamingTextDelta(
+              previousVisibleContent,
+              nextVisibleContent,
+            );
             if (!delta) {
               return;
             }
@@ -1245,7 +1251,7 @@ function createRawOllamaStreamFn(
             }
 
             accumulatedVisibleContent = nextVisibleContent;
-            stream.push(streamAccumulator.appendTextDelta(textContentIndex(), delta));
+            stream.push(streamAccumulator.appendTextDelta(textContentIndex(), delta, { replace }));
           };
 
           const resolveVisibleContent = (final: boolean): string | undefined => {

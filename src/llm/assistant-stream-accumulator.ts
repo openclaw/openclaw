@@ -117,13 +117,15 @@ export function createAssistantStreamAccumulator(options: AssistantStreamAccumul
     appendTextDelta(
       contentIndex: number,
       delta: string,
+      options: { replace?: boolean } = {},
     ): Extract<AssistantMessageEvent, { type: "text_delta" }> {
       const block = ensureTextContent(content, contentIndex, "text_delta");
-      block.text += delta;
+      block.text = options.replace ? delta : block.text + delta;
       return {
         type: "text_delta",
         contentIndex,
         delta,
+        ...(options.replace ? { replace: true } : {}),
         partial: deltaPartial(),
       };
     },
