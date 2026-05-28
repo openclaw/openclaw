@@ -11,6 +11,8 @@ import {
   loadWorkspaceSkillEntries,
 } from "./workspace.js";
 
+const MAX_SKILL_INDEX_CACHE_ENTRIES = 16;
+
 export type SkillIndexRequest = {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -38,19 +40,22 @@ export class SkillsService {
   getIndex(request: SkillIndexRequest): SkillIndex {
     const snapshotVersion =
       request.snapshotVersion ?? getSkillsSnapshotVersion(request.workspaceDir);
-    if (!shouldCacheSkillIndex(snapshotVersion)) {
+    if (!shouldCacheSkillIndex(request, snapshotVersion)) {
       return this.loadIndex(request, buildUncachedSkillIndexCacheKey(request, snapshotVersion));
     }
     const cacheKeyParts = buildSkillIndexCacheKeyParts(request, snapshotVersion);
     const cacheKey = stringifyCacheKeyParts(cacheKeyParts);
     const cached = this.cache.get(cacheKey);
     if (cached) {
+      this.cache.delete(cacheKey);
+      this.cache.set(cacheKey, cached);
       return cached;
     }
     const index = this.loadIndex(request, cacheKey);
     this.pruneScope(cacheKeyParts.scope, cacheKey);
     this.cache.set(cacheKey, index);
     this.cacheScopes.set(cacheKey, cacheKeyParts.scope);
+    this.pruneCapacity();
     return index;
   }
 
@@ -74,9 +79,10 @@ export class SkillsService {
       snapshotVersion: opts?.snapshotVersion,
     };
     const snapshotVersion = request.snapshotVersion ?? getSkillsSnapshotVersion(workspaceDir);
-    const index = shouldCacheSkillIndex(snapshotVersion)
-      ? this.getIndex(request)
-      : this.loadIndex(request, buildUncachedSkillIndexCacheKey(request, snapshotVersion));
+    const index = this.loadIndex(
+      request,
+      buildUncachedSkillIndexCacheKey(request, snapshotVersion),
+    );
     return buildSkillSnapshotFromIndex(workspaceDir, index, opts);
   }
 
@@ -92,6 +98,17 @@ export class SkillsService {
       }
       this.cache.delete(key);
       this.cacheScopes.delete(key);
+    }
+  }
+
+  private pruneCapacity(): void {
+    while (this.cache.size > MAX_SKILL_INDEX_CACHE_ENTRIES) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      this.cache.delete(oldestKey);
+      this.cacheScopes.delete(oldestKey);
     }
   }
 }
@@ -138,8 +155,15 @@ type SkillIndexCacheKeyParts = {
   snapshotVersion: number;
 };
 
-function shouldCacheSkillIndex(snapshotVersion: number | undefined): boolean {
-  return typeof snapshotVersion === "number" && snapshotVersion > 0;
+function shouldCacheSkillIndex(
+  request: SkillIndexRequest,
+  snapshotVersion: number | undefined,
+): boolean {
+  return (
+    typeof snapshotVersion === "number" &&
+    snapshotVersion > 0 &&
+    request.config?.skills?.load?.watch !== false
+  );
 }
 
 function buildUncachedSkillIndexCacheKey(

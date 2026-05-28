@@ -96,6 +96,78 @@ describe("SkillsService", () => {
     expect(after.entries.map((entry) => entry.name)).toContain("service-zero-beta");
   });
 
+  it("does not cache explicit indexes when skill watching is disabled", async () => {
+    const workspaceDir = await makeTempWorkspace();
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "service-watch-alpha", description: "Alpha workflow" },
+    ]);
+    const service = new SkillsService();
+    const roots = isolatedSkillRoots(workspaceDir);
+    const config = { skills: { load: { watch: false } } } satisfies OpenClawConfig;
+
+    const before = service.getIndex({ workspaceDir, ...roots, config, snapshotVersion: 1 });
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "service-watch-beta", description: "Beta workflow" },
+    ]);
+    const after = service.getIndex({ workspaceDir, ...roots, config, snapshotVersion: 1 });
+
+    expect(after).not.toBe(before);
+    expect(before.entries.map((entry) => entry.name)).not.toContain("service-watch-beta");
+    expect(after.entries.map((entry) => entry.name)).toContain("service-watch-beta");
+  });
+
+  it("keeps snapshots uncached even when callers pass a positive version", async () => {
+    const workspaceDir = await makeTempWorkspace();
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "service-snapshot-alpha", description: "Alpha workflow" },
+    ]);
+    const service = new SkillsService();
+    const roots = isolatedSkillRoots(workspaceDir);
+
+    const before = service.buildSnapshot(workspaceDir, { ...roots, snapshotVersion: 1 });
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "service-snapshot-beta", description: "Beta workflow" },
+    ]);
+    const after = service.buildSnapshot(workspaceDir, { ...roots, snapshotVersion: 1 });
+
+    expect(before.skills.map((skill) => skill.name)).not.toContain("service-snapshot-beta");
+    expect(after.skills.map((skill) => skill.name)).toContain("service-snapshot-beta");
+  });
+
+  it("bounds cached indexes across workspace scopes", async () => {
+    const service = new SkillsService();
+    const workspaces = await Promise.all(
+      Array.from({ length: 17 }, async (_, index) => {
+        const workspaceDir = await makeTempWorkspace();
+        await writeWorkspaceSkills(workspaceDir, [
+          { name: `service-lru-${index}`, description: "Cached workflow" },
+        ]);
+        return workspaceDir;
+      }),
+    );
+    const firstWorkspace = workspaces[0]!;
+    const first = service.getIndex({
+      workspaceDir: firstWorkspace,
+      ...isolatedSkillRoots(firstWorkspace),
+      snapshotVersion: 1,
+    });
+
+    for (const workspaceDir of workspaces.slice(1)) {
+      service.getIndex({
+        workspaceDir,
+        ...isolatedSkillRoots(workspaceDir),
+        snapshotVersion: 1,
+      });
+    }
+    const firstAgain = service.getIndex({
+      workspaceDir: firstWorkspace,
+      ...isolatedSkillRoots(firstWorkspace),
+      snapshotVersion: 1,
+    });
+
+    expect(firstAgain).not.toBe(first);
+  });
+
   it("includes plugin config in the versioned cache key", async () => {
     const workspaceDir = await makeTempWorkspace();
     const roots = isolatedSkillRoots(workspaceDir);
