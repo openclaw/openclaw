@@ -1433,61 +1433,18 @@ describe("chat session controls", () => {
     });
   });
 
-  it("does not destroy picker result when blurring an initially empty search input", async () => {
-    const { state, request } = createChatHeaderState();
-    state.sessionsIncludeGlobal = false;
-    state.sessionsIncludeUnknown = false;
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!.click();
-    await vi.waitFor(() => expect(state.chatSessionPickerResult).not.toBeNull());
-    render(renderChatSessionSelect(state), container);
-    const pickerResultBefore = state.chatSessionPickerResult;
-    const optionsBefore = container.querySelectorAll(
-      'button[data-chat-session-picker-option="true"]',
-    );
-    expect(optionsBefore.length).toBeGreaterThan(0);
-
-    const input = container.querySelector<HTMLInputElement>(
-      'input[data-chat-session-picker-search="true"]',
-    );
-    expect(input!.value).toBe("");
-    const searchCallsBefore = request.mock.calls.filter(
-      ([method]) => method === "sessions.list",
-    ).length;
-
-    input!.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
-    render(renderChatSessionSelect(state), container);
-
-    expect(state.chatSessionPickerResult).toBe(pickerResultBefore);
-    expect(state.chatSessionPickerOpen).toBe(true);
-    const optionsAfter = container.querySelectorAll(
-      'button[data-chat-session-picker-option="true"]',
-    );
-    expect(optionsAfter.length).toBe(optionsBefore.length);
-    const searchCallsAfter = request.mock.calls.filter(
-      ([method]) => method === "sessions.list",
-    ).length;
-    expect(searchCallsAfter).toBe(searchCallsBefore);
-  });
-
-  it("session option click still works after blurring an empty search input", async () => {
+  it("keeps picker options clickable after blurring an empty search input", async () => {
     const { state } = createChatHeaderState();
     state.sessionsIncludeGlobal = false;
     state.sessionsIncludeUnknown = false;
-    state.sessionsResult = createSessionsResultFromRows([
+    const rows: GatewaySessionRow[] = [
       { key: "main", kind: "direct", label: "Main", updatedAt: 2 },
       { key: "agent:main:work", kind: "direct", label: "Work", updatedAt: 1 },
-    ]);
+    ];
+    state.sessionsResult = createSessionsResultFromRows(rows);
     const request = vi.fn((method: string) => {
       if (method === "sessions.list") {
-        return Promise.resolve(
-          createSessionsResultFromRows([
-            { key: "main", kind: "direct", label: "Main", updatedAt: 2 },
-            { key: "agent:main:work", kind: "direct", label: "Work", updatedAt: 1 },
-          ]),
-        );
+        return Promise.resolve(createSessionsResultFromRows(rows));
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -1499,6 +1456,8 @@ describe("chat session controls", () => {
     container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!.click();
     await vi.waitFor(() => expect(state.chatSessionPickerResult).not.toBeNull());
     render(renderChatSessionSelect(state, onSwitchSession), container);
+    const pickerResultBefore = state.chatSessionPickerResult;
+    const requestCountBefore = request.mock.calls.length;
 
     const input = container.querySelector<HTMLInputElement>(
       'input[data-chat-session-picker-search="true"]',
@@ -1507,16 +1466,22 @@ describe("chat session controls", () => {
     input!.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
     render(renderChatSessionSelect(state, onSwitchSession), container);
 
+    expect(state.chatSessionPickerResult).toBe(pickerResultBefore);
+    expect(state.chatSessionPickerOpen).toBe(true);
+    expect(request).toHaveBeenCalledTimes(requestCountBefore);
     const options = container.querySelectorAll<HTMLButtonElement>(
       'button[data-chat-session-picker-option="true"]',
     );
     const target = [...options].find(
       (button) => button.dataset.sessionKey && button.dataset.sessionKey !== state.sessionKey,
     );
-    expect(target).toBeTruthy();
-    target!.click();
+    if (!target?.dataset.sessionKey) {
+      throw new Error("expected another session option");
+    }
+    const targetSessionKey = target.dataset.sessionKey;
+    target.click();
 
-    expect(onSwitchSession).toHaveBeenCalledWith(state, target!.dataset.sessionKey);
+    expect(onSwitchSession).toHaveBeenCalledWith(state, targetSessionKey);
   });
 
   it("clears applied chat session picker search when the input is cleared", async () => {
