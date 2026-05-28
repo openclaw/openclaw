@@ -399,6 +399,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
             ? logWsControl.debug
             : logWsControl.warn;
         const authReason = stringMetaValue(closeMeta, "authReason");
+        // This pre-connect close path has no client object yet; treat only
+        // missing shared credentials as suppressible startup retry noise.
         const shouldLimitMissingAuthClose =
           closeCause === "unauthorized" &&
           shouldLimitMissingCredentialAuthLog({

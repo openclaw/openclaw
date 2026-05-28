@@ -71,6 +71,8 @@ export function shouldLimitMissingCredentialAuthLog(params: {
   reason?: string;
   authProvided?: string;
 }): boolean {
+  // Only no-credential retries are startup/config churn. Credential mismatches
+  // and auth rate limits are security audit events and must log per attempt.
   return (
     params.authProvided === "none" &&
     (params.reason === "token_missing" || params.reason === "password_missing")
