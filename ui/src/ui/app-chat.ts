@@ -24,6 +24,7 @@ import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.t
 import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
   abortChatRun,
+  ChatSendTransportFailedError,
   loadChatHistory,
   sendChatMessage,
   sendDetachedChatMessage,
@@ -295,6 +296,14 @@ async function sendChatMessageNow(
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
   // Reset scroll state before sending to ensure auto-scroll works for the response
   resetChatScroll(host as unknown as Parameters<typeof resetChatScroll>[0]);
+  // Pre-ACK transport rejections (socket closed mid-call, or precheck-not-
+  // connected after we passed the host.connected gate) come back as a typed
+  // ChatSendTransportFailedError. We let it propagate so the caller can
+  // preserve the original idempotency key on a queue entry instead of
+  // dropping the user's message — restoring the draft here would leave both
+  // the composer and the queue showing the same text. Business errors
+  // (auth/validation) still resolve to null with an assistant Error
+  // transcript entry; those are not retryable. See issue #45952.
   const runId = await sendChatMessage(host as unknown as ChatState, message, opts?.attachments, {
     idempotencyKey: opts?.idempotencyKey,
   });
@@ -541,7 +550,12 @@ async function flushChatQueue(host: ChatHost) {
       });
     }
   } catch (err) {
-    host.lastError = String(err);
+    // Transport failures during replay are expected during reconnect storms;
+    // surface them through the queue's retry budget instead of a toast so the
+    // user sees the message stay pending rather than a noisy error banner.
+    if (!(err instanceof ChatSendTransportFailedError)) {
+      host.lastError = String(err);
+    }
   }
   if (!ok) {
     // Normal sends that lost ACK are retry-eligible: bump the budget counter
@@ -745,14 +759,44 @@ export async function handleSendChat(
       return;
     }
 
-    await sendChatMessageNow(host, message, {
-      previousDraft: cleared.previousDraft,
-      restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
-      attachments: hasAttachments ? attachmentsToSend : undefined,
-      previousAttachments: cleared.previousAttachments,
-      restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
-      refreshSessions,
-    });
+    // Allocate the idempotency key up front so a transport failure between
+    // the host.connected check and the chat.send ACK can re-queue this same
+    // send under the original key. Reconnect-flush replays with the same key
+    // and the server-side `chat:${idempotencyKey}` dedupe collapses the retry
+    // into the original run instead of starting a duplicate agent turn. See
+    // issue #45952.
+    const idempotencyKey = generateUUID();
+    try {
+      await sendChatMessageNow(host, message, {
+        previousDraft: cleared.previousDraft,
+        restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
+        attachments: hasAttachments ? attachmentsToSend : undefined,
+        previousAttachments: cleared.previousAttachments,
+        restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
+        refreshSessions,
+        idempotencyKey,
+      });
+    } catch (err) {
+      if (!(err instanceof ChatSendTransportFailedError)) {
+        throw err;
+      }
+      // chat.send dispatched but never landed an ACK because the WS dropped
+      // mid-call. Capture the message into the chat queue with the same key
+      // so reconnect-flush replays it; the optimistic user transcript entry
+      // was rolled back inside sendChatMessage so the queue UI is the single
+      // visible representation until replay succeeds.
+      if (messageOverride == null) {
+        recordNonTranscriptInputHistory(host, message);
+      }
+      enqueueChatMessage(
+        host,
+        message,
+        hasAttachments ? attachmentsToSend : undefined,
+        refreshSessions,
+        undefined,
+        { idempotencyKey: err.attemptedRunId },
+      );
+    }
   });
 }
 

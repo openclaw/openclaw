@@ -6,6 +6,7 @@ import {
 import { GatewayRequestError } from "../gateway.ts";
 import {
   abortChatRun,
+  ChatSendTransportFailedError,
   handleChatEvent,
   loadChatHistory,
   sendChatMessage,
@@ -1248,6 +1249,61 @@ describe("sendChatMessage", () => {
       },
     ]);
     expect(JSON.stringify(captionedState.chatMessages)).not.toContain("data:image/png;base64");
+  });
+
+  // Pre-ACK transport failures (#45952): a raw Error from
+  // GatewayBrowserClient.flushPending (socket closed mid-call) must surface
+  // as a typed ChatSendTransportFailedError carrying the attempted runId,
+  // and the optimistic user message must be rolled back so the queue UI can
+  // be the single source of truth for the in-flight send.
+  it("throws ChatSendTransportFailedError when chat.send rejects with a mid-call socket close", async () => {
+    const request = vi.fn(async (_method: string, params: unknown) => {
+      // Mirrors the exact Error message GatewayBrowserClient emits from
+      // flushPending when the WebSocket closes with pending requests.
+      void params;
+      throw new Error("gateway closed (1006): abnormal closure");
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await expect(
+      sendChatMessage(state, "in-flight when socket dies", undefined, {
+        idempotencyKey: "key-transport",
+      }),
+    ).rejects.toBeInstanceOf(ChatSendTransportFailedError);
+
+    // Optimistic user message rolled back.
+    expect(state.chatMessages).toStrictEqual([]);
+    // No transcript noise.
+    expect(state.lastError).toBeNull();
+    // Local run cleared so the next attempt is not blocked by chatSending.
+    expect(state.chatSending).toBe(false);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
+  it("preserves the attempted runId on ChatSendTransportFailedError so retries replay with the same dedupe key", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("gateway not connected");
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const failure = await sendChatMessage(state, "retry under same key", undefined, {
+      idempotencyKey: "key-preserved",
+    }).catch((err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(ChatSendTransportFailedError);
+    const typed = failure as ChatSendTransportFailedError;
+    expect(typed.attemptedRunId).toBe("key-preserved");
+    // The original raw Error is preserved as `cause` for debugging without
+    // leaking it into chat state.
+    expect(typed.cause).toBeInstanceOf(Error);
+    expect((typed.cause as Error).message).toBe("gateway not connected");
   });
 
   it("formats structured non-auth connect failures for chat send", async () => {

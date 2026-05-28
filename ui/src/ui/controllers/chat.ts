@@ -489,6 +489,41 @@ export type SendChatMessageOptions = {
   idempotencyKey?: string;
 };
 
+// Pre-ACK transport rejections from the gateway client are conservatively
+// detected: the raw `Error` shape comes from `GatewayBrowserClient.flushPending`
+// or its precheck, never from a server-side `res.error` payload (those become
+// `GatewayRequestError` with a `gatewayCode`). Auth/validation/business errors
+// are always `GatewayRequestError`, so this check keeps them out of the retry
+// queue while still catching socket-closed-mid-call and not-connected-at-call.
+// See issue #45952.
+const TRANSPORT_ERROR_MESSAGE_PATTERN = /^gateway (not connected|closed|client stopped)\b/iu;
+
+function isChatSendTransportFailure(err: unknown): boolean {
+  if (err instanceof GatewayRequestError) {
+    return false;
+  }
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  return TRANSPORT_ERROR_MESSAGE_PATTERN.test(err.message);
+}
+
+// Thrown by `sendChatMessage` when the chat.send round trip never reached the
+// server because the WS transport dropped mid-call. Callers (currently
+// `app-chat.ts`'s `sendChatMessageNow`) catch this to re-queue the original
+// message with the same idempotency key so the next reconnect-flush replays
+// it. The optimistic user transcript entry is rolled back before the throw so
+// the queue UI is the single source of truth for the in-flight message.
+export class ChatSendTransportFailedError extends Error {
+  readonly attemptedRunId: string;
+
+  constructor(attemptedRunId: string, cause: unknown) {
+    super("chat.send transport failure", { cause });
+    this.name = "ChatSendTransportFailedError";
+    this.attemptedRunId = attemptedRunId;
+  }
+}
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,
@@ -579,6 +614,27 @@ export async function sendChatMessage(
     await requestChatSend(state, { message: msg, attachments, runId });
     return runId;
   } catch (err) {
+    if (isChatSendTransportFailure(err)) {
+      // Roll back the optimistic user message so the caller can re-queue this
+      // send under its original idempotency key without leaving a dangling
+      // user bubble in the transcript. The queue UI surfaces the in-flight
+      // message until the next reconnect-flush replays it.
+      state.chatMessages = state.chatMessages.slice(0, -1);
+      // Quietly tear down local run state without an "interrupted" toast —
+      // the queue UI already shows the message as pending and the user does
+      // not need a transport-failure popup that will resolve itself on the
+      // next hello.
+      reconcileChatRunLifecycle(
+        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          runId,
+          sessionKey: state.sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+        },
+      );
+      throw new ChatSendTransportFailedError(runId, err);
+    }
     const error = formatConnectError(err);
     reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       outcome: "interrupted",

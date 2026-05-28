@@ -10,6 +10,7 @@ import {
   resetChatAttachmentPayloadStoreForTest,
 } from "./chat/attachment-payload-store.ts";
 import type { executeSlashCommand } from "./chat/slash-command-executor.ts";
+import { GatewayRequestError } from "./gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
@@ -1723,6 +1724,136 @@ describe("handleSendChat", () => {
     expect(queued?.attachments).toHaveLength(1);
     expect(queued?.attachments?.[0]?.id).toBe("att-disc");
     expect(typeof queued?.idempotencyKey).toBe("string");
+  });
+
+  // Regression coverage for ClawSweeper's pre-ACK risk on #45952: a normal
+  // send that passes the host.connected gate but whose chat.send rejects
+  // because the WS dropped mid-call must land in the chat queue with the
+  // same idempotency key, not silently turn into a transcript error toast.
+  it("queues direct send when chat.send rejects with transport error and ws is closed", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        // Mirrors the exact Error message that GatewayBrowserClient
+        // emits from flushPending when the socket closes with pending
+        // requests in flight.
+        throw new Error("gateway closed (1006): abnormal closure");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      connected: true,
+      chatMessage: "survive a mid-call WS drop",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    // chat.send was attempted exactly once; transport rejection redirected
+    // the message into the queue instead of a transcript error bubble.
+    expect(request).toHaveBeenCalledWith("chat.send", expect.any(Object));
+    expect(host.chatQueue).toHaveLength(1);
+    const queued = host.chatQueue[0];
+    expect(queued?.text).toBe("survive a mid-call WS drop");
+    expect(queued?.failed).toBeFalsy();
+    expect(queued?.retryCount ?? 0).toBe(0);
+    expect(typeof queued?.idempotencyKey).toBe("string");
+    expect(uuidPattern.test(queued?.idempotencyKey as string)).toBe(true);
+    // The optimistic user transcript entry must be rolled back so the queue
+    // UI is the only visible representation of the in-flight message.
+    expect(host.chatMessages).toStrictEqual([]);
+    // No transport-failure toast; the queue carries the retry signal instead.
+    expect(host.lastError).toBeNull();
+    // chatRunId is cleared so the user can submit again without being blocked.
+    expect(host.chatRunId).toBeNull();
+    // Composer is empty; draft recallable via input-history.
+    expect(host.chatMessage).toBe("");
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("survive a mid-call WS drop");
+  });
+
+  it("preserves idempotency key across pre-ACK failure replay", async () => {
+    // Phase 1: connected send. Capture the idempotency key the client tries
+    // to use, then reject with a transport error mid-call.
+    let firstAttemptKey: string | undefined;
+    const request = vi.fn();
+    request.mockImplementation(async (method: string, params: unknown) => {
+      if (method === "chat.send") {
+        firstAttemptKey = (params as { idempotencyKey?: string }).idempotencyKey;
+        throw new Error("gateway not connected");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      connected: true,
+      chatMessage: "same key after replay",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(typeof firstAttemptKey).toBe("string");
+    expect(uuidPattern.test(firstAttemptKey as string)).toBe(true);
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]?.idempotencyKey).toBe(firstAttemptKey);
+
+    // Phase 2: gateway reconnects, queue flushes, and chat.send is replayed
+    // with the EXACT same idempotency key. This is what lets the server-side
+    // `chat:${idempotencyKey}` dedupe collapse the retry into the original
+    // run instead of starting a duplicate agent turn.
+    request.mockImplementation(async (method: string, params: unknown) => {
+      if (method === "chat.send") {
+        return {
+          runId: (params as { idempotencyKey?: string }).idempotencyKey,
+          status: "started",
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    await flushChatQueueForEvent(host);
+
+    expect(host.chatQueue).toStrictEqual([]);
+    const chatSendCalls = request.mock.calls.filter((call) => call[0] === "chat.send");
+    expect(chatSendCalls).toHaveLength(2);
+    const firstCallKey = requireRecord(chatSendCalls[0]?.[1], "first attempt").idempotencyKey;
+    const replayKey = requireRecord(chatSendCalls[1]?.[1], "replay attempt").idempotencyKey;
+    expect(replayKey).toBe(firstCallKey);
+    expect(host.chatRunId).toBe(firstAttemptKey);
+  });
+
+  it("does NOT queue when chat.send rejects with a non-transport error (e.g., auth)", async () => {
+    // Auth/validation/business errors come back as GatewayRequestError with
+    // a server-assigned code. Requeueing those would loop forever on the
+    // same rejection — they must keep the existing transcript error path.
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        throw new GatewayRequestError({
+          code: "PERMISSION_DENIED",
+          message: "not authorized",
+          details: { code: "AUTH_UNAUTHORIZED" },
+        });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      connected: true,
+      chatMessage: "rejected by gateway",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    // No queue entry — auth failures are not retryable.
+    expect(host.chatQueue).toStrictEqual([]);
+    // The existing business-error path runs: assistant Error transcript
+    // entry + state.lastError populated for the UI to show.
+    expect(host.lastError).toBe("gateway auth failed");
+    const lastMessage = requireRecord(host.chatMessages.at(-1), "assistant Error entry");
+    expect(lastMessage.role).toBe("assistant");
+    const content = lastMessage.content as Array<Record<string, unknown>>;
+    expect(content[0]?.text).toBe("Error: gateway auth failed");
   });
 });
 
