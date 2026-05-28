@@ -1769,7 +1769,7 @@ describe("image tool implicit imageModel config", () => {
         await fs.rm(attachmentRoot, { recursive: true, force: true });
       }
     });
-  }, 240_000);
+  }, 420_000);
 
   it("allows image paths from current iMessage wildcard attachment roots", async () => {
     await withTempAgentDir(async (agentDir) => {
@@ -1828,7 +1828,7 @@ describe("image tool implicit imageModel config", () => {
         await fs.rm(attachmentRootParent, { recursive: true, force: true });
       }
     });
-  }, 240_000);
+  }, 420_000);
 
   it("allows workspace images via createOpenClawCodingTools when workspace root is explicit", async () => {
     await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {

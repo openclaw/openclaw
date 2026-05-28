@@ -1,6 +1,7 @@
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import type { ExecOutcomeClassification } from "./exec-outcome-classification-types.js";
 
 export type AgentEventStream =
   | "lifecycle"
@@ -82,6 +83,8 @@ export type AgentCommandOutputEventData = {
   name?: string;
   output?: string;
   status?: AgentItemEventStatus | "running";
+  outcomeClassification?: ExecOutcomeClassification;
+  statusLabel?: string;
   exitCode?: number | null;
   durationMs?: number;
   cwd?: string;

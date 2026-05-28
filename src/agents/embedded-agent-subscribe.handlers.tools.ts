@@ -26,7 +26,12 @@ import {
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
+import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
+import {
+  classifyExecOutcome,
+  execOutcomeStatusLabel,
+} from "./bash-tools.exec-outcome-classification.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
@@ -53,7 +58,6 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
-import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -257,6 +261,10 @@ function buildPatchItemId(toolCallId: string): string {
 
 function buildCommandItemTitle(toolName: string, meta?: string): string {
   return meta ? `command ${meta}` : `${toolName} command`;
+}
+
+function readExecCommandFromArgs(args: Record<string, unknown>): string | undefined {
+  return readStringValue(args.command);
 }
 
 function buildPatchItemTitle(meta?: string): string {
@@ -1385,6 +1393,24 @@ export async function handleToolExecutionEnd(
       const rawOutput = extractExecOutput(sanitizedResult);
       const commandStatus =
         execDetails?.status === "failed" || isToolError ? "failed" : "completed";
+      const outcomeClassification = classifyExecOutcome({
+        command: readExecCommandFromArgs(startArgs),
+        status:
+          execDetails?.status === "completed" || execDetails?.status === "failed"
+            ? execDetails.status
+            : undefined,
+        exitCode:
+          execDetails && "exitCode" in execDetails && typeof execDetails.exitCode === "number"
+            ? execDetails.exitCode
+            : execDetails && "exitCode" in execDetails && execDetails.exitCode === null
+              ? null
+              : undefined,
+        timedOut: execDetails && "timedOut" in execDetails ? execDetails.timedOut : undefined,
+        aggregated: execDetails && "aggregated" in execDetails ? execDetails.aggregated : undefined,
+      });
+      const statusLabel = execOutcomeStatusLabel(outcomeClassification);
+      const visibleCommandSummary =
+        outcomeClassification === "benign_no_result" ? statusLabel : output;
       emitTrackedItemEvent(ctx, {
         itemId: commandItemId,
         phase: "end",
@@ -1396,7 +1422,7 @@ export async function handleToolExecutionEnd(
         toolCallId,
         startedAt: startData?.startTime,
         endedAt,
-        ...(output ? { summary: output } : {}),
+        ...(visibleCommandSummary ? { summary: visibleCommandSummary } : {}),
         ...(isToolError && extractToolErrorMessage(sanitizedResult)
           ? { error: extractToolErrorMessage(sanitizedResult) }
           : {}),
@@ -1409,6 +1435,8 @@ export async function handleToolExecutionEnd(
         name: toolName,
         ...(output ? { output } : {}),
         status: commandStatus,
+        outcomeClassification,
+        ...(statusLabel ? { statusLabel } : {}),
         ...(execDetails && "exitCode" in execDetails ? { exitCode: execDetails.exitCode } : {}),
         ...(execDetails && "durationMs" in execDetails
           ? { durationMs: execDetails.durationMs }

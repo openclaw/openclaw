@@ -1478,7 +1478,12 @@ describe("createFollowupRunner progress forwarding", () => {
         });
         await args.onAgentEvent?.({
           stream: "command_output",
-          data: { phase: "chunk", output: "queued output" },
+          data: {
+            phase: "chunk",
+            output: "queued output",
+            outcomeClassification: "benign_no_result",
+            statusLabel: "No matches found",
+          },
         });
         await args.onToolResult?.({ text: "🛠️ Exec: echo queued-suppressed-preview" });
         return { payloads: [], meta: { agentMeta: {} } };
@@ -1502,7 +1507,12 @@ describe("createFollowupRunner progress forwarding", () => {
       detailMode: "raw",
     });
     expect(onCommandOutput).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "chunk", output: "queued output" }),
+      expect.objectContaining({
+        phase: "chunk",
+        output: "queued output",
+        outcomeClassification: "benign_no_result",
+        statusLabel: "No matches found",
+      }),
     );
     expect(routeReplyMock).toHaveBeenCalledTimes(1);
     expect(routeReplyMock).toHaveBeenCalledWith(
@@ -1698,6 +1708,62 @@ describe("createFollowupRunner progress forwarding", () => {
     );
 
     expect(onCommandOutput).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps queued tool-error fallbacks available after benign no-result progress until a real failure", async () => {
+    const onCommandOutput = vi.fn(async () => {});
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+      }) => {
+        const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
+        expect(shouldSuppress()).toBeUndefined();
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: {
+            phase: "end",
+            name: "exec",
+            status: "completed",
+            outcomeClassification: "benign_no_result",
+            statusLabel: "No matches found",
+            exitCode: 1,
+          },
+        });
+        expect(shouldSuppress()).toBeUndefined();
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: {
+            phase: "end",
+            name: "exec",
+            status: "failed",
+            exitCode: 2,
+          },
+        });
+        expect(shouldSuppress()).toBe(true);
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "on",
+        },
+      }),
+    );
+
+    expect(onCommandOutput).toHaveBeenCalledTimes(2);
   });
 
   it("keeps queued full-verbose tool-error fallbacks available after failed progress", async () => {

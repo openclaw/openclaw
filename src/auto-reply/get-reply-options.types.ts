@@ -1,3 +1,4 @@
+import type { ExecOutcomeClassification } from "../infra/exec-outcome-classification-types.js";
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -157,6 +158,8 @@ export type GetReplyOptions = {
     name?: string;
     output?: string;
     status?: string;
+    outcomeClassification?: ExecOutcomeClassification;
+    statusLabel?: string;
     exitCode?: number | null;
     durationMs?: number;
     cwd?: string;
