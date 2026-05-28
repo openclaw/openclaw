@@ -73,6 +73,10 @@ function applyToolCallDelta(
   message: AssistantMessage,
   event: Extract<AssistantMessageEvent, { type: "toolcall_delta" }>,
 ): AssistantMessage {
+  const partialToolCall = event.partial.content[event.contentIndex];
+  if (partialToolCall?.type === "toolCall") {
+    return event.partial;
+  }
   const existing = message.content[event.contentIndex];
   return existing?.type === "toolCall" ? cloneAssistantMessage(message) : event.partial;
 }
