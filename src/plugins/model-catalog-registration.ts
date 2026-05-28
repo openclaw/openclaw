@@ -3,9 +3,17 @@ import {
   type MediaGenerationCatalogKind,
   type MediaGenerationCatalogProvider,
 } from "../media-generation/catalog.js";
-import type { UnifiedModelCatalogEntry } from "../model-catalog/types.js";
+import type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogSource,
+} from "../model-catalog/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { uniqueValues } from "../shared/string-normalization.js";
+import {
+  synthesizeVoiceModelCatalogEntries,
+  type VoiceModelCapabilities,
+  type VoiceModelCatalogProvider,
+} from "../voice-models/catalog.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import type {
@@ -14,6 +22,37 @@ import type {
   UnifiedModelCatalogProviderContext,
   UnifiedModelCatalogProviderPlugin,
 } from "./types.js";
+
+type UnifiedModelCatalogHook = NonNullable<UnifiedModelCatalogProviderPlugin["staticCatalog"]>;
+
+function mergeCatalogHookResults(
+  source: UnifiedModelCatalogSource,
+  left: readonly UnifiedModelCatalogEntry[] | null | undefined,
+  right: readonly UnifiedModelCatalogEntry[] | null | undefined,
+): readonly UnifiedModelCatalogEntry[] | null {
+  const rows = [...(left ?? []), ...(right ?? [])];
+  if (rows.length === 0) {
+    return null;
+  }
+  return rows.map((row) => ({ ...row, source }));
+}
+
+function mergeModelCatalogHooks(
+  source: UnifiedModelCatalogSource,
+  left: UnifiedModelCatalogHook | undefined,
+  right: UnifiedModelCatalogHook | undefined,
+): UnifiedModelCatalogHook | undefined {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  return async (ctx) => {
+    const [leftRows, rightRows] = await Promise.all([left(ctx), right(ctx)]);
+    return mergeCatalogHookResults(source, leftRows, rightRows);
+  };
+}
 
 function projectProviderCatalogResultToUnifiedTextRows(params: {
   providerId: string;
@@ -94,8 +133,16 @@ export function createModelCatalogRegistrationHandlers(params: {
         ...provider,
         provider: providerId,
         kinds: uniqueValues([...samePluginOverlapping.provider.kinds, ...normalizedKinds]),
-        staticCatalog: provider.staticCatalog ?? samePluginOverlapping.provider.staticCatalog,
-        liveCatalog: provider.liveCatalog ?? samePluginOverlapping.provider.liveCatalog,
+        staticCatalog: mergeModelCatalogHooks(
+          "static",
+          samePluginOverlapping.provider.staticCatalog,
+          provider.staticCatalog,
+        ),
+        liveCatalog: mergeModelCatalogHooks(
+          "live",
+          samePluginOverlapping.provider.liveCatalog,
+          provider.liveCatalog,
+        ),
       };
       return;
     }
@@ -161,9 +208,28 @@ export function createModelCatalogRegistrationHandlers(params: {
     });
   };
 
+  const registerSynthesizedVoiceModelCatalogProvider = (registration: {
+    record: PluginRecord;
+    provider: VoiceModelCatalogProvider;
+    capabilities: VoiceModelCapabilities;
+    modes?: readonly string[];
+  }) => {
+    registerModelCatalogProvider(registration.record, {
+      provider: registration.provider.id,
+      kinds: ["voice"],
+      staticCatalog: () =>
+        synthesizeVoiceModelCatalogEntries({
+          provider: registration.provider,
+          capabilities: registration.capabilities,
+          modes: registration.modes,
+        }),
+    });
+  };
+
   return {
     registerModelCatalogProvider,
     registerSynthesizedTextModelCatalogProvider,
     registerSynthesizedMediaModelCatalogProvider,
+    registerSynthesizedVoiceModelCatalogProvider,
   };
 }
