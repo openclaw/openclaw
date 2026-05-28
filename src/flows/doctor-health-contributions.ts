@@ -40,6 +40,7 @@ type DoctorHealthFlowContext = {
   env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
+  gatewayHealthSkipped?: boolean;
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
 };
@@ -743,7 +744,7 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
       "Gateway health probes skipped because gateway.auth.token uses an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs.",
       "Gateway",
     );
-    ctx.healthOk = false;
+    ctx.gatewayHealthSkipped = true;
     ctx.gatewayMemoryProbe = { checked: false, ready: false, skipped: true };
     return;
   }
@@ -754,6 +755,7 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
     cfg: ctx.cfg,
     timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
   });
+  ctx.gatewayHealthSkipped = false;
   ctx.healthOk = healthOk;
   ctx.gatewayStatus = status;
   ctx.gatewayMemoryProbe = healthOk
@@ -807,7 +809,9 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
     prompter: ctx.prompter,
     options: ctx.options,
     gatewayDetailsMessage: ctx.gatewayDetails?.message ?? "",
-    healthOk: ctx.healthOk ?? false,
+    // A skipped exec-backed token probe is unknown, not unhealthy. Do not let
+    // doctor --fix restart services only because probing would require exec.
+    healthOk: ctx.gatewayHealthSkipped === true ? true : (ctx.healthOk ?? false),
   });
 }
 
