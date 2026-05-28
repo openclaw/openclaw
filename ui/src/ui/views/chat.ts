@@ -1072,11 +1072,16 @@ export function renderChat(props: ChatProps) {
   // Preload KaTeX when math rendering is enabled (one-shot guard to prevent infinite render loop)
   if (props.mathRendering === "katex" && !katexPreloadTriggered) {
     katexPreloadTriggered = true;
-    void preloadKatex().then(() => {
-      clearMarkdownCache();
-      const requestUpdate = props.onRequestUpdate ?? (() => {});
-      requestUpdate();
-    });
+    void preloadKatex()
+      .then(() => {
+        clearMarkdownCache();
+        const requestUpdate = props.onRequestUpdate ?? (() => {});
+        requestUpdate();
+      })
+      .catch(() => {
+        // Reset guard so a transient chunk failure allows retry on next render
+        katexPreloadTriggered = false;
+      });
     loadKatexCss();
   }
 
