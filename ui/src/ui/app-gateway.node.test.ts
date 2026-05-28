@@ -125,6 +125,14 @@ type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   activityEntries: ActivityEntry[];
   toolStreamById: Map<string, unknown>;
   toolStreamOrder: string[];
+  chatQueue: Array<{
+    id: string;
+    text: string;
+    createdAt: number;
+    idempotencyKey?: string;
+    retryCount?: number;
+    failed?: boolean;
+  }>;
 };
 
 function createHost(): TestGatewayHost {
@@ -648,6 +656,56 @@ describe("connectGateway", () => {
     connectGateway(host);
     expect(host.execApprovalQueue).toHaveLength(1);
     expect(host.execApprovalQueue[0]?.id).toBe("approval-1");
+  });
+
+  // Regression coverage for #45952: an ordinary reconnect (no seq-gap) must
+  // still flush the chat queue on hello so messages typed during the
+  // disconnect window get replayed. Prior behavior only flushed for
+  // reason === "seq-gap".
+  it("flushes the chat queue after hello on an ordinary reconnect", async () => {
+    const host = createHost();
+    host.chatQueue = [
+      {
+        id: "queued-discon",
+        text: "queued during disconnect",
+        createdAt: 1,
+        idempotencyKey: "key-discon",
+      },
+    ];
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    const chatSendResponses: Array<{ method: string; params: unknown }> = [];
+    client.request.mockImplementation(async (method: string, params: unknown) => {
+      if (method === "chat.send") {
+        chatSendResponses.push({ method, params });
+        return {
+          runId: (params as { idempotencyKey?: string }).idempotencyKey,
+          status: "started",
+        };
+      }
+      if (method === "update.status") {
+        return { sentinel: null };
+      }
+      if (method === "models.authStatus") {
+        return { ts: 0, providers: [] };
+      }
+      if (method === "sessions.list") {
+        return { count: 0, sessions: [] };
+      }
+      return {};
+    });
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(chatSendResponses).toHaveLength(1);
+    });
+    expect(host.chatQueue).toStrictEqual([]);
+    const sent = chatSendResponses[0]?.params as { idempotencyKey?: string; message?: string };
+    expect(sent.idempotencyKey).toBe("key-discon");
+    expect(sent.message).toBe("queued during disconnect");
   });
 
   it("maps generic fetch-failed auth errors to actionable token mismatch message", () => {

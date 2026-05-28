@@ -499,22 +499,27 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   const shutdownHost = host as GatewayHostWithShutdownMessage;
   const reconnectReason = options?.reason ?? "initial";
   shutdownHost.pendingShutdownMessage = null;
-  shutdownHost.resumeChatQueueAfterReconnect = false;
+  // Always plan to drain the chat queue after the next hello so disconnected
+  // sends queued by handleSendChat (and busy-run enqueues whose original run
+  // got reset by the disconnect) get replayed. Server-side idempotency on
+  // `chat:${idempotencyKey}` keeps replays from creating duplicate runs.
+  // See issue #45952. Prior to this change only `seq-gap` reconnects drained.
+  shutdownHost.resumeChatQueueAfterReconnect = true;
   clearSessionsChangedReloadTimer(host);
   host.lastError = null;
   host.lastErrorCode = null;
   host.hello = null;
   host.connected = false;
   if (reconnectReason === "seq-gap") {
-    host.execApprovalQueue = pruneExecApprovalQueue(host.execApprovalQueue);
+    // Seq-gap recovery throws away the in-flight run's pending queue tags
+    // (we lost events for it); other reconnects keep them since the run may
+    // still be live on the gateway and continue emitting terminal events.
     clearPendingQueueItemsForRun(
       host as unknown as Parameters<typeof clearPendingQueueItemsForRun>[0],
       host.chatRunId ?? undefined,
     );
-    shutdownHost.resumeChatQueueAfterReconnect = true;
-  } else {
-    host.execApprovalQueue = pruneExecApprovalQueue(host.execApprovalQueue);
   }
+  host.execApprovalQueue = pruneExecApprovalQueue(host.execApprovalQueue);
   host.execApprovalError = null;
 
   const previousClient = host.client;
@@ -582,8 +587,11 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         },
       );
       if (shutdownHost.resumeChatQueueAfterReconnect) {
-        // The interrupted run will never emit its terminal event now that the
-        // old client is gone, so resume any deferred commands after hello.
+        // Drain after every hello so disconnected normal sends queued during
+        // the reconnect window get flushed, and so deferred commands behind a
+        // run that was killed by the disconnect are resumed. The original-run
+        // idempotency key is preserved on queued items, so the server-side
+        // dedupe collapses replays into the same run. See issue #45952.
         shutdownHost.resumeChatQueueAfterReconnect = false;
         void flushChatQueueForEvent(
           host as unknown as Parameters<typeof flushChatQueueForEvent>[0],

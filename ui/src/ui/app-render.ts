@@ -2838,6 +2838,7 @@ export function renderApp(state: AppViewState) {
                   onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
                   onQueueRemove: (id) => state.removeQueuedMessage(id),
                   onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
+                  onQueueRetry: (id) => state.retryFailedQueuedMessage(id),
                   onDismissSideResult: () => {
                     state.chatSideResult = null;
                   },

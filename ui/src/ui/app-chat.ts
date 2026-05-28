@@ -217,12 +217,19 @@ export async function handleAbortChat(host: ChatHost, opts?: ChatAbortOptions) {
   await abortChatRun(host as unknown as ChatState);
 }
 
+// Bound transport retries per queue item so a wedged socket cannot loop
+// silently. Each failed flush bumps `retryCount`; once it exceeds the budget
+// the item is marked `failed` and the user gets a manual retry control. See
+// issue #45952.
+export const CHAT_QUEUE_RETRY_BUDGET = 5;
+
 function enqueueChatMessage(
   host: ChatHost,
   text: string,
   attachments?: ChatAttachment[],
   refreshSessions?: boolean,
   localCommand?: { args: string; name: string },
+  opts?: { idempotencyKey?: string },
 ) {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -239,6 +246,9 @@ function enqueueChatMessage(
       refreshSessions,
       localCommandArgs: localCommand?.args,
       localCommandName: localCommand?.name,
+      // Only normal chat sends carry an idempotencyKey; local slash commands
+      // run client-side and steered entries reuse the live run.
+      idempotencyKey: localCommand ? undefined : opts?.idempotencyKey,
     },
   ];
 }
@@ -277,12 +287,17 @@ async function sendChatMessageNow(
     previousAttachments?: ChatAttachment[];
     restoreAttachments?: boolean;
     refreshSessions?: boolean;
+    // Reuse a queued message's idempotency key so the server collapses replays
+    // into the original run instead of starting a new agent turn (#45952).
+    idempotencyKey?: string;
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
   // Reset scroll state before sending to ensure auto-scroll works for the response
   resetChatScroll(host as unknown as Parameters<typeof resetChatScroll>[0]);
-  const runId = await sendChatMessage(host as unknown as ChatState, message, opts?.attachments);
+  const runId = await sendChatMessage(host as unknown as ChatState, message, opts?.attachments, {
+    idempotencyKey: opts?.idempotencyKey,
+  });
   const ok = Boolean(runId);
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
@@ -504,7 +519,10 @@ async function flushChatQueue(host: ChatHost) {
   if (!host.connected || isChatBusy(host)) {
     return;
   }
-  const nextIndex = host.chatQueue.findIndex((item) => !item.pendingRunId);
+  // Skip failed items so the user can manually retry; eligible items are
+  // pending normal sends or local commands that have not exhausted their
+  // transport retry budget.
+  const nextIndex = host.chatQueue.findIndex((item) => !item.pendingRunId && !item.failed);
   if (nextIndex < 0) {
     return;
   }
@@ -519,15 +537,45 @@ async function flushChatQueue(host: ChatHost) {
       ok = await sendChatMessageNow(host, next.text, {
         attachments: next.attachments,
         refreshSessions: next.refreshSessions,
+        idempotencyKey: next.idempotencyKey,
       });
     }
   } catch (err) {
     host.lastError = String(err);
   }
   if (!ok) {
-    host.chatQueue = [next, ...host.chatQueue];
+    // Normal sends that lost ACK are retry-eligible: bump the budget counter
+    // and re-prepend so the next reconnect or run-finish picks them back up.
+    // Local commands are not deduped server-side; treat them the same way for
+    // transport errors but the budget still applies so a wedged socket cannot
+    // loop silently. See issue #45952.
+    const retryCount = (next.retryCount ?? 0) + 1;
+    const failed = retryCount > CHAT_QUEUE_RETRY_BUDGET;
+    const requeued: ChatQueueItem = { ...next, retryCount, failed };
+    host.chatQueue = [requeued, ...host.chatQueue];
+    if (failed) {
+      // Stop draining this round so the failed item stays visible at the head
+      // of the queue and the user can dismiss or retry it explicitly.
+      return;
+    }
   } else if (host.chatQueue.length > 0) {
     // Continue draining — local commands don't block on server response
+    void flushChatQueue(host);
+  }
+}
+
+export function retryFailedQueuedMessage(host: ChatHost, id: string) {
+  const target = host.chatQueue.find((item) => item.id === id);
+  if (!target || !target.failed) {
+    return;
+  }
+  // Reset budget and clear the failure marker. flushChatQueue picks it up
+  // on the next reconnect or run-finish; if we are already connected and
+  // idle, drain now.
+  host.chatQueue = host.chatQueue.map((item) =>
+    item.id === id ? { ...item, retryCount: 0, failed: false } : item,
+  );
+  if (host.connected && !isChatBusy(host)) {
     void flushChatQueue(host);
   }
 }
@@ -556,9 +604,6 @@ export async function handleSendChat(
   messageOverride?: string,
   opts?: ChatSendOptions,
 ) {
-  if (!host.connected) {
-    return;
-  }
   const previousDraft = host.chatMessage;
   const message = (messageOverride ?? host.chatMessage).trim();
   const submittedSessionKey = host.sessionKey;
@@ -571,6 +616,41 @@ export async function handleSendChat(
   }
 
   if (messageOverride != null && opts?.confirmReset && !confirmChatResetCommand(message)) {
+    return;
+  }
+
+  // Disconnected normal sends used to silently drop here, losing the user's
+  // message during a WS reconnect window. Capture the text into the chat
+  // queue with a pre-allocated idempotency key so flushChatQueue can replay
+  // it after the next hello — the gateway dedupes by `chat:${idempotencyKey}`
+  // so a retry whose original ACK was lost collapses into the same run
+  // instead of starting a duplicate agent turn. See issue #45952.
+  //
+  // Stop/abort, slash commands, and /btw still need a live transport, so they
+  // short-circuit below. We also keep the early-return for those code paths
+  // to avoid changing their disconnected behavior.
+  if (!host.connected) {
+    if (isChatStopCommand(message) || isBtwCommand(message)) {
+      return;
+    }
+    const parsedDisconnected = parseSlashCommand(message);
+    if (parsedDisconnected?.command.executeLocal) {
+      return;
+    }
+    if (messageOverride == null) {
+      recordNonTranscriptInputHistory(host, message);
+    }
+    enqueueChatMessage(
+      host,
+      message,
+      hasAttachments ? attachmentsToSend : undefined,
+      isChatResetCommand(message),
+      undefined,
+      { idempotencyKey: generateUUID() },
+    );
+    if (messageOverride == null) {
+      clearSubmittedComposerState(host, previousDraft, attachmentsToSend);
+    }
     return;
   }
 
@@ -657,7 +737,11 @@ export async function handleSendChat(
       if (messageOverride == null) {
         recordNonTranscriptInputHistory(host, message);
       }
-      enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
+      // Allocate the idempotency key up front so a disconnect between enqueue
+      // and drain still replays as the same run on the server (#45952).
+      enqueueChatMessage(host, message, attachmentsToSend, refreshSessions, undefined, {
+        idempotencyKey: generateUUID(),
+      });
       return;
     }
 

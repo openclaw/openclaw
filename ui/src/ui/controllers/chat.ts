@@ -481,10 +481,19 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
+export type SendChatMessageOptions = {
+  // Reuse the original idempotency key when retrying a queued send after a
+  // WS reconnect — server dedupes by `chat:${idempotencyKey}` so the gateway
+  // collapses a retry whose original ACK was lost into the same run rather
+  // than starting a duplicate agent turn. See issue #45952.
+  idempotencyKey?: string;
+};
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
+  options?: SendChatMessageOptions,
 ): Promise<string | null> {
   if (!state.client || !state.connected) {
     return null;
@@ -561,7 +570,7 @@ export async function sendChatMessage(
   reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
     clearRunStatus: true,
   });
-  const runId = generateUUID();
+  const runId = options?.idempotencyKey?.trim() || generateUUID();
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;

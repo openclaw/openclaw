@@ -22,6 +22,7 @@ import {
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
   resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
+  retryFailedQueuedMessage as retryFailedQueuedMessageInternal,
   steerQueuedChatMessage as steerQueuedChatMessageInternal,
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
@@ -1057,6 +1058,13 @@ export class OpenClawApp extends LitElement {
   removeQueuedMessage(id: string) {
     removeQueuedMessageInternal(
       this as unknown as Parameters<typeof removeQueuedMessageInternal>[0],
+      id,
+    );
+  }
+
+  retryFailedQueuedMessage(id: string) {
+    retryFailedQueuedMessageInternal(
+      this as unknown as Parameters<typeof retryFailedQueuedMessageInternal>[0],
       id,
     );
   }

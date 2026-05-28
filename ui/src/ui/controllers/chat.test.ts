@@ -1045,6 +1045,42 @@ describe("sendChatMessage", () => {
     expect(sendParams.message).toBe("continue");
   });
 
+  // Regression coverage for #45952: a caller-supplied idempotencyKey must be
+  // threaded through to chat.send so a reconnect-replay collapses on the
+  // server-side `chat:${idempotencyKey}` dedupe entry instead of creating a
+  // duplicate agent turn under a fresh runId.
+  it("reuses a caller-supplied idempotency key for chat.send", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "key-fixed", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "preserved across retries", undefined, {
+      idempotencyKey: "key-fixed",
+    });
+
+    expect(result).toBe("key-fixed");
+    expect(state.chatRunId).toBe("key-fixed");
+    const sendParams = requireRecord(request.mock.calls[0]?.[1]);
+    expect(sendParams.idempotencyKey).toBe("key-fixed");
+    expect(sendParams.message).toBe("preserved across retries");
+  });
+
+  it("generates a fresh idempotency key when none is provided", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "x", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "ad-hoc send");
+
+    expect(result).toMatch(UUID_V4_RE);
+    const sendParams = requireRecord(request.mock.calls[0]?.[1]);
+    expect(sendParams.idempotencyKey).toBe(result);
+  });
+
   it("serializes non-image chat attachments as files", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
     const state = createState({

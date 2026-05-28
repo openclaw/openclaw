@@ -155,6 +155,9 @@ export type ChatProps = {
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueSteer?: (id: string) => void;
+  // Manual retry for queue items whose transport retries exhausted the
+  // bounded budget; surfaced by chat-queue as a Retry button (#45952).
+  onQueueRetry?: (id: string) => void;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
@@ -1495,6 +1498,7 @@ export function renderChat(props: ChatProps) {
         canAbort: showAbortableUi,
         onQueueSteer: props.onQueueSteer,
         onQueueRemove: props.onQueueRemove,
+        onQueueRetry: props.onQueueRetry,
       })}
       ${renderSideResult(props.sideResult, props.onDismissSideResult)}
       ${renderFallbackIndicator(props.fallbackStatus)}

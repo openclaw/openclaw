@@ -17,6 +17,17 @@ export type ChatQueueItem = {
   localCommandArgs?: string;
   localCommandName?: string;
   pendingRunId?: string;
+  // Carried through chat.send so server-side dedupe (`chat:${idempotencyKey}`)
+  // keeps reconnect-replay safe. Set only for normal-send items that are
+  // eligible for transport retry; local commands and steered entries omit it.
+  idempotencyKey?: string;
+  // Transport retries spent since the item was first dispatched. Bumped by
+  // flushChatQueue when chat.send fails before the server ACK lands; capped at
+  // CHAT_QUEUE_RETRY_BUDGET to bound silent loops on a wedged connection.
+  retryCount?: number;
+  // Set true once retryCount exceeds the budget so the queue surfaces a
+  // failed-delivery indicator + manual retry instead of silently dropping.
+  failed?: boolean;
 };
 
 export const CRON_CHANNEL_LAST = "last";

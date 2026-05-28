@@ -7,6 +7,11 @@ export type ChatQueueProps = {
   canAbort?: boolean;
   onQueueSteer?: (id: string) => void;
   onQueueRemove: (id: string) => void;
+  // Retry handler for items whose transport retries hit
+  // CHAT_QUEUE_RETRY_BUDGET — used by the failed-delivery indicator added for
+  // the WebChat reconnect message-loss fix (#45952). Optional so embedders
+  // that do not surface failed sends still type-check.
+  onQueueRetry?: (id: string) => void;
 };
 
 export function renderChatQueue(props: ChatQueueProps) {
@@ -20,11 +25,21 @@ export function renderChatQueue(props: ChatQueueProps) {
         ${props.queue.map(
           (item) => html`
             <div
-              class="chat-queue__item ${item.kind === "steered" ? "chat-queue__item--steered" : ""}"
+              class="chat-queue__item ${item.kind === "steered"
+                ? "chat-queue__item--steered"
+                : ""} ${item.failed ? "chat-queue__item--failed" : ""}"
             >
               <div class="chat-queue__main">
                 ${item.kind === "steered"
                   ? html`<span class="chat-queue__badge">Steered</span>`
+                  : nothing}
+                ${item.failed
+                  ? html`<span
+                      class="chat-queue__badge chat-queue__badge--failed"
+                      role="alert"
+                      title="Could not deliver this message after multiple attempts"
+                      >Failed to send</span
+                    >`
                   : nothing}
                 <div class="chat-queue__text">
                   ${item.text ||
@@ -32,10 +47,24 @@ export function renderChatQueue(props: ChatQueueProps) {
                 </div>
               </div>
               <div class="chat-queue__actions">
+                ${item.failed && props.onQueueRetry
+                  ? html`
+                      <button
+                        class="btn chat-queue__retry"
+                        type="button"
+                        title="Retry sending"
+                        aria-label="Retry sending queued message"
+                        @click=${() => props.onQueueRetry?.(item.id)}
+                      >
+                        <span>Retry</span>
+                      </button>
+                    `
+                  : nothing}
                 ${props.canAbort &&
                 props.onQueueSteer &&
                 item.kind !== "steered" &&
-                !item.localCommandName
+                !item.localCommandName &&
+                !item.failed
                   ? html`
                       <button
                         class="btn chat-queue__steer"

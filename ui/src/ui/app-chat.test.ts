@@ -49,6 +49,9 @@ let refreshChat: typeof import("./app-chat.ts").refreshChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
+let flushChatQueueForEvent: typeof import("./app-chat.ts").flushChatQueueForEvent;
+let retryFailedQueuedMessage: typeof import("./app-chat.ts").retryFailedQueuedMessage;
+let CHAT_QUEUE_RETRY_BUDGET: typeof import("./app-chat.ts").CHAT_QUEUE_RETRY_BUDGET;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -61,6 +64,9 @@ async function loadChatHelpers(): Promise<void> {
     refreshChatAvatar,
     clearPendingQueueItemsForRun,
     removeQueuedMessage,
+    flushChatQueueForEvent,
+    retryFailedQueuedMessage,
+    CHAT_QUEUE_RETRY_BUDGET,
   } = await import("./app-chat.ts"));
 }
 
@@ -1484,6 +1490,239 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toStrictEqual([]);
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:queued");
+  });
+
+  // Regression coverage for issue #45952: messages typed during a WebSocket
+  // reconnect window must survive the disconnect and replay on the next
+  // hello using the same idempotency key so the server-side chat.send dedupe
+  // collapses retries into the original run.
+  it("queues a disconnected normal send instead of silently dropping it", async () => {
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request while disconnected: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      connected: false,
+      chatMessage: "queued during reconnect",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatQueue).toHaveLength(1);
+    const queued = host.chatQueue[0];
+    expect(queued?.text).toBe("queued during reconnect");
+    expect(queued?.failed).toBeFalsy();
+    expect(queued?.retryCount ?? 0).toBe(0);
+    expect(typeof queued?.idempotencyKey).toBe("string");
+    expect(uuidPattern.test(queued?.idempotencyKey as string)).toBe(true);
+    // Composer cleared so the user does not see a stale draft sitting there.
+    expect(host.chatMessage).toBe("");
+    // Draft text is still recallable via input-history navigation.
+    expect(navigateChatInputHistory(host, "up")).toBe(true);
+    expect(host.chatMessage).toBe("queued during reconnect");
+  });
+
+  it("does not queue stop or abort commands while disconnected", async () => {
+    const request = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      connected: false,
+      chatMessage: "/stop",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("does not queue local slash commands while disconnected", async () => {
+    const request = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      connected: false,
+      chatMessage: "/focus",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("replays a queued disconnected send with the preserved idempotency key on flush", async () => {
+    // Phase 1: disconnected submit lands in the queue with a pre-allocated key.
+    const request = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      connected: false,
+      chatMessage: "save me across reconnect",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue).toHaveLength(1);
+    const queuedKey = host.chatQueue[0]?.idempotencyKey;
+    expect(typeof queuedKey).toBe("string");
+    expect(uuidPattern.test(queuedKey as string)).toBe(true);
+
+    // Phase 2: gateway reconnects. The post-hello drain invokes
+    // flushChatQueueForEvent, which must send chat.send carrying the
+    // preserved idempotencyKey so the server-side dedupe collapses any
+    // duplicate replay into the same run instead of starting a new turn.
+    request.mockImplementation(async (method: string, params: unknown) => {
+      if (method === "chat.send") {
+        return {
+          runId: (params as { idempotencyKey?: string }).idempotencyKey,
+          status: "started",
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    host.connected = true;
+    await flushChatQueueForEvent(host);
+
+    expect(host.chatQueue).toStrictEqual([]);
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "replayed chat send payload",
+    );
+    expect(payload.message).toBe("save me across reconnect");
+    expect(payload.idempotencyKey).toBe(queuedKey);
+    expect(host.chatRunId).toBe(queuedKey);
+  });
+
+  it("marks a queued send failed after the retry budget is exhausted", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        throw new Error("gateway not connected");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      connected: true,
+      chatQueue: [
+        {
+          id: "stuck",
+          text: "please retry me",
+          createdAt: 1,
+          idempotencyKey: "key-stuck",
+        },
+      ],
+    });
+
+    // Each flush attempt bumps retryCount; once it exceeds the budget the
+    // item is marked failed and flush stops draining so the UI can surface it.
+    for (let i = 0; i <= CHAT_QUEUE_RETRY_BUDGET; i++) {
+      await flushChatQueueForEvent(host);
+    }
+
+    expect(host.chatQueue).toHaveLength(1);
+    const stuck = host.chatQueue[0];
+    expect(stuck?.id).toBe("stuck");
+    expect(stuck?.failed).toBe(true);
+    expect(stuck?.retryCount).toBeGreaterThan(CHAT_QUEUE_RETRY_BUDGET);
+    expect(stuck?.idempotencyKey).toBe("key-stuck");
+  });
+
+  it("does not redrive a failed queue item until the user retries it", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("should not be called for failed items");
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      connected: true,
+      chatQueue: [
+        {
+          id: "failed",
+          text: "needs manual retry",
+          createdAt: 1,
+          idempotencyKey: "key-failed",
+          retryCount: CHAT_QUEUE_RETRY_BUDGET + 1,
+          failed: true,
+        },
+      ],
+    });
+
+    await flushChatQueueForEvent(host);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]?.failed).toBe(true);
+  });
+
+  it("retryFailedQueuedMessage clears the failed marker and redrives the send", async () => {
+    const sendDeferred = createDeferred<unknown>();
+    const request = vi.fn(async (method: string, params: unknown) => {
+      if (method === "chat.send") {
+        const ack = {
+          runId: (params as { idempotencyKey?: string }).idempotencyKey,
+          status: "started",
+        };
+        sendDeferred.resolve(ack);
+        return ack;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      connected: true,
+      chatQueue: [
+        {
+          id: "manual-retry",
+          text: "retry me by hand",
+          createdAt: 1,
+          idempotencyKey: "key-manual",
+          retryCount: CHAT_QUEUE_RETRY_BUDGET + 1,
+          failed: true,
+        },
+      ],
+    });
+
+    retryFailedQueuedMessage(host, "manual-retry");
+    await sendDeferred.promise;
+    // flushChatQueue runs as a microtask after the connected/!busy check;
+    // wait one tick so the await chain settles before asserting drained state.
+    await Promise.resolve();
+
+    expect(host.chatQueue).toStrictEqual([]);
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "manual-retry chat send",
+    );
+    expect(payload.idempotencyKey).toBe("key-manual");
+    expect(payload.message).toBe("retry me by hand");
+  });
+
+  it("queues a disconnected normal send with attachments preserved", async () => {
+    const request = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      connected: false,
+      chatMessage: "look at this",
+      chatAttachments: [
+        {
+          id: "att-disc",
+          mimeType: "image/png",
+          fileName: "screenshot.png",
+        },
+      ],
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue).toHaveLength(1);
+    const queued = host.chatQueue[0];
+    expect(queued?.text).toBe("look at this");
+    expect(queued?.attachments).toHaveLength(1);
+    expect(queued?.attachments?.[0]?.id).toBe("att-disc");
+    expect(typeof queued?.idempotencyKey).toBe("string");
   });
 });
 
