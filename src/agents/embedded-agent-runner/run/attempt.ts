@@ -232,6 +232,7 @@ import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
+  markActiveEmbeddedRunAbandoned,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSessionFile,
   updateActiveEmbeddedRunSnapshot,
@@ -2892,6 +2893,7 @@ export async function runEmbeddedAttempt(
           }
         }
       };
+      let queueHandleForAbandonment: EmbeddedAgentQueueHandle | undefined;
       const abortRun = (isTimeout = false, reason?: unknown) => {
         aborted = true;
         if (isTimeout) {
@@ -2907,7 +2909,14 @@ export async function runEmbeddedAttempt(
         }
         abortCompaction();
         void abortActiveSession();
-        if (isTimeout) {
+        if (isTimeout && queueHandleForAbandonment) {
+          markActiveEmbeddedRunAbandoned({
+            sessionId: params.sessionId,
+            handle: queueHandleForAbandonment,
+            sessionKey: params.sessionKey,
+            sessionFile: params.sessionFile,
+            reason: "timeout",
+          });
           void sessionLockController.releaseHeldLockForAbort().catch((err) => {
             log.warn(
               `failed to release session lock on timeout abort: runId=${params.runId} ${String(err)}`,
@@ -3092,6 +3101,7 @@ export async function runEmbeddedAttempt(
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
       }
+      queueHandleForAbandonment = queueHandle;
       setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey, params.sessionFile);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
