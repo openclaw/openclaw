@@ -1,0 +1,249 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  escapeHtml,
+  findInlineMathEnd,
+  extractMathBlocks,
+  preProcessTex,
+  restoreMathBlocksSync,
+  preloadKatex,
+  getKatexModule,
+} from "./katex-renderer.ts";
+
+// ── escapeHtml ──
+
+describe("escapeHtml", () => {
+  it("escapes & to &amp;", () => {
+    expect(escapeHtml("a & b")).toBe("a &amp; b");
+  });
+
+  it("escapes < and > to &lt; and &gt;", () => {
+    expect(escapeHtml("<div>")).toBe("&lt;div&gt;");
+  });
+
+  it("escapes \" to &quot; and ' to &#39;", () => {
+    expect(escapeHtml("\"hello'")).toBe("&quot;hello&#39;");
+  });
+});
+
+// ── findInlineMathEnd ──
+
+describe("findInlineMathEnd", () => {
+  it("finds closing $ in $x$ (single letter variable)", () => {
+    expect(findInlineMathEnd("$x$", 0)).toBe(2);
+  });
+
+  it("finds closing $ in $\\frac{x}{y}$ (backslash command)", () => {
+    expect(findInlineMathEnd("$\\frac{x}{y}$", 0)).toBe(12);
+  });
+
+  it("returns -1 for $5 and $10 (pure digits = currency)", () => {
+    expect(findInlineMathEnd("$5 and $10", 0)).toBe(-1);
+  });
+
+  it("finds closing $ in $x^2$ (math operator)", () => {
+    expect(findInlineMathEnd("$x^2$", 0)).toBe(4);
+  });
+
+  it("returns -1 for $variable_name (no closing $)", () => {
+    expect(findInlineMathEnd("$variable_name", 0)).toBe(-1);
+  });
+
+  it("returns -1 for content crossing paragraph boundary (two newlines)", () => {
+    expect(findInlineMathEnd("$a\n\nb$", 0)).toBe(-1);
+  });
+
+  it("returns -1 for empty content $$ (no content between $ and $)", () => {
+    expect(findInlineMathEnd("$$", 0)).toBe(-1);
+  });
+
+  it("finds closing $ in $E=mc^2$", () => {
+    expect(findInlineMathEnd("$E=mc^2$", 0)).toBe(7);
+  });
+
+  it("finds closing $ in $a_n$ (subscript)", () => {
+    expect(findInlineMathEnd("$a_n$", 0)).toBe(4);
+  });
+
+  it("returns -1 for $5.99 (currency with decimal, no closing $)", () => {
+    expect(findInlineMathEnd("$5.99", 0)).toBe(-1);
+  });
+
+  it("handles escaped \\$ inside math content $x\\$y$", () => {
+    expect(findInlineMathEnd("$x\\$y$", 0)).toBe(5);
+  });
+});
+
+// ── extractMathBlocks ──
+
+describe("extractMathBlocks", () => {
+  it("extracts one inline math block from $x^2$ with displayMode=false", () => {
+    const { protectedText, mathBlocks } = extractMathBlocks("$x^2$");
+    expect(mathBlocks.size).toBe(1);
+    const [ph, info] = mathBlocks.entries().next().value!;
+    expect(info.tex).toBe("x^2");
+    expect(info.displayMode).toBe(false);
+    expect(protectedText).toBe(ph);
+  });
+
+  it("extracts one display math block from $$E=mc^2$$ with displayMode=true", () => {
+    const { protectedText, mathBlocks } = extractMathBlocks("$$E=mc^2$$");
+    expect(mathBlocks.size).toBe(1);
+    const [ph, info] = mathBlocks.entries().next().value!;
+    expect(info.tex).toBe("E=mc^2");
+    expect(info.displayMode).toBe(true);
+    expect(protectedText).toBe(ph);
+  });
+
+  it("extracts one display math block from \\[E=mc^2\\] with displayMode=true", () => {
+    const { protectedText, mathBlocks } = extractMathBlocks("\\[E=mc^2\\]");
+    expect(mathBlocks.size).toBe(1);
+    const [ph, info] = mathBlocks.entries().next().value!;
+    expect(info.tex).toBe("E=mc^2");
+    expect(info.displayMode).toBe(true);
+    expect(protectedText).toBe(ph);
+  });
+
+  it("extracts one inline math block from \\(\\frac{x}{y}\\) with displayMode=false", () => {
+    const { protectedText, mathBlocks } = extractMathBlocks("\\(\\frac{x}{y}\\)");
+    expect(mathBlocks.size).toBe(1);
+    const [ph, info] = mathBlocks.entries().next().value!;
+    expect(info.tex).toBe("\\frac{x}{y}");
+    expect(info.displayMode).toBe(false);
+    expect(protectedText).toBe(ph);
+  });
+
+  it("preserves surrounding text and inserts placeholder at correct position", () => {
+    const { protectedText, mathBlocks } = extractMathBlocks("text $x^2$ more text");
+    expect(mathBlocks.size).toBe(1);
+    const [ph, info] = mathBlocks.entries().next().value!;
+    expect(info.tex).toBe("x^2");
+    expect(protectedText).toBe(`text ${ph} more text`);
+  });
+
+  it("extracts two display math blocks from $$a$$ and $$b$$", () => {
+    const { protectedText, mathBlocks } = extractMathBlocks("$$a$$ and $$b$$");
+    expect(mathBlocks.size).toBe(2);
+    const entries = [...mathBlocks.entries()];
+    expect(entries[0][1].tex).toBe("a");
+    expect(entries[0][1].displayMode).toBe(true);
+    expect(entries[1][1].tex).toBe("b");
+    expect(entries[1][1].displayMode).toBe(true);
+    const ph0 = entries[0][0];
+    const ph1 = entries[1][0];
+    expect(protectedText).toBe(`${ph0} and ${ph1}`);
+  });
+
+  it("does NOT extract $x^2$ inside inline code", () => {
+    const { mathBlocks } = extractMathBlocks("`$x^2$`");
+    expect(mathBlocks.size).toBe(0);
+  });
+
+  it("does NOT extract $x^2$ inside fenced code block", () => {
+    const { mathBlocks } = extractMathBlocks("```\n$x^2$\n```");
+    expect(mathBlocks.size).toBe(0);
+  });
+
+  it("does NOT extract escaped delimiters \\$5 and \\$10, outputs literal $", () => {
+    const { protectedText, mathBlocks } = extractMathBlocks("\\$5 and \\$10");
+    expect(mathBlocks.size).toBe(0);
+    expect(protectedText).toBe("$5 and $10");
+  });
+
+  it("extracts mixed inline and display math: text $x$ and $$y$$", () => {
+    const { protectedText, mathBlocks } = extractMathBlocks("text $x$ and $$y$$");
+    expect(mathBlocks.size).toBe(2);
+    const entries = [...mathBlocks.entries()];
+    expect(entries[0][1].tex).toBe("x");
+    expect(entries[0][1].displayMode).toBe(false);
+    expect(entries[1][1].tex).toBe("y");
+    expect(entries[1][1].displayMode).toBe(true);
+    const ph0 = entries[0][0];
+    const ph1 = entries[1][0];
+    expect(protectedText).toBe(`text ${ph0} and ${ph1}`);
+  });
+
+  it("returns empty mathBlocks and unchanged text when no math content", () => {
+    const { protectedText, mathBlocks } = extractMathBlocks("just plain text");
+    expect(mathBlocks.size).toBe(0);
+    expect(protectedText).toBe("just plain text");
+  });
+
+  it("does NOT extract $5 and $10 (currency detection via findInlineMathEnd)", () => {
+    const { mathBlocks, protectedText } = extractMathBlocks("$5 and $10");
+    expect(mathBlocks.size).toBe(0);
+    expect(protectedText).toBe("$5 and $10");
+  });
+
+  it("extracts multiple inline math blocks: $x$ and $y$", () => {
+    const { protectedText, mathBlocks } = extractMathBlocks("$x$ and $y$");
+    expect(mathBlocks.size).toBe(2);
+    const entries = [...mathBlocks.entries()];
+    expect(entries[0][1].tex).toBe("x");
+    expect(entries[0][1].displayMode).toBe(false);
+    expect(entries[1][1].tex).toBe("y");
+    expect(entries[1][1].displayMode).toBe(false);
+    const ph0 = entries[0][0];
+    const ph1 = entries[1][0];
+    expect(protectedText).toBe(`${ph0} and ${ph1}`);
+  });
+});
+
+// ── preProcessTex ──
+
+describe("preProcessTex", () => {
+  it("replaces multline* with gather*", () => {
+    const result = preProcessTex("\\begin{multline*}x\\end{multline*}", false);
+    expect(result).toBe("\\begin{gather*}x\\end{gather*}");
+  });
+
+  it("strips \\require{amsmath}", () => {
+    const result = preProcessTex("\\require{amsmath}x", false);
+    expect(result).toBe("x");
+  });
+
+  it("strips \\definecolor{red}{rgb}{1,0,0}", () => {
+    const result = preProcessTex("\\definecolor{red}{rgb}{1,0,0}x", false);
+    expect(result).toBe("x");
+  });
+
+  it("replaces \\ce{H2O} with \\mathrm{H2O}", () => {
+    const result = preProcessTex("\\ce{H2O}", false);
+    expect(result).toBe("\\mathrm{H2O}");
+  });
+
+  it("returns input unchanged when no preprocessing needed", () => {
+    const result = preProcessTex("x^2 + y^2 = z^2", false);
+    expect(result).toBe("x^2 + y^2 = z^2");
+  });
+});
+
+// ── restoreMathBlocksSync (no module loaded) ──
+
+describe("restoreMathBlocksSync — no module loaded", () => {
+  it("returns html unchanged when mathBlocks is empty", () => {
+    const result = restoreMathBlocksSync("<p>Hello</p>", new Map());
+    expect(result).toBe("<p>Hello</p>");
+  });
+
+  it("replaces placeholders with katex-fallback when module not loaded", () => {
+    const mathBlocks = new Map([
+      ["\x00KATEX_PLACEHOLDER_0\x00", { tex: "x^2", displayMode: false }],
+    ]);
+    const result = restoreMathBlocksSync("text \x00KATEX_PLACEHOLDER_0\x00 after", mathBlocks);
+    expect(result).toBe('text <code class="katex-fallback">x^2</code> after');
+  });
+
+  it("replaces multiple placeholders with katex-fallback", () => {
+    const mathBlocks = new Map([
+      ["\x00KATEX_PLACEHOLDER_0\x00", { tex: "x^2", displayMode: false }],
+      ["\x00KATEX_PLACEHOLDER_1\x00", { tex: "E=mc^2", displayMode: true }],
+    ]);
+    const result = restoreMathBlocksSync(
+      "a \x00KATEX_PLACEHOLDER_0\x00 b \x00KATEX_PLACEHOLDER_1\x00 c",
+      mathBlocks,
+    );
+    expect(result).toBe(
+      'a <code class="katex-fallback">x^2</code> b <code class="katex-fallback">E=mc^2</code> c',
+    );
+  });
+});
