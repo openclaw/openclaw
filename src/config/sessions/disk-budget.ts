@@ -319,6 +319,22 @@ function isUnreferencedPromptBlobFileRemovable(
   return hash ? !projectedPromptBlobRefCounts.has(hash) : false;
 }
 
+function isPromptBlobArtifactRemovable(
+  file: Pick<SessionsDirFileStat, "name" | "mtimeMs">,
+  projectedPromptBlobRefCounts: ReadonlyMap<string, number>,
+  promptBlobCutoffMs: number,
+  tempCutoffMs: number,
+): boolean {
+  if (isSessionPromptBlobTempArtifactName(file.name)) {
+    return file.mtimeMs <= tempCutoffMs;
+  }
+  return isUnreferencedPromptBlobFileRemovable(
+    file,
+    projectedPromptBlobRefCounts,
+    promptBlobCutoffMs,
+  );
+}
+
 function isDiskBudgetRemovableSessionFile(
   file: Pick<SessionsDirFileStat, "canonicalPath" | "name" | "mtimeMs">,
   referencedPaths: ReadonlySet<string>,
@@ -375,6 +391,48 @@ async function removeFileForBudget(params: {
   return size;
 }
 
+async function removePromptBlobFileForBudget(params: {
+  file: SessionsDirFileStat;
+  projectedPromptBlobRefCounts: ReadonlyMap<string, number>;
+  promptBlobCutoffMs: number;
+  tempCutoffMs: number;
+  dryRun: boolean;
+  fileSizesByPath: Map<string, number>;
+  simulatedRemovedPaths: Set<string>;
+  onRemovedPath?: (canonicalPath: string) => void;
+}): Promise<number> {
+  let file = params.file;
+  if (!params.dryRun) {
+    const stat = await fs.promises.stat(file.path).catch(() => null);
+    if (!stat?.isFile()) {
+      return 0;
+    }
+    file = {
+      ...file,
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+    };
+  }
+  if (
+    !isPromptBlobArtifactRemovable(
+      file,
+      params.projectedPromptBlobRefCounts,
+      params.promptBlobCutoffMs,
+      params.tempCutoffMs,
+    )
+  ) {
+    return 0;
+  }
+  return await removeFileForBudget({
+    filePath: file.path,
+    canonicalPath: file.canonicalPath,
+    dryRun: params.dryRun,
+    fileSizesByPath: params.fileSizesByPath,
+    simulatedRemovedPaths: params.simulatedRemovedPaths,
+    onRemovedPath: params.onRemovedPath,
+  });
+}
+
 export async function pruneUnreferencedSessionArtifacts(params: {
   store: Record<string, SessionEntry>;
   storePath: string;
@@ -421,31 +479,44 @@ export async function pruneUnreferencedSessionArtifacts(params: {
     if (params.excludeCanonicalPaths?.has(file.canonicalPath)) {
       return false;
     }
-    if (isSessionPromptBlobTempArtifactName(file.name)) {
-      return file.mtimeMs <= tempCutoffMs;
-    }
-    return isUnreferencedPromptBlobFileRemovable(
+    return isPromptBlobArtifactRemovable(
       file,
       projectedPromptBlobRefCounts,
       promptBlobCutoffMs,
+      tempCutoffMs,
     );
   });
-  const removableFiles = [...removableStoreFiles, ...removablePromptBlobFiles]
+  const removableFiles = [
+    ...removableStoreFiles.map((file) => ({ kind: "store" as const, file })),
+    ...removablePromptBlobFiles.map((file) => ({ kind: "promptBlob" as const, file })),
+  ]
     .filter((file) => {
-      return !params.excludeCanonicalPaths?.has(file.canonicalPath);
+      return !params.excludeCanonicalPaths?.has(file.file.canonicalPath);
     })
-    .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
+    .toSorted((a, b) => a.file.mtimeMs - b.file.mtimeMs);
 
   let removedFiles = 0;
   let freedBytes = 0;
-  for (const file of removableFiles) {
-    const deletedBytes = await removeFileForBudget({
-      filePath: file.path,
-      canonicalPath: file.canonicalPath,
-      dryRun: params.dryRun === true,
-      fileSizesByPath,
-      simulatedRemovedPaths,
-    });
+  const dryRun = params.dryRun === true;
+  for (const item of removableFiles) {
+    const deletedBytes =
+      item.kind === "promptBlob"
+        ? await removePromptBlobFileForBudget({
+            file: item.file,
+            projectedPromptBlobRefCounts,
+            promptBlobCutoffMs,
+            tempCutoffMs,
+            dryRun,
+            fileSizesByPath,
+            simulatedRemovedPaths,
+          })
+        : await removeFileForBudget({
+            filePath: item.file.path,
+            canonicalPath: item.file.canonicalPath,
+            dryRun,
+            fileSizesByPath,
+            simulatedRemovedPaths,
+          });
     if (deletedBytes <= 0) {
       continue;
     }
@@ -563,13 +634,11 @@ export async function enforceSessionDiskBudget(params: {
   const storeBasename = path.basename(params.storePath);
   const unreferencedPromptBlobQueue = promptBlobFiles
     .filter((file) => {
-      if (isSessionPromptBlobTempArtifactName(file.name)) {
-        return file.mtimeMs <= tempStaleCutoffMs;
-      }
-      return isUnreferencedPromptBlobFileRemovable(
+      return isPromptBlobArtifactRemovable(
         file,
         projectedPromptBlobRefCounts,
         promptBlobOrphanCutoffMs,
+        tempStaleCutoffMs,
       );
     })
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
@@ -577,9 +646,11 @@ export async function enforceSessionDiskBudget(params: {
     if (total <= highWaterBytes) {
       break;
     }
-    const deletedBytes = await removeFileForBudget({
-      filePath: file.path,
-      canonicalPath: file.canonicalPath,
+    const deletedBytes = await removePromptBlobFileForBudget({
+      file,
+      projectedPromptBlobRefCounts,
+      promptBlobCutoffMs: promptBlobOrphanCutoffMs,
+      tempCutoffMs: tempStaleCutoffMs,
       dryRun,
       fileSizesByPath,
       simulatedRemovedPaths,
@@ -668,15 +739,18 @@ export async function enforceSessionDiskBudget(params: {
             const blobFile = existingPromptBlobFilesByHash.get(promptBlobHash);
             if (
               blobFile &&
-              isUnreferencedPromptBlobFileRemovable(
+              isPromptBlobArtifactRemovable(
                 blobFile,
                 projectedPromptBlobRefCounts,
                 promptBlobOrphanCutoffMs,
+                tempStaleCutoffMs,
               )
             ) {
-              const deletedBytes = await removeFileForBudget({
-                filePath: blobFile.path,
-                canonicalPath: blobFile.canonicalPath,
+              const deletedBytes = await removePromptBlobFileForBudget({
+                file: blobFile,
+                projectedPromptBlobRefCounts,
+                promptBlobCutoffMs: promptBlobOrphanCutoffMs,
+                tempCutoffMs: tempStaleCutoffMs,
                 dryRun,
                 fileSizesByPath,
                 simulatedRemovedPaths,

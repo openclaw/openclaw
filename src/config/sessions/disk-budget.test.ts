@@ -1,6 +1,8 @@
+import nodeFs from "node:fs";
+import type { PathLike, StatOptions } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   resolveTrajectoryFilePath,
@@ -31,6 +33,23 @@ function expectBudgetResult(
   if (result === null) {
     throw new Error("expected disk budget enforcement result");
   }
+}
+
+function refreshPathBeforeSecondStat(targetPath: string): ReturnType<typeof vi.spyOn> {
+  const originalStat = nodeFs.promises.stat.bind(nodeFs.promises);
+  let statCalls = 0;
+  return vi
+    .spyOn(nodeFs.promises, "stat")
+    .mockImplementation(async (target: PathLike, options?: StatOptions) => {
+      if (target === targetPath) {
+        statCalls += 1;
+        if (statCalls === 2) {
+          const now = new Date();
+          await fs.utimes(targetPath, now, now);
+        }
+      }
+      return await originalStat(target, options);
+    });
 }
 
 describe("enforceSessionDiskBudget", () => {
@@ -323,6 +342,43 @@ describe("enforceSessionDiskBudget", () => {
       expect(result.overBudget).toBe(true);
       expect(result.removedFiles).toBe(0);
       await expectPathExists(blobPath);
+    });
+  });
+
+  it("revalidates stale prompt blobs before removing them under pressure", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-revalidate-prompt-blob-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const store: Record<string, SessionEntry> = {
+        "agent:main:active": { sessionId: "active", updatedAt: Date.now() },
+      };
+      const hash = "d".repeat(64);
+      const blobDir = path.join(dir, "skills-prompts", "sha256", hash.slice(0, 2));
+      const blobPath = path.join(blobDir, `${hash}.txt`);
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.mkdir(blobDir, { recursive: true });
+      await fs.writeFile(blobPath, "stale prompt blob".repeat(200), "utf-8");
+      const staleBlobTime = new Date(Date.now() - 10 * 60 * 1000);
+      await fs.utimes(blobPath, staleBlobTime, staleBlobTime);
+      const statSpy = refreshPathBeforeSecondStat(blobPath);
+      try {
+        const result = await enforceSessionDiskBudget({
+          store,
+          storePath,
+          activeSessionKey: "agent:main:active",
+          maintenance: {
+            maxDiskBytes: 1,
+            highWaterBytes: 1,
+          },
+          warnOnly: false,
+        });
+
+        expectBudgetResult(result);
+        expect(result.overBudget).toBe(true);
+        expect(result.removedFiles).toBe(0);
+        await expectPathExists(blobPath);
+      } finally {
+        statSpy.mockRestore();
+      }
     });
   });
 
@@ -635,6 +691,33 @@ describe("pruneUnreferencedSessionArtifacts", () => {
 
       await expectPathExists(blobPath);
       expect(result.removedFiles).toBe(0);
+    });
+  });
+
+  it("revalidates stale prompt blobs before removing them during normal artifact cleanup", async () => {
+    await withTempDir({ prefix: "openclaw-prune-revalidate-prompt-blob-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const hash = "e".repeat(64);
+      const blobDir = path.join(dir, "skills-prompts", "sha256", hash.slice(0, 2));
+      const blobPath = path.join(blobDir, `${hash}.txt`);
+      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf-8");
+      await fs.mkdir(blobDir, { recursive: true });
+      await fs.writeFile(blobPath, "stale prompt blob".repeat(200), "utf-8");
+      const staleBlobTime = new Date(Date.now() - 10 * 60 * 1000);
+      await fs.utimes(blobPath, staleBlobTime, staleBlobTime);
+      const statSpy = refreshPathBeforeSecondStat(blobPath);
+      try {
+        const result = await pruneUnreferencedSessionArtifacts({
+          store: {},
+          storePath,
+          olderThanMs: 60_000,
+        });
+
+        await expectPathExists(blobPath);
+        expect(result.removedFiles).toBe(0);
+      } finally {
+        statSpy.mockRestore();
+      }
     });
   });
 
