@@ -2164,6 +2164,7 @@ export async function runEmbeddedAgent(
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
               if (preflightRecovery && isNoRealConversationCompactionNoop(compactResult)) {
                 lastCompactionTokensAfter = undefined;
+                lastContextBudgetStatus = undefined;
                 await resetNoRealConversationTokenSnapshot({
                   config: params.config,
                   sessionKey: params.sessionKey,
