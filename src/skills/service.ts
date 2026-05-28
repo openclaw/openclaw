@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getSkillsSnapshotVersion } from "./refresh-state.js";
 import { buildSkillIndex, skillIndexEntries, type SkillIndex } from "./registry.js";
-import type { SkillEligibilityContext, SkillSnapshot } from "./types.js";
+import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "./types.js";
 import {
   buildWorkspaceSkillSnapshot as buildWorkspaceSkillSnapshotFromEntries,
   loadWorkspaceSkillEntries,
@@ -27,6 +27,7 @@ export type SkillSnapshotBuildOptions = {
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
   pluginSkillsDir?: string;
+  entries?: SkillEntry[];
   agentId?: string;
   skillFilter?: string[];
   eligibility?: SkillEligibilityContext;
@@ -70,6 +71,9 @@ export class SkillsService {
   }
 
   buildSnapshot(workspaceDir: string, opts?: SkillSnapshotBuildOptions): SkillSnapshot {
+    if (opts?.entries) {
+      return buildWorkspaceSkillSnapshotFromEntries(workspaceDir, opts);
+    }
     const request = {
       workspaceDir,
       config: opts?.config,

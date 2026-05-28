@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeWorkspaceSkills } from "./e2e-test-helpers.js";
-import { buildSkillIndexCacheKey, SkillsService } from "./service.js";
+import { buildSkillIndexCacheKey, buildWorkspaceSkillSnapshot, SkillsService } from "./service.js";
+import { createCanonicalFixtureSkill } from "./test-helpers.js";
+import type { SkillEntry } from "./types.js";
 import { buildWorkspaceSkillSnapshot as buildLegacyWorkspaceSkillSnapshot } from "./workspace.js";
 
 const tempDirs: string[] = [];
@@ -50,6 +52,29 @@ describe("SkillsService", () => {
     expect(actual.skills).toEqual(expected.skills);
     expect(actual.resolvedSkills).toEqual(expected.resolvedSkills);
     expect(actual.version).toBe(42);
+  });
+
+  it("preserves the preloaded entries snapshot path", () => {
+    const entry: SkillEntry = {
+      skill: createCanonicalFixtureSkill({
+        name: "synthetic-entry-skill",
+        description: "Synthetic entry",
+        filePath: "/synthetic/skills/synthetic-entry-skill/SKILL.md",
+        baseDir: "/synthetic/skills/synthetic-entry-skill",
+        source: "openclaw-workspace",
+      }),
+      frontmatter: {},
+    };
+
+    const snapshot = buildWorkspaceSkillSnapshot("/workspace/that/does/not/exist", {
+      entries: [entry],
+      snapshotVersion: 9,
+    });
+
+    expect(snapshot.prompt).toContain("synthetic-entry-skill");
+    expect(snapshot.skills).toEqual([{ name: "synthetic-entry-skill" }]);
+    expect(snapshot.resolvedSkills).toEqual([entry.skill]);
+    expect(snapshot.version).toBe(9);
   });
 
   it("caches the source-aware index until the version key changes", async () => {
