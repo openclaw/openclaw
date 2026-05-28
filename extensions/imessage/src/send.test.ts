@@ -159,10 +159,9 @@ describe("sendMessageIMessage receipts", () => {
     let copiedContent = "";
     let copiedMode: number | undefined;
     const runCliJson = vi.fn(async (args: readonly string[]) => {
-      const copiedPath = args[4];
-      expect(typeof copiedPath).toBe("string");
-      copiedContent = await readFile(copiedPath as string, "utf8");
-      copiedMode = (await stat(copiedPath as string)).mode & 0o777;
+      const copiedPath = args[4] ?? "";
+      copiedContent = await readFile(copiedPath, "utf8");
+      copiedMode = (await stat(copiedPath)).mode & 0o777;
       return { messageId: "p:0/media-guid", transferGuid: "transfer-1" };
     });
 
@@ -179,13 +178,13 @@ describe("sendMessageIMessage receipts", () => {
     expect(runCliJson).toHaveBeenCalledOnce();
     const requestArgs = runCliJson.mock.calls[0]?.[0] ?? [];
     expect(requestArgs.slice(0, 4)).toEqual(["send-attachment", "--chat", "chat-1", "--file"]);
-    const copiedPath = requestArgs[4];
-    expect(typeof copiedPath).toBe("string");
+    const copiedPath = requestArgs[4] ?? "";
+    expect(copiedPath).toBeTruthy();
     expect(copiedPath).not.toBe(sourcePath);
     expect(copiedPath).toContain(`${handoffDir}${path.sep}`);
     expect(copiedContent).toBe("image-bytes");
     expect(copiedMode).toBe(0o640);
-    await expect(readFile(copiedPath as string, "utf8")).rejects.toThrow();
+    await expect(readFile(copiedPath, "utf8")).rejects.toThrow();
     expect(requestArgs.slice(5)).toEqual(["--transport", "auto"]);
   });
 
