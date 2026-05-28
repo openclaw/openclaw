@@ -983,15 +983,14 @@ export async function runWhatsAppQaLive(params: {
   const passed = scenarioResults.filter((entry) => entry.status === "pass").length;
   const failed = scenarioResults.filter((entry) => entry.status === "fail").length;
   const skipped = scenarioResults.filter((entry) => entry.status === "skip").length;
+  const credentialFingerprint = fingerprintWhatsAppCredentialId(credentialLease?.credentialId);
   const summary: WhatsAppQaSummary = {
     credentials: credentialLease
       ? {
           source: credentialLease.source,
           kind: credentialLease.kind,
           role: credentialLease.role,
-          credentialFingerprint: redactPublicMetadata
-            ? undefined
-            : fingerprintWhatsAppCredentialId(credentialLease.credentialId),
+          credentialFingerprint,
           credentialId: redactPublicMetadata ? undefined : credentialLease.credentialId,
           ownerId: redactPublicMetadata ? undefined : credentialLease.ownerId,
         }
@@ -1032,9 +1031,7 @@ export async function runWhatsAppQaLive(params: {
     reportPath,
     `${renderWhatsAppQaMarkdown({
       cleanupIssues,
-      credentialFingerprint: redactPublicMetadata
-        ? undefined
-        : fingerprintWhatsAppCredentialId(credentialLease?.credentialId),
+      credentialFingerprint,
       credentialSource: credentialLease?.source ?? requestedCredentialSource,
       finishedAt,
       gatewayDebugDirPath: preservedGatewayDebugArtifacts ? gatewayDebugDirPath : undefined,
@@ -1063,6 +1060,7 @@ export const testing = {
   fingerprintWhatsAppCredentialId,
   isTransientWhatsAppQaDriverError,
   parseWhatsAppQaCredentialPayload,
+  renderWhatsAppQaMarkdown,
   resolveWhatsAppQaRuntimeEnv,
   resolveWhatsAppMetadataRedaction,
   toObservedWhatsAppArtifacts,
