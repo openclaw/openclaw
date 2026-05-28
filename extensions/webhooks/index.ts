@@ -98,7 +98,8 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
   });
 
   api.registerCli(({ program }) => registerWebhooksCli({ program }), {
-    commands: ["webhook", "webhooks"],
+    parentPath: ["webhooks"],
+    commands: ["subscribe", "list", "remove", "test"],
   });
 
   if (routes.some((route) => route.dispatchMode === "agent" && route.agent.onCompletion)) {

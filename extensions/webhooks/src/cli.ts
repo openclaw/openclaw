@@ -44,10 +44,7 @@ function splitCsv(value: string | undefined): string[] | undefined {
 }
 
 export function registerWebhooksCli(params: { program: Command }): void {
-  const command = params.program
-    .command("webhook")
-    .alias("webhooks")
-    .description("Manage webhook subscriptions through the OpenClaw Gateway.");
+  const command = params.program;
 
   command
     .command("subscribe")
@@ -126,7 +123,5 @@ export function registerWebhooksCli(params: { program: Command }): void {
       );
     });
 
-  command.action(() => {
-    writeLine(command.helpInformation());
-  });
+  command.action(() => writeLine(command.helpInformation()));
 }
