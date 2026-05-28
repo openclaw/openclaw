@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MediaFileType, type UploadMediaResponse } from "../types.js";
-import type { ApiClient } from "./api-client.js";
+import { ApiClient } from "./api-client.js";
 import { MediaApi } from "./media.js";
-import type { TokenManager } from "./token.js";
+import { TokenManager } from "./token.js";
 
 const resolvePinnedHostnameWithPolicyMock = vi.hoisted(() => vi.fn());
 
@@ -25,16 +25,16 @@ const UPLOAD_RESPONSE: UploadMediaResponse = {
   ttl: 3600,
 };
 
-function mockApiClient(): ApiClient & { request: ReturnType<typeof vi.fn> } {
-  return {
-    request: vi.fn().mockResolvedValue(UPLOAD_RESPONSE),
-  } as unknown as ApiClient & { request: ReturnType<typeof vi.fn> };
+function mockApiClient(): ApiClient {
+  const client = new ApiClient();
+  vi.spyOn(client, "request").mockResolvedValue(UPLOAD_RESPONSE);
+  return client;
 }
 
-function mockTokenManager(): TokenManager & { getAccessToken: ReturnType<typeof vi.fn> } {
-  return {
-    getAccessToken: vi.fn().mockResolvedValue("token-1"),
-  } as unknown as TokenManager & { getAccessToken: ReturnType<typeof vi.fn> };
+function mockTokenManager(): TokenManager {
+  const tokenManager = new TokenManager();
+  vi.spyOn(tokenManager, "getAccessToken").mockResolvedValue("token-1");
+  return tokenManager;
 }
 
 describe("MediaApi.uploadMedia direct URL uploads", () => {
