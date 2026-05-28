@@ -12,6 +12,28 @@ import { NonEmptyString } from "./primitives.js";
 const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;
+const PLUGIN_APPROVAL_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH = 80;
+const PLUGIN_APPROVAL_EXTERNAL_RESOLUTION_COMMAND_TEMPLATE_MAX_LENGTH = 256;
+
+const PluginApprovalExternalResolutionSchema = Type.Object(
+  {
+    label: Type.String({
+      minLength: 1,
+      maxLength: PLUGIN_APPROVAL_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH,
+    }),
+    commandTemplate: Type.String({
+      minLength: 1,
+      maxLength: PLUGIN_APPROVAL_EXTERNAL_RESOLUTION_COMMAND_TEMPLATE_MAX_LENGTH,
+    }),
+    decisions: Type.Optional(
+      Type.Array(Type.String({ enum: ["allow-once", "allow-always"] }), {
+        minItems: 1,
+        maxItems: 2,
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 /** Approval request raised by a plugin before a sensitive tool action proceeds. */
 export const PluginApprovalRequestParamsSchema = Type.Object(
@@ -28,6 +50,7 @@ export const PluginApprovalRequestParamsSchema = Type.Object(
         maxItems: 3,
       }),
     ),
+    externalResolution: Type.Optional(PluginApprovalExternalResolutionSchema),
     agentId: Type.Optional(Type.String()),
     sessionKey: Type.Optional(Type.String()),
     turnSourceChannel: Type.Optional(Type.String()),
@@ -45,6 +68,15 @@ export const PluginApprovalResolveParamsSchema = Type.Object(
   {
     id: NonEmptyString,
     decision: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const PluginApprovalResolveVerifiedParamsSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    decision: Type.String({ enum: ["allow-once", "allow-always"] }),
+    pluginId: NonEmptyString,
   },
   { additionalProperties: false },
 );

@@ -295,6 +295,70 @@ describe("matrixApprovalNativeRuntime", () => {
     expectRecordFields(mockCall(reactMessage)?.[3], { accountId: "default" });
   });
 
+  it("delivers Matrix plugin approval external verification commands", async () => {
+    const sendSingleTextMessage = vi.fn().mockResolvedValue({
+      messageId: "$plugin-approval",
+      primaryMessageId: "$plugin-approval",
+      receipt: buildMatrixReceipt(["$plugin-approval"]),
+      roomId: "!room:example.org",
+    });
+    const reactMessage = vi.fn().mockResolvedValue(undefined);
+    const externalResolution = {
+      label: "Verify with World",
+      commands: [
+        {
+          decision: "allow-once" as const,
+          label: "Verify once",
+          description: "Approve this blocked action only",
+          command: "/agentkit approve plugin:req-1 allow-once",
+        },
+      ],
+    };
+    const view = buildPluginApprovalView({
+      actions: [
+        {
+          decision: "deny",
+          label: "Deny",
+          style: "danger",
+          command: "/approve plugin:req-1 deny",
+        },
+      ],
+      externalResolution,
+    });
+    const pendingPayload = await buildPendingPayload(view);
+
+    await matrixApprovalNativeRuntime.transport.deliverPending({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        client: {} as never,
+        deps: {
+          sendSingleTextMessage,
+          reactMessage,
+        },
+      },
+      request: {} as never,
+      approvalKind: "plugin",
+      plannedTarget: buildMatrixApprovalRoomTarget("!room:example.org"),
+      preparedTarget: {
+        to: "room:!room:example.org",
+        roomId: "!room:example.org",
+      },
+      view,
+      pendingPayload,
+    });
+
+    const [, text, options] = mockCall(sendSingleTextMessage) ?? [];
+    expect(String(text)).toContain("External verification: Verify with World");
+    expect(String(text)).toContain("/agentkit approve plugin:req-1 allow-once");
+    const extraContent = (options as { extraContent?: Record<string, unknown> } | undefined)
+      ?.extraContent;
+    expectRecordFields(extraContent?.[MATRIX_APPROVAL_METADATA_KEY], {
+      allowedDecisions: ["deny"],
+      externalResolution,
+    });
+  });
+
   it("binds Matrix approval reactions before publishing option reactions", async () => {
     const sendSingleTextMessage = vi.fn().mockResolvedValue({
       messageId: "$approval",

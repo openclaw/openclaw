@@ -227,6 +227,7 @@ function broadcastCall(opts: GatewayRequestHandlerOptions, index = 0) {
 const invalidParamMethodCases = [
   { method: "plugin.approval.request" },
   { method: "plugin.approval.resolve" },
+  { method: "plugin.approval.resolveVerified" },
 ] as const;
 
 const invalidRequestCases = [
@@ -265,6 +266,7 @@ describe("createPluginApprovalHandlers", () => {
       "plugin.approval.list",
       "plugin.approval.request",
       "plugin.approval.resolve",
+      "plugin.approval.resolveVerified",
       "plugin.approval.waitDecision",
     ]);
   });
@@ -443,6 +445,7 @@ describe("createPluginApprovalHandlers", () => {
       const opts = createMockOptions(
         "plugin.approval.request",
         {
+          pluginId: "agentkit",
           title: "T",
           description: "D",
           allowedDecisions: ["allow-once", "deny", "allow-once"],
@@ -459,6 +462,154 @@ describe("createPluginApprovalHandlers", () => {
       ]);
       manager.resolve(approvalId, "deny");
       await handlerPromise;
+    });
+
+    it("stores narrow external resolution commands with the server approval id", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          pluginId: "agentkit",
+          title: "T",
+          description: "D",
+          allowedDecisions: ["deny"],
+          externalResolution: {
+            label: "Verify with World",
+            commandTemplate: "/agentkit approve {id} {decision}",
+            decisions: ["allow-once", "allow-always"],
+          },
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](opts);
+      await vi.waitFor(() => {
+        const accepted = acceptedResult(respond as unknown as MockCallSource);
+        expect(accepted.status).toBe("accepted");
+        expect(accepted.id).toBeTypeOf("string");
+      });
+
+      const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
+      expect(manager.getSnapshot(approvalId)?.request.externalResolution).toEqual({
+        label: "Verify with World",
+        commands: [
+          {
+            decision: "allow-once",
+            label: "Verify once",
+            description: "Approve this blocked action only",
+            command: `/agentkit approve ${approvalId} allow-once`,
+          },
+          {
+            decision: "allow-always",
+            label: "Verify and trust for session",
+            description: "Trust approvals for this session",
+            command: `/agentkit approve ${approvalId} allow-always`,
+          },
+        ],
+      });
+      expect(manager.getSnapshot(approvalId)?.request.allowedDecisions).toEqual(["deny"]);
+      manager.resolve(approvalId, "deny");
+      await handlerPromise;
+    });
+
+    it("defaults external verification approvals to a core-owned deny decision", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          pluginId: "agentkit",
+          title: "T",
+          description: "D",
+          externalResolution: {
+            label: "Verify with World",
+            commandTemplate: "/agentkit approve {id} {decision}",
+          },
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](opts);
+      await vi.waitFor(() => {
+        const accepted = acceptedResult(respond as unknown as MockCallSource);
+        expect(accepted.status).toBe("accepted");
+        expect(accepted.id).toBeTypeOf("string");
+      });
+
+      const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
+      expect(manager.getSnapshot(approvalId)?.request.allowedDecisions).toEqual(["deny"]);
+      expect(manager.getSnapshot(approvalId)?.request.externalResolution?.commands).toEqual([
+        {
+          decision: "allow-once",
+          label: "Verify once",
+          description: "Approve this blocked action only",
+          command: `/agentkit approve ${approvalId} allow-once`,
+        },
+      ]);
+      manager.resolve(approvalId, "deny");
+      await handlerPromise;
+    });
+
+    it("rejects normal allow decisions when external verification is configured", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions("plugin.approval.request", {
+        pluginId: "agentkit",
+        title: "T",
+        description: "D",
+        allowedDecisions: ["allow-once", "deny"],
+        externalResolution: {
+          label: "Verify with World",
+          commandTemplate: "/agentkit approve {id} {decision}",
+        },
+      });
+
+      await handlers["plugin.approval.request"](opts);
+
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).message).toBe(
+        'externalResolution approvals must route allow decisions through external verification; use allowedDecisions: ["deny"]',
+      );
+    });
+
+    it("rejects external verification approvals without a plugin owner", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions("plugin.approval.request", {
+        title: "T",
+        description: "D",
+        externalResolution: {
+          label: "Verify with World",
+          commandTemplate: "/agentkit approve {id} {decision}",
+        },
+      });
+
+      await handlers["plugin.approval.request"](opts);
+
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).message).toBe(
+        "externalResolution requires pluginId",
+      );
+    });
+
+    it("rejects external resolution command templates without id and decision placeholders", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions("plugin.approval.request", {
+        title: "T",
+        description: "D",
+        externalResolution: {
+          label: "Verify with World",
+          commandTemplate: "/agentkit approve",
+        },
+      });
+
+      await handlers["plugin.approval.request"](opts);
+
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).message).toContain(
+        "externalResolution.commandTemplate must include {id} and {decision}",
+      );
     });
   });
 
@@ -717,6 +868,192 @@ describe("createPluginApprovalHandlers", () => {
       const error = expectResponseRejected(opts.respond);
       expect(error.code).toBe("INVALID_REQUEST");
       expect(error.message).toBe("unknown or expired approval id");
+    });
+  });
+
+  describe("plugin.approval.resolveVerified", () => {
+    it("resolves a plugin-owned approval with an external verification decision", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create(
+        {
+          pluginId: "agentkit",
+          title: "T",
+          description: "D",
+          allowedDecisions: ["deny"],
+          externalResolution: {
+            label: "Verify with World",
+            commands: [
+              {
+                decision: "allow-once",
+                label: "Verify once",
+                description: "Approve this blocked action only",
+                command: "/agentkit approve plugin:agentkit-1 allow-once",
+              },
+            ],
+          },
+        },
+        60_000,
+        "plugin:agentkit-1",
+      );
+      void manager.register(record, 60_000);
+
+      const opts = createMockOptions("plugin.approval.resolveVerified", {
+        id: record.id,
+        decision: "allow-once",
+        pluginId: "agentkit",
+      });
+      await handlers["plugin.approval.resolveVerified"](opts);
+
+      expect(opts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
+      const resolvedBroadcast = broadcastCall(opts);
+      expect(resolvedBroadcast.event).toBe("plugin.approval.resolved");
+      expect(resolvedBroadcast.payload.request).toEqual(record.request);
+    });
+
+    it("resolves plugin-owned approvals from a different requester connection", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create(
+        {
+          pluginId: "agentkit",
+          title: "T",
+          description: "D",
+          allowedDecisions: ["deny"],
+          externalResolution: {
+            label: "Verify with World",
+            commands: [
+              {
+                decision: "allow-once",
+                label: "Verify once",
+                description: "Approve this blocked action only",
+                command: "/agentkit approve plugin:agentkit-cross-conn allow-once",
+              },
+            ],
+          },
+        },
+        60_000,
+        "plugin:agentkit-cross-conn",
+      );
+      record.requestedByDeviceId = "device-other";
+      record.requestedByConnId = "conn-other";
+      record.requestedByClientId = "client-other";
+      void manager.register(record, 60_000);
+
+      const opts = createMockOptions(
+        "plugin.approval.resolveVerified",
+        {
+          id: record.id,
+          decision: "allow-once",
+          pluginId: "agentkit",
+        },
+        { client: createOwnedClient() },
+      );
+      await handlers["plugin.approval.resolveVerified"](opts);
+
+      expect(opts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
+    });
+
+    it("rejects verified resolution for approvals owned by another plugin", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create(
+        { pluginId: "other", title: "T", description: "D" },
+        60_000,
+        "plugin:other-1",
+      );
+      void manager.register(record, 60_000);
+
+      const opts = createMockOptions("plugin.approval.resolveVerified", {
+        id: record.id,
+        decision: "allow-once",
+        pluginId: "agentkit",
+      });
+      await handlers["plugin.approval.resolveVerified"](opts);
+
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      const error = responseError(opts.respond as unknown as MockCallSource);
+      expect(error.message).toBe("plugin approval is not owned by the requested plugin");
+      expect(error.details).toEqual({ pluginId: "agentkit" });
+      expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
+    });
+
+    it("rejects verified resolution for decisions the request did not expose", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create(
+        {
+          pluginId: "agentkit",
+          title: "T",
+          description: "D",
+          allowedDecisions: ["deny"],
+          externalResolution: {
+            label: "Verify with World",
+            commands: [
+              {
+                decision: "allow-once",
+                label: "Verify once",
+                description: "Approve this blocked action only",
+                command: "/agentkit approve plugin:agentkit-2 allow-once",
+              },
+            ],
+          },
+        },
+        60_000,
+        "plugin:agentkit-2",
+      );
+      void manager.register(record, 60_000);
+
+      const opts = createMockOptions("plugin.approval.resolveVerified", {
+        id: record.id,
+        decision: "allow-always",
+        pluginId: "agentkit",
+      });
+      await handlers["plugin.approval.resolveVerified"](opts);
+
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      const error = responseError(opts.respond as unknown as MockCallSource);
+      expect(error.message).toBe("allow-always is unavailable for this verified plugin approval");
+      expect(error.details).toEqual({ allowedDecisions: ["allow-once"] });
+      expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
+    });
+
+    it("rejects verified resolution for the core-owned deny decision", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create(
+        {
+          pluginId: "agentkit",
+          title: "T",
+          description: "D",
+          allowedDecisions: ["deny"],
+          externalResolution: {
+            label: "Verify with World",
+            commands: [
+              {
+                decision: "allow-once",
+                label: "Verify once",
+                description: "Approve this blocked action only",
+                command: "/agentkit approve plugin:agentkit-3 allow-once",
+              },
+            ],
+          },
+        },
+        60_000,
+        "plugin:agentkit-3",
+      );
+      void manager.register(record, 60_000);
+
+      const opts = createMockOptions("plugin.approval.resolveVerified", {
+        id: record.id,
+        decision: "deny",
+        pluginId: "agentkit",
+      });
+      await handlers["plugin.approval.resolveVerified"](opts);
+
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      const error = responseError(opts.respond as unknown as MockCallSource);
+      expect(error.code).toBe("INVALID_REQUEST");
+      expect(error.message).toContain("invalid plugin.approval.resolveVerified params");
+      expect(error.message).toContain("decision");
+      expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
     });
   });
 });

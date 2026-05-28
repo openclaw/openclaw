@@ -107,6 +107,44 @@ describe("parsePluginApprovalRequested", () => {
     expect(result?.expiresAtMs).toBe(120_000);
   });
 
+  it("parses external verification commands from plugin approval payloads", () => {
+    const result = parsePluginApprovalRequested({
+      ...validPayload,
+      request: {
+        ...validPayload.request,
+        externalResolution: {
+          label: "Verify with World",
+          commands: [
+            {
+              decision: "allow-once",
+              label: "Verify once",
+              description: "Approve this blocked action only",
+              command: "/agentkit approve plugin-1 allow-once",
+            },
+            {
+              decision: "deny",
+              label: "Bad",
+              description: "Bad",
+              command: "/approve plugin-1 deny",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result?.pluginExternalResolution).toEqual({
+      label: "Verify with World",
+      commands: [
+        {
+          decision: "allow-once",
+          label: "Verify once",
+          description: "Approve this blocked action only",
+          command: "/agentkit approve plugin-1 allow-once",
+        },
+      ],
+    });
+  });
+
   it("returns null when title is missing from request", () => {
     const {
       request: { title: _, ...restRequest },
