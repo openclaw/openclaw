@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Post-checkout hook: prevent switching the default checkout away from main.
+#
+# Git post-checkout receives:
+#   $1 = previous HEAD SHA
+#   $2 = new HEAD SHA
+#   $3 = flag (1 = branch checkout, 0 = file checkout)
+#
+# This hook only acts on branch checkouts ($3 = 1).
+# It auto-reverts to main unless DEFAULT_CHECKOUT_ALLOW_SWITCH=1 is set.
+
+set -euo pipefail
+
+PREV_HEAD="${1:-}"
+NEW_HEAD="${2:-}"
+FLAG="${3:-0}"
+
+# Only act on branch checkouts, not file checkouts
+if [[ "$FLAG" != "1" ]]; then
+  exit 0
+fi
+
+# Allow bypass with explicit permission
+if [[ "${DEFAULT_CHECKOUT_ALLOW_SWITCH:-}" == "1" ]]; then
+  exit 0
+fi
+
+ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+# Check if this is a worktree (worktrees have .git as a file, not directory)
+GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo ".git")"
+if [[ -f "$GIT_DIR" ]]; then
+  # This is a worktree — switching is expected, allow it
+  exit 0
+fi
+
+BRANCH="$(git symbolic-ref --short HEAD 2>/dev/null || echo "DETACHED")"
+
+# If we're on main, nothing to do
+if [[ "$BRANCH" == "main" ]]; then
+  exit 0
+fi
+
+# We switched away from main in the default checkout — REVERT
+echo "" >&2
+echo "🚫 DEFAULT CHECKOUT SWITCH GUARD" >&2
+echo "" >&2
+echo "You just switched the default checkout to '$BRANCH'." >&2
+echo "The default checkout must stay on 'main'." >&2
+echo "" >&2
+echo "Reverting to main..." >&2
+
+# Switch back to main
+git checkout main --quiet 2>/dev/null
+
+echo "✓ Back on main." >&2
+echo "" >&2
+echo "To switch branches intentionally, use one of:" >&2
+echo "  1. Worktree:       scripts/worktree-start.sh <task-slug>" >&2
+echo "  2. Bypass:         DEFAULT_CHECKOUT_ALLOW_SWITCH=1 git checkout <branch>" >&2
+echo "" >&2
+
+exit 0
