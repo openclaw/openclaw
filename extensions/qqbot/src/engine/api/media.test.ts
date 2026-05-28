@@ -78,7 +78,6 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
         url,
         maxRedirects: 0,
-        policy: { allowRfc2544BenchmarkRange: true },
       });
       expect(tokenManager.getAccessToken).toHaveBeenCalledWith("app-id", "client-secret");
       expect(client.request).toHaveBeenCalledWith(
@@ -265,11 +264,10 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
       url: "http://93.184.216.34/assets/photo.png",
       maxRedirects: 0,
-      policy: undefined,
     });
   });
 
-  it("allows fake-IP DNS only for the guarded local download, not the QQ upload body", async () => {
+  it("does not pass URL or fake-IP DNS policy to the QQ upload body", async () => {
     const client = mockApiClient();
     const tokenManager = mockTokenManager();
     const api = new MediaApi(client, tokenManager);
@@ -285,7 +283,6 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
       url: "https://cdn.example.com/assets/photo.png",
       maxRedirects: 0,
-      policy: { allowRfc2544BenchmarkRange: true },
     });
     expect(client.request).toHaveBeenCalledWith(
       "token-1",

@@ -12,14 +12,8 @@
  */
 
 import * as fs from "node:fs";
-import * as net from "node:net";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { normalizeHostname } from "openclaw/plugin-sdk/security-runtime";
-import {
-  fetchWithSsrFGuard,
-  isBlockedHostnameOrIp,
-  type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   MediaFileType,
   type ChatScope,
@@ -27,7 +21,7 @@ import {
   type MessageResponse,
   type EngineLogger,
 } from "../types.js";
-import { getMaxUploadSize } from "../utils/file-utils.js";
+import { MAX_UPLOAD_SIZE } from "../utils/file-utils.js";
 import { ApiClient } from "./api-client.js";
 import { withRetry, UPLOAD_RETRY_POLICY } from "./retry.js";
 import { mediaUploadPath, messagePath, getNextMsgSeq } from "./routes.js";
@@ -59,19 +53,13 @@ interface MediaApiConfig {
   sanitizeFileName?: SanitizeFileNameFn;
 }
 
-function directUploadDownloadPolicy(hostname: string): SsrFPolicy | undefined {
+function assertDirectUploadDownloadHostAllowed(hostname: string): void {
   if (isBlockedHostnameOrIp(hostname)) {
     throw new Error("Blocked hostname or private/internal/special-use IP address");
   }
-
-  // The local guarded download can support fake-IP DNS, but literal IP URLs
-  // must stay on the default SSRF policy so RFC 2544 literals remain blocked.
-  return net.isIP(normalizeHostname(hostname)) === 0
-    ? { allowRfc2544BenchmarkRange: true }
-    : undefined;
 }
 
-async function downloadDirectUploadUrl(url: string, fileType: MediaFileType): Promise<Buffer> {
+async function downloadDirectUploadUrl(url: string): Promise<Buffer> {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -83,16 +71,16 @@ async function downloadDirectUploadUrl(url: string, fileType: MediaFileType): Pr
     throw new Error("Direct-upload media URL must use HTTP or HTTPS");
   }
 
+  assertDirectUploadDownloadHostAllowed(parsed.hostname);
   const { response, release } = await fetchWithSsrFGuard({
     url: parsed.toString(),
     maxRedirects: 0,
-    policy: directUploadDownloadPolicy(parsed.hostname),
   });
   try {
     if (!response.ok) {
       throw new Error(`Direct-upload media URL returned HTTP ${response.status}`);
     }
-    return await readResponseWithLimit(response, getMaxUploadSize(fileType));
+    return await readResponseWithLimit(response, MAX_UPLOAD_SIZE);
   } finally {
     await release?.();
   }
@@ -178,7 +166,7 @@ export class MediaApi {
       const buf = await fs.promises.readFile(opts.localPath);
       fileData = buf.toString("base64");
     } else if (opts.url !== undefined) {
-      const buf = await downloadDirectUploadUrl(opts.url, fileType);
+      const buf = await downloadDirectUploadUrl(opts.url);
       fileData = buf.toString("base64");
     }
 
