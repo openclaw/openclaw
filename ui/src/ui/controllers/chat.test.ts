@@ -1497,7 +1497,7 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages[0]).toBe(existing);
   });
 
-  it("deduplicates other-run final when same message is already chat tail", () => {
+  it("preserves cross-run final even when same text is already chat tail", () => {
     const existing = {
       role: "assistant",
       content: [{ type: "text", text: "Sub-agent result" }],
@@ -1518,8 +1518,10 @@ describe("handleChatEvent", () => {
         content: [{ type: "text", text: "Sub-agent result" }],
       },
     };
-    expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toHaveLength(1);
+    // Cross-run finals are always appended — the renderer collapses
+    // consecutive identical messages with duplicateCount.
+    expect(handleChatEvent(state, payload)).toBeNull();
+    expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toBe(existing);
     expect(state.chatStream).toBe("Working...");
   });

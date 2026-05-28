@@ -1260,11 +1260,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
-      if (
-        finalMessage &&
-        !shouldHideAssistantChatMessage(finalMessage) &&
-        !isTailDuplicate(state.chatMessages, finalMessage)
-      ) {
+      if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+        // Cross-run finals are always appended — a sub-agent or separate
+        // run may legitimately produce the same text as the current tail.
+        // The renderer collapses consecutive identical messages with
+        // duplicateCount instead of dropping them from state.
         state.chatMessages = [...state.chatMessages, finalMessage];
         return null;
       }
