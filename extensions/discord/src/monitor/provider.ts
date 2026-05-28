@@ -523,10 +523,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
       const scheduleVoiceAutoJoin = (label: string, delayMs: number) => {
         const startedAt = Date.now();
-        setTimeout(() => {
+        // .unref() so these fire-and-forget safety-net timers do not keep the
+        // Node event loop alive if the monitor exits before they fire.
+        const handle = setTimeout(() => {
           logger.info(
             `discord voice: ${label} autoJoin fired after ${Date.now() - startedAt}ms account=${account.accountId}`,
           );
+          // autoJoin() itself guards against destroyed/disabled managers.
           if (!voiceManager?.isEnabled()) return;
           void voiceManager
             .autoJoin()
@@ -539,6 +542,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
               );
             });
         }, delayMs);
+        handle.unref();
       };
       scheduleVoiceAutoJoin("8s", 8000);
       scheduleVoiceAutoJoin("75s", 75_000);

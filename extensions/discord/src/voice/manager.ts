@@ -221,11 +221,13 @@ function isUnknownDiscordVoiceStateError(err: unknown): boolean {
 const AUTOJOIN_READY_DELAY_MS = 6000;
 
 function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
+  // .unref() so this safety-net timer does not prevent process exit if the
+  // voice manager is torn down before the delay fires.
   setTimeout(() => {
     void manager
       .autoJoin()
       .catch((err) => logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`));
-  }, AUTOJOIN_READY_DELAY_MS);
+  }, AUTOJOIN_READY_DELAY_MS).unref();
 }
 
 function resolveVoiceConnectionGroup(accountId: string): string {
