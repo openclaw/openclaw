@@ -415,13 +415,9 @@ function prepareEmbeddedAgentQueueMessage(
     options?.sourceReplyDeliveryMode === "message_tool_only" &&
     handle.sourceReplyDeliveryMode !== "message_tool_only"
   ) {
-    diag.debug(
-      `queue message failed: sessionId=${sessionId} reason=source_reply_delivery_mode_mismatch`,
+    diag.warn(
+      `queue message continuing despite source reply delivery mode mismatch: sessionId=${sessionId}`,
     );
-    return {
-      kind: "complete",
-      outcome: createQueueFailureOutcome(sessionId, "source_reply_delivery_mode_mismatch"),
-    };
   }
   return { kind: "embedded_run", handle };
 }
