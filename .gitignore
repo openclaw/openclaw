@@ -220,3 +220,11 @@ extensions/**/.openclaw-runtime-deps-stamp.json
 # Output dir for scripts/run-opengrep.sh (local opengrep scans)
 /.opengrep-out/
 /.crabbox-artifacts
+
+# 臨時生成檔案（AI agent 產出）
+reports/
+codex-tasks/
+CODEX_TASK_*.md
+DMAD-STABILIZE-PLAN.md
+progress.md
+run-gate-refresh.bat
