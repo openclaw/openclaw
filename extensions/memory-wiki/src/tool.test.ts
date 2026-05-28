@@ -28,6 +28,7 @@ describe("memory-wiki tools", () => {
 
     expect(Object.keys(evidenceProperties).toSorted()).toEqual([
       "confidence",
+      "hash",
       "kind",
       "lines",
       "note",
