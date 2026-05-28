@@ -89,6 +89,9 @@ describe("openrouter provider hooks", () => {
   // OpenAI, Anthropic, etc.) must keep the existing passthrough policy.
   describe("OpenRouter Mistral tool_call_id strict9 (#58012)", () => {
     it.each([
+      ["unprefixed Mistral", "mistral-large-latest"],
+      ["unprefixed Codestral", "codestral-latest"],
+      ["unprefixed Devstral", "devstral-small-latest"],
       ["bare mistralai prefix", "mistralai/mistral-large-latest"],
       ["nested openrouter/mistralai", "openrouter/mistralai/mistral-small"],
       ["bare mistral provider prefix", "mistral/mistral-medium"],

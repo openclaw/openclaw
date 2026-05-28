@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-family";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { isOpenRouterMistralModelId } from "./models.js";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
@@ -92,23 +93,6 @@ export default definePluginEntry({
 
     function isOpenRouterCacheTtlModel(modelId: string): boolean {
       return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
-    }
-
-    function isOpenRouterMistralModelId(modelId: string | undefined): boolean {
-      const normalized = (modelId ?? "").trim().toLowerCase();
-      if (!normalized) {
-        return false;
-      }
-      // OpenRouter exposes Mistral-family routes as `mistralai/<model>` and a
-      // few `openrouter/mistralai/<model>` mirrors. Use a prefix match instead
-      // of an enumerated list so future Mistral models inherit the same
-      // strict9 tool_call_id contract by default.
-      return (
-        normalized.startsWith("mistralai/") ||
-        normalized.startsWith("openrouter/mistralai/") ||
-        normalized.startsWith("mistral/") ||
-        normalized.startsWith("openrouter/mistral/")
-      );
     }
 
     const passthroughReplayHook = PASSTHROUGH_GEMINI_REPLAY_HOOKS.buildReplayPolicy;
