@@ -3,6 +3,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -346,6 +348,55 @@ test("sessions.reset emits internal command hook with reason", async () => {
   expect(event.sessionKey).toBe("agent:main:main");
   expect(event.context?.commandSource).toBe("gateway:sessions.reset");
   expect(event.context?.previousSessionEntry?.sessionId).toBe("sess-main");
+});
+
+test("sessions.reset emits a single sessions.changed broadcast", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+
+  const broadcastToConnIds = vi.fn();
+  const lifecycleUnsub = onSessionLifecycleEvent(
+    createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: {
+        getAll: () => new Set(["conn-1"]),
+      },
+    }),
+  );
+
+  try {
+    const reset = await directSessionReq<{ ok: true; key: string }>(
+      "sessions.reset",
+      {
+        key: "main",
+        reason: "new",
+      },
+      {
+        context: {
+          broadcastToConnIds,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        },
+      },
+    );
+    expect(reset.ok).toBe(true);
+
+    const changedCalls = broadcastToConnIds.mock.calls.filter(
+      ([event]) => event === "sessions.changed",
+    );
+    expect(changedCalls).toHaveLength(1);
+    expect(changedCalls[0]?.[1]).toMatchObject({
+      sessionKey: "agent:main:main",
+      reason: "new",
+    });
+  } finally {
+    lifecycleUnsub();
+  }
 });
 
 test("sessions.reset emits before_reset hook with transcript context", async () => {
