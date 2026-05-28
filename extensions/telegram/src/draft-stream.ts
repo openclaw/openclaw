@@ -20,6 +20,8 @@ export type TelegramDraftStream = {
   lastDeliveredText?: () => string;
   clear: () => Promise<void>;
   stop: () => Promise<void>;
+  /** Force the next initial flush through minInitialChars. */
+  forceInitialSend?: () => void;
   /** Stop without a final flush or delete. */
   discard?: () => Promise<void>;
   /** Return the current preview message id after pending updates settle. */
@@ -117,6 +119,7 @@ export function createTelegramDraftStream(params: {
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
+  let forceInitialSend = false;
   let resetStreamToNewMessage: (options?: {
     keepFinal?: boolean;
     keepPending?: boolean;
@@ -259,7 +262,14 @@ export function createTelegramDraftStream(params: {
     }
     const sendGeneration = generation;
 
-    if (typeof streamMessageId !== "number" && minInitialChars != null && !streamState.final) {
+    const bypassMinInitialChars = forceInitialSend;
+    forceInitialSend = false;
+    if (
+      typeof streamMessageId !== "number" &&
+      minInitialChars != null &&
+      !streamState.final &&
+      !bypassMinInitialChars
+    ) {
       if (renderedText.length < minInitialChars) {
         return false;
       }
@@ -378,6 +388,9 @@ export function createTelegramDraftStream(params: {
     lastDeliveredText: () => lastDeliveredText,
     clear,
     stop,
+    forceInitialSend: () => {
+      forceInitialSend = true;
+    },
     discard,
     materialize,
     forceNewMessage,

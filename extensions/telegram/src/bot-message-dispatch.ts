@@ -30,6 +30,7 @@ import {
   formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
+  isPotentialTruncatedFinal,
   mergeChannelProgressDraftLine,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
@@ -117,6 +118,7 @@ import {
   type LaneDeliveryResult,
   type LaneName,
 } from "./lane-delivery.js";
+import type { TelegramLongTurnProgressState } from "./long-turn-progress.js";
 import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
@@ -143,8 +145,28 @@ import {
 export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 export { getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests };
 
+const ERROR_RESPONSE_FALLBACK =
+  "Something went wrong while processing your request. Please try again.";
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
+// Mirrors the private auto-reply hook without making this a public channel API.
+const INTERNAL_FOREGROUND_REPLY_FRESHNESS_POLICY_KEY = Symbol.for(
+  "openclaw.internal.foregroundReplyFreshnessPolicy",
+);
+
+type TelegramForegroundReplyFreshnessPolicy = {
+  allowSupersededDelivery?: (delivery: {
+    payload: ReplyPayload;
+    info: { kind: "tool" | "block" | "final" };
+  }) => boolean;
+  registerVisibleDeliveryMarker?: (markVisibleDelivery: (() => void) | undefined) => void;
+};
+
+type TelegramReplyOptionsWithInternalFreshness = NonNullable<
+  Parameters<TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]>[0]["replyOptions"]
+> & {
+  [INTERNAL_FOREGROUND_REPLY_FRESHNESS_POLICY_KEY]?: TelegramForegroundReplyFreshnessPolicy;
+};
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -246,6 +268,7 @@ type DispatchTelegramMessageParams = {
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
   opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
+  longTurnProgressState?: TelegramLongTurnProgressState;
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
@@ -677,6 +700,7 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   telegramDeps: injectedTelegramDeps,
   opts,
+  longTurnProgressState,
 }: DispatchTelegramMessageParams) => {
   const dispatchStartedAt = Date.now();
   const dispatchContext = resolveDispatchTelegramContext({ cfg, context });
@@ -922,8 +946,10 @@ export const dispatchTelegramMessage = async ({
   let streamToolProgressLines: Array<string | ChannelProgressDraftLine> = [];
   let lastAnswerPartialText = "";
   let activeAnswerDraftIsToolProgressOnly = false;
+  let preserveProgressDraftForFinal = false;
   function resetAnswerToolProgressDraft() {
     activeAnswerDraftIsToolProgressOnly = false;
+    preserveProgressDraftForFinal = false;
   }
   async function prepareAnswerLaneForToolProgress() {
     if (activeAnswerDraftIsToolProgressOnly) {
@@ -951,6 +977,7 @@ export const dispatchTelegramMessage = async ({
     answerLane.lastPartialText = streamText;
     answerLane.hasStreamedMessage = true;
     answerLane.finalized = false;
+    answerLane.stream.forceInitialSend?.();
     answerLane.stream.update(streamText);
     if (options?.flush) {
       await answerLane.stream.flush();
@@ -1044,6 +1071,83 @@ export const dispatchTelegramMessage = async ({
     }
     return false;
   };
+  let markLongTurnProgressPreviewVisible: (() => void) | undefined;
+  let pendingLongTurnProgressPreviewReady = false;
+  const markLongTurnProgressPreviewReadyWhenFenced = (): boolean => {
+    if (!longTurnProgressState || !pendingLongTurnProgressPreviewReady) {
+      return false;
+    }
+    if (longTurnProgressState.progressPreviewStatus() !== "requested") {
+      pendingLongTurnProgressPreviewReady = false;
+      return false;
+    }
+    if (!markLongTurnProgressPreviewVisible) {
+      return false;
+    }
+    markLongTurnProgressPreviewVisible();
+    pendingLongTurnProgressPreviewReady = false;
+    longTurnProgressState.markProgressPreviewReady();
+    return true;
+  };
+  const hasConfirmedAnswerPreviewMessage = (): boolean =>
+    typeof answerLane.stream?.messageId() === "number";
+  const waitForSettledLongTurnPreview = async (): Promise<boolean> => {
+    if (!answerLane.stream) {
+      return false;
+    }
+    if (hasConfirmedAnswerPreviewMessage()) {
+      return true;
+    }
+    if (answerLane.stream.sendMayHaveLanded?.() !== true) {
+      return false;
+    }
+    await answerLane.stream.flush();
+    return hasConfirmedAnswerPreviewMessage();
+  };
+  const materializeLongTurnProgressPreview = async (): Promise<boolean> => {
+    if (
+      !answerLane.stream ||
+      answerLane.finalized ||
+      finalAnswerDeliveryStarted ||
+      finalAnswerDelivered ||
+      isDispatchSuperseded()
+    ) {
+      return false;
+    }
+    if (await waitForSettledLongTurnPreview()) {
+      preserveProgressDraftForFinal = streamMode !== "progress";
+      return true;
+    }
+    if (answerLane.stream?.sendMayHaveLanded?.() === true) {
+      return false;
+    }
+    if (answerLane.hasStreamedMessage) {
+      answerLane.stream.forceNewMessage();
+      answerLane.lastPartialText = "";
+      answerLane.hasStreamedMessage = false;
+      answerLane.finalized = false;
+    }
+    await prepareAnswerLaneForToolProgress();
+    // Non-progress stream mode can finalize this same draft; progress mode keeps
+    // its existing separate-progress-then-final contract.
+    preserveProgressDraftForFinal = streamMode !== "progress";
+    const streamText = formatChannelProgressDraftText({
+      entry: telegramCfg,
+      lines: streamToolProgressLines,
+      seed: progressSeed,
+      formatLine: formatProgressAsMarkdownCode,
+    });
+    if (!streamText) {
+      return false;
+    }
+    answerLane.lastPartialText = streamText;
+    answerLane.hasStreamedMessage = true;
+    answerLane.finalized = false;
+    answerLane.stream.forceInitialSend?.();
+    answerLane.stream.update(streamText);
+    await answerLane.stream.flush();
+    return hasConfirmedAnswerPreviewMessage();
+  };
   let splitReasoningOnNextStream = false;
   let draftLaneEventQueue = Promise.resolve();
   const reasoningStepState = createTelegramReasoningStepState();
@@ -1059,6 +1163,32 @@ export const dispatchTelegramMessage = async ({
     });
     return draftLaneEventQueue;
   };
+  longTurnProgressState?.setCanCreateProgressPreview(
+    () =>
+      Boolean(answerLane.stream) &&
+      !answerLane.finalized &&
+      !finalAnswerDeliveryStarted &&
+      !finalAnswerDelivered &&
+      !isDispatchSuperseded(),
+  );
+  longTurnProgressState?.onProgressPreviewRequested(() => {
+    void enqueueDraftLaneEvent(async () => {
+      try {
+        const previewReady = await materializeLongTurnProgressPreview();
+        if (previewReady) {
+          pendingLongTurnProgressPreviewReady = true;
+          markLongTurnProgressPreviewReadyWhenFenced();
+        } else {
+          pendingLongTurnProgressPreviewReady = false;
+          longTurnProgressState.markProgressPreviewUnavailable();
+        }
+      } catch (err) {
+        logVerbose(`telegram: long-turn progress preview failed: ${String(err)}`);
+        pendingLongTurnProgressPreviewReady = false;
+        longTurnProgressState.markProgressPreviewUnavailable();
+      }
+    });
+  });
   type SplitLaneSegment = { lane: LaneName; update: DraftPartialTextUpdate };
   type SplitLaneSegmentsResult = {
     segments: SplitLaneSegment[];
@@ -1121,6 +1251,11 @@ export const dispatchTelegramMessage = async ({
   const rotateAnswerLaneAfterToolProgress = async () => {
     nativeToolProgressDraft?.stop();
     if (!activeAnswerDraftIsToolProgressOnly) {
+      return false;
+    }
+    if (preserveProgressDraftForFinal) {
+      resetAnswerToolProgressDraft();
+      streamToolProgressLines = [];
       return false;
     }
     await answerLane.stream?.clear();
@@ -1322,6 +1457,56 @@ export const dispatchTelegramMessage = async ({
         }
       : undefined,
   };
+  type PreviewFinalizedDeliveryRecord = {
+    content: string;
+    promptContextContent?: string;
+    messageId: number;
+  };
+  const recordPreviewFinalizedDelivery = async (
+    delivery: PreviewFinalizedDeliveryRecord,
+  ): Promise<void> => {
+    if (isDispatchSuperseded()) {
+      return;
+    }
+    (telegramDeps.emitInternalMessageSentHook ?? emitInternalMessageSentHook)({
+      sessionKeyForInternalHooks: deliveryBaseOptions.sessionKeyForInternalHooks,
+      chatId: deliveryBaseOptions.chatId,
+      accountId: deliveryBaseOptions.accountId,
+      content: delivery.content,
+      success: true,
+      messageId: delivery.messageId,
+      isGroup: deliveryBaseOptions.mirrorIsGroup,
+      groupId: deliveryBaseOptions.mirrorGroupId,
+    });
+    try {
+      await (
+        telegramDeps.recordOutboundMessageForPromptContext ?? recordOutboundMessageForPromptContext
+      )({
+        cfg,
+        account: { accountId: route.accountId },
+        chatId: deliveryBaseOptions.chatId,
+        message: { message_id: delivery.messageId },
+        messageId: delivery.messageId,
+        text: delivery.promptContextContent ?? delivery.content,
+        ...(threadSpec.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
+      });
+    } catch (error) {
+      logVerbose(
+        `telegram: failed to record streamed reply for prompt context: ${formatErrorMessage(
+          error,
+        )}`,
+      );
+    }
+    if (deliveryBaseOptions.transcriptMirror && delivery.content) {
+      void deliveryBaseOptions
+        .transcriptMirror({ text: delivery.content })
+        .catch((err: unknown) => {
+          logVerbose(
+            `telegram preview-finalized transcriptMirror failed: ${formatErrorMessage(err)}`,
+          );
+        });
+    }
+  };
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;
   let queuedFinal = false;
@@ -1329,6 +1514,48 @@ export const dispatchTelegramMessage = async ({
   let hadErrorReplyFailureOrSkip = false;
   let isFirstTurnInSession = false;
   let dispatchError: unknown;
+  let longTurnFailureFallbackHandled = false;
+  let requireLongTurnPreviewOnlyFinal = false;
+  const finalizeLongTurnFailureProgressPreview = async (): Promise<boolean> => {
+    if (
+      !longTurnProgressState?.hasProgressPreview() ||
+      !answerLane.stream ||
+      isDispatchSuperseded()
+    ) {
+      return false;
+    }
+    const stream = answerLane.stream;
+    if (!hasConfirmedAnswerPreviewMessage()) {
+      return false;
+    }
+    try {
+      const messageId = stream.messageId();
+      if (typeof messageId !== "number") {
+        return false;
+      }
+      longTurnProgressState.markFinalDeliveryStarted();
+      finalAnswerDeliveryStarted = true;
+      answerLane.lastPartialText = ERROR_RESPONSE_FALLBACK;
+      answerLane.hasStreamedMessage = true;
+      stream.update(ERROR_RESPONSE_FALLBACK);
+      await stream.stop();
+      if (stream.lastDeliveredText?.().trimEnd() !== ERROR_RESPONSE_FALLBACK) {
+        return false;
+      }
+      answerLane.finalized = true;
+      finalAnswerDelivered = true;
+      deliveryState.markDelivered();
+      await recordPreviewFinalizedDelivery({
+        content: ERROR_RESPONSE_FALLBACK,
+        promptContextContent: ERROR_RESPONSE_FALLBACK,
+        messageId,
+      });
+      return true;
+    } catch (err) {
+      logVerbose(`telegram: long-turn failure preview finalization failed: ${String(err)}`);
+      return false;
+    }
+  };
 
   try {
     const sticker = ctxPayload.Sticker;
@@ -1423,6 +1650,9 @@ export const dispatchTelegramMessage = async ({
       if (isDispatchSuperseded()) {
         return false;
       }
+      if (options?.durable) {
+        longTurnProgressState?.markFinalDeliveryStarted();
+      }
       const deliverablePayload = applyQuoteReplyTarget(payload);
       const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
       const durableDelivery = telegramDeps.deliverInboundReplyWithMessageSendContext;
@@ -1483,45 +1713,7 @@ export const dispatchTelegramMessage = async ({
       if (isDispatchSuperseded() || result.kind !== "preview-finalized") {
         return;
       }
-      (telegramDeps.emitInternalMessageSentHook ?? emitInternalMessageSentHook)({
-        sessionKeyForInternalHooks: deliveryBaseOptions.sessionKeyForInternalHooks,
-        chatId: deliveryBaseOptions.chatId,
-        accountId: deliveryBaseOptions.accountId,
-        content: result.delivery.content,
-        success: true,
-        messageId: result.delivery.messageId,
-        isGroup: deliveryBaseOptions.mirrorIsGroup,
-        groupId: deliveryBaseOptions.mirrorGroupId,
-      });
-      try {
-        await (
-          telegramDeps.recordOutboundMessageForPromptContext ??
-          recordOutboundMessageForPromptContext
-        )({
-          cfg,
-          account: { accountId: route.accountId },
-          chatId: deliveryBaseOptions.chatId,
-          message: { message_id: result.delivery.messageId },
-          messageId: result.delivery.messageId,
-          text: result.delivery.promptContextContent ?? result.delivery.content,
-          ...(threadSpec.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
-        });
-      } catch (error) {
-        logVerbose(
-          `telegram: failed to record streamed reply for prompt context: ${formatErrorMessage(
-            error,
-          )}`,
-        );
-      }
-      if (deliveryBaseOptions.transcriptMirror && result.delivery.content) {
-        void deliveryBaseOptions
-          .transcriptMirror({ text: result.delivery.content })
-          .catch((err: unknown) => {
-            logVerbose(
-              `telegram preview-finalized transcriptMirror failed: ${formatErrorMessage(err)}`,
-            );
-          });
-      }
+      await recordPreviewFinalizedDelivery(result.delivery);
     };
     const deliverLaneText = createLaneTextDeliverer({
       lanes,
@@ -1578,6 +1770,52 @@ export const dispatchTelegramMessage = async ({
         finalText: text,
         resolveCandidateText: resolveCurrentTurnTranscriptFinalText,
       });
+    const canFinalizeLongTurnProgressPreviewWithoutNewMessages = (
+      payload: ReplyPayload,
+    ): boolean => {
+      if (
+        streamMode === "progress" ||
+        payload.isError === true ||
+        !longTurnProgressState?.hasProgressPreview()
+      ) {
+        return false;
+      }
+      if (!answerLane.stream) {
+        return false;
+      }
+      if (activeAnswerDraftIsToolProgressOnly && !preserveProgressDraftForFinal) {
+        return false;
+      }
+      if (typeof answerLane.stream.messageId() !== "number") {
+        return false;
+      }
+      const text = typeof payload.text === "string" ? payload.text.trimEnd() : "";
+      if (!text.trim()) {
+        return false;
+      }
+      if (isPotentialTruncatedFinal(text)) {
+        return false;
+      }
+      const reply = resolveSendableOutboundReplyParts(payload, { text });
+      if (reply.hasMedia) {
+        return false;
+      }
+      const chunks = splitFinalTextForStream(text);
+      return chunks.length === 1 && (chunks[0]?.length ?? 0) <= draftMaxChars;
+    };
+    const allowLongTurnSupersededFinalDelivery = (params: {
+      payload: ReplyPayload;
+      info: { kind: "block" | "final" | "tool" };
+    }): boolean => {
+      const allowed =
+        params.info.kind === "final" &&
+        canFinalizeLongTurnProgressPreviewWithoutNewMessages(params.payload) &&
+        !replyAbortController.signal.aborted;
+      if (allowed) {
+        requireLongTurnPreviewOnlyFinal = true;
+      }
+      return allowed;
+    };
 
     if (isDmTopic) {
       try {
@@ -1704,9 +1942,19 @@ export const dispatchTelegramMessage = async ({
                       text: string,
                       buttons?: TelegramInlineButtons,
                     ) => {
+                      longTurnProgressState?.markFinalDeliveryStarted();
                       const finalText = await resolveTranscriptBackedFinalText(text);
                       if (streamMode === "progress") {
                         return deliverProgressModeFinalAnswer(answerPayload, finalText);
+                      }
+                      const requireExistingPreviewFinalization = requireLongTurnPreviewOnlyFinal;
+                      requireLongTurnPreviewOnlyFinal = false;
+                      const finalPayload = applyTextToPayload(answerPayload, finalText);
+                      if (
+                        requireExistingPreviewFinalization &&
+                        !canFinalizeLongTurnProgressPreviewWithoutNewMessages(finalPayload)
+                      ) {
+                        return { kind: "skipped" } satisfies LaneDeliveryResult;
                       }
                       await rotateAnswerLaneAfterToolProgress();
                       const result = await deliverLaneText({
@@ -1715,6 +1963,7 @@ export const dispatchTelegramMessage = async ({
                         payload: answerPayload,
                         infoKind: "final",
                         buttons,
+                        requireExistingPreviewFinalization,
                       });
                       if (result.kind !== "skipped") {
                         finalAnswerDelivered = true;
@@ -1901,6 +2150,17 @@ export const dispatchTelegramMessage = async ({
                   },
                 },
                 replyOptions: {
+                  ...(longTurnProgressState
+                    ? {
+                        [INTERNAL_FOREGROUND_REPLY_FRESHNESS_POLICY_KEY]: {
+                          registerVisibleDeliveryMarker: (markVisibleDelivery) => {
+                            markLongTurnProgressPreviewVisible = markVisibleDelivery;
+                            markLongTurnProgressPreviewReadyWhenFenced();
+                          },
+                          allowSupersededDelivery: allowLongTurnSupersededFinalDelivery,
+                        },
+                      }
+                    : {}),
                   skillFilter,
                   disableBlockStreaming,
                   abortSignal: replyAbortController.signal,
@@ -2073,7 +2333,7 @@ export const dispatchTelegramMessage = async ({
                       }
                     : undefined,
                   onModelSelected,
-                },
+                } satisfies TelegramReplyOptionsWithInternalFreshness,
               });
             },
           }),
@@ -2088,6 +2348,7 @@ export const dispatchTelegramMessage = async ({
     } catch (err) {
       dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+      longTurnFailureFallbackHandled = await finalizeLongTurnFailureProgressPreview();
     } finally {
       progressDraftGate.cancel();
       await draftLaneEventQueue;
@@ -2153,13 +2414,12 @@ export const dispatchTelegramMessage = async ({
   const deliverySummary = deliveryState.snapshot();
   const shouldSendFailureFallback =
     !isRoomEvent &&
+    !longTurnFailureFallbackHandled &&
     (dispatchError ||
       (!deliverySummary.delivered &&
         (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)));
   if (shouldSendFailureFallback) {
-    const fallbackText = dispatchError
-      ? "Something went wrong while processing your request. Please try again."
-      : EMPTY_RESPONSE_FALLBACK;
+    const fallbackText = dispatchError ? ERROR_RESPONSE_FALLBACK : EMPTY_RESPONSE_FALLBACK;
     const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
       replies: [{ text: fallbackText }],
       ...deliveryBaseOptions,

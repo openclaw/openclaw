@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import { TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS } from "./long-turn-progress.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
 const dispatchTelegramMessage = vi.hoisted(() => vi.fn());
@@ -38,7 +39,7 @@ describe("telegram bot message processor", () => {
 
   beforeEach(() => {
     buildTelegramMessageContext.mockClear();
-    dispatchTelegramMessage.mockClear();
+    dispatchTelegramMessage.mockReset();
     telegramInboundInfo.mockClear();
     upsertChannelPairingRequest.mockClear();
   });
@@ -164,6 +165,210 @@ describe("telegram bot message processor", () => {
     expect(onDispatchStart.mock.invocationCallOrder[0]).toBeLessThan(
       dispatchTelegramMessage.mock.invocationCallOrder[0],
     );
+  });
+
+  it("detaches long-running direct turns after the normal progress preview is visible", async () => {
+    vi.useFakeTimers();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    let resolveDispatch: (() => void) | undefined;
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        threadSpec: { id: 456, scope: "dm" },
+      }),
+    );
+    dispatchTelegramMessage.mockImplementation((params) => {
+      (
+        params as {
+          longTurnProgressState?: {
+            onProgressPreviewRequested: (listener: () => void) => void;
+            markProgressPreviewReady: () => void;
+          };
+        }
+      ).longTurnProgressState?.onProgressPreviewRequested(() => {
+        (
+          params as {
+            longTurnProgressState?: { markProgressPreviewReady: () => void };
+          }
+        ).longTurnProgressState?.markProgressPreviewReady();
+      });
+      return new Promise<void>((resolve) => {
+        resolveDispatch = resolve;
+      });
+    });
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    try {
+      const processPromise = processSampleMessage(processMessage);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS);
+      await expect(processPromise).resolves.toBe(true);
+
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+
+      resolveDispatch?.();
+      await Promise.resolve();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps waiting when the progress preview surface is unavailable", async () => {
+    vi.useFakeTimers();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    let resolveDispatch: (() => void) | undefined;
+    let processResolved = false;
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        threadSpec: { id: 456, scope: "dm" },
+      }),
+    );
+    dispatchTelegramMessage.mockImplementation((params) => {
+      (
+        params as {
+          longTurnProgressState?: {
+            onProgressPreviewRequested: (listener: () => void) => void;
+            markProgressPreviewUnavailable: () => void;
+          };
+        }
+      ).longTurnProgressState?.onProgressPreviewRequested(() => {
+        (
+          params as {
+            longTurnProgressState?: { markProgressPreviewUnavailable: () => void };
+          }
+        ).longTurnProgressState?.markProgressPreviewUnavailable();
+      });
+      return new Promise<void>((resolve) => {
+        resolveDispatch = resolve;
+      });
+    });
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    try {
+      const processPromise = processSampleMessage(processMessage).then((result) => {
+        processResolved = true;
+        return result;
+      });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS);
+
+      expect(processResolved).toBe(false);
+      expect(sendMessage).not.toHaveBeenCalled();
+
+      resolveDispatch?.();
+      await expect(processPromise).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not detach group turns before visible reply eligibility is known", async () => {
+    vi.useFakeTimers();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    let resolveDispatch: (() => void) | undefined;
+    let processResolved = false;
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        isGroup: true,
+        threadSpec: { id: undefined, scope: "none" },
+        ctxPayload: {
+          From: "telegram:group:-100",
+          To: "@openclaw_bot",
+          ChatType: "group",
+          RawBody: "@bot think for a while",
+        },
+      }),
+    );
+    dispatchTelegramMessage.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveDispatch = resolve;
+      }),
+    );
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    try {
+      const processPromise = processSampleMessage(processMessage).then((result) => {
+        processResolved = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS);
+
+      expect(processResolved).toBe(false);
+      expect(sendMessage).not.toHaveBeenCalled();
+
+      resolveDispatch?.();
+      await expect(processPromise).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("logs detached dispatch failures without posting unfenced fallback messages", async () => {
+    vi.useFakeTimers();
+    let rejectDispatch: ((error: unknown) => void) | undefined;
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    let resolveFailureLogged: (() => void) | undefined;
+    const failureLogged = new Promise<void>((resolve) => {
+      resolveFailureLogged = resolve;
+    });
+    const runtimeError = vi.fn(() => {
+      resolveFailureLogged?.();
+    });
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        threadSpec: { id: 456, scope: "dm" },
+      }),
+    );
+    dispatchTelegramMessage.mockImplementation((params) => {
+      (
+        params as {
+          longTurnProgressState?: {
+            onProgressPreviewRequested: (listener: () => void) => void;
+            markProgressPreviewReady: () => void;
+          };
+        }
+      ).longTurnProgressState?.onProgressPreviewRequested(() => {
+        (
+          params as {
+            longTurnProgressState?: { markProgressPreviewReady: () => void };
+          }
+        ).longTurnProgressState?.markProgressPreviewReady();
+      });
+      return new Promise<void>((_resolve, reject) => {
+        rejectDispatch = reject;
+      });
+    });
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+      runtime: { error: runtimeError },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+
+    try {
+      const processPromise = processSampleMessage(processMessage);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(TELEGRAM_LONG_TURN_SOFT_DEADLINE_MS);
+      await expect(processPromise).resolves.toBe(true);
+
+      rejectDispatch?.(new Error("provider down"));
+      await failureLogged;
+
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(runtimeError).toHaveBeenCalledWith(
+        "telegram detached dispatch failed: Error: provider down",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not run the dispatch-start lifecycle when no context is produced", async () => {

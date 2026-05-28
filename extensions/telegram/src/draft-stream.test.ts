@@ -631,6 +631,23 @@ describe("draft stream initial message debounce", () => {
       expect(api.sendMessage).not.toHaveBeenCalled();
     });
 
+    it("can force a short first message through the threshold once", async () => {
+      const api = createMockApi();
+      const stream = createDebouncedStream(api);
+
+      stream.forceInitialSend?.();
+      stream.update("Working");
+      await stream.flush();
+
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Working", undefined);
+
+      stream.forceNewMessage();
+      stream.update("Short");
+      await stream.flush();
+
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    });
+
     it("does not send a first message when discard() supersedes a short partial", async () => {
       const api = createMockApi();
       const stream = createDebouncedStream(api);

@@ -8,6 +8,7 @@ import {
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
 import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
+import { createTelegramLongTurnProgressState } from "./long-turn-progress.js";
 import {
   buildTelegramConversationContext,
   createTelegramMessageCache,
@@ -18,6 +19,17 @@ import { recordOutboundMessageForPromptContext as recordOutboundMessageForPrompt
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
 >[0];
+type ForegroundFreshnessPolicyForTest = {
+  allowSupersededDelivery?: (delivery: {
+    payload: { text?: string; isError?: boolean; mediaUrl?: string };
+    info: { kind: "block" | "final" | "tool" };
+  }) => boolean;
+  registerVisibleDeliveryMarker?: (markVisibleDelivery: (() => void) | undefined) => void;
+};
+
+const foregroundReplyFreshnessPolicyKey = Symbol.for(
+  "openclaw.internal.foregroundReplyFreshnessPolicy",
+);
 
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const createNativeTelegramToolProgressDraft = vi.hoisted(() => vi.fn());
@@ -364,6 +376,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
     return expectRecordFields(mockCallArg(dispatchReplyWithBufferedBlockDispatcher), expected);
   }
 
+  function readForegroundFreshnessPolicy(
+    replyOptions: DispatchReplyWithBufferedBlockDispatcherArgs["replyOptions"],
+  ): ForegroundFreshnessPolicyForTest | undefined {
+    return (
+      replyOptions as Record<symbol, ForegroundFreshnessPolicyForTest | undefined> | undefined
+    )?.[foregroundReplyFreshnessPolicyKey];
+  }
+
   function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {
     const base = {
       ctxPayload: {},
@@ -482,6 +502,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     bot?: Bot;
     replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
     textLimit?: number;
+    longTurnProgressState?: Parameters<typeof dispatchTelegramMessage>[0]["longTurnProgressState"];
   }) {
     const bot = params.bot ?? createBot();
     await dispatchTelegramMessage({
@@ -495,6 +516,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: params.telegramCfg ?? {},
       telegramDeps: params.telegramDeps ?? telegramDepsForTest,
       opts: { token: "token" },
+      ...(params.longTurnProgressState
+        ? { longTurnProgressState: params.longTurnProgressState }
+        : {}),
     });
   }
 
@@ -554,6 +578,492 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expectRecordFields(dispatchParams.replyOptions, { disableBlockStreaming: true });
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("materializes a long-turn progress preview and finalizes the same draft", async () => {
+    const longTurnProgressState = createTelegramLongTurnProgressState();
+    const draftStream = createSequencedDraftStream(2001);
+    const markVisiblePreview = vi.fn();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        readForegroundFreshnessPolicy(replyOptions)?.registerVisibleDeliveryMarker?.(
+          markVisiblePreview,
+        );
+        longTurnProgressState.requestProgressPreview();
+        await expect(longTurnProgressState.waitForProgressPreview()).resolves.toBe("ready");
+        const freshnessPolicy = readForegroundFreshnessPolicy(replyOptions);
+        expect(
+          freshnessPolicy?.allowSupersededDelivery?.({
+            payload: { text: "final answer" },
+            info: { kind: "final" },
+          }),
+        ).toBe(true);
+        expect(
+          freshnessPolicy?.allowSupersededDelivery?.({
+            payload: { text: "final answer" },
+            info: { kind: "tool" },
+          }),
+        ).toBe(false);
+        expect(
+          freshnessPolicy?.allowSupersededDelivery?.({
+            payload: { text: "final answer", mediaUrl: "file:///tmp/final.png" },
+            info: { kind: "final" },
+          }),
+        ).toBe(false);
+        expect(
+          freshnessPolicy?.allowSupersededDelivery?.({
+            payload: { text: "x".repeat(5000) },
+            info: { kind: "final" },
+          }),
+        ).toBe(false);
+        expect(
+          freshnessPolicy?.allowSupersededDelivery?.({
+            payload: { text: `${"x".repeat(60)}...` },
+            info: { kind: "final" },
+          }),
+        ).toBe(false);
+        await dispatcherOptions.deliver({ text: "final answer" }, { kind: "final" });
+        return {
+          queuedFinal: true,
+          counts: { block: 0, final: 1, tool: 0 },
+        };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      telegramCfg: { streaming: { progress: { label: "Working" } } },
+      longTurnProgressState,
+    });
+
+    expect(longTurnProgressState.hasProgressPreview()).toBe(true);
+    expect(markVisiblePreview).toHaveBeenCalledTimes(1);
+    expect(draftStream.update.mock.calls[0]?.[0]).toBe("Working");
+    expect(draftStream.update).toHaveBeenLastCalledWith("final answer");
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("waits for the foreground freshness marker before reporting long-turn preview readiness", async () => {
+    const longTurnProgressState = createTelegramLongTurnProgressState();
+    const draftStream = createSequencedDraftStream(2001);
+    const markVisiblePreview = vi.fn();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      longTurnProgressState.requestProgressPreview();
+      const previewWait = longTurnProgressState.waitForProgressPreview();
+      let previewResolved = false;
+      void previewWait.then(() => {
+        previewResolved = true;
+      });
+      await vi.waitFor(() => expect(draftStream.update).toHaveBeenCalledWith("Working"));
+      await Promise.resolve();
+      expect(previewResolved).toBe(false);
+      readForegroundFreshnessPolicy(replyOptions)?.registerVisibleDeliveryMarker?.(
+        markVisiblePreview,
+      );
+      await expect(previewWait).resolves.toBe("ready");
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+      };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      telegramCfg: { streaming: { progress: { label: "Working" } } },
+      longTurnProgressState,
+    });
+
+    expect(longTurnProgressState.hasProgressPreview()).toBe(true);
+    expect(markVisiblePreview).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send a stale fallback final when superseded progress preview finalization misses", async () => {
+    const longTurnProgressState = createTelegramLongTurnProgressState();
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        readForegroundFreshnessPolicy(replyOptions)?.registerVisibleDeliveryMarker?.(vi.fn());
+        longTurnProgressState.requestProgressPreview();
+        await expect(longTurnProgressState.waitForProgressPreview()).resolves.toBe("ready");
+        const freshnessPolicy = readForegroundFreshnessPolicy(replyOptions);
+        expect(
+          freshnessPolicy?.allowSupersededDelivery?.({
+            payload: { text: "final answer" },
+            info: { kind: "final" },
+          }),
+        ).toBe(true);
+        draftStream.lastDeliveredText.mockReturnValue("Working");
+        await dispatcherOptions.deliver({ text: "final answer" }, { kind: "final" });
+        return {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+        };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      telegramCfg: { streaming: { progress: { label: "Working" } } },
+      longTurnProgressState,
+    });
+
+    expect(longTurnProgressState.hasProgressPreview()).toBe(true);
+    expect(draftStream.update.mock.calls[0]?.[0]).toBe("Working");
+    expect(draftStream.update).toHaveBeenLastCalledWith("final answer");
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("finalizes a long-turn progress preview with an error instead of sending a separate fallback", async () => {
+    const longTurnProgressState = createTelegramLongTurnProgressState();
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    const context = createContext({
+      ctxPayload: createDirectSessionPayload(),
+    });
+    loadSessionStore.mockReturnValue({
+      "agent:test:telegram:direct:123": { sessionId: "s1" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      readForegroundFreshnessPolicy(replyOptions)?.registerVisibleDeliveryMarker?.(vi.fn());
+      longTurnProgressState.requestProgressPreview();
+      await expect(longTurnProgressState.waitForProgressPreview()).resolves.toBe("ready");
+      throw new Error("provider down");
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context,
+      telegramCfg: { streaming: { progress: { label: "Working" } } },
+      longTurnProgressState,
+    });
+
+    expect(draftStream.update.mock.calls[0]?.[0]).toBe("Working");
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      "Something went wrong while processing your request. Please try again.",
+    );
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+      content: "Something went wrong while processing your request. Please try again.",
+      messageId: 2001,
+    });
+    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      chatId: "123",
+      messageId: 2001,
+      text: "Something went wrong while processing your request. Please try again.",
+      messageThreadId: 777,
+    });
+    await vi.waitFor(() => expect(appendSessionTranscriptMessage).toHaveBeenCalledTimes(1));
+    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
+      transcriptPath: "/tmp/session.jsonl",
+    });
+    expectRecordFields(transcriptCall.message, {
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [
+        {
+          type: "text",
+          text: "Something went wrong while processing your request. Please try again.",
+        },
+      ],
+    });
+  });
+
+  it("uses normal failure fallback when long-turn error preview edit is not delivered", async () => {
+    const longTurnProgressState = createTelegramLongTurnProgressState();
+    const draftStream = createSequencedDraftStream(2001);
+    draftStream.lastDeliveredText.mockReturnValue("Working");
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      readForegroundFreshnessPolicy(replyOptions)?.registerVisibleDeliveryMarker?.(vi.fn());
+      longTurnProgressState.requestProgressPreview();
+      await expect(longTurnProgressState.waitForProgressPreview()).resolves.toBe("ready");
+      throw new Error("provider down");
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      telegramCfg: { streaming: { progress: { label: "Working" } } },
+      longTurnProgressState,
+    });
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      "Something went wrong while processing your request. Please try again.",
+    );
+    expectDeliveredReply(0, {
+      text: "Something went wrong while processing your request. Please try again.",
+    });
+  });
+
+  it("uses normal failure fallback when long-turn progress has no confirmed preview message", async () => {
+    const longTurnProgressState = createTelegramLongTurnProgressState();
+    const draftStream = createTestDraftStream();
+    draftStream.sendMayHaveLanded.mockReturnValue(true);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async () => {
+      longTurnProgressState.requestProgressPreview();
+      await expect(longTurnProgressState.waitForProgressPreview()).resolves.toBe("unavailable");
+      throw new Error("provider down");
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      telegramCfg: { streaming: { progress: { label: "Working" } } },
+      longTurnProgressState,
+    });
+
+    expect(longTurnProgressState.hasProgressPreview()).toBe(false);
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expectDeliveredReply(0, {
+      text: "Something went wrong while processing your request. Please try again.",
+    });
+  });
+
+  it("waits for in-flight long-turn preview sends before reporting progress readiness", async () => {
+    const longTurnProgressState = createTelegramLongTurnProgressState();
+    let releaseFlush!: () => void;
+    let flushStarted!: () => void;
+    const flushStartedPromise = new Promise<void>((resolve) => {
+      flushStarted = resolve;
+    });
+    const flushReleasePromise = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+    const draftStream = createTestDraftStream();
+    draftStream.sendMayHaveLanded.mockReturnValue(true);
+    draftStream.flush.mockImplementation(async () => {
+      flushStarted();
+      await flushReleasePromise;
+      draftStream.setMessageId(2001);
+      draftStream.sendMayHaveLanded.mockReturnValue(false);
+    });
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      readForegroundFreshnessPolicy(replyOptions)?.registerVisibleDeliveryMarker?.(vi.fn());
+      longTurnProgressState.requestProgressPreview();
+      const waitForPreview = longTurnProgressState.waitForProgressPreview();
+      await flushStartedPromise;
+      let resolved = false;
+      void waitForPreview.then(() => {
+        resolved = true;
+      });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+      releaseFlush();
+      await expect(waitForPreview).resolves.toBe("ready");
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+      };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      telegramCfg: { streaming: { progress: { label: "Working" } } },
+      longTurnProgressState,
+    });
+
+    expect(longTurnProgressState.hasProgressPreview()).toBe(true);
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).not.toHaveBeenCalledWith("Working");
+  });
+
+  it("preserves already-visible tool progress previews before detaching", async () => {
+    const longTurnProgressState = createTelegramLongTurnProgressState();
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        expect(draftStream.messageId()).toBe(2001);
+        readForegroundFreshnessPolicy(replyOptions)?.registerVisibleDeliveryMarker?.(vi.fn());
+        longTurnProgressState.requestProgressPreview();
+        await expect(longTurnProgressState.waitForProgressPreview()).resolves.toBe("ready");
+        const freshnessPolicy = readForegroundFreshnessPolicy(replyOptions);
+        expect(
+          freshnessPolicy?.allowSupersededDelivery?.({
+            payload: { text: "final answer" },
+            info: { kind: "final" },
+          }),
+        ).toBe(true);
+        await dispatcherOptions.deliver({ text: "final answer" }, { kind: "final" });
+        return {
+          queuedFinal: true,
+          counts: { block: 0, final: 1, tool: 0 },
+        };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+      longTurnProgressState,
+    });
+
+    expect(longTurnProgressState.hasProgressPreview()).toBe(true);
+    expect(draftStream.update.mock.calls[0]?.[0]).toContain("Exec");
+    expect(draftStream.update).toHaveBeenLastCalledWith("final answer");
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not bypass freshness for ambiguous long-turn previews without a message id", async () => {
+    const longTurnProgressState = createTelegramLongTurnProgressState();
+    const draftStream = createTestDraftStream();
+    draftStream.sendMayHaveLanded.mockReturnValue(true);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      longTurnProgressState.requestProgressPreview();
+      await expect(longTurnProgressState.waitForProgressPreview()).resolves.toBe("unavailable");
+      const freshnessPolicy = readForegroundFreshnessPolicy(replyOptions);
+      expect(
+        freshnessPolicy?.allowSupersededDelivery?.({
+          payload: { text: "final answer" },
+          info: { kind: "final" },
+        }),
+      ).toBe(false);
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+      };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      telegramCfg: { streaming: { progress: { label: "Working" } } },
+      longTurnProgressState,
+    });
+
+    expect(longTurnProgressState.hasProgressPreview()).toBe(false);
+    expect(draftStream.messageId()).toBeUndefined();
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+  });
+
+  it("replaces unsent partial answer drafts when materializing a long-turn progress preview", async () => {
+    const longTurnProgressState = createTelegramLongTurnProgressState();
+    const draftUpdates: string[] = [];
+    const draftEvents: string[] = [];
+    let draftStream!: ReturnType<typeof createTestDraftStream>;
+    draftStream = createTestDraftStream({
+      onUpdate: (text) => {
+        draftUpdates.push(text);
+        draftEvents.push(`update:${text}`);
+        if (text === "Working") {
+          draftStream.setMessageId(2001);
+        }
+      },
+    });
+    const forceNewMessage = draftStream.forceNewMessage.getMockImplementation();
+    draftStream.forceNewMessage.mockImplementation(() => {
+      draftEvents.push("force-new");
+      forceNewMessage?.();
+    });
+    const stop = draftStream.stop.getMockImplementation();
+    draftStream.stop.mockImplementation(async () => {
+      draftEvents.push("stop");
+      await stop?.();
+    });
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Hi" });
+        expect(draftStream.messageId()).toBeUndefined();
+        readForegroundFreshnessPolicy(replyOptions)?.registerVisibleDeliveryMarker?.(vi.fn());
+        longTurnProgressState.requestProgressPreview();
+        await expect(longTurnProgressState.waitForProgressPreview()).resolves.toBe("ready");
+        await replyOptions?.onPartialReply?.({ text: "Hi there" });
+        await dispatcherOptions.deliver({ text: "Hi there final" }, { kind: "final" });
+        return {
+          queuedFinal: true,
+          counts: { block: 0, final: 1, tool: 0 },
+        };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      telegramCfg: { streaming: { progress: { label: "Working" } } },
+      longTurnProgressState,
+    });
+
+    expect(longTurnProgressState.hasProgressPreview()).toBe(true);
+    expect(draftStream.forceInitialSend).toHaveBeenCalledTimes(1);
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(draftEvents.slice(0, 3)).toEqual(["update:Hi", "force-new", "update:Working"]);
+    const progressPreviewIndex = draftEvents.indexOf("update:Working");
+    const firstStopIndex = draftEvents.indexOf("stop");
+    expect(firstStopIndex === -1 || firstStopIndex > progressPreviewIndex).toBe(true);
+    expect(draftUpdates).toEqual(["Hi", "Working", "Hi there", "Hi there final"]);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("clears long-turn progress previews before separate progress-mode final delivery", async () => {
+    const longTurnProgressState = createTelegramLongTurnProgressState();
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        readForegroundFreshnessPolicy(replyOptions)?.registerVisibleDeliveryMarker?.(vi.fn());
+        longTurnProgressState.requestProgressPreview();
+        await expect(longTurnProgressState.waitForProgressPreview()).resolves.toBe("ready");
+        const freshnessPolicy = readForegroundFreshnessPolicy(replyOptions);
+        expect(
+          freshnessPolicy?.allowSupersededDelivery?.({
+            payload: { text: "final answer" },
+            info: { kind: "final" },
+          }),
+        ).toBe(false);
+        await dispatcherOptions.deliver({ text: "final answer" }, { kind: "final" });
+        return {
+          queuedFinal: true,
+          counts: { block: 0, final: 1, tool: 0 },
+        };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "progress",
+      telegramCfg: { streaming: { progress: { label: "Working" } } },
+      longTurnProgressState,
+    });
+
+    expect(longTurnProgressState.hasProgressPreview()).toBe(true);
+    expect(draftStream.update.mock.calls[0]?.[0]).toBe("Working");
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).not.toHaveBeenLastCalledWith("final answer");
+    expectDeliveredReply(0, { text: "final answer" });
   });
 
   it("recovers forum thread context from a topic-scoped session key", async () => {

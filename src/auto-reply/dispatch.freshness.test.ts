@@ -5,7 +5,7 @@ import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { ReplyDispatchBeforeDeliver } from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
-import type { ReplyPayload } from "./types.js";
+import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 type DispatchReplyFromConfigFn =
   typeof import("./reply/dispatch-from-config.js").dispatchReplyFromConfig;
@@ -65,6 +65,7 @@ function dispatchWithDeliveries(
     deliver?: (payload: ReplyPayload, info: { kind: Delivery["kind"] }) => Promise<object | void>;
     onSettled?: () => object | void | Promise<object | void>;
     onFreshSettledDelivery?: () => object | void | Promise<object | void>;
+    replyOptions?: Omit<GetReplyOptions, "onBlockReply"> & Record<PropertyKey, unknown>;
   } = {},
 ) {
   return dispatchInboundMessageWithBufferedDispatcher({
@@ -78,6 +79,7 @@ function dispatchWithDeliveries(
           deliveries.push({ kind: info.kind, text: payload.text });
         }),
     },
+    replyOptions: dispatcherOptions.replyOptions,
   });
 }
 
@@ -130,6 +132,259 @@ describe("foreground reply freshness", () => {
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
     });
+    expect(olderResult).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(deliveries).toEqual([{ kind: "final", text: "new final" }]);
+  });
+
+  it("allows channel-owned preview finalization after a newer visible delivery", async () => {
+    const deliveries: Delivery[] = [];
+    const olderStarted = createDeferred<void>();
+    const releaseOlderFinal = createDeferred<void>();
+    const foregroundFreshnessPolicyKey = Symbol.for(
+      "openclaw.internal.foregroundReplyFreshnessPolicy",
+    );
+
+    hoisted.dispatchReplyFromConfigMock.mockImplementation(
+      async (params: DispatchReplyFromConfigParams) => {
+        if (params.ctx.MessageSid === "old-message") {
+          olderStarted.resolve();
+          await releaseOlderFinal.promise;
+          params.dispatcher.sendFinalReply({ text: "old final" });
+          return queuedFinalResult();
+        }
+        if (params.ctx.MessageSid === "new-message") {
+          params.dispatcher.sendFinalReply({ text: "new final" });
+          return queuedFinalResult();
+        }
+        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
+      },
+    );
+
+    const olderDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "old-message" }),
+      deliveries,
+      {
+        replyOptions: {
+          [foregroundFreshnessPolicyKey]: {
+            allowSupersededDelivery: () => true,
+          },
+        },
+      },
+    );
+    await olderStarted.promise;
+
+    await dispatchWithDeliveries(buildForegroundCtx({ MessageSid: "new-message" }), deliveries);
+
+    releaseOlderFinal.resolve();
+    const olderResult = await olderDispatch;
+
+    expect(olderResult).toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    expect(deliveries).toEqual([
+      { kind: "final", text: "new final" },
+      { kind: "final", text: "old final" },
+    ]);
+  });
+
+  it("waits for newer active foreground replies before allowing channel-owned preview finalization", async () => {
+    const deliveries: Delivery[] = [];
+    const olderStarted = createDeferred<void>();
+    const releaseOlderFinal = createDeferred<void>();
+    const newerStarted = createDeferred<void>();
+    const releaseNewerFinal = createDeferred<void>();
+    const foregroundFreshnessPolicyKey = Symbol.for(
+      "openclaw.internal.foregroundReplyFreshnessPolicy",
+    );
+
+    hoisted.dispatchReplyFromConfigMock.mockImplementation(
+      async (params: DispatchReplyFromConfigParams) => {
+        if (params.ctx.MessageSid === "old-message") {
+          olderStarted.resolve();
+          await releaseOlderFinal.promise;
+          params.dispatcher.sendFinalReply({ text: "old final" });
+          return queuedFinalResult();
+        }
+        if (params.ctx.MessageSid === "new-message") {
+          newerStarted.resolve();
+          await releaseNewerFinal.promise;
+          params.dispatcher.sendFinalReply({ text: "new final" });
+          return queuedFinalResult();
+        }
+        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
+      },
+    );
+
+    const olderDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "old-message" }),
+      deliveries,
+      {
+        replyOptions: {
+          [foregroundFreshnessPolicyKey]: {
+            allowSupersededDelivery: () => true,
+          },
+        },
+      },
+    );
+    await olderStarted.promise;
+
+    const newerDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "new-message" }),
+      deliveries,
+    );
+    await newerStarted.promise;
+
+    let olderSettled = false;
+    const watchedOlderDispatch = olderDispatch.then((result) => {
+      olderSettled = true;
+      return result;
+    });
+    releaseOlderFinal.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(olderSettled).toBe(false);
+    expect(deliveries).toEqual([]);
+
+    releaseNewerFinal.resolve();
+    await newerDispatch;
+    const olderResult = await watchedOlderDispatch;
+
+    expect(olderResult).toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    expect(deliveries).toEqual([
+      { kind: "final", text: "new final" },
+      { kind: "final", text: "old final" },
+    ]);
+  });
+
+  it("lets a channel-owned visible preview marker release older preview finalization while newer turns remain active", async () => {
+    const deliveries: Delivery[] = [];
+    const olderStarted = createDeferred<void>();
+    const releaseOlderFinal = createDeferred<void>();
+    const newerStarted = createDeferred<void>();
+    const releaseNewerFinal = createDeferred<void>();
+    const foregroundFreshnessPolicyKey = Symbol.for(
+      "openclaw.internal.foregroundReplyFreshnessPolicy",
+    );
+    let markNewerPreviewVisible: (() => void) | undefined;
+
+    hoisted.dispatchReplyFromConfigMock.mockImplementation(
+      async (params: DispatchReplyFromConfigParams) => {
+        if (params.ctx.MessageSid === "old-message") {
+          olderStarted.resolve();
+          await releaseOlderFinal.promise;
+          params.dispatcher.sendFinalReply({ text: "old final" });
+          return queuedFinalResult();
+        }
+        if (params.ctx.MessageSid === "new-message") {
+          newerStarted.resolve();
+          await releaseNewerFinal.promise;
+          params.dispatcher.sendFinalReply({ text: "new final" });
+          return queuedFinalResult();
+        }
+        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
+      },
+    );
+
+    const olderDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "old-message" }),
+      deliveries,
+      {
+        replyOptions: {
+          [foregroundFreshnessPolicyKey]: {
+            allowSupersededDelivery: () => true,
+          },
+        },
+      },
+    );
+    await olderStarted.promise;
+
+    const newerDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "new-message" }),
+      deliveries,
+      {
+        replyOptions: {
+          [foregroundFreshnessPolicyKey]: {
+            registerVisibleDeliveryMarker: (markVisibleDelivery: (() => void) | undefined) => {
+              markNewerPreviewVisible = markVisibleDelivery;
+            },
+          },
+        },
+      },
+    );
+    await newerStarted.promise;
+    expect(markNewerPreviewVisible).toBeTypeOf("function");
+
+    markNewerPreviewVisible?.();
+    releaseOlderFinal.resolve();
+    const olderResult = await olderDispatch;
+
+    expect(olderResult).toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    expect(deliveries).toEqual([{ kind: "final", text: "old final" }]);
+
+    releaseNewerFinal.resolve();
+    await newerDispatch;
+    expect(deliveries).toEqual([
+      { kind: "final", text: "old final" },
+      { kind: "final", text: "new final" },
+    ]);
+  });
+
+  it("does not apply channel-owned preview freshness to stale block deliveries", async () => {
+    const deliveries: Delivery[] = [];
+    const olderStarted = createDeferred<void>();
+    const releaseOlderBlock = createDeferred<void>();
+    const foregroundFreshnessPolicyKey = Symbol.for(
+      "openclaw.internal.foregroundReplyFreshnessPolicy",
+    );
+
+    hoisted.dispatchReplyFromConfigMock.mockImplementation(
+      async (params: DispatchReplyFromConfigParams) => {
+        if (params.ctx.MessageSid === "old-message") {
+          olderStarted.resolve();
+          await releaseOlderBlock.promise;
+          params.dispatcher.sendBlockReply({ text: "old block" });
+          return {
+            queuedFinal: false,
+            counts: { tool: 0, block: 1, final: 0 },
+          };
+        }
+        if (params.ctx.MessageSid === "new-message") {
+          params.dispatcher.sendFinalReply({ text: "new final" });
+          return queuedFinalResult();
+        }
+        throw new Error(`unexpected test message ${params.ctx.MessageSid ?? "<missing>"}`);
+      },
+    );
+
+    const olderDispatch = dispatchWithDeliveries(
+      buildForegroundCtx({ MessageSid: "old-message" }),
+      deliveries,
+      {
+        replyOptions: {
+          [foregroundFreshnessPolicyKey]: {
+            allowSupersededDelivery: () => true,
+          },
+        },
+      },
+    );
+    await olderStarted.promise;
+
+    await dispatchWithDeliveries(buildForegroundCtx({ MessageSid: "new-message" }), deliveries);
+
+    releaseOlderBlock.resolve();
+    const olderResult = await olderDispatch;
+
     expect(olderResult).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
