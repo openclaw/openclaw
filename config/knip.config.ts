@@ -50,7 +50,7 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "lit",
   "linkedom",
   "openclaw",
-  "pdfjs-dist",
+  "clawpdf",
 ] as const;
 
 const rootBundledPluginRuntimeDependencies = [
@@ -70,7 +70,7 @@ const rootBundledPluginRuntimeDependencies = [
   "minimatch",
   "node-edge-tts",
   "openshell",
-  "pdfjs-dist",
+  "clawpdf",
   "tokenjuice",
 ] as const;
 

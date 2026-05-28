@@ -5,18 +5,10 @@
   "description": "OpenClaw local document extraction plugin",
   "type": "module",
   "dependencies": {
-    "pdfjs-dist": "5.7.284"
+    "clawpdf": "https://codeload.github.com/openclaw/clawpdf/tar.gz/2b942755f7ae3d1d8ba6bb219cb3bc1b589069b1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
-  },
-  "peerDependencies": {
-    "@napi-rs/canvas": "^0.1.89"
-  },
-  "peerDependenciesMeta": {
-    "@napi-rs/canvas": {
-      "optional": true
-    }
   },
   "openclaw": {
     "extensions": [
