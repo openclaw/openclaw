@@ -989,7 +989,9 @@ export async function runWhatsAppQaLive(params: {
           source: credentialLease.source,
           kind: credentialLease.kind,
           role: credentialLease.role,
-          credentialFingerprint: fingerprintWhatsAppCredentialId(credentialLease.credentialId),
+          credentialFingerprint: redactPublicMetadata
+            ? undefined
+            : fingerprintWhatsAppCredentialId(credentialLease.credentialId),
           credentialId: redactPublicMetadata ? undefined : credentialLease.credentialId,
           ownerId: redactPublicMetadata ? undefined : credentialLease.ownerId,
         }
@@ -1030,7 +1032,9 @@ export async function runWhatsAppQaLive(params: {
     reportPath,
     `${renderWhatsAppQaMarkdown({
       cleanupIssues,
-      credentialFingerprint: fingerprintWhatsAppCredentialId(credentialLease?.credentialId),
+      credentialFingerprint: redactPublicMetadata
+        ? undefined
+        : fingerprintWhatsAppCredentialId(credentialLease?.credentialId),
       credentialSource: credentialLease?.source ?? requestedCredentialSource,
       finishedAt,
       gatewayDebugDirPath: preservedGatewayDebugArtifacts ? gatewayDebugDirPath : undefined,
