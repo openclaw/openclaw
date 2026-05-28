@@ -242,6 +242,11 @@ export function resolveSubagentMaxAnnounceRetryCount(cfg: OpenClawConfig): numbe
  * Resolve the base delay (in ms) for the exponential backoff between announce retries.
  * Defaults to {@link DEFAULT_ANNOUNCE_RETRY_BASE_DELAY_MS} (1000 ms) so the behavior is
  * unchanged when `agents.defaults.subagents.announceRetryBaseDelayMs` is absent.
+ *
+ * Note: a configured value of `0` is honored and short-circuits the backoff so retries fire
+ * with no delay between them. This is intentionally allowed (e.g. for test setups) but
+ * produces a back-to-back burst against the parent channel — see the schema description
+ * before using it in production.
  */
 export function resolveSubagentAnnounceRetryBaseDelayMs(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.subagents?.announceRetryBaseDelayMs;

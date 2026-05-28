@@ -294,7 +294,7 @@ export const AgentDefaultsSchema = z
           .min(0)
           .optional()
           .describe(
-            "Base delay in milliseconds between sub-agent completion announce retries (default: 1000). Each retry doubles this delay (exponential backoff) up to announceRetryMaxDelayMs.",
+            "Base delay in milliseconds between sub-agent completion announce retries (default: 1000). Each retry doubles this delay (exponential backoff) up to announceRetryMaxDelayMs. Set to 0 to fire all retries back-to-back with no delay (use with caution: this can produce a burst that hammers the parent channel). Use the default or a higher value for well-behaved channels.",
           ),
         announceRetryMaxDelayMs: z
           .number()

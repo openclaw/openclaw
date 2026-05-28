@@ -467,6 +467,9 @@ export type AgentDefaultsConfig = {
     /**
      * Base delay in milliseconds between sub-agent completion announce retries (default: 1000).
      * Each retry doubles this delay (exponential backoff) up to announceRetryMaxDelayMs.
+     * Setting this to 0 disables the delay entirely and fires retries back-to-back; this is
+     * intentionally allowed for advanced cases but will produce a burst that can hammer the
+     * parent channel, so prefer the default or a higher value for normal use.
      */
     announceRetryBaseDelayMs?: number;
     /**
