@@ -176,10 +176,14 @@ function parsePromptRef(value: unknown): SessionSkillPromptRef | null {
 
 export function hydrateSessionStoreSkillPromptRefs(params: {
   storePath: string;
-  store: Record<string, SessionEntry>;
+  store: Record<string, unknown>;
 }): boolean {
   let changed = false;
-  for (const [key, entry] of Object.entries(params.store)) {
+  for (const [key, value] of Object.entries(params.store)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      continue;
+    }
+    const entry = value as SessionEntry;
     const snapshot = entry.skillsSnapshot;
     if (!snapshot || typeof snapshot.prompt === "string") {
       continue;
@@ -187,8 +191,9 @@ export function hydrateSessionStoreSkillPromptRefs(params: {
     const promptRef = parsePromptRef((snapshot as { promptRef?: unknown }).promptRef);
     const prompt = promptRef ? readValidPromptBlob(params.storePath, promptRef) : null;
     if (!prompt) {
-      params.store[key] = { ...entry };
-      delete params.store[key].skillsSnapshot;
+      const nextEntry = { ...entry };
+      delete nextEntry.skillsSnapshot;
+      params.store[key] = nextEntry;
       changed = true;
       continue;
     }

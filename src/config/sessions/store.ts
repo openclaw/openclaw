@@ -223,12 +223,10 @@ function updateSessionStoreWriteCaches(params: {
     store: params.store,
     mtimeMs: fileStat?.mtimeMs,
     sizeBytes: fileStat?.sizeBytes,
-    serialized: params.cloneSerialized,
+    serialized: params.serialized,
+    cloneSerialized: params.cloneSerialized,
     takeOwnership: params.takeOwnership,
   });
-  if (params.cloneSerialized === undefined) {
-    setSerializedSessionStore(params.storePath, params.serialized, fileStat?.sizeBytes);
-  }
   dropSessionStoreSnapshotCache(params.storePath);
 }
 
@@ -248,13 +246,20 @@ function restoreUnchangedSessionStoreCache(
     invalidateSessionStoreCache(storePath);
     return;
   }
+  const serialized = getSerializedSessionStore(storePath);
   writeSessionStoreCache({
     storePath,
     store,
     mtimeMs: loadedFileStat?.mtimeMs,
     sizeBytes: loadedFileStat?.sizeBytes,
+    serialized,
     takeOwnership: true,
   });
+  if (serialized !== undefined) {
+    // Keep hydrated blob prompts in the object cache, but preserve the disk JSON
+    // comparison string so repeated no-op saves do not rewrite sessions.json.
+    setSerializedSessionStore(storePath, serialized, loadedFileStat?.sizeBytes);
+  }
 }
 
 function loadMutableSessionStoreForWriter(storePath: string): Record<string, SessionEntry> {

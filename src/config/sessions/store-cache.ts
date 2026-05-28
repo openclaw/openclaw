@@ -404,6 +404,7 @@ export function writeSessionStoreCache(params: {
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
+  cloneSerialized?: string;
   takeOwnership?: boolean;
 }): void {
   const store =
@@ -415,7 +416,7 @@ export function writeSessionStoreCache(params: {
     store,
     mtimeMs: params.mtimeMs,
     sizeBytes: params.sizeBytes,
-    serialized: params.serialized,
+    serialized: params.cloneSerialized,
   });
   setSerializedSessionStore(params.storePath, params.serialized, params.sizeBytes);
 }

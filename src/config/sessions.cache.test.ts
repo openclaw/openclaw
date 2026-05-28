@@ -257,7 +257,12 @@ describe("Session Store Cache", () => {
     const parseSpy = vi.spyOn(JSON, "parse");
 
     try {
-      writeSessionStoreCache({ storePath, store: testStore, serialized });
+      writeSessionStoreCache({
+        storePath,
+        store: testStore,
+        serialized,
+        cloneSerialized: serialized,
+      });
 
       expect(parseSpy).not.toHaveBeenCalled();
 
