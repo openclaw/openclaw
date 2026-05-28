@@ -304,6 +304,8 @@ describe("Dockerfile", () => {
     expect(workflow).toContain('${IMAGE}:${version}-browser"');
     expect(workflow).toContain('${IMAGE}:latest-browser"');
     expect(workflow).toContain('${IMAGE}:main-browser"');
+    expect(workflow).not.toContain("main-browser-amd64");
+    expect(workflow).not.toContain("main-browser-arm64");
     expect(workflow).toContain("Smoke test amd64 browser image");
     expect(workflow).toContain("Smoke test arm64 browser image");
     expect(workflow).toContain("chrome-headless-shell");
