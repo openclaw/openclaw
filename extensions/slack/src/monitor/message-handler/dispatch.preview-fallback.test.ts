@@ -22,6 +22,7 @@ const startSlackStreamMock = vi.fn(async () => ({
 const stopSlackStreamMock = vi.fn(async () => {});
 const reactSlackMessageMock = vi.fn(async () => {});
 const removeSlackReactionMock = vi.fn(async () => {});
+const recordSlackThreadParticipationMock = vi.fn();
 class TestSlackStreamNotDeliveredError extends Error {
   readonly pendingText: string;
   readonly slackCode: string;
@@ -88,6 +89,8 @@ const statusReactionControllerMock = {
 };
 let mockedReplyThreadTs: string | undefined = THREAD_TS;
 let mockedReplyThreadTsSequence: Array<string | undefined> | undefined;
+let mockedStatusThreadTs: string | undefined = THREAD_TS;
+let mockedIsThreadReply = true;
 let mockedSlackReplyBlocks: unknown[] | undefined;
 let capturedTyping:
   | {
@@ -113,6 +116,7 @@ let mockedDispatchSequence: Array<{
   kind: TestReplyDispatchKind;
   payload: TestReplyPayload;
 }> = [];
+let mockedDispatchError: unknown;
 let mockedQueuedDispatchCounts: TestDispatchCounts = { tool: 0, block: 0, final: 0 };
 
 let mockedProgressEvents: string[] = [];
@@ -277,6 +281,7 @@ function createPreparedSlackMessage(params?: {
   channelConfig?: Record<string, unknown> | null;
   replyToMode?: "off" | "first" | "all" | "batched";
   isDirectMessage?: boolean;
+  isRoomish?: boolean;
   route?: Partial<{
     agentId: string;
     accountId: string;
@@ -346,7 +351,7 @@ function createPreparedSlackMessage(params?: {
     },
     replyToMode: params?.replyToMode ?? "all",
     isDirectMessage: params?.isDirectMessage ?? false,
-    isRoomish: false,
+    isRoomish: params?.isRoomish ?? false,
     historyKey: "history-key",
     preview: "",
     ackReactionValue: "eyes",
@@ -765,7 +770,7 @@ vi.mock("../../limits.js", () => ({
 }));
 
 vi.mock("../../sent-thread-cache.js", () => ({
-  recordSlackThreadParticipation: () => {},
+  recordSlackThreadParticipation: recordSlackThreadParticipationMock,
 }));
 
 vi.mock("../../stream-mode.js", () => ({
@@ -803,8 +808,8 @@ vi.mock("../../streaming.js", () => ({
 
 vi.mock("../../threading.js", () => ({
   resolveSlackThreadTargets: () => ({
-    statusThreadTs: THREAD_TS,
-    isThreadReply: true,
+    statusThreadTs: mockedStatusThreadTs,
+    isThreadReply: mockedIsThreadReply,
   }),
 }));
 
@@ -913,6 +918,9 @@ vi.mock("../reply.runtime.js", () => ({
     };
   }) => {
     capturedReplyOptions = params.replyOptions;
+    if (mockedDispatchError) {
+      throw mockedDispatchError;
+    }
     if (mockedReplyOptionEvents.length > 0) {
       for (const entry of mockedReplyOptionEvents) {
         if (entry.kind === "item") {
@@ -1031,6 +1039,9 @@ vi.mock("../reply.runtime.js", () => ({
     };
   }) => {
     capturedReplyOptions = params.replyOptions;
+    if (mockedDispatchError) {
+      throw mockedDispatchError;
+    }
     if (mockedReplyOptionEvents.length > 0) {
       for (const entry of mockedReplyOptionEvents) {
         if (entry.kind === "item") {
@@ -1100,10 +1111,12 @@ vi.mock("./preview-finalize.js", () => ({
 }));
 
 let dispatchPreparedSlackMessage: typeof import("./dispatch.js").dispatchPreparedSlackMessage;
+let clearSlackHandlerTimeoutFallbackDedupeForTests: typeof import("./dispatch.js").clearSlackHandlerTimeoutFallbackDedupeForTests;
 
 describe("dispatchPreparedSlackMessage preview fallback", () => {
   beforeAll(async () => {
-    ({ dispatchPreparedSlackMessage } = await import("./dispatch.js"));
+    ({ dispatchPreparedSlackMessage, clearSlackHandlerTimeoutFallbackDedupeForTests } =
+      await import("./dispatch.js"));
   });
 
   beforeEach(() => {
@@ -1132,11 +1145,15 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     capturedTyping = undefined;
     mockedReplyThreadTs = THREAD_TS;
     mockedReplyThreadTsSequence = undefined;
+    mockedStatusThreadTs = THREAD_TS;
+    mockedIsThreadReply = true;
     mockedSlackReplyBlocks = undefined;
+    mockedDispatchError = undefined;
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedQueuedDispatchCounts = { tool: 0, block: 0, final: 0 };
     mockedProgressEvents = [];
     mockedReplyOptionEvents = [];
+    clearSlackHandlerTimeoutFallbackDedupeForTests();
 
     createSlackDraftStreamMock.mockReturnValue(createDraftStreamStub());
     finalizeSlackPreviewEditMock.mockRejectedValue(new Error("socket closed"));
@@ -1157,6 +1174,180 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("posts a visible fallback for explicit human mentions when the handler times out before replying", async () => {
+    mockedDispatchError = new Error(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    mockedDispatchSequence = [];
+
+    await expect(
+      dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          isRoomish: true,
+          ctxPayload: {
+            ExplicitlyMentionedBot: true,
+            MentionSource: "explicit_bot",
+          },
+        }),
+      ),
+    ).rejects.toThrow("codex app-server turn idle timed out waiting for turn/completed");
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(
+      0,
+      "I received this, but my handler timed out before producing a reply. Please retry in a fresh handler.",
+    );
+  });
+
+  it("recognizes structured Codex app-server timeout failures", async () => {
+    const error = new Error("codex handler stalled");
+    (error as { codexAppServerFailure?: { kind: string } }).codexAppServerFailure = {
+      kind: "turn_completion_idle_timeout",
+    };
+    mockedDispatchError = error;
+    mockedDispatchSequence = [];
+
+    await expect(
+      dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          isRoomish: true,
+          ctxPayload: {
+            ExplicitlyMentionedBot: true,
+            MentionSource: "explicit_bot",
+          },
+        }),
+      ),
+    ).rejects.toThrow("codex handler stalled");
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("threads handler-timeout fallback through the normal reply planner for top-level first replies", async () => {
+    mockedDispatchError = new Error("codex app-server attempt timed out");
+    mockedDispatchSequence = [];
+    mockedStatusThreadTs = undefined;
+    mockedIsThreadReply = false;
+    mockedReplyThreadTsSequence = ["171234.111"];
+
+    await expect(
+      dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          isRoomish: true,
+          replyToMode: "first",
+          message: {
+            thread_ts: undefined,
+          },
+          ctxPayload: {
+            ExplicitlyMentionedBot: true,
+            MentionSource: "explicit_bot",
+          },
+        }),
+      ),
+    ).rejects.toThrow("codex app-server attempt timed out");
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(
+      0,
+      "I received this, but my handler timed out before producing a reply. Please retry in a fresh handler.",
+      { replyThreadTs: "171234.111" },
+    );
+    expect(recordSlackThreadParticipationMock).toHaveBeenCalledWith(
+      "default",
+      "C123",
+      "171234.111",
+      { agentId: "agent-1" },
+    );
+  });
+
+  it("dedupes handler-timeout fallbacks for the same Slack message and agent", async () => {
+    mockedDispatchError = new Error("codex app-server attempt timed out");
+    mockedDispatchSequence = [];
+    const prepared = createPreparedSlackMessage({
+      isRoomish: true,
+      ctxPayload: {
+        ExplicitlyMentionedBot: true,
+        MentionSource: "explicit_bot",
+      },
+    });
+
+    await expect(dispatchPreparedSlackMessage(prepared)).rejects.toThrow(
+      "codex app-server attempt timed out",
+    );
+    await expect(dispatchPreparedSlackMessage(prepared)).rejects.toThrow(
+      "codex app-server attempt timed out",
+    );
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dedupe handler-timeout fallback attempts when fallback delivery fails", async () => {
+    mockedDispatchError = new Error("codex app-server attempt timed out");
+    mockedDispatchSequence = [];
+    deliverRepliesMock.mockRejectedValueOnce(new Error("slack unavailable"));
+    const prepared = createPreparedSlackMessage({
+      isRoomish: true,
+      ctxPayload: {
+        ExplicitlyMentionedBot: true,
+        MentionSource: "explicit_bot",
+      },
+    });
+
+    await expect(dispatchPreparedSlackMessage(prepared)).rejects.toThrow(
+      "codex app-server attempt timed out",
+    );
+    await expect(dispatchPreparedSlackMessage(prepared)).rejects.toThrow(
+      "codex app-server attempt timed out",
+    );
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
+    expectDeliverReplyCall(
+      1,
+      "I received this, but my handler timed out before producing a reply. Please retry in a fresh handler.",
+    );
+  });
+
+  it("does not post handler-timeout fallback for bot-authored explicit mentions", async () => {
+    mockedDispatchError = new Error("codex app-server attempt timed out");
+    mockedDispatchSequence = [];
+
+    await expect(
+      dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          isRoomish: true,
+          message: {
+            user: undefined,
+            bot_id: "B_OTHER",
+          },
+          ctxPayload: {
+            ExplicitlyMentionedBot: true,
+            MentionSource: "explicit_bot",
+          },
+        }),
+      ),
+    ).rejects.toThrow("codex app-server attempt timed out");
+
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("does not post handler-timeout fallback for non-explicit room messages", async () => {
+    mockedDispatchError = new Error("codex app-server attempt timed out");
+    mockedDispatchSequence = [];
+
+    await expect(
+      dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          isRoomish: true,
+          ctxPayload: {
+            ExplicitlyMentionedBot: false,
+            MentionSource: "none",
+          },
+        }),
+      ),
+    ).rejects.toThrow("codex app-server attempt timed out");
+
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
   });
 
   it("passes accepted Slack bot messages through the shared bot loop guard", async () => {
