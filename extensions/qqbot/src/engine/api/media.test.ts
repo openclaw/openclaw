@@ -143,6 +143,36 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds stalled guarded fetch setup before reading URL bodies", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchWithSsrFGuardMock.mockReset();
+      fetchWithSsrFGuardMock.mockImplementationOnce(() => new Promise(() => {}));
+      const client = mockApiClient();
+      const tokenManager = mockTokenManager();
+      const api = new MediaApi(client, tokenManager);
+
+      const uploadPromise = api.uploadMedia(
+        "c2c",
+        "user-openid",
+        MediaFileType.IMAGE,
+        { appId: "app-id", clientSecret: "client-secret" },
+        { url: "https://slow-dns.example.com/assets/photo.png" },
+      );
+      const rejection = expect(uploadPromise).rejects.toThrow(
+        "Direct-upload media URL fetch timed out",
+      );
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejection;
+      expect(readResponseWithLimitMock).not.toHaveBeenCalled();
+      expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
+      expect(client.request).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects URL bodies that keep trickling under the idle timeout", async () => {
     vi.useFakeTimers();
     try {

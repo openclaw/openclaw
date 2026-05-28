@@ -67,18 +67,36 @@ function assertDirectUploadDownloadHostAllowed(hostname: string): void {
 
 async function fetchDirectUploadDownload(url: string) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => {
-    controller.abort(new Error("Direct-upload media URL fetch timed out"));
-  }, DIRECT_UPLOAD_DOWNLOAD_TIMEOUT_MS);
-  unrefTimer(timeout);
+  const timeoutError = new Error("Direct-upload media URL fetch timed out");
+  let timedOut = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, DIRECT_UPLOAD_DOWNLOAD_TIMEOUT_MS);
+    unrefTimer(timeout);
+  });
+  const guardedFetch = fetchWithSsrFGuard({
+    url,
+    maxRedirects: 0,
+    signal: controller.signal,
+  });
+  void guardedFetch.then(
+    (result) => {
+      if (timedOut) {
+        void result.release().catch(() => undefined);
+      }
+    },
+    () => undefined,
+  );
   try {
-    return await fetchWithSsrFGuard({
-      url,
-      maxRedirects: 0,
-      signal: controller.signal,
-    });
+    return await Promise.race([guardedFetch, timeoutPromise]);
   } finally {
-    clearTimeout(timeout);
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
 
