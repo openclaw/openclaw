@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
+  repairManagedNpmRootActiveHostPackage,
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
   readManagedNpmRootInstalledDependency,
@@ -1005,6 +1006,104 @@ describe("managed npm root", () => {
     await expect(
       fs.readFile(path.join(hostPackageRoot, "package.json"), "utf8"),
     ).resolves.toContain("2026.5.12-beta.6");
+  });
+
+  it("repairs missing dependencies for the active global OpenClaw host package", async () => {
+    const npmRoot = await makeTempRoot();
+    const hostPackageRoot = path.join(npmRoot, "lib", "node_modules", "openclaw");
+    const dependencyRoot = path.join(hostPackageRoot, "node_modules", "json5");
+    await fs.mkdir(hostPackageRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(hostPackageRoot, "package.json"),
+      `${JSON.stringify({
+        name: "openclaw",
+        version: "2026.5.27-beta.1",
+        dependencies: {
+          json5: "2.2.3",
+        },
+        optionalDependencies: {
+          sharp: "0.34.5",
+        },
+      })}\n`,
+    );
+
+    const runCommand = vi.fn().mockImplementation(async () => {
+      await fs.mkdir(dependencyRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(dependencyRoot, "package.json"),
+        `${JSON.stringify({ name: "json5", version: "2.2.3" })}\n`,
+      );
+      const optionalDependencyRoot = path.join(hostPackageRoot, "node_modules", "sharp");
+      await fs.mkdir(optionalDependencyRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(optionalDependencyRoot, "package.json"),
+        `${JSON.stringify({ name: "sharp", version: "0.34.5" })}\n`,
+      );
+      return successfulSpawn;
+    });
+
+    await expect(
+      repairManagedNpmRootActiveHostPackage({
+        npmRoot,
+        packageRoot: hostPackageRoot,
+        dependencySnapshot: {
+          packageRoot: hostPackageRoot,
+          version: "2026.5.27-beta.1",
+          dependencyNames: ["json5", "sharp"],
+        },
+        runCommand,
+      }),
+    ).resolves.toBe(true);
+
+    const [repairArgs, rawRepairOptions] = requireFirstMockCall(
+      runCommand,
+      "active host repair command",
+    );
+    const repairOptions = requireCommandOptions(rawRepairOptions, "active host repair");
+    expect(repairArgs).toEqual([
+      "npm",
+      "install",
+      "--loglevel=error",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      "--global",
+      "--prefix",
+      npmRoot,
+      "openclaw@2026.5.27-beta.1",
+    ]);
+    expect(repairOptions.timeoutMs).toBe(300_000);
+    expect(repairOptions.env?.npm_config_ignore_scripts).toBe("true");
+    expect(repairOptions.env?.npm_config_global).toBe("true");
+    expect(repairOptions.env?.npm_config_prefix).toBe(npmRoot);
+  });
+
+  it("does not run global repair for a local active OpenClaw host package", async () => {
+    const npmRoot = await makeTempRoot();
+    const hostPackageRoot = path.join(npmRoot, "node_modules", "openclaw");
+    await fs.mkdir(hostPackageRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(hostPackageRoot, "package.json"),
+      `${JSON.stringify({
+        name: "openclaw",
+        version: "2026.5.27-beta.1",
+        dependencies: {
+          json5: "2.2.3",
+        },
+      })}\n`,
+    );
+
+    const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
+
+    await expect(
+      repairManagedNpmRootActiveHostPackage({
+        npmRoot,
+        packageRoot: hostPackageRoot,
+        runCommand,
+      }),
+    ).resolves.toBe(false);
+
+    expect(runCommand).not.toHaveBeenCalled();
   });
 
   it("scrubs managed ownership metadata without deleting a linked active host package", async () => {
