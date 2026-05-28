@@ -689,7 +689,9 @@ export function registerControlUiAndPairingSuite(): void {
 
   test("device token auth matrix", async () => {
     const { server, ws, port, prevToken } = await startControlUiServerWithClient("secret");
-    const { deviceToken, deviceIdentityPath } = await ensurePairedDeviceTokenForCurrentIdentity(ws);
+    const { identity, deviceToken, deviceIdentityPath } =
+      await ensurePairedDeviceTokenForCurrentIdentity(ws);
+    const { getPairedDevice } = await import("../infra/device-pairing.js");
     ws.close();
 
     const scenarios: Array<{
@@ -772,6 +774,9 @@ export function registerControlUiAndPairingSuite(): void {
           ws2.close();
         }
       }
+      const paired = await getPairedDevice(identity.deviceId);
+      expect(paired?.lastSeenReason).toBe("connect");
+      expect(typeof paired?.lastSeenAtMs).toBe("number");
     } finally {
       await server.close();
       restoreGatewayToken(prevToken);

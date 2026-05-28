@@ -1113,6 +1113,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const clientAccessMetadata = {
             displayName: connectParams.client.displayName,
             remoteIp: reportedClientIp,
+            lastSeenAtMs: Date.now(),
+            lastSeenReason: "connect",
           };
           const requirePairing = async (
             reason: ConnectPairingRequiredReason,

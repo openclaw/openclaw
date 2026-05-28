@@ -976,9 +976,12 @@ export async function verifyDeviceToken(params: {
     if (!roleScopesAllow({ role, requestedScopes, allowedScopes: entry.scopes })) {
       return { ok: false, reason: "scope-mismatch" };
     }
-    entry.lastUsedAtMs = Date.now();
+    const now = Date.now();
+    entry.lastUsedAtMs = now;
     device.tokens ??= {};
     device.tokens[role] = entry;
+    device.lastSeenAtMs = now;
+    device.lastSeenReason = "device-token-auth";
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, params.baseDir, "paired");
     return entry.issuer ? { ok: true, issuer: entry.issuer } : { ok: true };
