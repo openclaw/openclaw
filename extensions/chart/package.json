@@ -1,13 +1,37 @@
 {
-  "name": "@openclaw/chart-plugin",
+  "name": "chart-generator",
   "version": "2026.5.27",
-  "private": true,
+  "private": false,
   "description": "OpenClaw Chart plugin — generate bar, line, pie, scatter, and area charts as SVG images",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhangguiping-xydt/openclaw"
+  },
+  "files": [
+    "index.ts",
+    "openclaw.plugin.json",
+    "src/",
+    "tsconfig.json"
+  ],
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
-    "extensions": ["./index.ts"]
+    "extensions": ["./index.ts"],
+    "release": {
+      "publishToClawHub": true
+    },
+    "install": {
+      "npmSpec": "chart-generator",
+      "defaultChoice": "clawhub",
+      "minHostVersion": ">=2026.5.27"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.27"
+    },
+    "build": {
+      "openclawVersion": "2026.5.27"
+    }
   }
 }

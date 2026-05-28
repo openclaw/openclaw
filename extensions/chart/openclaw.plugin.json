@@ -1,16 +1,32 @@
 {
-  "id": "chart",
-  "activation": { "onStartup": false },
+  "id": "chart-generator",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "name": "Chart",
   "description": "Generate bar, line, pie, scatter, and area charts as SVG images from structured data.",
-  "contracts": { "tools": ["chart"] },
+  "contracts": {
+    "tools": [
+      "chart"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "defaultWidth": { "type": "integer", "minimum": 200, "maximum": 4000, "default": 800 },
-      "defaultHeight": { "type": "integer", "minimum": 200, "maximum": 4000, "default": 500 }
+      "defaultWidth": {
+        "type": "integer",
+        "minimum": 200,
+        "maximum": 4000,
+        "default": 800
+      },
+      "defaultHeight": {
+        "type": "integer",
+        "minimum": 200,
+        "maximum": 4000,
+        "default": 500
+      }
     }
   }
 }
