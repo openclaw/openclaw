@@ -16,14 +16,22 @@ export function escapeHtml(value: string): string {
 }
 
 function looksLikeMath(content: string): boolean {
-  if (content.length === 0) return false;
-  if (/\\[a-zA-Z]+/.test(content)) return true;
-  if (/[\^_{}]/.test(content)) return true;
+  if (content.length === 0) {
+    return false;
+  }
+  if (/\\[a-zA-Z]+/.test(content)) {
+    return true;
+  }
+  if (/[\^_{}]/.test(content)) {
+    return true;
+  }
   return false;
 }
 
 function isSingleLetterVariable(content: string): boolean {
-  if (content.length !== 1) return false;
+  if (content.length !== 1) {
+    return false;
+  }
   const ch = content.charCodeAt(0);
   return (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122);
 }
@@ -60,16 +68,26 @@ export function findInlineMathEnd(text: string, start: number): number {
       const nextChar = i + 1 < text.length ? text[i + 1] : null;
       const isBoundary =
         nextChar === null ||
-        /[\s.,;:!?)\]}"'`\-]/.test(nextChar) ||
+        /[\s.,;:!?)\]}"'`-]/.test(nextChar) ||
         nextChar === "$" ||
         nextChar === "\n";
 
       if (isBoundary) {
-        if (content.length === 0) return -1;
-        if (hasBackslashCommand) return i;
-        if (looksLikeMath(content)) return i;
-        if (isSingleLetterVariable(content)) return i;
-        if (/^[\d., ]+$/.test(content)) return -1;
+        if (content.length === 0) {
+          return -1;
+        }
+        if (hasBackslashCommand) {
+          return i;
+        }
+        if (looksLikeMath(content)) {
+          return i;
+        }
+        if (isSingleLetterVariable(content)) {
+          return i;
+        }
+        if (/^[\d., ]+$/.test(content)) {
+          return -1;
+        }
         return i;
       }
     }
@@ -105,8 +123,12 @@ export function extractMathBlocks(markdown: string): {
     if (markdown[i] === "`" && markdown[i + 1] === "`" && markdown[i + 2] === "`") {
       const start = i;
       i += 3;
-      while (i < len && markdown[i] !== "\n") i++;
-      if (i < len) i++;
+      while (i < len && markdown[i] !== "\n") {
+        i++;
+      }
+      if (i < len) {
+        i++;
+      }
       while (i < len) {
         if (markdown[i] === "`" && markdown[i + 1] === "`" && markdown[i + 2] === "`") {
           i += 3;
@@ -290,7 +312,9 @@ export function restoreMathBlocksSync(
   html: string,
   mathBlocks: Map<string, { tex: string; displayMode: boolean }>,
 ): string {
-  if (mathBlocks.size === 0) return html;
+  if (mathBlocks.size === 0) {
+    return html;
+  }
 
   if (!katexModule) {
     let result = html;
@@ -335,8 +359,12 @@ export function restoreMathBlocksSync(
  * multiple times.
  */
 export function preloadKatex(): Promise<typeof import("katex")> {
-  if (katexModule) return Promise.resolve(katexModule);
-  if (katexLoading) return katexLoading;
+  if (katexModule) {
+    return Promise.resolve(katexModule);
+  }
+  if (katexLoading) {
+    return katexLoading;
+  }
   katexLoading = import("katex").then((mod) => {
     katexModule = mod;
     return mod;
@@ -362,8 +390,12 @@ export function getKatexModule(): typeof import("katex") | null {
  * multiple times.
  */
 export function loadKatexCss(): void {
-  if (cssLoaded) return;
-  if (typeof document === "undefined") return;
+  if (cssLoaded) {
+    return;
+  }
+  if (typeof document === "undefined") {
+    return;
+  }
   cssLoaded = true;
   const link = document.createElement("link");
   link.rel = "stylesheet";

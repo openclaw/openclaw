@@ -27,6 +27,7 @@ export type ControlUiBootstrapState = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
   settings?: { token?: string | null } | null;
   password?: string | null;
+  mathRendering?: "off" | "katex";
 };
 
 function resolveActiveAgentId(state: ControlUiBootstrapState): string | null {

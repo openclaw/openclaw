@@ -1818,7 +1818,7 @@ importers:
         specifier: 2.2.3
         version: 2.2.3
       katex:
-        specifier: ^0.16.21
+        specifier: 0.16.47
         version: 0.16.47
       lit:
         specifier: 3.3.3
@@ -6764,8 +6764,6 @@ packages:
   tinyrainbow@3.1.0:
     resolution: {integrity: sha512-Bf+ILmBgretUrdJxzXM0SgXLZ3XfiaUuOj/IKQHuTXip+05Xn+uyEYdVg0kYDipTBcLrCVyUzAPz7QmArb0mmw==}
     engines: {node: '>=14.0.0'}
-
-
 
   to-regex-range@5.0.1:
     resolution: {integrity: sha512-65P7iz6X5yEr1cwcgvQxbbIw7Uk3gOy5dIdtZ4rDveLqhrdJP+Li/Hx6tyK0NEb+2GCyneCMJiGqrADCSNk8sQ==}

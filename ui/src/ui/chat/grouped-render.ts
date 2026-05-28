@@ -1668,7 +1668,7 @@ function renderGroupedMessage(
                           ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
                               ${unsafeHTML(
                                 renderMarkdownContent(markdown, {
-                                  ...(markdownRenderOptions ?? {}),
+                                  ...markdownRenderOptions,
                                   mathRendering: opts.mathRendering,
                                 }),
                               )}
@@ -1737,7 +1737,7 @@ function renderGroupedMessage(
                 ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
                     ${unsafeHTML(
                       renderMarkdownContent(markdown, {
-                        ...(markdownRenderOptions ?? {}),
+                        ...markdownRenderOptions,
                         mathRendering: opts.mathRendering,
                       }),
                     )}
