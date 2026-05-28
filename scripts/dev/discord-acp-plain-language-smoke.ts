@@ -494,12 +494,7 @@ async function requestDiscordJson<T>(params: {
         onTimeout: () => controller.abort(),
       })) as { retry_after?: number };
       const waitSeconds = typeof body.retry_after === "number" ? body.retry_after : 1;
-      const requestedWaitMs = Math.ceil(waitSeconds * 1000);
-      const remainingWaitMs = remainingTimeoutMs(deadlineMs);
-      await sleepImpl(Math.min(requestedWaitMs, remainingWaitMs));
-      if (requestedWaitMs >= remainingWaitMs) {
-        throw new Error("Discord ACP smoke exceeded total timeout.");
-      }
+      await sleepImpl(Math.min(Math.ceil(waitSeconds * 1000), remainingTimeoutMs(deadlineMs)));
       continue;
     }
 
