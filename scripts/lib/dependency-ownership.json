@@ -32,15 +32,6 @@
       "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
     },
-    "@napi-rs/canvas": {
-      "owner": "plugin:document-extract",
-      "class": "optional-peer-runtime",
-      "activation": [
-        "input_file.application_pdf.image_fallback",
-        "plugins.entries.document-extract.enabled"
-      ],
-      "risk": ["native", "parser", "untrusted-files"]
-    },
     "ajv": {
       "owner": "core:json-schema-validation",
       "class": "core-runtime",
@@ -137,11 +128,11 @@
       "class": "core-runtime",
       "risk": ["browser-automation", "cdp"]
     },
-    "pdfjs-dist": {
+    "clawpdf": {
       "owner": "plugin:document-extract",
       "class": "plugin-runtime",
       "activation": ["input_file.application_pdf", "plugins.entries.document-extract.enabled"],
-      "risk": ["parser", "untrusted-files"]
+      "risk": ["wasm", "parser", "untrusted-files"]
     },
     "proxy-agent": {
       "owner": "core:proxy",

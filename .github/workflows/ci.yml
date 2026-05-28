@@ -1172,7 +1172,7 @@ jobs:
               pnpm lint:auth:pairing-account-scope
               pnpm check:import-cycles
               # build-artifacts already runs the tsdown/runtime build for the same Node-relevant changes.
-              pnpm build:plugin-sdk:strict-smoke
+              NODE_OPTIONS=--max-old-space-size=8192 pnpm build:plugin-sdk:strict-smoke
               ;;
             prod-types)
               pnpm tsgo:prod

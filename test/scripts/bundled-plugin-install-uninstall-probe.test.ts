@@ -180,6 +180,20 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(readyLogSeen()).toBe(true);
   });
 
+  it("treats signaled gateway children as already stopped", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const child = {
+      exitCode: null,
+      kill: vi.fn(),
+      signalCode: "SIGTERM",
+    };
+
+    expect(runtimeSmoke.hasChildExited(child)).toBe(true);
+    await runtimeSmoke.stopGateway(child);
+
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it("does not treat shallow HTTP listen logs as runtime readiness", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const root = makePackageRoot();
@@ -386,6 +400,24 @@ describe("bundled plugin install/uninstall probe", () => {
       "OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS entry is not an installable bundled plugin in this package: qa-channel",
     );
     expect(result.stderr).toContain("Available: admin-http-rpc");
+  });
+
+  it("bounds plugin list selection when the CLI hangs", () => {
+    const root = makePackageRoot();
+    fs.writeFileSync(
+      path.join(root, "dist", "index.js"),
+      "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\n",
+      "utf8",
+    );
+
+    const startedAt = Date.now();
+    const result = runProbe(root, {
+      OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS: "100",
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(2_500);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Timed out listing packaged bundled plugins after 100ms");
   });
 
   it("loads runtime smoke manifests from the selected packaged root", () => {

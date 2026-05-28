@@ -1111,6 +1111,27 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBeNull();
     });
 
+    it.each(["0x10", "1e3"])(
+      "ignores non-decimal OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS values: %s",
+      async (value) => {
+        process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = value;
+        fetchWithSsrFGuardMock.mockResolvedValue({
+          response: new Response(null, {
+            status: 429,
+            headers: { "retry-after": "30" },
+          }),
+          finalUrl: "https://api.anthropic.com/v1/messages",
+          release: vi.fn(async () => undefined),
+        });
+        const response = await buildGuardedModelFetch(anthropicModel)(
+          "https://api.anthropic.com/v1/messages",
+          { method: "POST" },
+        );
+
+        expect(response.headers.get("x-should-retry")).toBeNull();
+      },
+    );
+
     it("injects x-should-retry:false for terminal 429 responses without retry-after", async () => {
       fetchWithSsrFGuardMock.mockResolvedValue({
         response: new Response("Sorry, you've exceeded your weekly rate limit.", {

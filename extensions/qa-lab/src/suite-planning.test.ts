@@ -34,6 +34,17 @@ describe("qa suite planning helpers", () => {
       expect(normalizeQaSuiteConcurrency(2.8, 10)).toBe(2);
       expect(normalizeQaSuiteConcurrency(20, 3)).toBe(3);
       expect(normalizeQaSuiteConcurrency(0, 3)).toBe(1);
+
+      process.env.OPENCLAW_QA_SUITE_CONCURRENCY = "3";
+      expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(3);
+
+      process.env.OPENCLAW_QA_SUITE_CONCURRENCY = "0";
+      expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(1);
+
+      for (const value of ["0x10", "1e2", "2.5"]) {
+        process.env.OPENCLAW_QA_SUITE_CONCURRENCY = value;
+        expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(10);
+      }
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_QA_SUITE_CONCURRENCY;

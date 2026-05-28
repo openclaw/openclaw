@@ -36,7 +36,40 @@ function parseProxyTargetUrl(targetUrl: string | URL): URL | undefined {
   }
 }
 
+function normalizeProxyHostname(hostname: string): string {
+  let normalized = hostname.toLowerCase();
+  if (normalized.startsWith("[") && normalized.endsWith("]")) {
+    normalized = normalized.slice(1, -1);
+  }
+  return normalized.endsWith(".") ? normalized.slice(0, -1) : normalized;
+}
+
+function parseNoProxyEntry(entry: string): { hostname: string; port: number } {
+  const bracketed = entry.match(/^\[([^\]]+)\](?::(\d+))?$/);
+  if (bracketed) {
+    return {
+      hostname: normalizeProxyHostname(bracketed[1] ?? ""),
+      port: bracketed[2] ? Number.parseInt(bracketed[2], 10) : 0,
+    };
+  }
+
+  const firstColon = entry.indexOf(":");
+  const lastColon = entry.lastIndexOf(":");
+  if (firstColon > -1 && firstColon === lastColon) {
+    const portRaw = entry.slice(lastColon + 1);
+    if (/^\d+$/.test(portRaw)) {
+      return {
+        hostname: normalizeProxyHostname(entry.slice(0, lastColon)),
+        port: Number.parseInt(portRaw, 10),
+      };
+    }
+  }
+
+  return { hostname: normalizeProxyHostname(entry), port: 0 };
+}
+
 function shouldProxyHostname(hostname: string, port: number): boolean {
+  const normalizedHostname = normalizeProxyHostname(hostname);
   const noProxy = getProxyEnv("no_proxy").toLowerCase();
   if (!noProxy) {
     return true;
@@ -50,21 +83,21 @@ function shouldProxyHostname(hostname: string, port: number): boolean {
       return true;
     }
 
-    const parsedProxy = proxy.match(/^(.+):(\d+)$/);
-    let proxyHostname = parsedProxy ? parsedProxy[1] : proxy;
-    const proxyPort = parsedProxy ? Number.parseInt(parsedProxy[2], 10) : 0;
+    const parsedProxy = parseNoProxyEntry(proxy);
+    let proxyHostname = parsedProxy.hostname;
+    const proxyPort = parsedProxy.port;
     if (proxyPort && proxyPort !== port) {
       return true;
     }
 
     if (!/^[.*]/.test(proxyHostname)) {
-      return hostname !== proxyHostname;
+      return normalizedHostname !== proxyHostname;
     }
 
     if (proxyHostname.startsWith("*")) {
       proxyHostname = proxyHostname.slice(1);
     }
-    return !hostname.endsWith(proxyHostname);
+    return !normalizedHostname.endsWith(proxyHostname);
   });
 }
 
@@ -75,7 +108,7 @@ function getProxyForUrl(targetUrl: string | URL): string {
   }
 
   const protocol = parsedUrl.protocol.split(":", 1)[0];
-  const hostname = parsedUrl.host.replace(/:\d*$/, "");
+  const hostname = parsedUrl.hostname;
   const port = Number.parseInt(parsedUrl.port, 10) || DEFAULT_PROXY_PORTS[protocol] || 0;
   if (!shouldProxyHostname(hostname, port)) {
     return "";

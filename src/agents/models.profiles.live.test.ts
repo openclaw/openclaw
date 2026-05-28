@@ -14,6 +14,7 @@ import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { isRateLimitErrorMessage } from "./embedded-agent-helpers/errors.js";
 import { collectAnthropicApiKeys } from "./live-auth-keys.js";
+import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
   isHighSignalLiveModelRef,
@@ -157,6 +158,16 @@ function formatFailurePreview(
     lines.push(`... and ${remaining} more`);
   }
   return lines.join("\n");
+}
+
+function formatSkippedPreview(
+  skipped: Array<{ model: string; reason: string }>,
+  maxItems: number,
+): string {
+  return formatFailurePreview(
+    skipped.map((entry) => ({ model: entry.model, error: entry.reason })),
+    maxItems,
+  );
 }
 
 function isGoogleModelNotFoundError(err: unknown): boolean {
@@ -755,12 +766,26 @@ describeLive("live models (profile keys)", () => {
           "[live-models] load auth storage",
         );
         logProgress("[live-models] loading model registry");
-        return withLiveStageTimeout(
+        const modelRegistry = await withLiveStageTimeout(
           Promise.resolve().then(() =>
-            discoverModels(authStorage, agentDir, { normalizeModels: false }).getAll(),
+            discoverModels(authStorage, agentDir, { normalizeModels: false }),
           ),
           "[live-models] load model registry",
         );
+        const configuredModels = modelRegistry.getAll();
+        const augmented = await appendPrioritizedDynamicLiveModels({
+          models: configuredModels,
+          config: cfg,
+          agentDir,
+          env: process.env,
+          modelRegistry,
+        });
+        if (augmented.added.length > 0) {
+          logProgress(
+            `[live-models] loaded ${augmented.added.length} prioritized dynamic model refs`,
+          );
+        }
+        return augmented.models;
       })();
       const perModelTimeoutMs = toInt(process.env.OPENCLAW_LIVE_MODEL_TIMEOUT_MS, 30_000);
       const maxModels = resolveHighSignalLiveModelLimit({
@@ -843,6 +868,13 @@ describeLive("live models (profile keys)", () => {
       }
 
       if (candidates.length === 0) {
+        if (useExplicit) {
+          const skippedPreview =
+            skipped.length > 0 ? `\nSkipped candidates:\n${formatSkippedPreview(skipped, 8)}` : "";
+          throw new Error(
+            `[live-models] explicit model selection matched no runnable models.${skippedPreview}`,
+          );
+        }
         logProgress("[live-models] no API keys found; skipping");
         return;
       }

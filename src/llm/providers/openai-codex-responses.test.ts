@@ -223,7 +223,7 @@ describe("streamOpenAICodexResponses transport", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
-        throw new Error("stop after payload");
+        throw new Error("usage limit: stop after payload");
       }),
     );
 

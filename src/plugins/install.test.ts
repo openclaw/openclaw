@@ -1019,12 +1019,12 @@ describe("installPluginFromArchive", () => {
   });
 
   it("rejects reserved archive package ids", async () => {
-    for (const params of [
-      { packageName: "@evil/..", outName: "traversal.tgz" },
-      { packageName: "@evil/.", outName: "reserved.tgz" },
-    ]) {
-      await expectArchiveInstallReservedSegmentRejection(params);
-    }
+    await Promise.all(
+      [
+        { packageName: "@evil/..", outName: "traversal.tgz" },
+        { packageName: "@evil/.", outName: "reserved.tgz" },
+      ].map((params) => expectArchiveInstallReservedSegmentRejection(params)),
+    );
   });
 
   it("rejects packages without openclaw.extensions", async () => {

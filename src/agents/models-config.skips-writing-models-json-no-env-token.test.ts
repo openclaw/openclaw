@@ -125,6 +125,7 @@ async function runEnvProviderCase(params: {
 
 describe("models-config", () => {
   beforeAll(async () => {
+    vi.resetModules();
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
     ({ clearRuntimeAuthProfileStoreSnapshots } = await import("./auth-profiles/store.js"));
     ({ ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =

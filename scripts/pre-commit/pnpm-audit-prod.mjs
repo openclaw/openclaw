@@ -26,12 +26,12 @@ const IMPORTER_SECTIONS = ["dependencies", "optionalDependencies"];
 const LOCAL_REFERENCE_PREFIXES = ["file:", "link:", "portal:", "workspace:"];
 // GitHub's GHSA-3q49-cfcf-g5fm feed includes an overbroad ">=0" range alongside
 // the compromised @mistralai/mistralai versions. Keep the production audit
-// blocking for the compromised releases while allowing our pinned 2.2.1 lock.
+// blocking for the compromised releases while allowing pinned safe locks.
 const AUDIT_ADVISORY_VERSION_OVERRIDES = [
   {
     packageName: "@mistralai/mistralai",
     advisoryIds: new Set(["1118204", "GHSA-3q49-cfcf-g5fm"]),
-    unaffectedVersions: new Set(["2.2.1"]),
+    unaffectedVersions: new Set(["2.2.1", "2.2.5"]),
   },
 ];
 

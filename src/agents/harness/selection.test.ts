@@ -37,6 +37,13 @@ const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
 beforeEach(() => {
   clearAgentHarnesses();
   cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupRegistry: () => ({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    }),
     resolveRuntimeCliBackends: () => [
       {
         id: "claude-cli",

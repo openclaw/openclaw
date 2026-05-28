@@ -577,7 +577,7 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "zai", id: "glm-5.1" })).toBe(true);
     expect(
       isHighSignalLiveModelRef({ provider: "fireworks", id: "accounts/fireworks/models/glm-5" }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isHighSignalLiveModelRef({ provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" }),
     ).toBe(true);
@@ -672,7 +672,6 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "openrouter", id: "ai21/jamba-large-1.7" },
       { provider: "xai", id: "grok-4.3" },
       { provider: "zai", id: "glm-5.1" },
-      { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
       { provider: "minimax-portal", id: "minimax-m2.7" },
     ]);
@@ -729,13 +728,14 @@ describe("selectHighSignalLiveItems", () => {
     ]);
   });
 
-  it("prioritizes Fireworks GLM 5 models over GLM 4.x fallback entries", () => {
+  it("prioritizes supported Fireworks GLM 5 models over GLM 4.x fallback entries", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
     const items = [
       { provider: "fireworks", id: "accounts/fireworks/models/glm-4p7" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
       { provider: "fireworks", id: "accounts/fireworks/models/gpt-oss-120b" },
-    ];
+    ].filter(isHighSignalLiveModelRef);
 
     expect(
       selectHighSignalLiveItems(
@@ -744,10 +744,7 @@ describe("selectHighSignalLiveItems", () => {
         (item) => item,
         (item) => item.provider,
       ),
-    ).toEqual([
-      { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
-      { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
-    ]);
+    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" }]);
   });
 });
 

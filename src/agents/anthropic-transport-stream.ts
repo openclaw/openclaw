@@ -959,6 +959,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         );
         stream.push({ type: "start", partial: output as never });
         const blocks = output.content;
+        const signatureDeltaIndexes = new Set<number>();
         const allowReasoningContentReplay = supportsReasoningContentReplay(model);
         const reasoningContentThinkingBlocks = new Map<number, number>();
         const reasoningContentTextBlocks = new Map<number, number>();
@@ -1291,7 +1292,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "signature_delta" &&
               typeof delta.signature === "string"
             ) {
-              block.thinkingSignature = delta.signature;
+              const signatureIndex = eventIndexKey(event.index);
+              if (!signatureDeltaIndexes.has(signatureIndex)) {
+                signatureDeltaIndexes.add(signatureIndex);
+                block.thinkingSignature = "";
+              }
+              block.thinkingSignature = (block.thinkingSignature || "") + delta.signature;
             }
             continue;
           }

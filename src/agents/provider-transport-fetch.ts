@@ -33,6 +33,7 @@ import {
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
 const log = createSubsystemLogger("provider-transport-fetch");
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
+const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -267,6 +268,10 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
 
   if (/^(?:0|false|off|none|disabled)$/i.test(raw)) {
     return undefined;
+  }
+
+  if (!PLAIN_DECIMAL_NUMBER_RE.test(raw)) {
+    return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
   }
 
   const seconds = Number(raw);

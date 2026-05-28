@@ -1,3 +1,4 @@
+import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
 import { getChatChannelMeta } from "../channels/chat-meta.js";
 import { getRegisteredChannelPluginMeta, normalizeChatChannelId } from "../channels/registry.js";
 import {
@@ -78,6 +79,12 @@ export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {
     const builtInMeta = getChatChannelMeta(builtInChannel);
     if (builtInMeta) {
       return builtInMeta.markdownCapable === true;
+    }
+    const catalogMeta = listBundledChannelCatalogEntries().find(
+      (entry) => entry.id === builtInChannel,
+    );
+    if (catalogMeta) {
+      return catalogMeta.channel.markdownCapable === true;
     }
   }
   return getRegisteredChannelPluginMeta(channel)?.markdownCapable === true;

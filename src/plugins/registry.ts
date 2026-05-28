@@ -1761,6 +1761,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           pluginName: record.name,
           pluginRoot: record.rootDir,
           allowReservedCommandNames,
+          allowOwnerStatusExposure: canClaimReservedCommandOwnership(record),
         },
       );
       if (!result.ok) {

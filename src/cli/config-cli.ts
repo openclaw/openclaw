@@ -33,6 +33,7 @@ import {
 } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -48,6 +49,7 @@ import {
   discoverConfigSecretTargets,
   resolveConfigSecretTargetByPath,
 } from "../secrets/target-registry.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
@@ -319,7 +321,11 @@ class ConfigSetDryRunValidationError extends Error {
 }
 
 function isIndexSegment(raw: string): boolean {
-  return /^[0-9]+$/.test(raw);
+  return parseIndexSegment(raw) !== undefined;
+}
+
+function parseIndexSegment(raw: string): number | undefined {
+  return parseConfigPathArrayIndex(raw);
 }
 
 function parseBracketPathSegment(raw: string, fullPath: string): string {
@@ -456,8 +462,8 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
       if (!isIndexSegment(segment)) {
         return { found: false };
       }
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+      const index = parseIndexSegment(segment);
+      if (index === undefined || index >= current.length) {
         return { found: false };
       }
       current = current[index];
@@ -544,8 +550,8 @@ function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSch
   const schemas: JsonSchemaRecord[] = [];
   for (const alternative of schemaAlternatives(schema)) {
     if (schemaLooksArray(alternative)) {
-      if (isIndexSegment(segment)) {
-        const index = Number.parseInt(segment, 10);
+      const index = parseIndexSegment(segment);
+      if (index !== undefined) {
         const indexedItem = Array.isArray(alternative.items)
           ? alternative.items[index]
           : alternative.items;
@@ -642,7 +648,10 @@ function setAtPath(
       if (!isIndexSegment(segment)) {
         throw new Error(`Expected numeric index for array segment "${segment}"`);
       }
-      const index = Number.parseInt(segment, 10);
+      const index = parseIndexSegment(segment);
+      if (index === undefined) {
+        throw new Error(`Expected numeric index for array segment "${segment}"`);
+      }
       const existing = current[index];
       if (!existing || typeof existing !== "object") {
         current[index] = nextIsIndex ? [] : {};
@@ -666,7 +675,10 @@ function setAtPath(
     if (!isIndexSegment(last)) {
       throw new Error(`Expected numeric index for array segment "${last}"`);
     }
-    const index = Number.parseInt(last, 10);
+    const index = parseIndexSegment(last);
+    if (index === undefined) {
+      throw new Error(`Expected numeric index for array segment "${last}"`);
+    }
     current[index] = value;
     return;
   }
@@ -837,8 +849,8 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetA
       if (!isIndexSegment(segment)) {
         return { removed: false };
       }
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+      const index = parseIndexSegment(segment);
+      if (index === undefined || index >= current.length) {
         return { removed: false };
       }
       current = current[index];
@@ -856,8 +868,8 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetA
     if (!isIndexSegment(last)) {
       return { removed: false };
     }
-    const index = Number.parseInt(last, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+    const index = parseIndexSegment(last);
+    if (index === undefined || index >= current.length) {
       return { removed: false };
     }
     current.splice(index, 1);
@@ -1003,8 +1015,8 @@ function parseOptionalPositiveInteger(raw: string | undefined, flag: string): nu
   if (!trimmed) {
     throw new Error(`${flag} must not be empty.`);
   }
-  const parsed = Number(trimmed);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  const parsed = parseStrictPositiveInteger(trimmed);
+  if (parsed === undefined) {
     throw new Error(`${flag} must be a positive integer.`);
   }
   return parsed;

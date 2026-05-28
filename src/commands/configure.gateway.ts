@@ -8,6 +8,7 @@ import {
   TAILSCALE_EXPOSURE_OPTIONS,
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
@@ -51,7 +52,7 @@ export async function promptGatewayConfig(
     }),
     runtime,
   );
-  const port = Number.parseInt(portRaw, 10);
+  const port = parseStrictPositiveInteger(portRaw) ?? resolveGatewayPort(cfg);
 
   let bind = guardCancel(
     await select({

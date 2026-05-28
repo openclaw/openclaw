@@ -96,6 +96,48 @@ function createDefaultSessionMessages(): unknown[] {
 }
 export const sessionMessages: unknown[] = createDefaultSessionMessages();
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
+function createMockCompactionSession() {
+  const session = {
+    sessionId: "session-1",
+    messages: sessionMessages.map((message) => structuredClone(message)),
+    agent: {
+      streamFn: vi.fn(),
+      transport: "sse",
+      state: {
+        get messages() {
+          return session.messages;
+        },
+        set messages(messages: unknown[]) {
+          session.messages = [...messages];
+        },
+      },
+    },
+    compact: vi.fn(async () => {
+      session.messages.splice(1);
+      return await sessionCompactImpl();
+    }),
+    setActiveToolsByName: vi.fn(),
+    abortCompaction: sessionAbortCompactionMock,
+    dispose: vi.fn(),
+  };
+  return session;
+}
+export const createAgentSessionMock = vi.fn(async (_options?: unknown) => ({
+  session: createMockCompactionSession(),
+}));
+function createMockToolDefinitions(tools: unknown[] = []) {
+  return tools.map((tool) => {
+    const source = tool && typeof tool === "object" ? (tool as Record<string, unknown>) : {};
+    const name = typeof source.name === "string" && source.name.length > 0 ? source.name : "tool";
+    return {
+      name,
+      label: source.label ?? name,
+      description: source.description ?? "",
+      parameters: source.parameters,
+      execute: source.execute ?? vi.fn(),
+    };
+  });
+}
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
 export const guardSessionManagerMock = vi.fn(() => ({
   flushPendingToolResults: vi.fn(),
@@ -266,6 +308,10 @@ export function resetCompactSessionStateMocks(): void {
   estimateTokensMock.mockReturnValue(10);
   sessionMessages.splice(0, sessionMessages.length, ...createDefaultSessionMessages());
   sessionAbortCompactionMock.mockReset();
+  createAgentSessionMock.mockReset();
+  createAgentSessionMock.mockImplementation(async () => ({
+    session: createMockCompactionSession(),
+  }));
   resolveEmbeddedAgentStreamFnMock.mockReset();
   resolveEmbeddedAgentStreamFnMock.mockImplementation((_params?: unknown) => vi.fn());
   registerProviderStreamForModelMock.mockReset();
@@ -444,32 +490,7 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../sessions/index.js", () => ({
     AuthStorage: function AuthStorage() {},
     ModelRegistry: function ModelRegistry() {},
-    createAgentSession: vi.fn(async () => {
-      const session = {
-        sessionId: "session-1",
-        messages: sessionMessages.map((message) => structuredClone(message)),
-        agent: {
-          streamFn: vi.fn(),
-          transport: "sse",
-          state: {
-            get messages() {
-              return session.messages;
-            },
-            set messages(messages: unknown[]) {
-              session.messages = [...messages];
-            },
-          },
-        },
-        compact: vi.fn(async () => {
-          session.messages.splice(1);
-          return await sessionCompactImpl();
-        }),
-        setActiveToolsByName: vi.fn(),
-        abortCompaction: sessionAbortCompactionMock,
-        dispose: vi.fn(),
-      };
-      return { session };
-    }),
+    createAgentSession: createAgentSessionMock,
     DefaultResourceLoader: function DefaultResourceLoader() {
       return {
         reload: vi.fn(async () => undefined),
@@ -634,7 +655,9 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./tool-split.js", () => ({
-    splitSdkTools: vi.fn(() => ({ customTools: [] })),
+    splitSdkTools: vi.fn(({ tools }: { tools?: unknown[] }) => ({
+      customTools: createMockToolDefinitions(tools),
+    })),
   }));
 
   vi.doMock("./compaction-safety-timeout.js", () => {

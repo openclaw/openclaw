@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveZaiFallbackPnpmCommand } from "../../scripts/zai-fallback-repro.ts";
+import {
+  appendBoundedReproOutput,
+  resolveZaiFallbackPnpmCommand,
+} from "../../scripts/zai-fallback-repro.ts";
 
 describe("zai fallback repro command resolution", () => {
   it("wraps Windows pnpm.cmd without Node shell argv", () => {
@@ -23,5 +26,13 @@ describe("zai fallback repro command resolution", () => {
       shell: false,
       windowsVerbatimArguments: true,
     });
+  });
+
+  it("keeps only a bounded child output tail", () => {
+    const first = appendBoundedReproOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
+    const second = appendBoundedReproOutput(first, "ghij", 5);
+
+    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
+    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
   });
 });

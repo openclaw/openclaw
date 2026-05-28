@@ -1,9 +1,10 @@
 import Testing
 @testable import OpenClaw
 
-@Suite struct RootCanvasPresentationTests {
+@MainActor
+@Suite struct RootTabsPresentationTests {
     @Test func quickSetupDoesNotPresentWhenGatewayAlreadyConfigured() {
-        let shouldPresent = RootCanvas.shouldPresentQuickSetup(
+        let shouldPresent = RootTabs.shouldPresentQuickSetup(
             quickSetupDismissed: false,
             showOnboarding: false,
             hasPresentedSheet: false,
@@ -15,7 +16,7 @@ import Testing
     }
 
     @Test func quickSetupPresentsForFreshInstallWithDiscoveredGateway() {
-        let shouldPresent = RootCanvas.shouldPresentQuickSetup(
+        let shouldPresent = RootTabs.shouldPresentQuickSetup(
             quickSetupDismissed: false,
             showOnboarding: false,
             hasPresentedSheet: false,
@@ -27,7 +28,7 @@ import Testing
     }
 
     @Test func quickSetupDoesNotPresentWhenAlreadyConnected() {
-        let shouldPresent = RootCanvas.shouldPresentQuickSetup(
+        let shouldPresent = RootTabs.shouldPresentQuickSetup(
             quickSetupDismissed: false,
             showOnboarding: false,
             hasPresentedSheet: false,

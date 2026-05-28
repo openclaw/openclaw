@@ -812,6 +812,25 @@ describe("config schema", () => {
     expect((lookup?.schema as { items?: unknown } | undefined)?.items).toBeUndefined();
   });
 
+  it("rejects impractical numeric tuple lookup indexes", () => {
+    const tupleSchema = {
+      schema: {
+        type: "object",
+        properties: {
+          pair: {
+            type: "array",
+            items: [{ type: "string" }, { type: "number" }],
+          },
+        },
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "test",
+    } as unknown as Parameters<typeof lookupConfigSchema>[0];
+
+    expect(lookupConfigSchema(tupleSchema, "pair.4294967294")).toBeNull();
+  });
+
   it("rejects prototype-chain lookup segments", () => {
     expect(lookupConfigSchema(baseSchema, "constructor")).toBeNull();
     expect(lookupConfigSchema(baseSchema, "__proto__.polluted")).toBeNull();

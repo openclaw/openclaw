@@ -531,6 +531,15 @@ function collectExitSummary(samples: Sample[]): string {
   return [...buckets.entries()].map(([key, count]) => `${key}x${count}`).join(", ");
 }
 
+function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> | null {
+  if (commandCase.id !== "configGetGatewayPort") {
+    return null;
+  }
+  const envPort = Number.parseInt(process.env.OPENCLAW_GATEWAY_PORT ?? "", 10);
+  const port = Number.isFinite(envPort) && envPort > 0 ? envPort : 32123;
+  return { gateway: { port } };
+}
+
 function buildRssHook(tmpDir: string): string {
   const rssHookPath = path.join(tmpDir, "measure-rss.mjs");
   writeFileSync(
@@ -583,6 +592,11 @@ async function runSample(params: {
   const runRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"));
   const stateDir = path.join(runRoot, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
+  const configFixture = buildConfigFixture(params.commandCase);
+  if (configFixture) {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(configPath, `${JSON.stringify(configFixture, null, 2)}\n`, "utf8");
+  }
   const nodeArgs = [
     "--import",
     params.rssHookPath,
@@ -981,6 +995,7 @@ async function main(): Promise<void> {
 }
 
 export const testing = {
+  buildConfigFixture,
   collectFailedSamples,
   parseNonNegativeInt,
   parsePositiveInt,

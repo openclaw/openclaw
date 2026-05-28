@@ -1,8 +1,8 @@
 import type { SubscribeEmbeddedAgentSessionParams } from "../../embedded-agent-subscribe.types.js";
 import { log } from "../logger.js";
+import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
 
-export const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS =
-  process.env.OPENCLAW_TEST_FAST === "1" ? 250 : 2_000;
+export const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
 
 type IdleAwareAgent = {
   waitForIdle?: (() => Promise<void>) | undefined;

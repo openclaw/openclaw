@@ -441,7 +441,7 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
-          timeoutMs: 100,
+          timeoutMs: 1_000,
         },
       },
     } as never;

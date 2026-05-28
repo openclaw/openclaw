@@ -107,6 +107,8 @@ import {
   resolveSkillsPromptForRun,
 } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
+import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
+import { logRuntimeToolSchemaQuarantine } from "../tool-schema-quarantine.js";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
@@ -844,7 +846,16 @@ async function compactEmbeddedAgentSessionDirectOnce(
       filteredBundledTools.length > 0
         ? runtimePlan.tools.normalize(filteredBundledTools, runtimePlanModelContext)
         : filteredBundledTools;
-    const effectiveTools = [...tools, ...normalizedBundledTools];
+    const projectedEffectiveTools = [...tools, ...normalizedBundledTools];
+    const toolSchemaProjection = filterRuntimeCompatibleTools(projectedEffectiveTools);
+    logRuntimeToolSchemaQuarantine({
+      diagnostics: toolSchemaProjection.diagnostics,
+      tools: projectedEffectiveTools,
+      runId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    });
+    const effectiveTools = [...toolSchemaProjection.tools];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
     runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
     const machineName = await getMachineDisplayName();

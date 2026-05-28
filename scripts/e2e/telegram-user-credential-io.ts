@@ -12,6 +12,7 @@ type FetchJsonParams = {
 
 type RunCommandOptions = {
   outputLimit?: number;
+  timeoutKillGraceMs?: number;
   timeoutMs: number;
 };
 
@@ -47,7 +48,9 @@ export function runCommand(
     let settled = false;
     let timeout: NodeJS.Timeout;
     let killTimer: NodeJS.Timeout | undefined;
+    let timedOutError: Error | undefined;
     const timeoutMs = Math.max(1, options.timeoutMs);
+    const timeoutKillGraceMs = Math.max(0, options.timeoutKillGraceMs ?? KILL_GRACE_MS);
     const clearTimers = () => {
       clearTimeout(timeout);
       if (killTimer) {
@@ -66,17 +69,14 @@ export function runCommand(
       if (settled) {
         return;
       }
-      settled = true;
-      clearTimeout(timeout);
-      const error = timeoutError(
+      timedOutError = timeoutError(
         `${command} ${args.join(" ")} timed out after ${timeoutMs}ms\n${stdout}${stderr}`,
       );
       child.kill("SIGTERM");
       killTimer = setTimeout(() => {
         child.kill("SIGKILL");
-      }, KILL_GRACE_MS);
+      }, timeoutKillGraceMs);
       killTimer.unref?.();
-      reject(error);
     }, timeoutMs);
     timeout.unref?.();
 
@@ -89,13 +89,14 @@ export function runCommand(
     child.on("error", fail);
     child.on("close", (code, signal) => {
       if (settled) {
-        if (killTimer) {
-          clearTimeout(killTimer);
-        }
         return;
       }
       settled = true;
       clearTimers();
+      if (timedOutError) {
+        reject(timedOutError);
+        return;
+      }
       if (code === 0) {
         resolve();
         return;

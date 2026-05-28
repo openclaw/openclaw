@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import {
   createServer,
   request as httpRequest,
@@ -700,7 +708,58 @@ function pruneExpiredNativeHookRelays(now = Date.now()): void {
   }
 }
 
+function isNativeHookRelayBridgePidDead(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH";
+  }
+}
+
 function registerNativeHookRelayBridge(registration: ActiveNativeHookRelayRegistration): void {
+  // Prune actually stale bridge files from prior gateway processes. The bridge
+  // directory is scoped by OS user (uid) and is shared across all OpenClaw
+  // gateways/profiles run by that user, so a record with a non-current PID is
+  // NOT automatically stale — it can legitimately belong to another live
+  // gateway under the same uid. Only prune records whose owning PID is dead
+  // or whose expiry has passed; leave live foreign records alone.
+  try {
+    const staleDir = ensureNativeHookRelayBridgeDir();
+    const now = Date.now();
+    for (const name of readdirSync(staleDir)) {
+      if (!name.endsWith(".json")) {
+        continue;
+      }
+      const full = path.join(staleDir, name);
+      try {
+        const rec = JSON.parse(readFileSync(full, "utf8")) as {
+          pid?: number;
+          expiresAtMs?: number;
+        };
+        if (!rec || typeof rec.pid !== "number" || rec.pid === process.pid) {
+          continue;
+        }
+        const expired = typeof rec.expiresAtMs === "number" && now > rec.expiresAtMs;
+        const deadPid = !expired && isNativeHookRelayBridgePidDead(rec.pid);
+        if (!expired && !deadPid) {
+          // Live foreign record from another same-uid gateway/profile. Preserve it.
+          continue;
+        }
+        rmSync(full, { force: true });
+        log.debug("pruned stale native hook relay bridge file", {
+          file: name,
+          stalePid: rec.pid,
+          currentPid: process.pid,
+          reason: deadPid ? "dead-pid" : "expired",
+        });
+      } catch {
+        // ignore unparseable / racing files
+      }
+    }
+  } catch (error) {
+    log.debug("native hook relay bridge dir prune skipped", { error });
+  }
   unregisterNativeHookRelayBridge(registration.relayId);
   const token = randomUUID();
   const bridgeDir = ensureNativeHookRelayBridgeDir();

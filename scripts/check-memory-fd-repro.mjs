@@ -342,7 +342,11 @@ function sampleFds({ label, pid, workspaceRealPath }) {
   return sample;
 }
 
-async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
+export function hasChildExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+export async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
   const startedAt = Date.now();
   let outputState = { tail: "", readySeen: false };
   const append = (chunk) => {
@@ -357,7 +361,7 @@ async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
     if (outputState.readySeen && findGatewayPid(port)) {
       return;
     }
-    if (child.exitCode !== null) {
+    if (hasChildExited(child)) {
       throw new Error(`gateway exited before ready; see ${logPath}`);
     }
     await sleep(100);
@@ -365,26 +369,41 @@ async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
   throw new Error(`gateway did not become ready within ${timeoutMs}ms; see ${logPath}`);
 }
 
-async function stopGateway({ child, port }) {
-  if (child.exitCode === null) {
+export async function stopGateway({ child, port }) {
+  return stopGatewayWithRuntime({
+    child,
+    port,
+    findGatewayPidFn: findGatewayPid,
+    killProcess: (pid, signal) => process.kill(pid, signal),
+  });
+}
+
+export async function stopGatewayWithRuntime({
+  child,
+  port,
+  findGatewayPidFn,
+  killProcess,
+  listenerSettleDelayMs = 500,
+}) {
+  if (!hasChildExited(child)) {
     child.kill("SIGINT");
     for (let i = 0; i < 50; i += 1) {
-      if (child.exitCode !== null) {
+      if (hasChildExited(child)) {
         break;
       }
       await sleep(100);
     }
   }
-  const listenerPid = findGatewayPid(port);
+  const listenerPid = findGatewayPidFn(port);
   if (listenerPid) {
     try {
-      process.kill(listenerPid, "SIGTERM");
+      killProcess(listenerPid, "SIGTERM");
     } catch {}
-    await sleep(500);
-    const stillListening = findGatewayPid(port);
+    await sleep(listenerSettleDelayMs);
+    const stillListening = findGatewayPidFn(port);
     if (stillListening) {
       try {
-        process.kill(stillListening, "SIGKILL");
+        killProcess(stillListening, "SIGKILL");
       } catch {}
     }
   }

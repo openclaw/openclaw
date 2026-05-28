@@ -10,6 +10,7 @@ import {
   tryNormalizeBotFrameworkServiceUrl,
 } from "./bot-framework-service-url.js";
 import { formatUnknownError } from "./errors.js";
+import { createMSTeamsHttpError } from "./http-error.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
@@ -491,9 +492,8 @@ async function updateActivityViaRest(params: {
 
   try {
     if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw Object.assign(new Error(`updateActivity failed: HTTP ${response.status} ${body}`), {
-        statusCode: response.status,
+      throw await createMSTeamsHttpError(response, "updateActivity failed", {
+        statusPrefix: "HTTP ",
       });
     }
 
@@ -538,9 +538,8 @@ async function deleteActivityViaRest(params: {
 
   try {
     if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw Object.assign(new Error(`deleteActivity failed: HTTP ${response.status} ${body}`), {
-        statusCode: response.status,
+      throw await createMSTeamsHttpError(response, "deleteActivity failed", {
+        statusPrefix: "HTTP ",
       });
     }
   } finally {
@@ -683,9 +682,16 @@ type JwksClientCtor = BotFrameworkJwtDeps["JwksClient"];
 
 const BOT_FRAMEWORK_GLOBAL_AUDIENCE = "https://api.botframework.com";
 
-function isJwtPayloadObject(
-  value: unknown,
-): value is { iss?: unknown; aud?: unknown; appid?: unknown; azp?: unknown } {
+type BotFrameworkJwtPayload = {
+  iss?: unknown;
+  aud?: unknown;
+  appid?: unknown;
+  azp?: unknown;
+  serviceurl?: unknown;
+  serviceUrl?: unknown;
+};
+
+function isJwtPayloadObject(value: unknown): value is BotFrameworkJwtPayload {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -726,6 +732,43 @@ function hasExpectedBotIdentity(payload: unknown, expectedAppId: string): boolea
     normalizeBotIdentityClaim(payload.appid) === expected ||
     normalizeBotIdentityClaim(payload.azp) === expected
   );
+}
+
+function validateAndNormalizeBotFrameworkServiceUrl(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const url = new URL(trimmed);
+    // Match the signed endpoint, not a loosely equivalent URL: the URL parser
+    // normalizes host/default port, while path casing and encoding stay intact.
+    // Query/fragment values are not valid Bot Framework service endpoints.
+    if (url.protocol !== "https:" || url.search || url.hash) {
+      return null;
+    }
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function hasMatchingServiceUrlClaim(
+  payload: BotFrameworkJwtPayload,
+  activityServiceUrl: string | undefined,
+): boolean {
+  const expectedServiceUrl = validateAndNormalizeBotFrameworkServiceUrl(activityServiceUrl);
+  if (!expectedServiceUrl) {
+    return false;
+  }
+  // Bot Framework tokens commonly use lowercase `serviceurl`; keep the
+  // documented camelCase spelling as a narrow fallback for SDK/source variants.
+  const claimValue = payload.serviceurl ?? payload.serviceUrl;
+  const claimServiceUrl = validateAndNormalizeBotFrameworkServiceUrl(claimValue);
+  return claimServiceUrl === expectedServiceUrl;
 }
 
 let botFrameworkJwtDepsPromise: Promise<BotFrameworkJwtDeps> | null = null;
@@ -795,10 +838,11 @@ async function loadBotFrameworkJwtDeps(): Promise<BotFrameworkJwtDeps> {
  * - signature verification via issuer-specific JWKS endpoints
  * - audience validation: appId, api://appId, and https://api.botframework.com
  * - issuer validation: strict allowlist (Bot Framework + tenant-scoped Entra)
+ * - service URL binding: JWT serviceurl claim must match a usable Activity.serviceUrl
  * - expiration validation with 5-minute clock tolerance
  */
 export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials): Promise<{
-  validate: (authHeader: string) => Promise<boolean>;
+  validate: (authHeader: string, activityServiceUrl?: string) => Promise<boolean>;
 }> {
   const { jwt, JwksClient } = await loadBotFrameworkJwtDeps();
 
@@ -847,7 +891,7 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
   }
 
   return {
-    async validate(authHeader: string, _serviceUrl?: string): Promise<boolean> {
+    async validate(authHeader: string, activityServiceUrl: string | undefined): Promise<boolean> {
       const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
       if (!token) {
         return false;
@@ -881,6 +925,9 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
           clockTolerance: 300,
         });
         if (!isJwtPayloadObject(verifiedPayload)) {
+          return false;
+        }
+        if (!hasMatchingServiceUrlClaim(verifiedPayload, activityServiceUrl)) {
           return false;
         }
         const audiences = getAudienceClaims(verifiedPayload);
