@@ -5,7 +5,8 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
-import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { toSanitizedMarkdownHtml, toSanitizedMarkdownHtmlWithKatex } from "../markdown.ts";
+import type { MarkdownRenderOptions } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
@@ -44,6 +45,18 @@ const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachment
 const assistantAttachmentRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
+
+/**
+ * Render markdown content with optional KaTeX math rendering.
+ * When options.mathRendering === "katex", uses the KaTeX-enabled renderer.
+ * Otherwise, uses the standard renderer (identical behavior to current code).
+ */
+function renderMarkdownContent(markdown: string, options: MarkdownRenderOptions = {}): string {
+  if (options.mathRendering === "katex") {
+    return toSanitizedMarkdownHtmlWithKatex(markdown, options);
+  }
+  return toSanitizedMarkdownHtml(markdown, options);
+}
 
 export type ChatTimestampDisplay = {
   label: string;
@@ -401,6 +414,7 @@ export function renderMessageGroup(
     allowExternalEmbedUrls?: boolean;
     contextWindow?: number | null;
     onDelete?: () => void;
+    mathRendering?: "off" | "katex";
   },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
@@ -466,6 +480,7 @@ export function renderMessageGroup(
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
               embedSandboxMode: opts.embedSandboxMode,
+              mathRendering: opts.mathRendering,
             },
             opts.onOpenSidebar,
           ),
@@ -1453,6 +1468,7 @@ function renderGroupedMessage(
     assistantAttachmentAuthToken?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    mathRendering?: "off" | "katex";
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -1628,7 +1644,11 @@ function renderGroupedMessage(
                       )}
                       ${reasoningMarkdown
                         ? html`<div class="chat-thinking">
-                            ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                            ${unsafeHTML(
+                              renderMarkdownContent(reasoningMarkdown, {
+                                mathRendering: opts.mathRendering,
+                              }),
+                            )}
                           </div>`
                         : nothing}
                       ${jsonResult
@@ -1647,7 +1667,10 @@ function renderGroupedMessage(
                         : markdown
                           ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
                               ${unsafeHTML(
-                                toSanitizedMarkdownHtml(markdown, markdownRenderOptions),
+                                renderMarkdownContent(markdown, {
+                                  ...(markdownRenderOptions ?? {}),
+                                  mathRendering: opts.mathRendering,
+                                }),
                               )}
                             </div>`
                           : nothing}
@@ -1686,7 +1709,9 @@ function renderGroupedMessage(
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">
-                  ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                  ${unsafeHTML(
+                    renderMarkdownContent(reasoningMarkdown, { mathRendering: opts.mathRendering }),
+                  )}
                 </div>`
               : nothing}
             ${normalizedRole === "assistant" && assistantViewBlocks.length > 0
@@ -1710,7 +1735,12 @@ function renderGroupedMessage(
                 </details>`
               : markdown
                 ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                    ${unsafeHTML(toSanitizedMarkdownHtml(markdown, markdownRenderOptions))}
+                    ${unsafeHTML(
+                      renderMarkdownContent(markdown, {
+                        ...(markdownRenderOptions ?? {}),
+                        mathRendering: opts.mathRendering,
+                      }),
+                    )}
                   </div>`
                 : nothing}
             ${hasToolCards
