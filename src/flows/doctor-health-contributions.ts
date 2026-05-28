@@ -721,6 +721,21 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 }
 
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { resolveSecretInputRef } = await import("../config/types.secrets.js");
+  const { note } = await import("../terminal/note.js");
+  const gatewayTokenRef = resolveSecretInputRef({
+    value: ctx.cfg.gateway?.auth?.token,
+    defaults: ctx.cfg.secrets?.defaults,
+  }).ref;
+  if (gatewayTokenRef?.source === "exec" && ctx.options.allowExec !== true) {
+    note(
+      "Gateway health probes skipped because gateway.auth.token uses an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs.",
+      "Gateway",
+    );
+    ctx.healthOk = false;
+    ctx.gatewayMemoryProbe = { checked: false, ready: false, skipped: true };
+    return;
+  }
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
   const { healthOk, status } = await checkGatewayHealth({

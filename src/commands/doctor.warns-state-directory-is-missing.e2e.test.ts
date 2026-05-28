@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  callGateway,
   createDoctorRuntime,
   ensureAuthProfileStore,
   mockDoctorConfigSnapshot,
@@ -434,6 +435,45 @@ describe("doctor command", () => {
     expect(String(gatewayAuthNote[0])).toContain(
       "Gateway token SecretRef could not be resolved: gateway.auth.token SecretRef is unresolved",
     );
+  });
+
+  it("skips gateway health probes for exec SecretRefs unless allow-exec is set", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: {
+              source: "exec",
+              provider: "default",
+              id: "gateway/token",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: {
+              source: "exec",
+              command: process.execPath,
+            },
+          },
+        },
+      },
+    });
+
+    callGateway.mockClear();
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    requireTerminalNote({
+      title: "Gateway",
+      messageIncludes:
+        "Gateway health probes skipped because gateway.auth.token uses an exec SecretRef.",
+    });
   });
 
   it("skips gateway auth warning when SecretRef-managed token resolves", async () => {
