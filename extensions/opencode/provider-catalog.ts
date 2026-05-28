@@ -11,10 +11,10 @@ const OPENCODE_ZEN_MODELS = (
     {
       id: "deepseek-v4-flash-free",
       name: "DeepSeek V4 Flash (Free)",
-      api: "openai-responses",
+      api: "openai-completions",
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
-      reasoning: false,
+      reasoning: true,
       input: ["text"],
       cost: {
         input: 0,
@@ -22,8 +22,8 @@ const OPENCODE_ZEN_MODELS = (
         cacheRead: 0,
         cacheWrite: 0,
       },
-      contextWindow: 195_000,
-      maxTokens: 16_384,
+      contextWindow: 65_536,
+      maxTokens: 8_192,
     },
     {
       id: "claude-opus-4-6",
