@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPluginLoaderCache, testing } from "../loader.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRegistry } from "../registry-types.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runtime.js";
+import {
+  getActivePluginChannelRegistry,
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../runtime.js";
 
 const loaderMocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn<typeof import("../loader.js").loadOpenClawPlugins>(),
@@ -112,6 +117,37 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded", () => {
     });
 
     expect(result).toBe(loadedRegistry);
+    expect(loaderMocks.loadOpenClawPlugins).toHaveBeenCalledOnce();
+  });
+
+  it("does not pin a tool-discovery registry when channels are empty", () => {
+    const startupRegistry = createEmptyPluginRegistry();
+    startupRegistry.channels.push({} as never); // Mock an existing pinned registry
+    setActivePluginRegistry(startupRegistry, "startup", "gateway-bindable");
+    pinActivePluginChannelRegistry(startupRegistry);
+
+    // Make sure our startup pinned registry is the one returned
+    expect(getActivePluginChannelRegistry()).toBe(startupRegistry);
+
+    const loadedRegistry = createEmptyPluginRegistry(); // Empty channels
+    loaderMocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry);
+
+    const result = ensureStandaloneRuntimePluginRegistryLoaded({
+      loadOptions: {
+        config: { plugins: { allow: ["demo"] } },
+        onlyPluginIds: ["demo"],
+        workspaceDir: "/tmp/ws",
+        activate: false,
+        toolDiscovery: true,
+      },
+      surface: "channel",
+      forceLoad: true,
+      installRegistry: true,
+    });
+
+    expect(result).toBe(loadedRegistry);
+    // The previous startup pinned registry should still be the active channel registry
+    expect(getActivePluginChannelRegistry()).toBe(startupRegistry);
     expect(loaderMocks.loadOpenClawPlugins).toHaveBeenCalledOnce();
   });
 });
