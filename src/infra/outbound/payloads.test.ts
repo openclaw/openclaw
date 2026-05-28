@@ -1,6 +1,7 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { SILENT_REPLY_DISALLOWED_FALLBACK_TEXT } from "../../shared/silent-reply-policy.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   createOutboundPayloadPlan,
@@ -214,15 +215,15 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
-  it("drops bare silent replies for direct conversations", () => {
-    expect(
-      projectOutboundPayloadPlanForDelivery(
-        createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
-          sessionKey: "agent:main:telegram:direct:123",
-          surface: "telegram",
-        }),
-      ),
-    ).toStrictEqual([]);
+  it("surfaces bare silent replies for direct conversations", () => {
+    const delivery = projectOutboundPayloadPlanForDelivery(
+      createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+        sessionKey: "agent:main:telegram:direct:123",
+        surface: "telegram",
+      }),
+    );
+    expect(delivery).toHaveLength(1);
+    expect(delivery[0]?.text).toBe(SILENT_REPLY_DISALLOWED_FALLBACK_TEXT);
   });
 
   it("drops bare silent replies for groups", () => {

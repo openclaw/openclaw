@@ -1,6 +1,7 @@
 import type { Bot } from "grammy";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SILENT_REPLY_DISALLOWED_FALLBACK_TEXT } from "../../../../src/shared/silent-reply-policy.js";
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
@@ -479,7 +480,7 @@ describe("deliverReplies", () => {
     expect(triggerInternalHook).not.toHaveBeenCalled();
   });
 
-  it("suppresses exact NO_REPLY for direct Telegram sessions", async () => {
+  it("surfaces exact NO_REPLY for direct Telegram sessions", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 12, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
@@ -491,10 +492,14 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      SILENT_REPLY_DISALLOWED_FALLBACK_TEXT,
+      expect.any(Object),
+    );
   });
 
-  it("uses the policy session key when suppressing exact NO_REPLY", async () => {
+  it("uses the policy session key when surfacing exact NO_REPLY", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 121, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
@@ -507,7 +512,11 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      SILENT_REPLY_DISALLOWED_FALLBACK_TEXT,
+      expect.any(Object),
+    );
   });
 
   it("suppresses exact NO_REPLY for group Telegram sessions", async () => {

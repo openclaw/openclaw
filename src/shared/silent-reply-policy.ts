@@ -12,6 +12,9 @@ export const DEFAULT_SILENT_REPLY_POLICY: Record<SilentReplyConversationType, Si
   internal: "allow",
 };
 
+export const SILENT_REPLY_DISALLOWED_FALLBACK_TEXT =
+  "I received this, but the model returned an empty reply. Please send it again.";
+
 export function classifySilentReplyConversationType(params: {
   sessionKey?: string;
   surface?: string;

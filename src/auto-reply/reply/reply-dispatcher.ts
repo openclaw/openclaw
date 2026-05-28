@@ -1,9 +1,13 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
+import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import {
+  SILENT_REPLY_DISALLOWED_FALLBACK_TEXT,
+  type SilentReplyConversationType,
+} from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -156,6 +160,15 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
     const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
+    const shouldSurfaceDisallowedSilent =
+      kind === "final" &&
+      originalWasExactSilent &&
+      resolveSilentReplyPolicy({
+        cfg: options.silentReplyContext?.cfg,
+        sessionKey: options.silentReplyContext?.sessionKey,
+        surface: options.silentReplyContext?.surface,
+        conversationType: options.silentReplyContext?.conversationType,
+      }) === "disallow";
     const normalized = normalizeReplyPayloadInternal(payload, {
       responsePrefix: options.responsePrefix,
       responsePrefixContext: options.responsePrefixContext,
@@ -164,7 +177,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       onHeartbeatStrip: options.onHeartbeatStrip,
       onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
     });
-    if (!normalized) {
+    const deliverable =
+      shouldSurfaceDisallowedSilent && !normalized
+        ? ({ ...payload, text: SILENT_REPLY_DISALLOWED_FALLBACK_TEXT } satisfies ReplyPayload)
+        : normalized;
+    if (!deliverable) {
       if (kind === "final" && originalWasExactSilent) {
         silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
           hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
@@ -192,9 +209,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
-        let deliverPayload: ReplyPayload | null = normalized;
+        let deliverPayload: ReplyPayload | null = deliverable;
         if (options.beforeDeliver) {
-          deliverPayload = await options.beforeDeliver(normalized, { kind });
+          deliverPayload = await options.beforeDeliver(deliverPayload, { kind });
           if (!deliverPayload) {
             cancelledCounts[kind] += 1;
             return;

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { SILENT_REPLY_DISALLOWED_FALLBACK_TEXT } from "../../shared/silent-reply-policy.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createReplyDispatcher, waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { createReplyToModeFilter } from "./reply-threading.js";
@@ -29,7 +30,7 @@ describe("createReplyDispatcher", () => {
     expect(deliveredText(deliver, 1)).toBe(`interject.${SILENT_REPLY_TOKEN}`);
   });
 
-  it("drops exact NO_REPLY final payloads for direct sessions", async () => {
+  it("surfaces exact NO_REPLY final payloads for direct sessions", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const cfg: OpenClawConfig = {
       agents: {
@@ -50,10 +51,11 @@ describe("createReplyDispatcher", () => {
       },
     });
 
-    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
+    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(true);
 
     await dispatcher.waitForIdle();
-    expect(deliver).not.toHaveBeenCalled();
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliveredText(deliver)).toBe(SILENT_REPLY_DISALLOWED_FALLBACK_TEXT);
   });
 
   it("still drops exact NO_REPLY final payloads for group sessions where silence is allowed", async () => {
