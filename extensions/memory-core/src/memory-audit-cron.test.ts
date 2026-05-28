@@ -3,7 +3,10 @@ import {
   type MemoryAuditConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { describe, expect, it, vi } from "vitest";
-import { reconcileMemoryAuditCronJobs } from "./memory-audit-cron.js";
+import {
+  createMemoryAuditCronReconciler,
+  reconcileMemoryAuditCronJobs,
+} from "./memory-audit-cron.js";
 
 type CronJob = Parameters<
   NonNullable<Parameters<typeof reconcileMemoryAuditCronJobs>[0]["cron"]>["update"]
@@ -121,5 +124,60 @@ describe("memory audit cron reconciliation", () => {
       }),
     );
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it("retries startup reconciliation when cron is not available at gateway_start", async () => {
+    const addedNames: string[] = [];
+    const cron = {
+      list: vi.fn(async () => []),
+      add: async (job: { name: string }) => {
+        addedNames.push(job.name);
+      },
+      update: vi.fn(async () => undefined),
+      remove: vi.fn(async () => ({ removed: true })),
+    };
+    const api = {
+      config: {},
+      pluginConfig: {},
+      logger: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    };
+    let currentCron: unknown = null;
+    const reconciler = createMemoryAuditCronReconciler(api as never, {
+      startupRetryDelayMs: 10,
+      startupRetryMaxAttempts: 1,
+      runtimeIntervalMs: false,
+    });
+
+    await reconciler.handleGatewayStart({
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                memoryAudit: {
+                  enabled: true,
+                  daily: { enabled: true, cron: "10 6 * * *" },
+                  weekly: { enabled: false, cron: "0 21 * * 0" },
+                },
+              },
+            },
+          },
+        },
+      },
+      getCron: () => currentCron,
+    });
+
+    expect(addedNames).toStrictEqual([]);
+
+    currentCron = cron;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(addedNames).toContain(MANAGED_MEMORY_AUDIT_DAILY_CRON_NAME);
+    reconciler.dispose();
   });
 });

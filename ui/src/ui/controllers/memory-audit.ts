@@ -172,17 +172,27 @@ function readMemoryAuditConfig(config: unknown, pluginId: string): Record<string
   return readNestedRecord(pluginConfig, "memoryAudit");
 }
 
+function readMemoryPluginEntry(config: unknown, pluginId: string): Record<string, unknown> | null {
+  const root = asRecord(config);
+  const plugins = readNestedRecord(root, "plugins");
+  const entries = readNestedRecord(plugins, "entries");
+  return readNestedRecord(entries, pluginId);
+}
+
 export function readMemoryAuditSettings(config: unknown): {
   pluginId: string;
   draft: MemoryAuditSettingsDraft;
 } {
   const pluginId = resolveMemoryAuditPluginId(config);
+  const entry = readMemoryPluginEntry(config, pluginId);
   const audit = readMemoryAuditConfig(config, pluginId);
   const delivery = readNestedRecord(audit, "delivery");
   const daily = readNestedRecord(audit, "daily");
   const weekly = readNestedRecord(audit, "weekly");
+  const pluginEnabled = entry?.enabled !== false;
+  const auditEnabled = normalizeBoolean(audit?.enabled, DEFAULT_MEMORY_AUDIT_SETTINGS.enabled);
   const draft: MemoryAuditSettingsDraft = {
-    enabled: normalizeBoolean(audit?.enabled, DEFAULT_MEMORY_AUDIT_SETTINGS.enabled),
+    enabled: pluginEnabled && auditEnabled,
     agentId: normalizeTrimmedString(audit?.agentId) ?? DEFAULT_MEMORY_AUDIT_SETTINGS.agentId,
     sessionTarget:
       normalizeTrimmedString(audit?.sessionTarget) ?? DEFAULT_MEMORY_AUDIT_SETTINGS.sessionTarget,
@@ -496,6 +506,20 @@ function memoryAuditSettingsSavedMessage(payload: ConfigPatchResult): string {
   return "Memory Audit settings saved. Restart the Gateway to reconcile audit schedules.";
 }
 
+async function requestMemoryAuditGatewayRestart(state: MemoryAuditState): Promise<boolean> {
+  if (!state.client || hasGatewayMethod(state, "gateway.restart.request") !== true) {
+    return false;
+  }
+  try {
+    await state.client.request("gateway.restart.request", {
+      reason: "memory-audit-settings",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function loadMemoryAuditSuggestions(state: MemoryAuditState): Promise<void> {
   if (!state.client || !state.connected || state.memoryAuditLoading) {
     return;
@@ -574,11 +598,18 @@ export async function saveMemoryAuditSettings(state: MemoryAuditState): Promise<
       note: "Memory Audit settings updated from the Audit tab.",
     });
     state.memoryAuditSettingsOriginal = { ...state.memoryAuditSettingsDraft };
+    await loadMemoryAuditSettings(state);
+    const restartRequested =
+      patchResult?.noop === true || asRecord(patchResult?.restart)
+        ? false
+        : await requestMemoryAuditGatewayRestart(state);
+    const message = restartRequested
+      ? "Memory Audit settings saved. Gateway restart requested to reconcile audit schedules."
+      : memoryAuditSettingsSavedMessage(patchResult ?? {});
     state.memoryAuditSettingsMessage = {
       kind: "success",
-      text: memoryAuditSettingsSavedMessage(patchResult ?? {}),
+      text: message,
     };
-    await loadMemoryAuditSettings(state);
     return true;
   } catch (err) {
     const message = String(err);

@@ -118,6 +118,32 @@ describe("memory audit controller", () => {
     });
   });
 
+  it("treats audit settings as disabled when the memory plugin entry is disabled", () => {
+    const result = readMemoryAuditSettings({
+      plugins: {
+        entries: {
+          "memory-core": {
+            enabled: false,
+            config: {
+              memoryAudit: {
+                enabled: true,
+                sessionTarget: "session:audit",
+                daily: { enabled: true, cron: "15 8 * * *" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.draft).toMatchObject({
+      enabled: false,
+      sessionTarget: "session:audit",
+      dailyEnabled: true,
+      dailyCron: "15 8 * * *",
+    });
+  });
+
   it("builds a config patch under the memory audit plugin id", () => {
     const patch = buildMemoryAuditConfigPatch("memory-plus", {
       ...DEFAULT_MEMORY_AUDIT_SETTINGS,
@@ -132,6 +158,7 @@ describe("memory audit controller", () => {
       plugins: {
         entries: {
           "memory-plus": {
+            enabled: true,
             config: {
               memoryAudit: {
                 enabled: true,
@@ -229,17 +256,24 @@ describe("memory audit controller", () => {
   it("saves audit settings with config.patch", async () => {
     const { state, request } = createState();
     state.configSnapshot = { hash: "hash-1", config: {} };
+    state.hello = {
+      features: { methods: ["config.patch", "config.get", "gateway.restart.request"] },
+    } as MemoryAuditState["hello"];
     state.memoryAuditSettingsDraft = {
       ...DEFAULT_MEMORY_AUDIT_SETTINGS,
       enabled: true,
       agentId: "hex",
     };
-    request.mockImplementation(async (method: string) => {
+    request.mockImplementation(async (method: string, params?: unknown) => {
       if (method === "config.patch") {
-        return { restart: { ok: true, signal: "SIGUSR1" } };
+        return {};
       }
       if (method === "config.get") {
         return { hash: "hash-2", config: {} };
+      }
+      if (method === "gateway.restart.request") {
+        expect(params).toMatchObject({ reason: "memory-audit-settings" });
+        return { status: "requested" };
       }
       return {};
     });
@@ -256,14 +290,18 @@ describe("memory audit controller", () => {
       plugins: {
         entries: {
           "memory-core": {
+            enabled: true,
             config: { memoryAudit: { enabled: true, agentId: "hex" } },
           },
         },
       },
     });
+    expect(request).toHaveBeenCalledWith("gateway.restart.request", {
+      reason: "memory-audit-settings",
+    });
     expect(state.memoryAuditSettingsMessage).toEqual({
       kind: "success",
-      text: "Memory Audit settings saved. Gateway restart scheduled to reconcile audit schedules.",
+      text: "Memory Audit settings saved. Gateway restart requested to reconcile audit schedules.",
     });
   });
 

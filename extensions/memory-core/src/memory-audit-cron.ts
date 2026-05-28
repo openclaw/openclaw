@@ -47,6 +47,20 @@ type CronServiceLike = {
   remove: (id: string) => Promise<{ removed?: boolean }>;
 };
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error" | "debug">;
+type GatewayCronContext = {
+  config?: OpenClawConfig;
+  getCron?: () => CronServiceLike | null;
+  deps?: { cron?: CronServiceLike };
+};
+type MemoryAuditCronReconcilerOptions = {
+  startupRetryDelayMs?: number;
+  startupRetryMaxAttempts?: number;
+  runtimeIntervalMs?: number | false;
+};
+
+const STARTUP_CRON_RETRY_DELAY_MS = 5_000;
+const STARTUP_CRON_RETRY_MAX_ATTEMPTS = 12;
+const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
 
 function cadenceName(cadence: MemoryAuditCadence): string {
   return cadence === "daily"
@@ -247,24 +261,78 @@ export async function reconcileMemoryAuditCronJobs(params: {
 }
 
 function resolveCronService(ctx: unknown): CronServiceLike | null {
-  const record = ctx as {
-    getCron?: () => CronServiceLike | null;
-    deps?: { cron?: CronServiceLike };
-  };
+  const record = ctx as GatewayCronContext;
   return record.getCron?.() ?? record.deps?.cron ?? null;
 }
 
-export function registerMemoryAuditCron(api: OpenClawPluginApi): void {
-  api.on("gateway_start", async (_event, ctx) => {
-    const cfg = (ctx.config ?? api.config) as OpenClawConfig;
+export function createMemoryAuditCronReconciler(
+  api: OpenClawPluginApi,
+  options: MemoryAuditCronReconcilerOptions = {},
+): {
+  handleGatewayStart: (ctx: GatewayCronContext) => Promise<void>;
+  dispose: () => void;
+} {
+  const startupRetryDelayMs = options.startupRetryDelayMs ?? STARTUP_CRON_RETRY_DELAY_MS;
+  const startupRetryMaxAttempts =
+    options.startupRetryMaxAttempts ?? STARTUP_CRON_RETRY_MAX_ATTEMPTS;
+  const runtimeIntervalMs = options.runtimeIntervalMs ?? RUNTIME_CRON_RECONCILE_INTERVAL_MS;
+  let disposed = false;
+  let gatewayContext: GatewayCronContext | null = null;
+  let startupRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let startupRetryAttempts = 0;
+  let runtimeTimer: ReturnType<typeof setInterval> | null = null;
+  let unavailableCronWarningEmitted = false;
+
+  const clearStartupRetry = (): void => {
+    if (startupRetryTimer) {
+      clearTimeout(startupRetryTimer);
+      startupRetryTimer = null;
+    }
+  };
+
+  const dispose = (): void => {
+    disposed = true;
+    clearStartupRetry();
+    if (runtimeTimer) {
+      clearInterval(runtimeTimer);
+      runtimeTimer = null;
+    }
+    gatewayContext = null;
+    startupRetryAttempts = 0;
+    unavailableCronWarningEmitted = false;
+  };
+
+  const reconcile = async (params: {
+    reason: "startup" | "runtime";
+    ctx?: GatewayCronContext;
+  }): Promise<void> => {
+    const ctx = params.ctx ?? gatewayContext;
+    const cfg = (ctx?.config ?? api.config) as OpenClawConfig;
     const pluginConfig = resolveMemoryCorePluginConfig(cfg) ?? api.pluginConfig;
     const config = resolveMemoryAuditConfig({ pluginConfig, cfg });
     try {
+      const cron = ctx ? resolveCronService(ctx) : null;
+      if (!cron && config.enabled) {
+        if (params.reason === "startup") {
+          api.logger.debug?.(
+            "memory-core: cron service not yet available at gateway_start; deferring memory audit reconciliation.",
+          );
+        } else if (!unavailableCronWarningEmitted) {
+          api.logger.warn(
+            "memory-core: memory audit cron could not be reconciled (cron service unavailable).",
+          );
+          unavailableCronWarningEmitted = true;
+        }
+      }
       const result = await reconcileMemoryAuditCronJobs({
-        cron: resolveCronService(ctx),
+        cron,
         config,
         logger: api.logger,
       });
+      if (cron) {
+        unavailableCronWarningEmitted = false;
+        clearStartupRetry();
+      }
       if (result.changed > 0) {
         api.logger.info(`memory-core: reconciled ${result.changed} memory audit cron job(s).`);
       }
@@ -273,6 +341,61 @@ export function registerMemoryAuditCron(api: OpenClawPluginApi): void {
         `memory-core: memory audit cron reconciliation failed: ${formatErrorMessage(err)}`,
       );
     }
+  };
+
+  const scheduleStartupRetry = (): void => {
+    if (disposed || startupRetryTimer || startupRetryAttempts >= startupRetryMaxAttempts) {
+      return;
+    }
+    startupRetryTimer = setTimeout(() => {
+      startupRetryTimer = null;
+      if (disposed) {
+        return;
+      }
+      startupRetryAttempts += 1;
+      void reconcile({ reason: "runtime" }).finally(() => {
+        const shouldRetry =
+          !disposed &&
+          !resolveCronService(gatewayContext) &&
+          startupRetryAttempts < startupRetryMaxAttempts;
+        if (shouldRetry) {
+          scheduleStartupRetry();
+        }
+      });
+    }, startupRetryDelayMs);
+    startupRetryTimer.unref?.();
+  };
+
+  const startRuntimeTimer = (): void => {
+    if (runtimeTimer || runtimeIntervalMs === false) {
+      return;
+    }
+    runtimeTimer = setInterval(() => {
+      void reconcile({ reason: "runtime" });
+    }, runtimeIntervalMs);
+    runtimeTimer.unref?.();
+  };
+
+  const handleGatewayStart = async (ctx: GatewayCronContext): Promise<void> => {
+    disposed = false;
+    gatewayContext = ctx;
+    await reconcile({ reason: "startup", ctx });
+    startRuntimeTimer();
+    if (!resolveCronService(ctx)) {
+      scheduleStartupRetry();
+    }
+  };
+
+  return { handleGatewayStart, dispose };
+}
+
+export function registerMemoryAuditCron(api: OpenClawPluginApi): void {
+  const reconciler = createMemoryAuditCronReconciler(api);
+  api.on("gateway_start", async (_event, ctx) => {
+    await reconciler.handleGatewayStart(ctx as GatewayCronContext);
+  });
+  api.on("gateway_stop", () => {
+    reconciler.dispose();
   });
 }
 
