@@ -158,7 +158,7 @@ After onboarding, your `openclaw.json` will include:
 | :--- | :--- | :--- | :--- |
 | `GOOGLE_CLOUD_PROJECT` | Yes (auto-detected during onboarding on GCE/GKE) | None | GCP project ID |
 | `GOOGLE_CLOUD_LOCATION` | No | `global` | Vertex AI endpoint region |
-| `GOOGLE_APPLICATION_CREDENTIALS` | No | Auto-detected | Path to service account key file |
+| `GOOGLE_APPLICATION_CREDENTIALS` | No | None | Path to service account key file |
 | `GOOGLE_CLOUD_API_KEY` | No | None | Vertex AI Express API key (alternative to ADC) |
 
 <Note>
@@ -203,7 +203,9 @@ automatically (e.g. `gemini-3.1-pro` resolves to `gemini-3.1-pro-preview`).
 
 <AccordionGroup>
   <Accordion title="No API key found for provider google-vertex">
-    This means the auth gate did not detect ADC credentials. Check:
+    This error should not appear if you completed onboarding with the Google Vertex AI
+    provider. If it does, try running `openclaw onboard --auth-choice google-vertex-adc`
+    again. For manual configurations, check:
 
     1. `GOOGLE_CLOUD_PROJECT` is set (in env or `openclaw.json` `env` section).
     2. On GCE/GKE: the metadata server is reachable.
@@ -238,7 +240,6 @@ automatically (e.g. `gemini-3.1-pro` resolves to `gemini-3.1-pro-preview`).
     { env: { GOOGLE_CLOUD_LOCATION: "global" } }
     ```
   </Accordion>
-
 </AccordionGroup>
 
 ## Related
