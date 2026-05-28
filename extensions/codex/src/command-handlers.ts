@@ -546,6 +546,7 @@ async function bindConversation(
     sessionFile: ctx.sessionFile,
     workspaceDir,
     agentDir: scope.agentDir,
+    sessionKey: ctx.sessionKey,
     threadId: parsed.threadId,
     model: parsed.model,
     modelProvider: parsed.provider,

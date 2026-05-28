@@ -42,6 +42,7 @@ import {
   onInternalDiagnosticEvent,
   resolveDiagnosticModelContentCapturePolicy,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { resolveCodexAppServerForOpenClawToolPolicy } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
@@ -118,6 +119,7 @@ import {
   readCodexPluginConfig,
   resolveCodexComputerUseConfig,
   resolveCodexAppServerRuntimeOptions,
+  resolveOpenClawExecPolicyForCodexAppServer,
   shouldAutoApproveCodexAppServerApprovals,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
@@ -342,7 +344,11 @@ export async function runCodexAppServerAttempt(
   const attemptClientFactory = options.clientFactory ?? defaultLeasedCodexAppServerClientFactory;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
-  const configuredAppServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
   const beforeToolCallPolicy = getBeforeToolCallPolicyDiagnosticState();
   preDynamicStartupStages.mark("config");
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
@@ -357,6 +363,17 @@ export async function runCodexAppServerAttempt(
     workspaceDir: resolvedWorkspace,
   });
   preDynamicStartupStages.mark("sandbox");
+  const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
+    execOverrides: params.execOverrides,
+    approvals: loadExecApprovals(),
+    config: params.config,
+    agentId: sessionAgentId,
+  });
+  const configuredAppServer = resolveCodexAppServerRuntimeOptions({
+    pluginConfig,
+    execPolicy,
+    openClawSandboxActive: sandbox?.enabled === true,
+  });
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
       ? resolvedWorkspace
@@ -378,6 +395,7 @@ export async function runCodexAppServerAttempt(
     shouldPromote:
       beforeToolCallPolicy.hasBeforeToolCallHook ||
       beforeToolCallPolicy.trustedToolPolicies.length > 0,
+    execPolicy,
     canUseUntrustedApprovalPolicy:
       configuredAppServer.start.transport !== "stdio" ||
       isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
@@ -408,11 +426,6 @@ export async function runCodexAppServerAttempt(
     params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
 
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   preDynamicStartupStages.mark("session-agent");
   let startupBinding = await readCodexAppServerBinding(params.sessionFile);

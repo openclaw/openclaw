@@ -427,6 +427,10 @@
       "types": "./dist/plugin-sdk/transport-ready-runtime.d.ts",
       "default": "./dist/plugin-sdk/transport-ready-runtime.js"
     },
+    "./plugin-sdk/exec-approvals-runtime": {
+      "types": "./dist/plugin-sdk/exec-approvals-runtime.d.ts",
+      "default": "./dist/plugin-sdk/exec-approvals-runtime.js"
+    },
     "./plugin-sdk/infra-runtime": {
       "types": "./dist/plugin-sdk/infra-runtime.d.ts",
       "default": "./dist/plugin-sdk/infra-runtime.js"

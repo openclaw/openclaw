@@ -9,6 +9,7 @@ import {
   type ExecAsk,
   type ExecSecurity,
   type SystemRunApprovalPlan,
+  commandRequiresSecurityAuditSuppressionApproval,
   evaluateShellAllowlist,
   hasDurableExecApproval,
   resolveExecApprovalsFromFile,
@@ -48,6 +49,8 @@ type NodeApprovalAnalysis = {
   allowlistSatisfied: boolean;
   durableApprovalSatisfied: boolean;
   inlineEvalHit: InterpreterInlineEvalHit | null;
+  requiresSecurityAuditSuppressionApproval: boolean;
+  autoReviewArgv?: string[];
 };
 
 export function shouldSkipNodeApprovalPrepare(params: {
@@ -317,11 +320,18 @@ export async function analyzeNodeApprovalRequirement(params: {
       : null;
   if (inlineEvalHit) {
     params.request.warnings.push(
-      `Warning: strict inline-eval mode requires explicit approval for ${describeInterpreterInlineEval(
+      `Warning: strict inline-eval mode requires reviewer or explicit approval for ${describeInterpreterInlineEval(
         inlineEvalHit,
       )}.`,
     );
   }
+  const requiresSecurityAuditSuppressionApproval =
+    commandRequiresSecurityAuditSuppressionApproval({
+      command: params.request.command,
+      cwd: params.request.workdir,
+      env: params.request.env,
+      segments: baseAllowlistEval.segments,
+    }) && !(params.hostSecurity === "full" && params.hostAsk === "off");
   if ((params.hostAsk === "always" || params.hostSecurity === "allowlist") && analysisOk) {
     try {
       const approvalsSnapshot = await callGatewayTool<{ file: string }>(
@@ -367,5 +377,12 @@ export async function analyzeNodeApprovalRequirement(params: {
     allowlistSatisfied,
     durableApprovalSatisfied,
     inlineEvalHit,
+    requiresSecurityAuditSuppressionApproval,
+    autoReviewArgv:
+      baseAllowlistEval.segments.length === 1 &&
+      (baseAllowlistEval.segments[0]?.raw === undefined ||
+        baseAllowlistEval.segments[0].raw.trim() === params.request.command.trim())
+        ? baseAllowlistEval.segments[0].argv
+        : undefined,
   };
 }

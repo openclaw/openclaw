@@ -282,6 +282,7 @@ and pairing-path families.
     | `plugin-sdk/secure-random-runtime` | Secure token/UUID helpers |
     | `plugin-sdk/system-event-runtime` | System event queue helpers |
     | `plugin-sdk/transport-ready-runtime` | Transport readiness wait helper |
+    | `plugin-sdk/exec-approvals-runtime` | Exec approval policy file helpers without the broad infra-runtime barrel |
     | `plugin-sdk/infra-runtime` | Deprecated compatibility shim; use the focused runtime subpaths above |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, and trace-context helpers |
