@@ -292,9 +292,17 @@ function convertAnthropicMessages(
               text: sanitizeTransportPayloadText(block.thinking),
             });
           } else {
+            // BUGFIX (#87459): Do NOT sanitize Anthropic-signed thinking content.
+            // sanitizeTransportPayloadText() strips orphan UTF-16 surrogates, mutating
+            // the text and invalidating the cryptographic signature attached by
+            // Anthropic. The API then rejects the next turn with:
+            //   "thinking or redacted_thinking blocks in the latest assistant
+            //    message cannot be modified".
+            // Anthropic round-trips its own response bytes correctly; sanitization
+            // is not needed and is actively harmful here.
             blocks.push({
               type: "thinking",
-              thinking: sanitizeTransportPayloadText(block.thinking),
+              thinking: block.thinking,
               signature: block.thinkingSignature,
             });
           }
