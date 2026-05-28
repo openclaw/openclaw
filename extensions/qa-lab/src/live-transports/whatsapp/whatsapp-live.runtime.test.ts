@@ -95,6 +95,16 @@ describe("WhatsApp QA live runtime", () => {
     ]);
   });
 
+  it("derives a stable non-secret credential fingerprint", () => {
+    expect(testing.fingerprintWhatsAppCredentialId("cred-stale-row")).toMatch(
+      /^sha256:[0-9a-f]{16}$/,
+    );
+    expect(testing.fingerprintWhatsAppCredentialId("cred-stale-row")).toBe(
+      testing.fingerprintWhatsAppCredentialId("cred-stale-row"),
+    );
+    expect(testing.fingerprintWhatsAppCredentialId(undefined)).toBeUndefined();
+  });
+
   it("unpacks auth archives into a caller-provided temp directory", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-qa-test-"));
     try {
