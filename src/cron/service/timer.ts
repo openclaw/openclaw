@@ -471,6 +471,10 @@ function resolveMainSessionCronDeliveryContext(
   }
 }
 
+function hasExplicitNoDelivery(job: CronJob): boolean {
+  return normalizeOptionalLowercaseString(job.delivery?.mode) === "none";
+}
+
 function resolveCronTaskChildSessionKey(params: {
   state: CronServiceState;
   job: CronJob;
@@ -1761,13 +1765,17 @@ async function executeMainSessionCronJob(
   const cronStartedAt =
     typeof job.state.runningAtMs === "number" ? job.state.runningAtMs : state.deps.nowMs();
   const cronRunSessionKey = resolveMainSessionCronRunSessionKey(job, cronStartedAt);
+  const suppressHeartbeat = hasExplicitNoDelivery(job);
   const deliveryContext = resolveMainSessionCronDeliveryContext(state, job);
   state.deps.enqueueSystemEvent(text, {
     agentId: job.agentId,
     sessionKey: cronRunSessionKey,
     contextKey: `cron:${job.id}`,
-    ...(deliveryContext ? { deliveryContext } : {}),
+    ...(!suppressHeartbeat && deliveryContext ? { deliveryContext } : {}),
   });
+  if (suppressHeartbeat) {
+    return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
+  }
   if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
     const reason = `cron:${job.id}`;
     const maxWaitMs = state.deps.wakeNowHeartbeatBusyMaxWaitMs ?? 2 * 60_000;

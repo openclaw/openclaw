@@ -560,6 +560,9 @@ CRITICAL CONSTRAINTS:
 - sessionTarget="isolated" | "current" | "session:xxx" REQUIRES payload.kind="agentTurn"
 - Webhook: delivery.mode="webhook" and delivery.to URL.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
+For silent background automation that uses tools or stores memory, use
+sessionTarget="isolated" + payload.kind="agentTurn" + delivery.mode="none";
+do not use a main systemEvent job for tool-running background work.
 
 RESTRICTED CRON RUNS:
 - Some isolated cron runs get narrow self-cleanup grant: status/list self-only, get/runs current job only, mutation only remove current job.
