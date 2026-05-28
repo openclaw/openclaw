@@ -102,6 +102,9 @@ describe("detectImageReferences", () => {
     expectNoImageReferences(
       `Prior turn wrote ${path.join(os.tmpdir(), "openclaw", "openclaw-cli-images", "stale.jpg")}`,
     );
+    expectNoImageReferences(
+      `Prior turn wrote ${path.join(os.tmpdir(), "openclaw-501", "openclaw-cli-images", "stale.jpg")}`,
+    );
   });
 
   it("ignores file URLs into the OpenClaw CLI image cache", () => {
