@@ -85,6 +85,11 @@ describe("ssh-config", () => {
     expect(parsed.identityFiles).toStrictEqual([]);
   });
 
+  it("ignores partial and out-of-range ssh -G ports", () => {
+    expect(parseSshConfigOutput("hostname example.com\nport 2222abc\n").port).toBeUndefined();
+    expect(parseSshConfigOutput("hostname example.com\nport 70000\n").port).toBeUndefined();
+  });
+
   it("resolves ssh config via ssh -G", async () => {
     const config = await resolveSshConfig({ user: "me", host: "alias", port: 22 });
     expect(config?.user).toBe("steipete");

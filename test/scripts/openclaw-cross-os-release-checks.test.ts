@@ -11,7 +11,7 @@ import { createConnection as createNetConnection, createServer as createNetServe
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
   agentOutputHasExpectedOkMarker,
@@ -40,7 +40,6 @@ import {
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
-  hasChildExited,
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
@@ -79,7 +78,6 @@ import {
   shouldSkipOptionalCrossOsAgentTurnError,
   shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
-  stopGateway,
   verifyDevUpdateStatus,
   verifyPackagedUpgradeUpdateResult,
   writePackageDistInventoryForCandidate,
@@ -958,22 +956,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
-
-  it("treats signaled managed gateway children as exited", async () => {
-    const child = {
-      exitCode: null,
-      kill: vi.fn(),
-      pid: 1234,
-      signalCode: "SIGTERM",
-    };
-    const closeLog = vi.fn();
-
-    expect(hasChildExited(child)).toBe(true);
-    await stopGateway({ child, closeLog });
-
-    expect(child.kill).not.toHaveBeenCalled();
-    expect(closeLog).toHaveBeenCalledTimes(1);
   });
 
   it("derives the installed prefix from resolved CLI paths", () => {

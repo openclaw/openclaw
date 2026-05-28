@@ -181,8 +181,8 @@ import {
 } from "../../tool-allowlist-guard.js";
 import {
   filterRuntimeCompatibleTools,
-  type RuntimeToolSchemaDiagnostic,
 } from "../../tool-schema-projection.js";
+import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
   addClientToolsToToolSearchCatalog,
   applyToolSearchCatalog,
@@ -459,39 +459,6 @@ export {
   resolveEmbeddedAgentStreamFn,
 };
 
-function logRuntimeToolSchemaQuarantine(params: {
-  diagnostics: readonly RuntimeToolSchemaDiagnostic[];
-  tools: readonly Parameters<typeof getPluginToolMeta>[0][];
-  runId: string;
-  sessionKey?: string;
-  sessionId?: string;
-}): void {
-  if (params.diagnostics.length === 0) {
-    return;
-  }
-  const summary = params.diagnostics
-    .map((diagnostic) => {
-      const tool = params.tools[diagnostic.toolIndex];
-      const pluginId = tool ? getPluginToolMeta(tool)?.pluginId : undefined;
-      const owner = pluginId ? ` plugin=${pluginId}` : "";
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.blocked",
-        runId: params.runId,
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-        toolName: diagnostic.toolName,
-        toolSource: pluginId ? "plugin" : "core",
-        ...(pluginId ? { toolOwner: pluginId } : {}),
-        deniedReason: "unsupported_tool_schema",
-        reason: diagnostic.violations.join(", "),
-      });
-      return `${diagnostic.toolName}${owner}: ${diagnostic.violations.join(", ")}`;
-    })
-    .join("; ");
-  log.warn(
-    `[tools] quarantined ${params.diagnostics.length} unsupported tool schema${params.diagnostics.length === 1 ? "" : "s"} before model runtime projection: ${summary}. Run openclaw doctor for details.`,
-  );
-}
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {

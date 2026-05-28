@@ -1,3 +1,4 @@
+import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { createExpiringMapCache, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
 import type { SessionEntry } from "./types.js";
 
@@ -64,8 +65,7 @@ function parseNonNegativeInteger(value: string | undefined): number | null {
   if (!trimmed) {
     return null;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  return parseStrictNonNegativeInteger(trimmed) ?? null;
 }
 
 function getSerializedSessionStoreCacheMaxBytes(): number {

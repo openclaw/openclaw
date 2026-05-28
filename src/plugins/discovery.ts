@@ -602,11 +602,12 @@ function readCandidatePackageManifest(params: {
   }
   const canUseProcessCache = params.origin === "bundled" || !params.rejectHardlinks;
   const stat = readPackageManifestStat(params.dir);
-  const processCached =
-    canUseProcessCache && stat ? packageManifestProcessCache.get(cacheKey) : undefined;
-  if (processCached && processCached.mtimeMs === stat.mtimeMs && processCached.size === stat.size) {
-    params.packageManifestCache?.set(cacheKey, processCached.manifest);
-    return processCached.manifest;
+  if (canUseProcessCache && stat) {
+    const processCached = packageManifestProcessCache.get(cacheKey);
+    if (processCached?.mtimeMs === stat.mtimeMs && processCached.size === stat.size) {
+      params.packageManifestCache?.set(cacheKey, processCached.manifest);
+      return processCached.manifest;
+    }
   }
   const manifest =
     params.origin === "bundled"
@@ -1358,13 +1359,13 @@ export function discoverOpenClawPlugins(params: {
   const workspaceDir = normalizeOptionalString(params.workspaceDir);
   const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
   const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
+  const realpathCache = new Map<string, string>();
+  const packageManifestCache = new Map<string, PackageManifest | null>();
   const scopedResult = tracePluginLifecyclePhase(
     "discovery scan",
     () => {
       const result = createDiscoveryResult();
       const seen = new Set<string>();
-      const realpathCache = new Map<string, string>();
-      const packageManifestCache = new Map<string, PackageManifest | null>();
       const extra = params.extraPaths ?? [];
       for (const extraPath of extra) {
         if (typeof extraPath !== "string") {
@@ -1430,8 +1431,6 @@ export function discoverOpenClawPlugins(params: {
     () => {
       const result = createDiscoveryResult();
       const seen = new Set<string>();
-      const realpathCache = new Map<string, string>();
-      const packageManifestCache = new Map<string, PackageManifest | null>();
       for (const sourceOverlayDir of listBundledSourceOverlayDirs({
         bundledRoot: roots.stock,
         env,

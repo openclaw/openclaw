@@ -2,6 +2,7 @@ import os from "node:os";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isErrno } from "./errors.js";
+import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { buildPortHints } from "./ports-format.js";
 import { resolveLsofCommand } from "./ports-lsof.js";
 import { tryListenOnPort } from "./ports-probe.js";
@@ -438,9 +439,9 @@ function parseNetstatListeners(output: string, port: number): PortListener[] {
       continue;
     }
     const pidRaw = parts.at(-1);
-    const pid = pidRaw ? Number.parseInt(pidRaw, 10) : Number.NaN;
+    const pid = parseStrictPositiveInteger(pidRaw);
     const listener: PortListener = {};
-    if (Number.isFinite(pid)) {
+    if (pid !== undefined) {
       listener.pid = pid;
     }
     listener.address = localAddr;
@@ -475,8 +476,8 @@ function parseNetstatConnections(output: string, port: number): PortConnection[]
       address,
       direction: resolveLsofTcpDirection(address, port),
     };
-    const pid = Number.parseInt(pidRaw, 10);
-    if (Number.isFinite(pid)) {
+    const pid = parseStrictPositiveInteger(pidRaw);
+    if (pid !== undefined) {
       connection.pid = pid;
     }
     connections.push(connection);

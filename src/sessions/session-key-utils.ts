@@ -95,6 +95,30 @@ function escapeRegExp(value: string): string {
 
 type PreservedSpan = { start: number; end: number; trim: boolean };
 
+const NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES = 2048;
+const NORMALIZED_SESSION_KEY_CACHE_MAX_LENGTH = 4096;
+const normalizedSessionKeyCache = new Map<string, string>();
+
+function readNormalizedSessionKeyCache(raw: string): string | undefined {
+  return raw.length <= NORMALIZED_SESSION_KEY_CACHE_MAX_LENGTH
+    ? normalizedSessionKeyCache.get(raw)
+    : undefined;
+}
+
+function writeNormalizedSessionKeyCache(raw: string, normalized: string): void {
+  if (raw.length > NORMALIZED_SESSION_KEY_CACHE_MAX_LENGTH) {
+    return;
+  }
+  normalizedSessionKeyCache.set(raw, normalized);
+  while (normalizedSessionKeyCache.size > NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES) {
+    const oldest = normalizedSessionKeyCache.keys().next().value;
+    if (oldest === undefined) {
+      return;
+    }
+    normalizedSessionKeyCache.delete(oldest);
+  }
+}
+
 function mayContainCasePreservingPeer(raw: string): boolean {
   const folded = raw.toLowerCase();
   return CASE_PRESERVING_PEERS.some((descriptor) => folded.includes(`${descriptor.channel}:`));
@@ -169,8 +193,14 @@ export function normalizeSessionKeyPreservingOpaquePeerIds(
   if (!raw) {
     return "";
   }
+  const cached = readNormalizedSessionKeyCache(raw);
+  if (cached !== undefined) {
+    return cached;
+  }
   if (!mayContainCasePreservingPeer(raw)) {
-    return raw.toLowerCase();
+    const normalized = raw.toLowerCase();
+    writeNormalizedSessionKeyCache(raw, normalized);
+    return normalized;
   }
   const spans = collectCasePreservedSpans(raw)
     .filter((span) => span.end > span.start)
@@ -189,6 +219,7 @@ export function normalizeSessionKeyPreservingOpaquePeerIds(
     cursor = span.end;
   }
   normalized += normalizeLowercaseStringOrEmpty(raw.slice(cursor));
+  writeNormalizedSessionKeyCache(raw, normalized);
   return normalized;
 }
 

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { inspectPortUsage } from "../infra/ports.js";
 import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { killProcessTree } from "../process/kill-tree.js";
@@ -503,8 +504,7 @@ function resolveConfiguredGatewayPort(env: GatewayServiceEnv): number | null {
   if (!raw) {
     return null;
   }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return parseStrictPositiveInteger(raw) ?? null;
 }
 
 function parsePositivePort(raw: string | undefined): number | null {
@@ -515,8 +515,8 @@ function parsePositivePort(raw: string | undefined): number | null {
   if (!/^\d+$/.test(value)) {
     return null;
   }
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 && parsed <= 65535 ? parsed : null;
+  const parsed = parseStrictPositiveInteger(value);
+  return parsed !== undefined && parsed <= 65535 ? parsed : null;
 }
 
 function parsePortFromProgramArguments(programArguments?: string[]): number | null {

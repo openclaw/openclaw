@@ -5,6 +5,7 @@ import {
   applyAgentCompactionSettingsFromConfigMock,
   buildEmbeddedSystemPromptMock,
   contextEngineCompactMock,
+  createAgentSessionMock,
   createPreparedEmbeddedAgentSettingsManagerMock,
   createOpenClawCodingToolsMock,
   enqueueCommandInLaneMock,
@@ -424,6 +425,49 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expectRecordFields(mockCallArg(applyAgentCompactionSettingsFromConfigMock), {
       contextTokenBudget: 64_000,
     });
+  });
+
+  it("quarantines unsupported tool schemas before creating the compaction model session", async () => {
+    resolveContextEngineMock.mockResolvedValueOnce({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    });
+    resolveModelMock.mockReturnValueOnce({
+      model: { provider: "openai", api: "openai-responses", id: "fake", input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    });
+    createOpenClawCodingToolsMock.mockReturnValueOnce([
+      {
+        name: "healthy_lookup",
+        label: "Healthy Lookup",
+        description: "Look up safe data.",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ text: "ok" }),
+      },
+      {
+        name: "dofbot_move_angles",
+        label: "Dofbot Move Angles",
+        description: "Move robot joints.",
+        parameters: { type: "array", items: { type: "number" } },
+        execute: async () => ({ text: "bad" }),
+      },
+    ] as never);
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      runId: "run-tool-schema-quarantine",
+    });
+
+    const sessionOptions = expectRecordFields(mockCallArg(createAgentSessionMock), {});
+    expect((sessionOptions.customTools as Array<{ name: string }>).map((tool) => tool.name)).toEqual(
+      ["healthy_lookup"],
+    );
+    expect(sessionOptions.tools).toEqual(["healthy_lookup"]);
   });
 
   it("clamps the caller context token budget to the compaction model", async () => {

@@ -1,5 +1,6 @@
 import type { TSchema } from "typebox";
 import { readLocalFileSafely } from "../../infra/fs-safe.js";
+import { parseStrictFiniteNumber } from "../../infra/parse-finite-number.js";
 import { detectMime } from "../../media/mime.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
@@ -166,8 +167,8 @@ export function readNumberParam(
   } else if (typeof raw === "string") {
     const trimmed = raw.trim();
     if (trimmed) {
-      const parsed = strict ? Number(trimmed) : Number.parseFloat(trimmed);
-      if (Number.isFinite(parsed)) {
+      const parsed = strict ? parseStrictFiniteNumber(trimmed) : Number.parseFloat(trimmed);
+      if (parsed !== undefined && Number.isFinite(parsed)) {
         value = parsed;
       }
     }

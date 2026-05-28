@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";
 
 export const SSH_CONFIG_OUTPUT_MAX_CHARS = 64 * 1024;
@@ -16,8 +17,8 @@ function parsePort(value: string | undefined): number | undefined {
   if (!value) {
     return undefined;
   }
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined || parsed > 65535) {
     return undefined;
   }
   return parsed;

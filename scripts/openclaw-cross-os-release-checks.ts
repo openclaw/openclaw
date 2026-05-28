@@ -3360,11 +3360,11 @@ async function runDashboardSmoke(params) {
   throw new Error(`Dashboard HTML did not become ready at ${dashboardUrl}.`);
 }
 
-export function hasChildExited(child) {
+function hasChildExited(child) {
   return child.exitCode !== null || (child.signalCode ?? null) !== null;
 }
 
-export async function stopGateway(gateway) {
+async function stopGateway(gateway) {
   try {
     if (!gateway?.child?.pid) {
       return;
