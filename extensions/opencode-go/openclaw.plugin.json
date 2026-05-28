@@ -69,6 +69,14 @@
       "opencode-go": "refreshable"
     }
   },
+  "setup": {
+    "providers": [
+      {
+        "id": "opencode-go",
+        "envVars": ["OPENCODE_GO_API_KEY", "OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
+      }
+    ]
+  },
   "providerAuthEnvVars": {
     "opencode-go": ["OPENCODE_GO_API_KEY", "OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
   },

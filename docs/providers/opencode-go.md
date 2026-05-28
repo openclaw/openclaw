@@ -7,14 +7,15 @@ title: "OpenCode Go"
 ---
 
 OpenCode Go is the Go catalog within [OpenCode](/providers/opencode).
-It uses the same `OPENCODE_API_KEY` as the Zen catalog, but keeps the runtime
-provider id `opencode-go` so upstream per-model routing stays correct.
+It prefers its own `OPENCODE_GO_API_KEY`, with fallback to the shared
+`OPENCODE_API_KEY` and `OPENCODE_ZEN_API_KEY`. The runtime provider id
+`opencode-go` keeps upstream per-model routing correct.
 
-| Property         | Value                           |
-| ---------------- | ------------------------------- |
-| Runtime provider | `opencode-go`                   |
-| Auth             | `OPENCODE_API_KEY`              |
-| Parent setup     | [OpenCode](/providers/opencode) |
+| Property         | Value                                                                   |
+| ---------------- | ----------------------------------------------------------------------- |
+| Runtime provider | `opencode-go`                                                           |
+| Auth             | `OPENCODE_GO_API_KEY` → `OPENCODE_API_KEY` → `OPENCODE_ZEN_API_KEY`     |
+| Parent setup     | [OpenCode](/providers/opencode)                                         |
 
 ## Built-in catalog
 
@@ -66,7 +67,7 @@ The provider includes:
     <Steps>
       <Step title="Pass the key directly">
         ```bash
-        openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
+        openclaw onboard --opencode-go-api-key "$OPENCODE_GO_API_KEY"
         ```
       </Step>
       <Step title="Verify models are available">
@@ -82,7 +83,7 @@ The provider includes:
 
 ```json5
 {
-  env: { OPENCODE_API_KEY: "YOUR_API_KEY_HERE" }, // pragma: allowlist secret
+  env: { OPENCODE_GO_API_KEY: "YOUR_API_KEY_HERE" }, // pragma: allowlist secret
   agents: { defaults: { model: { primary: "opencode-go/kimi-k2.6" } } },
 }
 ```
@@ -100,9 +101,11 @@ The provider includes:
     This keeps upstream per-model routing correct across both catalogs.
   </Accordion>
 
-  <Accordion title="Shared credentials">
-    The same `OPENCODE_API_KEY` is used by both the Zen and Go catalogs. Entering
-    the key during setup stores credentials for both runtime providers.
+  <Accordion title="Credential fallback">
+    OpenCode Go prefers `OPENCODE_GO_API_KEY` but falls back to
+    `OPENCODE_API_KEY` and `OPENCODE_ZEN_API_KEY`. If you already have the
+    shared key, you only need to set `OPENCODE_GO_API_KEY` for a Go-specific
+    key, or skip it entirely to reuse the existing shared key.
   </Accordion>
 </AccordionGroup>
 

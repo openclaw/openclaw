@@ -167,7 +167,7 @@ What you set:
     when you want an xAI Console API key instead of subscription OAuth.
   </Accordion>
   <Accordion title="OpenCode">
-    Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`) and lets you choose the Zen or Go catalog.
+    Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, or `OPENCODE_GO_API_KEY`) and lets you choose the Zen or Go catalog.
     Setup URL: [opencode.ai/auth](https://opencode.ai/auth).
   </Accordion>
   <Accordion title="API key (generic)">

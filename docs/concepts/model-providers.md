@@ -190,7 +190,7 @@ Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so Ope
 
 ### OpenCode
 
-- Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
+- Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, `OPENCODE_GO_API_KEY`)
 - Zen runtime provider: `opencode`
 - Go runtime provider: `opencode-go`
 - Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.6`

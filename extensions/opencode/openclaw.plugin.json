@@ -18,6 +18,14 @@
       }
     }
   },
+  "setup": {
+    "providers": [
+      {
+        "id": "opencode",
+        "envVars": ["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"]
+      }
+    ]
+  },
   "providerAuthEnvVars": {
     "opencode": ["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"]
   },
