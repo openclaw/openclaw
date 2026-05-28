@@ -4,6 +4,7 @@ import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
 import { renderBitmapTextPngBase64 } from "../../../../test/helpers/live-image-probe.ts";
 import { createJsonlRequestTailer } from "./jsonl-request-tail.mjs";
+import { readPositiveIntEnv } from "./limits.mjs";
 import { waitForWebSocketOpen } from "./open-websocket.mjs";
 
 const port = process.env.PORT;
@@ -11,13 +12,10 @@ const token = process.env.OPENCLAW_GATEWAY_TOKEN;
 const appServerLog =
   process.env.OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG ??
   "/tmp/openclaw-codex-media-path-app-server.jsonl";
-const timeoutSeconds = Number.parseInt(
-  process.env.OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS ?? "180",
-  10,
-);
-const logTailMaxBytes = Number.parseInt(
-  process.env.OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES ?? `${2 * 1024 * 1024}`,
-  10,
+const timeoutSeconds = readPositiveIntEnv("OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", 180);
+const logTailMaxBytes = readPositiveIntEnv(
+  "OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES",
+  2 * 1024 * 1024,
 );
 
 if (!port || !token) {
@@ -35,10 +33,7 @@ function sha256Base64(data) {
 }
 
 const loggedRequests = createJsonlRequestTailer(appServerLog, {
-  maxReadBytes:
-    Number.isSafeInteger(logTailMaxBytes) && logTailMaxBytes > 0
-      ? logTailMaxBytes
-      : 2 * 1024 * 1024,
+  maxReadBytes: logTailMaxBytes,
 });
 
 async function waitFor(label, predicate, timeoutMs) {

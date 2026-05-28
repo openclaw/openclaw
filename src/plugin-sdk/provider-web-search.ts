@@ -10,6 +10,7 @@ import type {
 export {
   jsonResult,
   readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "../agents/tools/common.js";

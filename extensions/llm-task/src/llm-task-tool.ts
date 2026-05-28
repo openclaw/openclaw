@@ -4,7 +4,11 @@ import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber,
+  asPositiveSafeInteger,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
@@ -220,22 +224,14 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       }
 
       const timeoutMs =
-        (typeof params.timeoutMs === "number" && params.timeoutMs > 0
-          ? params.timeoutMs
-          : undefined) ||
-        (typeof pluginCfg.timeoutMs === "number" && pluginCfg.timeoutMs > 0
-          ? pluginCfg.timeoutMs
-          : undefined) ||
+        asPositiveSafeInteger(params.timeoutMs) ??
+        asPositiveSafeInteger(pluginCfg.timeoutMs) ??
         30_000;
 
       const streamParams = {
-        temperature: typeof params.temperature === "number" ? params.temperature : undefined,
+        temperature: asFiniteNumber(params.temperature),
         maxTokens:
-          typeof params.maxTokens === "number"
-            ? params.maxTokens
-            : typeof pluginCfg.maxTokens === "number"
-              ? pluginCfg.maxTokens
-              : undefined,
+          asPositiveSafeInteger(params.maxTokens) ?? asPositiveSafeInteger(pluginCfg.maxTokens),
       };
 
       const input = params.input;

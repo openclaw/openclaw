@@ -1207,6 +1207,7 @@ describe("package artifact reuse", () => {
   it("keeps release QA and repo E2E lanes off scarce 32-core runners", () => {
     const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
     const qaWorkflow = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
+    const liveE2eWorkflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
 
     for (const jobName of [
       "qa_lab_parity_lane_release_checks",
@@ -1230,6 +1231,10 @@ describe("package artifact reuse", () => {
         new RegExp(`${jobName}:[\\s\\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404`, "u"),
       );
     }
+    expectTextToIncludeAll(liveE2eWorkflow, [
+      "OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000",
+      "OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
+    ]);
   });
 
   it("summarizes queue time separately from execution time in full validation", () => {

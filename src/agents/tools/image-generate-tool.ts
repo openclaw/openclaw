@@ -32,6 +32,7 @@ import {
 import { getImageMetadata } from "../../media/media-services.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -178,7 +179,7 @@ const ImageGenerateToolSchema = Type.Object({
         description: "OpenAI moderation: low, auto.",
       }),
       outputCompression: Type.Optional(
-        Type.Number({
+        Type.Integer({
           description: "OpenAI jpeg/webp compression 0-100.",
           minimum: 0,
           maximum: 100,
@@ -192,14 +193,14 @@ const ImageGenerateToolSchema = Type.Object({
     }),
   ),
   count: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: `Image count 1-${MAX_COUNT}.`,
       minimum: 1,
       maximum: MAX_COUNT,
     }),
   ),
   timeoutMs: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: "Provider timeout ms (300000 tends to be a safe amount).",
       minimum: 1,
     }),
@@ -235,8 +236,11 @@ function resolveAction(args: Record<string, unknown>): "generate" | "list" | "st
 }
 
 function resolveRequestedCount(args: Record<string, unknown>): number {
-  const count = readNumberParam(args, "count", { integer: true });
+  const count = readNumberParam(args, "count", { positiveInteger: true });
   if (count === undefined) {
+    if (readSnakeCaseParamRaw(args, "count") !== undefined) {
+      throw new ToolInputError(`count must be between 1 and ${MAX_COUNT}`);
+    }
     return DEFAULT_COUNT;
   }
   if (count < 1 || count > MAX_COUNT) {
@@ -339,8 +343,14 @@ function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationO
   const raw = readRecordParam(args, "openai");
   const background = normalizeOpenAIBackground(readStringParam(raw, "background"));
   const moderation = normalizeOpenAIModeration(readStringParam(raw, "moderation"));
-  const outputCompression = readNumberParam(raw, "outputCompression", { integer: true });
+  const outputCompression = readNumberParam(raw, "outputCompression", { nonNegativeInteger: true });
   const user = readStringParam(raw, "user");
+  if (
+    outputCompression === undefined &&
+    readSnakeCaseParamRaw(raw, "outputCompression") !== undefined
+  ) {
+    throw new ToolInputError("openai.outputCompression must be between 0 and 100");
+  }
   if (outputCompression !== undefined && (outputCompression < 0 || outputCompression > 100)) {
     throw new ToolInputError("openai.outputCompression must be between 0 and 100");
   }

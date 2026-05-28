@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createActionGate,
+  readPositiveIntegerParam,
   readNumberParam,
   readReactionParams,
   readStringOrNumberParam,
@@ -56,6 +57,58 @@ describe("readNumberParam", () => {
   it("truncates when integer is true", () => {
     const params = { messageId: "42.9" };
     expect(readNumberParam(params, "messageId", { integer: true })).toBe(42);
+  });
+
+  it("accepts only positive safe integers when positiveInteger is true", () => {
+    expect(readNumberParam({ tokenBudget: "42" }, "tokenBudget", { positiveInteger: true })).toBe(
+      42,
+    );
+    expect(
+      readNumberParam({ tokenBudget: "42.9" }, "tokenBudget", { positiveInteger: true }),
+    ).toBeUndefined();
+    expect(
+      readNumberParam({ tokenBudget: 0 }, "tokenBudget", { positiveInteger: true }),
+    ).toBeUndefined();
+    expect(
+      readNumberParam({ tokenBudget: Number.POSITIVE_INFINITY }, "tokenBudget", {
+        positiveInteger: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("accepts only nonnegative safe integers when nonNegativeInteger is true", () => {
+    expect(readNumberParam({ cacheAge: 0 }, "cacheAge", { nonNegativeInteger: true })).toBe(0);
+    expect(readNumberParam({ cacheAge: "42" }, "cacheAge", { nonNegativeInteger: true })).toBe(42);
+    expect(
+      readNumberParam({ cacheAge: "42.9" }, "cacheAge", { nonNegativeInteger: true }),
+    ).toBeUndefined();
+    expect(
+      readNumberParam({ cacheAge: -1 }, "cacheAge", { nonNegativeInteger: true }),
+    ).toBeUndefined();
+    expect(
+      readNumberParam({ cacheAge: Number.POSITIVE_INFINITY }, "cacheAge", {
+        nonNegativeInteger: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("throws for invalid present positive integer params", () => {
+    expect(readPositiveIntegerParam({ timeoutMs: "42" }, "timeoutMs")).toBe(42);
+    expect(readPositiveIntegerParam({ timeoutMs: null }, "timeoutMs")).toBeUndefined();
+    expect(() => readPositiveIntegerParam({ timeoutMs: "42.5" }, "timeoutMs")).toThrow(
+      "timeoutMs must be a positive integer",
+    );
+    expect(() =>
+      readPositiveIntegerParam({ timeoutMs: 0 }, "timeoutMs", {
+        message: "timeoutMs must be a positive integer in milliseconds.",
+      }),
+    ).toThrow("timeoutMs must be a positive integer in milliseconds.");
+    expect(() =>
+      readPositiveIntegerParam({ maxResults: 21 }, "maxResults", {
+        max: 20,
+        message: "maxResults must be an integer from 1 to 20",
+      }),
+    ).toThrow("maxResults must be an integer from 1 to 20");
   });
 });
 

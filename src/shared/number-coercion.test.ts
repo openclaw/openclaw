@@ -4,6 +4,10 @@ import {
   asFiniteNumberInRange,
   asSafeIntegerInRange,
   parseFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictInteger,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
 } from "./number-coercion.js";
 
 describe("number-coercion", () => {
@@ -36,5 +40,29 @@ describe("number-coercion", () => {
     expect(parseFiniteNumber("4.5ms")).toBeUndefined();
     expect(parseFiniteNumber("")).toBeUndefined();
     expect(parseFiniteNumber("nope")).toBeUndefined();
+  });
+
+  test("parseStrictInteger accepts only safe integer tokens", () => {
+    expect(parseStrictInteger("42")).toBe(42);
+    expect(parseStrictInteger(" -7 ")).toBe(-7);
+    expect(parseStrictInteger("+9")).toBe(9);
+    expect(parseStrictInteger("1.5")).toBeUndefined();
+    expect(parseStrictInteger("1e3")).toBeUndefined();
+    expect(parseStrictInteger(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
+  });
+
+  test("parseStrictFiniteNumber rejects partial numeric strings", () => {
+    expect(parseStrictFiniteNumber("42")).toBe(42);
+    expect(parseStrictFiniteNumber(".5")).toBe(0.5);
+    expect(parseStrictFiniteNumber("1e3")).toBe(1000);
+    expect(parseStrictFiniteNumber("3.14ms")).toBeUndefined();
+    expect(parseStrictFiniteNumber("0x10")).toBeUndefined();
+  });
+
+  test("strict integer range helpers enforce sign", () => {
+    expect(parseStrictPositiveInteger("9")).toBe(9);
+    expect(parseStrictPositiveInteger("0")).toBeUndefined();
+    expect(parseStrictNonNegativeInteger("0")).toBe(0);
+    expect(parseStrictNonNegativeInteger("-1")).toBeUndefined();
   });
 });

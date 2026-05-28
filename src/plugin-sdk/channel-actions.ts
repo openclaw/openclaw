@@ -13,6 +13,7 @@ export {
   jsonResult,
   parseAvailableTags,
   readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringArrayParam,
   readStringOrNumberParam,

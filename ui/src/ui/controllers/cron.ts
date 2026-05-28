@@ -1,6 +1,7 @@
 import { t } from "../../i18n/index.ts";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import { getCronJobPayload, hasCronJobPayload } from "../cron-payload.ts";
+import { resolveCronJobLastRunStatus } from "../cron-status.ts";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
@@ -10,6 +11,7 @@ import type {
   CronJobsEnabledFilter,
   CronJobsListResult,
   CronJobsSortBy,
+  CronRunStatus,
   CronRunScope,
   CronRunLogEntry,
   CronRunsResult,
@@ -42,7 +44,7 @@ export type CronFieldKey =
 export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
 export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron";
-export type CronJobsLastStatusFilter = "all" | "ok" | "error" | "skipped";
+export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
 export type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
 export type CronState = {
@@ -274,7 +276,10 @@ function normalizeCronPageMeta(params: {
   return { total, hasMore, nextOffset };
 }
 
-export async function loadCronJobsPage(state: CronState, opts?: { append?: boolean }) {
+export async function loadCronJobsPage(
+  state: CronState,
+  opts?: { append?: boolean; tableFilters?: boolean },
+) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -299,6 +304,12 @@ export async function loadCronJobsPage(state: CronState, opts?: { append?: boole
       offset,
       query: state.cronJobsQuery.trim() || undefined,
       enabled: state.cronJobsEnabledFilter,
+      ...(opts?.tableFilters
+        ? {
+            scheduleKind: state.cronJobsScheduleKindFilter,
+            lastRunStatus: state.cronJobsLastStatusFilter,
+          }
+        : {}),
       sortBy: state.cronJobsSortBy,
       sortDir: state.cronJobsSortDir,
     });
@@ -369,7 +380,7 @@ export function getVisibleCronJobs(
     }
     if (
       state.cronJobsLastStatusFilter !== "all" &&
-      job.state?.lastStatus !== state.cronJobsLastStatusFilter
+      resolveCronJobLastRunStatus(job) !== state.cronJobsLastStatusFilter
     ) {
       return false;
     }
@@ -729,7 +740,7 @@ export async function addCronJob(state: CronState): Promise<boolean> {
       await client.request("cron.add", job);
       resetCronFormToDefaults(state);
     }
-    await loadCronJobsPage(state);
+    await loadCronJobsPage(state, { tableFilters: true });
     await loadCronStatus(state);
     saved = true;
   });
@@ -739,7 +750,7 @@ export async function addCronJob(state: CronState): Promise<boolean> {
 export async function toggleCronJob(state: CronState, job: CronJob, enabled: boolean) {
   await withCronBusy(state, async (client) => {
     await client.request("cron.update", { id: job.id, patch: { enabled } });
-    await loadCronJobsPage(state);
+    await loadCronJobsPage(state, { tableFilters: true });
     await loadCronStatus(state);
   });
 }
@@ -761,7 +772,7 @@ export async function removeCronJob(state: CronState, job: CronJob) {
       state.cronRunsJobId = null;
       clearCronRunsPage(state);
     }
-    await loadCronJobsPage(state);
+    await loadCronJobsPage(state, { tableFilters: true });
     await loadCronStatus(state);
   });
 }

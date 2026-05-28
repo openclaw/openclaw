@@ -489,6 +489,49 @@ describe("firecrawl tools", () => {
     });
   });
 
+  it("drops malformed numeric Firecrawl tool options", async () => {
+    const searchTool = createFirecrawlSearchTool({
+      config: { env: "test" },
+    } as never);
+    await searchTool.execute("call-search", {
+      query: "web search",
+      count: 6.5,
+      timeoutSeconds: Number.POSITIVE_INFINITY,
+    });
+
+    expect(runFirecrawlSearch).toHaveBeenLastCalledWith({
+      cfg: { env: "test" },
+      query: "web search",
+      count: undefined,
+      timeoutSeconds: undefined,
+      sources: undefined,
+      categories: undefined,
+      scrapeResults: false,
+    });
+
+    const scrapeTool = createFirecrawlScrapeTool({
+      config: { env: "test" },
+    } as never);
+    await scrapeTool.execute("call-scrape", {
+      url: "https://docs.openclaw.ai",
+      maxChars: 1500.5,
+      maxAgeMs: -1,
+      timeoutSeconds: 22.5,
+    });
+
+    expect(runFirecrawlScrape).toHaveBeenLastCalledWith({
+      cfg: { env: "test" },
+      url: "https://docs.openclaw.ai",
+      extractMode: "markdown",
+      maxChars: undefined,
+      onlyMainContent: undefined,
+      maxAgeMs: undefined,
+      proxy: undefined,
+      storeInCache: undefined,
+      timeoutSeconds: undefined,
+    });
+  });
+
   it("passes text mode through and ignores invalid proxy values", async () => {
     const tool = createFirecrawlScrapeTool({
       config: { env: "test" },

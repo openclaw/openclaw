@@ -1,5 +1,6 @@
 import {
   readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -7,6 +8,7 @@ import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   isoToPerplexityDate,
+  MAX_SEARCH_COUNT,
   normalizeFreshness,
   normalizeToIsoDate,
   readCachedSearchPayload,
@@ -326,7 +328,12 @@ export async function executePerplexitySearch(
 
   const query = readStringParam(args, "query", { required: true });
   const count =
-    readNumberParam(args, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(args, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const rawFreshness = readStringParam(args, "freshness");
   const freshness = rawFreshness ? normalizeFreshness(rawFreshness, "perplexity") : undefined;
   if (rawFreshness && !freshness) {
@@ -343,8 +350,10 @@ export async function executePerplexitySearch(
   const rawDateAfter = readStringParam(args, "date_after");
   const rawDateBefore = readStringParam(args, "date_before");
   const domainFilter = readStringArrayParam(args, "domain_filter");
-  const maxTokens = readNumberParam(args, "max_tokens", { integer: true });
-  const maxTokensPerPage = readNumberParam(args, "max_tokens_per_page", { integer: true });
+  const maxTokens = readNumberParam(args, "max_tokens", { positiveInteger: true });
+  const maxTokensPerPage = readNumberParam(args, "max_tokens_per_page", {
+    positiveInteger: true,
+  });
 
   if (!structured) {
     if (country) {

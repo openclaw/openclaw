@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { normalizePluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { fileSignatureMatches, hashJson } from "./installed-plugin-index-hash.js";
@@ -31,6 +32,7 @@ import {
 } from "./installed-plugin-index.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
+import { resolvePluginCacheInputs } from "./roots.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
@@ -148,9 +150,28 @@ function resolvePluginRegistrySnapshotMemoKey(
         ...(params.stateDir ? { stateDir: params.stateDir } : {}),
       }),
     ),
+    pluginRoots: fingerprintPluginSourceRoots(params, env),
     stateDir: params.stateDir ? resolveUserPath(params.stateDir, env) : null,
     workspaceDir: params.workspaceDir ? resolveUserPath(params.workspaceDir, env) : null,
   });
+}
+
+function fingerprintPluginSourceRoots(
+  params: LoadPluginRegistryParams,
+  env: NodeJS.ProcessEnv,
+): unknown {
+  const workspaceDir = params.workspaceDir ? resolveUserPath(params.workspaceDir, env) : undefined;
+  const cacheInputs = resolvePluginCacheInputs({
+    workspaceDir,
+    loadPaths: normalizePluginsConfig(params.config?.plugins).loadPaths,
+    env,
+  });
+  return {
+    global: fileFingerprint(cacheInputs.roots.global),
+    loadPaths: cacheInputs.loadPaths.map((entry) => fileFingerprint(entry)),
+    stock: cacheInputs.roots.stock ? fileFingerprint(cacheInputs.roots.stock) : null,
+    workspace: cacheInputs.roots.workspace ? fileFingerprint(cacheInputs.roots.workspace) : null,
+  };
 }
 
 function fileFingerprint(filePath: string): unknown {

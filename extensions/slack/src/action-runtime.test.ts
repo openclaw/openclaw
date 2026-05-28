@@ -1117,4 +1117,11 @@ describe("handleSlackAction", () => {
       },
     });
   });
+
+  it("rejects fractional emoji-list limits before reading emojis", async () => {
+    await expect(
+      handleSlackAction({ action: "emojiList", limit: 2.5 }, slackConfig()),
+    ).rejects.toThrow("limit must be a positive integer.");
+    expect(listSlackEmojis).not.toHaveBeenCalled();
+  });
 });

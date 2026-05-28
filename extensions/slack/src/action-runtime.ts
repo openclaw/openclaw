@@ -11,7 +11,7 @@ import {
   createActionGate,
   imageResultFromFile,
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
   type OpenClawConfig,
@@ -572,10 +572,12 @@ export async function handleSlackAction(
     if (!isActionEnabled("emojiList")) {
       throw new Error("Slack emoji list is disabled.");
     }
+    const limit = readPositiveIntegerParam(params, "limit", {
+      message: "limit must be a positive integer.",
+    });
     const result = readOpts
       ? await slackActionRuntime.listSlackEmojis(readOpts)
       : await slackActionRuntime.listSlackEmojis();
-    const limit = readNumberParam(params, "limit", { integer: true });
     if (limit != null && limit > 0 && result.emoji != null) {
       const entries = Object.entries(result.emoji).toSorted(([a], [b]) => a.localeCompare(b));
       if (entries.length > limit) {

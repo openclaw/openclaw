@@ -47,21 +47,58 @@ export function asSafeIntegerInRange(
   return value;
 }
 
+function normalizeNumericString(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 export function parseFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  return parseStrictFiniteNumber(value);
+}
+
+export function parseStrictInteger(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) ? value : undefined;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = normalizeNumericString(value);
+  if (!normalized || !/^[+-]?\d+$/.test(normalized)) {
+    return undefined;
+  }
+  const parsed = Number(normalized);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+export function parseStrictFiniteNumber(value: unknown): number | undefined {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : undefined;
   }
   if (typeof value !== "string") {
     return undefined;
   }
-  const trimmed = value.trim();
-  if (!trimmed || !/^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i.test(trimmed)) {
+  const normalized = normalizeNumericString(value);
+  if (!normalized || !/^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i.test(normalized)) {
     return undefined;
   }
-  const parsed = Number(trimmed);
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 export function asPositiveSafeInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+export function parseStrictPositiveInteger(value: unknown): number | undefined {
+  const parsed = parseStrictInteger(value);
+  return parsed !== undefined && parsed > 0 ? parsed : undefined;
+}
+
+export function parseStrictNonNegativeInteger(value: unknown): number | undefined {
+  const parsed = parseStrictInteger(value);
+  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
 }

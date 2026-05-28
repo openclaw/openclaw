@@ -7,11 +7,12 @@ import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   formatCliCommand,
+  MAX_SEARCH_COUNT,
   normalizeFreshness,
   parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
   resolveSearchCacheTtlMs,
@@ -351,7 +352,12 @@ export async function executeBraveSearch(
   const braveEndpointMode = await validateBraveBaseUrl(braveBaseUrl);
   const query = readStringParam(args, "query", { required: true });
   const count =
-    readNumberParam(args, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(args, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const country = normalizeBraveCountry(readStringParam(args, "country"));
   const language = readStringParam(args, "language");
   const search_lang = readStringParam(args, "search_lang");

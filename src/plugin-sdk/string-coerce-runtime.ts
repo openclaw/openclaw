@@ -20,6 +20,10 @@ export {
   asPositiveSafeInteger,
   asSafeIntegerInRange,
   parseFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictInteger,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
 } from "../shared/number-coercion.js";
 export { asBoolean, parseBooleanValue } from "../utils/boolean.js";
 export {

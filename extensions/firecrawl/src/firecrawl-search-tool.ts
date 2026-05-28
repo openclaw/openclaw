@@ -12,7 +12,7 @@ const FirecrawlSearchToolSchema = Type.Object(
   {
     query: Type.String({ description: "Search query string." }),
     count: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: "Number of results to return (1-10).",
         minimum: 1,
         maximum: 10,
@@ -34,7 +34,7 @@ const FirecrawlSearchToolSchema = Type.Object(
       }),
     ),
     timeoutSeconds: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: "Timeout in seconds for the Firecrawl Search request.",
         minimum: 1,
       }),
@@ -52,9 +52,9 @@ export function createFirecrawlSearchTool(api: OpenClawPluginApi) {
     parameters: FirecrawlSearchToolSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
       const query = readStringParam(rawParams, "query", { required: true });
-      const count = readNumberParam(rawParams, "count", { integer: true });
+      const count = readNumberParam(rawParams, "count", { positiveInteger: true });
       const timeoutSeconds = readNumberParam(rawParams, "timeoutSeconds", {
-        integer: true,
+        positiveInteger: true,
       });
       const sources = readStringArrayParam(rawParams, "sources");
       const categories = readStringArrayParam(rawParams, "categories");

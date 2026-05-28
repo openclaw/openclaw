@@ -1,5 +1,5 @@
 ---
-summary: "Release performance, install footprint, dependency count, and shrinkwrap audit for the April to May 2026 cleanup sweep"
+summary: "Visual summary and technical evidence for the May 2026 performance, package-size, dependency, and shrinkwrap cleanup"
 read_when:
   - You are validating the May 2026 performance and package-size cleanup
   - You need the numbers behind the OpenClaw performance and dependency blog post
@@ -7,8 +7,9 @@ read_when:
 title: "Release performance sweep"
 ---
 
-This page captures the technical evidence behind the May 2026 OpenClaw
-performance and dependency cleanup.
+This page captures the evidence behind the May 2026 OpenClaw performance,
+package-size, dependency, and shrinkwrap cleanup. It is the technical companion
+to the public blog post.
 
 Two audits are combined here:
 
@@ -27,40 +28,109 @@ Two audits are combined here:
 
 <Warning>
 The main performance sweep uses one smoke sample per tag. Earlier April context
-uses published repeat-3 medians from `clawgrit-reports`. Use both as trend
-evidence and regression-hunting signal, not as statistically significant
-release-gate data.
+uses published repeat-3 medians from `clawgrit-reports`. Treat the numbers as
+trend evidence and regression-hunting signal, not as release-gate statistics.
 </Warning>
 
-## Quick read
+## Snapshot
 
-Performance sweep:
+Performance coverage: **76 requested releases**, **73 artifact-backed points**,
+and **3 unavailable CI runs**. Latest stable measured point: `v2026.5.27`.
 
-- Requested releases: **76**
-- Artifact-backed points: **73**
-- CI unavailable: **3**
-- Best cold agent turn: `v2026.5.27-beta.1` at **2,575ms**
-- Best warm agent turn: `v2026.5.27-beta.1` at **2,217ms**
-- Best source gateway default `readyz` p50: `v2026.5.27-beta.1` at **1,462ms**
-- Latest stable measured point: `v2026.5.27`
-- Earlier April narrative baseline: `v2026.4.14` published median at
-  **9,819ms cold**, **7,458ms warm**, and **686.2MB peak RSS**.
+<CardGroup cols={2}>
+  <Card title="Stable agent turn" icon="gauge">
+    **2.9x faster cold turn**
 
-Install footprint sweep:
+    - `v2026.4.14`: 9.8s
+    - `v2026.5.27`: 3.4s
 
-- Root `npm-shrinkwrap.json` is absent in `2026.5.20` and present in
-  `2026.5.22`.
-- `2026.5.22` installed a **911.8 MB** nested `openclaw/node_modules` tree.
-- `2026.5.27` still installed a **675.9 MB** nested tree.
-- Current `main` keeps shrinkwrap but installs **0 MB** nested
-  `openclaw/node_modules`.
-- Current `main` installs at **407.4 MB** and **314 installed dependencies**.
-- Published npm package size peaked at `2026.3.31`: **43.3 MB** compressed,
-  **182.6 MB** unpacked, and **21,037 files**.
-- Latest stable `2026.5.27` npm package size is **17.8 MB** compressed,
-  **79.0 MB** unpacked, and **12,509 files**.
+  </Card>
+  <Card title="Published package" icon="package">
+    **17.8MB tarball**
 
-## Headline interpretation
+    Latest stable package, down from the 43.3MB March package-size peak.
+
+  </Card>
+  <Card title="Latest stable install" icon="hard-drive">
+    **786.9MB fresh install**
+
+    `v2026.5.27` still contains the nested OpenClaw dependency tree. The
+    next-release state on `main` is 407.4MB.
+
+  </Card>
+  <Card title="Dependency graph" icon="boxes">
+    **371 installed packages**
+
+    Latest stable release. Current `main` is down to 314 after the follow-up
+    dependency cleanup.
+
+  </Card>
+</CardGroup>
+
+## Install Footprint Timeline
+
+<CardGroup cols={2}>
+  <Card title="Monthly high" icon="triangle-alert">
+    **645 dependencies**
+
+    `2026.2.26` was the monthly dependency-count high in this sample.
+
+  </Card>
+  <Card title="Shrinkwrap introduced" icon="lock">
+    **1,020.6MB install**
+
+    `2026.5.22` added root shrinkwrap and exposed a package-shape problem:
+    911.8MB landed under nested `openclaw/node_modules`.
+
+  </Card>
+  <Card title="Latest stable" icon="tag">
+    **786.9MB install**
+
+    `2026.5.27` reduced the peak but still installed a 675.9MB nested
+    OpenClaw tree.
+
+  </Card>
+  <Card title="Next-release state" icon="scissors">
+    **407.4MB install**
+
+    Current `main` keeps shrinkwrap, removes the nested tree, and installs
+    314 packages.
+
+  </Card>
+</CardGroup>
+
+<Tip>
+Shrinkwrap was not the problem by itself. The bad package shape was. Current
+`main` still ships shrinkwrap, but npm no longer materializes a second
+OpenClaw dependency tree during install.
+</Tip>
+
+## What Changed After 5.27
+
+The cleanup between `v2026.5.27` and current `main` removed the duplicate
+default-install graph instead of removing the capabilities themselves.
+
+<CardGroup cols={2}>
+  <Card title="Root default graph" icon="git-branch">
+    Root shrinkwrap package paths fell from **372** to **331**. Unique package
+    names fell from **357** to **318**.
+  </Card>
+  <Card title="Direct root dependencies" icon="unplug">
+    `@earendil-works/pi-agent-core`, `@earendil-works/pi-ai`,
+    `@earendil-works/pi-coding-agent`, and `pdfjs-dist` left the default root
+    dependency path.
+  </Card>
+  <Card title="Native optional cones" icon="cpu">
+    The all-platform `@napi-rs/canvas` and `@mariozechner/clipboard` native
+    package cones stopped landing in the default install.
+  </Card>
+  <Card title="Supply-chain surface" icon="shield">
+    Fewer default packages means fewer tarballs, maintainers, native binaries,
+    install-time behaviors, and transitive update paths to trust by default.
+  </Card>
+</CardGroup>
+
+## Headline Numbers
 
 Do not use the late-April broken rows as public performance baselines.
 `v2026.4.23` and `v2026.4.29` are useful regression evidence, but the large
@@ -96,7 +166,7 @@ Best prerelease point in the single-sample sweep:
 | Warm agent turn |      2,973ms |             2,217ms | 25.4% lower |
 | Agent peak RSS  |      635.5MB |             635.3MB |        flat |
 
-Install footprint:
+### Install footprint
 
 | Metric                                          |  Baseline | Current main |       Delta |
 | ----------------------------------------------- | --------: | -----------: | ----------: |
@@ -107,7 +177,7 @@ Install footprint:
 | Nested `openclaw/node_modules` from `2026.5.22` |   911.8MB |          0MB |     removed |
 | Nested `openclaw/node_modules` from `2026.5.27` |   675.9MB |          0MB |     removed |
 
-npm package size:
+### npm package size
 
 | Version     | Compressed tarball | Unpacked package |  Files | Notes                             |
 | ----------- | -----------------: | ---------------: | -----: | --------------------------------- |
@@ -203,6 +273,24 @@ Dependency samples use one stable release per month, plus the
 | Current `main`     |            314 |       407.4MB |          101.0MB |                            0MB | yes             | top-level wrapper + `darwin-arm64`        |
 
 ### Shrinkwrap boundary
+
+<CardGroup cols={2}>
+  <Card title="Before shrinkwrap" icon="unlock">
+    `2026.5.20` has no root shrinkwrap and no large nested OpenClaw dependency
+    tree.
+  </Card>
+  <Card title="Introduced" icon="lock">
+    `2026.5.22` adds root shrinkwrap and installs 911.8MB under nested
+    `openclaw/node_modules`.
+  </Card>
+  <Card title="Latest stable" icon="tag">
+    `2026.5.27` keeps shrinkwrap and still installs 675.9MB under nested
+    `openclaw/node_modules`.
+  </Card>
+  <Card title="Current main" icon="check">
+    `main` keeps shrinkwrap and removes the nested OpenClaw dependency tree.
+  </Card>
+</CardGroup>
 
 Published tarball inspection verifies the boundary:
 

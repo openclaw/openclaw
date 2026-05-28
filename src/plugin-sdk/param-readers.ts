@@ -1,5 +1,6 @@
 export {
   readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringOrNumberParam,
   readStringParam,

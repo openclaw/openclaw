@@ -134,6 +134,24 @@ export class GatewayTransportError extends Error {
   }
 }
 
+export class GatewayCredentialsRequiredError extends Error {
+  readonly method: string;
+  readonly configPath: string;
+
+  constructor(params: { method: string; configPath: string }) {
+    super(
+      [
+        `gateway ${params.method} requires credentials before opening a websocket`,
+        "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
+        `Config: ${params.configPath}`,
+      ].join("\n"),
+    );
+    this.name = "GatewayCredentialsRequiredError";
+    this.method = params.method;
+    this.configPath = params.configPath;
+  }
+}
+
 export type GatewayTransportErrorJson = {
   ok: false;
   error: {
@@ -196,6 +214,19 @@ export function isGatewayTransportError(value: unknown): value is GatewayTranspo
     typeof candidate.connectionDetails === "object" &&
     candidate.connectionDetails !== null
   );
+}
+
+export function isGatewayCredentialsRequiredError(
+  value: unknown,
+): value is GatewayCredentialsRequiredError {
+  if (value instanceof GatewayCredentialsRequiredError) {
+    return true;
+  }
+  if (!(value instanceof Error) || value.name !== "GatewayCredentialsRequiredError") {
+    return false;
+  }
+  const candidate = value as Partial<GatewayCredentialsRequiredError>;
+  return typeof candidate.method === "string" && typeof candidate.configPath === "string";
 }
 
 const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
@@ -410,13 +441,10 @@ function ensureGatewayCallCanAuthenticate(params: {
   if (hasStoredOperatorDeviceAuthToken(params.deviceIdentity)) {
     return;
   }
-  throw new Error(
-    [
-      `gateway ${params.opts.method} requires credentials before opening a websocket`,
-      "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
-      `Config: ${params.context.configPath}`,
-    ].join("\n"),
-  );
+  throw new GatewayCredentialsRequiredError({
+    method: params.opts.method,
+    configPath: params.context.configPath,
+  });
 }
 
 export type { ExplicitGatewayAuth } from "./credentials.js";

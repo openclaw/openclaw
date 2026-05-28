@@ -923,13 +923,13 @@ describe("installPluginFromNpmSpec", () => {
     expect(managedManifest.dependencies?.["@openclaw/codex"]).toBeUndefined();
   });
 
-  it("rejects npm plugins whose package compatibility requires a newer host", async () => {
+  it("rejects exact npm plugins whose package compatibility requires a newer host", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
     vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.10-beta.1");
 
     mockNpmViewAndInstall({
-      spec: "@openclaw/whatsapp",
+      spec: "@openclaw/whatsapp@2026.5.27",
       packageName: "@openclaw/whatsapp",
       version: "2026.5.27",
       pluginId: "whatsapp",
@@ -943,7 +943,7 @@ describe("installPluginFromNpmSpec", () => {
     });
 
     const result = await installPluginFromNpmSpec({
-      spec: "@openclaw/whatsapp",
+      spec: "@openclaw/whatsapp@2026.5.27",
       npmDir: npmRoot,
       logger: { info: () => {}, warn: () => {} },
     });
@@ -963,12 +963,75 @@ describe("installPluginFromNpmSpec", () => {
     ).toBe(false);
   });
 
-  it("preserves an existing npm plugin when update metadata requires a newer host", async () => {
+  it("installs the newest compatible npm version for unpinned plugins", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
-    fs.mkdirSync(npmRoot, { recursive: true });
+    const warnings: string[] = [];
+    vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.10-beta.1");
+
+    mockNpmViewAndInstallMany([
+      {
+        spec: "@openclaw/whatsapp",
+        packageName: "@openclaw/whatsapp",
+        version: "2026.5.27",
+        pluginId: "whatsapp",
+        npmRoot,
+        versions: ["2026.5.26", "2026.5.27"],
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          install: { minHostVersion: ">=2026.4.25" },
+          compat: { pluginApi: ">=2026.5.27" },
+        },
+      },
+      {
+        spec: "@openclaw/whatsapp@2026.5.26",
+        packageName: "@openclaw/whatsapp",
+        version: "2026.5.26",
+        pluginId: "whatsapp",
+        npmRoot,
+        expectedDependencySpec: "2026.5.26",
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          install: { minHostVersion: ">=2026.4.25" },
+          compat: { pluginApi: ">=2026.5.10-beta.1" },
+        },
+      },
+    ]);
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/whatsapp",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: (message) => warnings.push(message) },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/whatsapp@2026.5.26");
+    expect(result.npmResolution?.version).toBe("2026.5.26");
+    expect(warnings.join("\n")).toContain("using newest compatible @openclaw/whatsapp@2026.5.26");
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(resolveTestPluginPackageDir(npmRoot, "@openclaw/whatsapp"), "package.json"),
+          "utf8",
+        ),
+      ).version,
+    ).toBe("2026.5.26");
+  });
+
+  it("preserves an existing npm plugin by resolving update metadata to a compatible version", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    const npmProjectRoot = resolvePluginNpmProjectDir({
+      npmDir: npmRoot,
+      packageName: "@openclaw/whatsapp",
+    });
+    const warnings: string[] = [];
+    fs.mkdirSync(npmProjectRoot, { recursive: true });
     fs.writeFileSync(
-      path.join(npmRoot, "package.json"),
+      path.join(npmProjectRoot, "package.json"),
       JSON.stringify({
         private: true,
         dependencies: {
@@ -981,54 +1044,71 @@ describe("installPluginFromNpmSpec", () => {
       packageName: "@openclaw/whatsapp",
       version: "2026.5.26",
       pluginId: "whatsapp",
-      npmRoot,
+      npmRoot: npmProjectRoot,
       openclaw: {
         extensions: ["./dist/index.js"],
         install: { minHostVersion: ">=2026.4.25" },
-        compat: { pluginApi: ">=2026.5.26" },
+        compat: { pluginApi: ">=2026.5.10-beta.1" },
       },
     });
     vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.10-beta.1");
-    mockNpmViewAndInstall({
-      spec: "@openclaw/whatsapp",
-      packageName: "@openclaw/whatsapp",
-      version: "2026.5.27",
-      pluginId: "whatsapp",
-      npmRoot,
-      openclaw: {
-        extensions: ["./dist/index.js"],
-        install: { minHostVersion: ">=2026.4.25" },
-        compat: { pluginApi: ">=2026.5.27" },
+    mockNpmViewAndInstallMany([
+      {
+        spec: "@openclaw/whatsapp",
+        packageName: "@openclaw/whatsapp",
+        version: "2026.5.27",
+        pluginId: "whatsapp",
+        npmRoot,
+        versions: ["2026.5.26", "2026.5.27"],
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          install: { minHostVersion: ">=2026.4.25" },
+          compat: { pluginApi: ">=2026.5.27" },
+        },
       },
-    });
+      {
+        spec: "@openclaw/whatsapp@2026.5.26",
+        packageName: "@openclaw/whatsapp",
+        version: "2026.5.26",
+        pluginId: "whatsapp",
+        npmRoot,
+        expectedDependencySpec: "2026.5.26",
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          install: { minHostVersion: ">=2026.4.25" },
+          compat: { pluginApi: ">=2026.5.10-beta.1" },
+        },
+      },
+    ]);
 
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/whatsapp",
       npmDir: npmRoot,
       mode: "update",
-      logger: { info: () => {}, warn: () => {} },
+      logger: { info: () => {}, warn: (message) => warnings.push(message) },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
       return;
     }
-    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API);
+    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/whatsapp@2026.5.26");
+    expect(warnings.join("\n")).toContain("using newest compatible @openclaw/whatsapp@2026.5.26");
     expect(
       JSON.parse(
         fs.readFileSync(
-          path.join(npmRoot, "node_modules", "@openclaw", "whatsapp", "package.json"),
+          path.join(resolveTestPluginPackageDir(npmRoot, "@openclaw/whatsapp"), "package.json"),
           "utf8",
         ),
       ).version,
     ).toBe("2026.5.26");
     const managedManifest = JSON.parse(
-      fs.readFileSync(path.join(npmRoot, "package.json"), "utf8"),
+      fs.readFileSync(path.join(npmProjectRoot, "package.json"), "utf8"),
     ) as { dependencies?: Record<string, string> };
     expect(managedManifest.dependencies?.["@openclaw/whatsapp"]).toBe("2026.5.26");
     expect(
       runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(
