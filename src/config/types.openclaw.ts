@@ -27,6 +27,7 @@ import type { ModelsConfig, ModelsConfigInput } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
+import type { SessionTitleConfig } from "./types.session-title.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
@@ -208,6 +209,8 @@ export type OpenClawConfig = {
   channels?: ChannelsConfig;
   /** Cron schedule and retention settings. */
   cron?: CronConfig;
+  /** AI-generated session title settings. */
+  sessionTitle?: SessionTitleConfig;
   /** Transcript persistence and export settings. */
   transcripts?: TranscriptsConfig;
   /** Commitment/reminder extraction settings. */
