@@ -585,6 +585,20 @@ jobs:
             pids+=("$!")
           }
 
+          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
+            gateway_watch_log="${RUNNER_TEMP}/gateway-watch.log"
+            echo "starting gateway-watch: node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000"
+            if node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000 >"$gateway_watch_log" 2>&1; then
+              result="success"
+            else
+              result="failure"
+            fi
+            echo "::group::gateway-watch log"
+            cat "$gateway_watch_log"
+            echo "::endgroup::"
+            results["gateway-watch"]="$result"
+          fi
+
           if [ "$RUN_CHANNELS" = "true" ]; then
             start_check "channels" env \
               NODE_OPTIONS=--max-old-space-size=8192 \
@@ -615,20 +629,6 @@ jobs:
             echo "::endgroup::"
             results["$name"]="$result"
           done
-
-          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
-            gateway_watch_log="${RUNNER_TEMP}/gateway-watch.log"
-            echo "starting gateway-watch: node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000"
-            if node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000 >"$gateway_watch_log" 2>&1; then
-              result="success"
-            else
-              result="failure"
-            fi
-            echo "::group::gateway-watch log"
-            cat "$gateway_watch_log"
-            echo "::endgroup::"
-            results["gateway-watch"]="$result"
-          fi
 
           for name in channels core-support-boundary gateway-watch; do
             echo "${name}-result=${results[$name]}" >> "$GITHUB_OUTPUT"
