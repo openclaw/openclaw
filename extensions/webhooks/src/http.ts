@@ -6,7 +6,6 @@ import {
   readWebhookBodyOrReject,
   resolveRequestClientIp,
   resolveConfiguredSecretInputString,
-  resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
   WEBHOOK_IN_FLIGHT_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
@@ -15,9 +14,10 @@ import {
 } from "../runtime-api.js";
 import {
   collectRequestHeaders,
-  extractPresentedSecret,
+  extractPresentedSecretFromHeaders,
   hmacMatches,
   timingSafeEquals,
+  type WebhookHeaderMap,
 } from "./auth.js";
 import type {
   ConfiguredWebhookAuth,
@@ -172,9 +172,213 @@ function parseJsonBody(rawBody: string): { ok: true; value: unknown } | { ok: fa
   }
 }
 
-function writeInvalidJsonBody(res: ServerResponse): void {
-  res.statusCode = 400;
-  res.end("invalid request body");
+export type WebhookEnvelope = {
+  path: string;
+  headers: WebhookHeaderMap;
+  rawBody: string;
+  remoteAddress?: string;
+};
+
+export type WebhookEnvelopeResult = {
+  statusCode: number;
+  body: unknown;
+  contentType: "json" | "text";
+};
+
+function jsonResult(statusCode: number, body: unknown): WebhookEnvelopeResult {
+  return { statusCode, body, contentType: "json" };
+}
+
+function textResult(statusCode: number, body: string): WebhookEnvelopeResult {
+  return { statusCode, body, contentType: "text" };
+}
+
+async function resolveTargetSecret(params: {
+  target: WebhookTarget;
+  cfg: OpenClawConfig;
+}): Promise<string | undefined> {
+  const secretInput = targetAuth(params.target).secret;
+  if (typeof secretInput === "string") {
+    return secretInput;
+  }
+  const resolved = await resolveConfiguredSecretInputString({
+    config: params.cfg,
+    env: process.env,
+    value: secretInput,
+    path: targetSecretConfigPath(params.target),
+  });
+  return resolved.value;
+}
+
+async function isTargetAuthMatch(params: {
+  target: WebhookTarget;
+  headers: WebhookHeaderMap;
+  rawBody: string;
+  cfg: OpenClawConfig;
+}): Promise<boolean> {
+  const auth = targetAuth(params.target);
+  const presentedSecret = extractPresentedSecretFromHeaders({ headers: params.headers, auth });
+  if (presentedSecret.length === 0) {
+    return false;
+  }
+  const resolvedSecret = await resolveTargetSecret({
+    target: params.target,
+    cfg: params.cfg,
+  });
+  if (!resolvedSecret) {
+    return false;
+  }
+  if (auth.mode === "hmac-sha256") {
+    return hmacMatches({
+      rawBody: params.rawBody,
+      secret: resolvedSecret,
+      presentedSignature: presentedSecret,
+    });
+  }
+  return timingSafeEquals(resolvedSecret, presentedSecret);
+}
+
+export async function handleWebhookEnvelope(params: {
+  cfg: OpenClawConfig;
+  targets: WebhookTarget[];
+  envelope: WebhookEnvelope;
+  idempotencyRecords: ReturnType<typeof createInMemoryIdempotencyRecords>;
+  idempotencyStore?: WebhookIdempotencyStore;
+  scheduleSessionTurn?: ScheduleSessionTurn;
+  onAgentCompletionDispatch?: (dispatch: WebhookAgentCompletionDispatch) => void | Promise<void>;
+  loadChannelOutboundAdapter?: LoadChannelOutboundAdapter;
+  logger?: WebhookLogger;
+}): Promise<WebhookEnvelopeResult> {
+  let target: WebhookTarget | undefined;
+  for (const candidate of params.targets) {
+    if (
+      await isTargetAuthMatch({
+        target: candidate,
+        headers: params.envelope.headers,
+        rawBody: params.envelope.rawBody,
+        cfg: params.cfg,
+      })
+    ) {
+      target = candidate;
+      break;
+    }
+  }
+  if (!target) {
+    return textResult(401, "unauthorized");
+  }
+
+  const parsedBody = parseJsonBody(params.envelope.rawBody);
+  if (!parsedBody.ok) {
+    return textResult(400, "invalid request body");
+  }
+
+  const eventType = extractEventType({
+    headers: params.envelope.headers,
+    body: parsedBody.value,
+    config: target.event,
+  });
+  if (target.events?.length && (!eventType || !target.events.includes(eventType))) {
+    return jsonResult(200, {
+      ok: true,
+      routeId: target.routeId,
+      skipped: true,
+      reason: "event_not_allowed",
+      ...(eventType ? { eventType } : {}),
+    });
+  }
+
+  const idempotencyKey = extractIdempotencyKey({
+    headers: params.envelope.headers,
+    body: parsedBody.value,
+    config: target.idempotency,
+  });
+  if (target.idempotency) {
+    const dedupe = await checkAndStoreDurableIdempotencyKey({
+      store: params.idempotencyStore,
+      records: params.idempotencyRecords,
+      routeId: target.routeId,
+      key: idempotencyKey,
+      ttlMs: target.idempotency.ttlMs,
+      nowMs: Date.now(),
+    });
+    if (dedupe.duplicate) {
+      return jsonResult(200, {
+        ok: true,
+        routeId: target.routeId,
+        duplicate: true,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      });
+    }
+  }
+
+  const dispatchContext: WebhookDispatchContext = {
+    routeId: target.routeId,
+    ...(eventType ? { eventType } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+    body: parsedBody.value,
+    rawBody: params.envelope.rawBody,
+    headers: params.envelope.headers,
+  };
+
+  if (!isTaskFlowTarget(target)) {
+    if (isAgentTarget(target)) {
+      const outcome = await executeAgentDispatch({
+        target,
+        context: dispatchContext,
+        scheduleSessionTurn: params.scheduleSessionTurn,
+        onAgentCompletionDispatch: params.onAgentCompletionDispatch,
+        logger: params.logger,
+      });
+      return jsonResult(outcome.statusCode, outcome.body);
+    }
+    if (isDeliverTarget(target)) {
+      const outcome = await executeDeliveryDispatch({
+        target,
+        context: dispatchContext,
+        loadChannelOutboundAdapter: params.loadChannelOutboundAdapter,
+        logger: params.logger,
+        cfg: params.cfg,
+      });
+      return jsonResult(outcome.statusCode, outcome.body);
+    }
+    return jsonResult(200, {
+      ok: true,
+      routeId: target.routeId,
+      result: {
+        action: "ack",
+        ...(eventType ? { eventType } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      },
+    });
+  }
+
+  if (target.taskflow || target.prompt) {
+    const result = await executeTaskFlowTemplateDispatch({
+      target,
+      context: dispatchContext,
+    });
+    return jsonResult(202, {
+      ok: true,
+      routeId: target.routeId,
+      result,
+    });
+  }
+
+  const outcome = await executeTaskFlowActionDispatch({
+    body: parsedBody.value,
+    target,
+    cfg: params.cfg,
+  });
+  return jsonResult(outcome.statusCode, outcome.body);
+}
+
+function writeEnvelopeResult(res: ServerResponse, result: WebhookEnvelopeResult): void {
+  if (result.contentType === "json") {
+    writeJson(res, result.statusCode, result.body);
+    return;
+  }
+  res.statusCode = result.statusCode;
+  res.end(String(result.body));
 }
 
 export function createTaskFlowWebhookRequestHandler(params: {
@@ -199,19 +403,6 @@ export function createTaskFlowWebhookRequestHandler(params: {
       maxTrackedKeys: WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
     });
   const idempotencyRecords = createInMemoryIdempotencyRecords();
-  const resolveTargetSecret = async (target: WebhookTarget): Promise<string | undefined> => {
-    const secretInput = targetAuth(target).secret;
-    if (typeof secretInput === "string") {
-      return secretInput;
-    }
-    const resolved = await resolveConfiguredSecretInputString({
-      config: params.cfg,
-      env: process.env,
-      value: secretInput,
-      path: targetSecretConfigPath(target),
-    });
-    return resolved.value;
-  };
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     return await withResolvedWebhookRequestPipeline({
@@ -233,7 +424,7 @@ export function createTaskFlowWebhookRequestHandler(params: {
         return `${new URL(req.url ?? "/", "http://localhost").pathname}:${clientIp}`;
       })(),
       inFlightLimiter,
-      handle: async ({ targets }: { path: string; targets: WebhookTarget[] }) => {
+      handle: async ({ path, targets }: { path: string; targets: WebhookTarget[] }) => {
         const body = await readWebhookBodyOrReject({
           req,
           res,
@@ -245,143 +436,23 @@ export function createTaskFlowWebhookRequestHandler(params: {
           return true;
         }
 
-        const target = await resolveWebhookTargetWithAuthOrReject({
-          targets,
-          res,
-          isMatch: async (candidate: WebhookTarget) => {
-            const auth = targetAuth(candidate);
-            const presentedSecret = extractPresentedSecret({ req, auth });
-            if (presentedSecret.length === 0) {
-              return false;
-            }
-            const resolvedSecret = await resolveTargetSecret(candidate);
-            if (!resolvedSecret) {
-              return false;
-            }
-            if (auth.mode === "hmac-sha256") {
-              return hmacMatches({
-                rawBody: body.value,
-                secret: resolvedSecret,
-                presentedSignature: presentedSecret,
-              });
-            }
-            return timingSafeEquals(resolvedSecret, presentedSecret);
-          },
-        });
-        if (!target) {
-          return true;
-        }
-
-        const parsedBody = parseJsonBody(body.value);
-        if (!parsedBody.ok) {
-          writeInvalidJsonBody(res);
-          return true;
-        }
-
-        const eventType = extractEventType({
-          req,
-          body: parsedBody.value,
-          config: target.event,
-        });
-        if (target.events?.length && (!eventType || !target.events.includes(eventType))) {
-          writeJson(res, 200, {
-            ok: true,
-            routeId: target.routeId,
-            skipped: true,
-            reason: "event_not_allowed",
-            ...(eventType ? { eventType } : {}),
-          });
-          return true;
-        }
-
-        const idempotencyKey = extractIdempotencyKey({
-          req,
-          body: parsedBody.value,
-          config: target.idempotency,
-        });
-        if (target.idempotency) {
-          const dedupe = await checkAndStoreDurableIdempotencyKey({
-            store: params.idempotencyStore,
-            records: idempotencyRecords,
-            routeId: target.routeId,
-            key: idempotencyKey,
-            ttlMs: target.idempotency.ttlMs,
-            nowMs: Date.now(),
-          });
-          if (dedupe.duplicate) {
-            writeJson(res, 200, {
-              ok: true,
-              routeId: target.routeId,
-              duplicate: true,
-              ...(idempotencyKey ? { idempotencyKey } : {}),
-            });
-            return true;
-          }
-        }
-
-        const dispatchContext: WebhookDispatchContext = {
-          routeId: target.routeId,
-          ...(eventType ? { eventType } : {}),
-          ...(idempotencyKey ? { idempotencyKey } : {}),
-          body: parsedBody.value,
-          rawBody: body.value,
-          headers: collectRequestHeaders(req),
-        };
-
-        if (!isTaskFlowTarget(target)) {
-          if (isAgentTarget(target)) {
-            const outcome = await executeAgentDispatch({
-              target,
-              context: dispatchContext,
-              scheduleSessionTurn: params.scheduleSessionTurn,
-              onAgentCompletionDispatch: params.onAgentCompletionDispatch,
-              logger: params.logger,
-            });
-            writeJson(res, outcome.statusCode, outcome.body);
-            return true;
-          }
-          if (isDeliverTarget(target)) {
-            const outcome = await executeDeliveryDispatch({
-              target,
-              context: dispatchContext,
-              loadChannelOutboundAdapter: params.loadChannelOutboundAdapter,
-              logger: params.logger,
-              cfg: params.cfg,
-            });
-            writeJson(res, outcome.statusCode, outcome.body);
-            return true;
-          }
-          writeJson(res, 200, {
-            ok: true,
-            routeId: target.routeId,
-            result: {
-              action: "ack",
-              ...(eventType ? { eventType } : {}),
-              ...(idempotencyKey ? { idempotencyKey } : {}),
-            },
-          });
-          return true;
-        }
-
-        if (target.taskflow || target.prompt) {
-          const result = await executeTaskFlowTemplateDispatch({
-            target,
-            context: dispatchContext,
-          });
-          writeJson(res, 202, {
-            ok: true,
-            routeId: target.routeId,
-            result,
-          });
-          return true;
-        }
-
-        const outcome = await executeTaskFlowActionDispatch({
-          body: parsedBody.value,
-          target,
+        const result = await handleWebhookEnvelope({
           cfg: params.cfg,
+          targets,
+          envelope: {
+            path,
+            headers: collectRequestHeaders(req),
+            rawBody: body.value,
+            remoteAddress: req.socket.remoteAddress,
+          },
+          idempotencyRecords,
+          idempotencyStore: params.idempotencyStore,
+          scheduleSessionTurn: params.scheduleSessionTurn,
+          onAgentCompletionDispatch: params.onAgentCompletionDispatch,
+          loadChannelOutboundAdapter: params.loadChannelOutboundAdapter,
+          logger: params.logger,
         });
-        writeJson(res, outcome.statusCode, outcome.body);
+        writeEnvelopeResult(res, result);
         return true;
       },
     });

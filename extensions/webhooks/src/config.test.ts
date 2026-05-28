@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveWebhooksPluginConfig } from "./config.js";
+import { resolveWebhooksPluginConfig, resolveWebhooksPluginRuntimeConfig } from "./config.js";
 
 describe("resolveWebhooksPluginConfig", () => {
   it("keeps SecretRef-backed secrets on the route config", () => {
@@ -284,6 +284,57 @@ describe("resolveWebhooksPluginConfig", () => {
     });
   });
 
+  it("normalizes websocket relay config separately from routes", () => {
+    const config = resolveWebhooksPluginRuntimeConfig({
+      pluginConfig: {
+        relay: {
+          mode: "websocket",
+          url: "wss://relay.example.test/openclaw/webhooks",
+          token: {
+            source: "env",
+            provider: "relay",
+            id: "WEBHOOK_RELAY_TOKEN",
+          },
+          reconnect: {
+            minDelayMs: 500,
+            maxDelayMs: 10_000,
+          },
+        },
+        routes: {
+          codebase: {
+            sessionKey: "agent:reviewer:codebase",
+            auth: {
+              mode: "header",
+              header: "x-vecode-hook-id",
+              secret: "hook-secret",
+            },
+            dispatch: { mode: "agent" },
+          },
+        },
+      },
+    });
+
+    expect(config.relay).toEqual({
+      mode: "websocket",
+      url: "wss://relay.example.test/openclaw/webhooks",
+      token: {
+        source: "env",
+        provider: "relay",
+        id: "WEBHOOK_RELAY_TOKEN",
+      },
+      tokenHeader: "authorization",
+      reconnect: {
+        minDelayMs: 500,
+        maxDelayMs: 10_000,
+      },
+      ack: true,
+    });
+    expect(config.routes[0]).toMatchObject({
+      routeId: "codebase",
+      dispatchMode: "agent",
+    });
+  });
+
   it("normalizes exec completion delivery routes", () => {
     const routes = resolveWebhooksPluginConfig({
       pluginConfig: {
@@ -548,24 +599,35 @@ describe("resolveWebhooksPluginConfig", () => {
     ).toThrow(/deliver is required/i);
   });
 
-  it("rejects duplicate normalized paths", () => {
-    expect(() =>
-      resolveWebhooksPluginConfig({
-        pluginConfig: {
-          routes: {
-            first: {
-              path: "/plugins/webhooks/shared",
-              sessionKey: "agent:main:main",
-              secret: "a",
-            },
-            second: {
-              path: "/plugins/webhooks/shared/",
-              sessionKey: "agent:main:other",
-              secret: "b",
-            },
+  it("allows duplicate normalized paths for route-specific auth isolation", () => {
+    const routes = resolveWebhooksPluginConfig({
+      pluginConfig: {
+        routes: {
+          first: {
+            path: "/plugins/webhooks/shared",
+            sessionKey: "agent:main:main",
+            secret: "a",
+          },
+          second: {
+            path: "/plugins/webhooks/shared/",
+            sessionKey: "agent:main:other",
+            secret: "b",
           },
         },
-      }),
-    ).toThrow(/conflicts with routes\.first\.path/i);
+      },
+    });
+
+    expect(routes).toMatchObject([
+      {
+        routeId: "first",
+        path: "/plugins/webhooks/shared",
+        sessionKey: "agent:main:main",
+      },
+      {
+        routeId: "second",
+        path: "/plugins/webhooks/shared",
+        sessionKey: "agent:main:other",
+      },
+    ]);
   });
 });

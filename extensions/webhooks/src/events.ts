@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import { getHeader } from "./auth.js";
+import { getHeader, getHeaderFromHeaders, type WebhookHeaderMap } from "./auth.js";
 import type { ConfiguredWebhookEventConfig, ConfiguredWebhookIdempotencyConfig } from "./config.js";
 import { normalizePathString, readTemplatePath } from "./template.js";
 
@@ -34,11 +34,16 @@ function readPayloadPath(value: unknown, path: string | undefined): unknown {
 }
 
 export function extractEventType(params: {
-  req: IncomingMessage;
+  req?: IncomingMessage;
+  headers?: WebhookHeaderMap;
   body: unknown;
   config: ConfiguredWebhookEventConfig | undefined;
 }): string | undefined {
-  const fromHeader = params.config?.header ? getHeader(params.req, params.config.header) : "";
+  const readHeader = (name: string) =>
+    params.headers
+      ? getHeaderFromHeaders(params.headers, name)
+      : getHeader(params.req as IncomingMessage, name);
+  const fromHeader = params.config?.header ? readHeader(params.config.header) : "";
   if (fromHeader) {
     return fromHeader;
   }
@@ -47,7 +52,7 @@ export function extractEventType(params: {
     return fromPayload;
   }
   for (const header of DEFAULT_EVENT_HEADERS) {
-    const value = getHeader(params.req, header);
+    const value = readHeader(header);
     if (value) {
       return value;
     }
@@ -62,11 +67,16 @@ export function extractEventType(params: {
 }
 
 export function extractIdempotencyKey(params: {
-  req: IncomingMessage;
+  req?: IncomingMessage;
+  headers?: WebhookHeaderMap;
   body: unknown;
   config: ConfiguredWebhookIdempotencyConfig | undefined;
 }): string | undefined {
-  const fromHeader = params.config?.header ? getHeader(params.req, params.config.header) : "";
+  const readHeader = (name: string) =>
+    params.headers
+      ? getHeaderFromHeaders(params.headers, name)
+      : getHeader(params.req as IncomingMessage, name);
+  const fromHeader = params.config?.header ? readHeader(params.config.header) : "";
   if (fromHeader) {
     return fromHeader;
   }
@@ -78,7 +88,7 @@ export function extractIdempotencyKey(params: {
     return undefined;
   }
   for (const header of DEFAULT_IDEMPOTENCY_HEADERS) {
-    const value = getHeader(params.req, header);
+    const value = readHeader(header);
     if (value) {
       return value;
     }

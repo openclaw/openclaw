@@ -6,15 +6,12 @@ import {
   storeCompletionDispatch,
 } from "./src/completion.js";
 import {
-  type ConfiguredWebhookAuth,
   type ConfiguredWebhookIdempotencyConfig,
-  resolveWebhooksPluginConfig,
+  resolveWebhooksPluginRuntimeConfig,
 } from "./src/config.js";
-import { createTaskFlowWebhookRequestHandler, type WebhookTarget } from "./src/http.js";
-
-function usesLegacySharedSecretHeader(auth: ConfiguredWebhookAuth): boolean {
-  return auth.mode === "bearer" && auth.legacySharedHeader === true;
-}
+import { createTaskFlowWebhookRequestHandler } from "./src/http.js";
+import { createWebhookRelayConnector } from "./src/relay.js";
+import { buildWebhookTargets } from "./src/targets.js";
 
 function hasIdempotency(routes: { idempotency?: ConfiguredWebhookIdempotencyConfig }[]): boolean {
   return routes.some((route) => route.idempotency);
@@ -42,12 +39,13 @@ function openIdempotencyStore(api: OpenClawPluginApi) {
 }
 
 function registerWebhookRoutes(api: OpenClawPluginApi): void {
-  const routes = resolveWebhooksPluginConfig({ pluginConfig: api.pluginConfig });
+  const runtimeConfig = resolveWebhooksPluginRuntimeConfig({ pluginConfig: api.pluginConfig });
+  const routes = runtimeConfig.routes;
   if (routes.length === 0) {
     return;
   }
 
-  const targetsByPath = new Map<string, WebhookTarget[]>();
+  const targetsByPath = buildWebhookTargets({ api, routes });
   const pendingCompletionBySessionKey = new Map<string, CompletionRunContext>();
   const completionContextStore = routes.some(
     (route) => route.dispatchMode === "agent" && route.agent.onCompletion,
@@ -80,56 +78,50 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
     });
   }
 
-  for (const route of routes) {
-    let target: WebhookTarget;
-    const secretConfigPath = usesLegacySharedSecretHeader(route.auth)
-      ? `plugins.entries.webhooks.routes.${route.routeId}.secret`
-      : `plugins.entries.webhooks.routes.${route.routeId}.auth.secret`;
-    const commonTarget = {
-      routeId: route.routeId,
-      path: route.path,
-      auth: route.auth,
-      secretConfigPath,
-      event: route.event,
-      ...(route.events ? { events: route.events } : {}),
-      ...(route.idempotency ? { idempotency: route.idempotency } : {}),
-      ...(route.prompt ? { prompt: route.prompt } : {}),
-      ...(route.skills ? { skills: route.skills } : {}),
-    };
-    if (route.dispatchMode === "ack") {
-      target = { ...commonTarget, dispatchMode: "ack" };
-    } else if (route.dispatchMode === "agent") {
-      target = {
-        ...commonTarget,
-        dispatchMode: "agent",
-        sessionKey: route.sessionKey,
-        agent: route.agent,
-      };
-    } else if (route.dispatchMode === "deliver") {
-      target = { ...commonTarget, dispatchMode: "deliver", delivery: route.delivery };
-    } else {
-      target = {
-        ...commonTarget,
-        dispatchMode: "taskflow",
-        secretInput: route.secret,
-        defaultControllerId: route.controllerId,
-        ...(route.taskflow ? { taskflow: route.taskflow } : {}),
-        taskFlow: api.runtime.tasks.managedFlows.bindSession({ sessionKey: route.sessionKey }),
-      };
-    }
-    targetsByPath.set(target.path, [...(targetsByPath.get(target.path) ?? []), target]);
+  for (const [path] of targetsByPath) {
     api.registerHttpRoute({
-      path: target.path,
+      path,
       auth: "plugin",
       match: "exact",
       replaceExisting: true,
       handler,
     });
+  }
+
+  for (const route of routes) {
     const sessionSuffix =
       route.dispatchMode === "taskflow" ? ` for session ${route.sessionKey}` : "";
     api.logger.info?.(
       `[webhooks] registered route ${route.routeId} on ${route.path}${sessionSuffix}`,
     );
+  }
+
+  if (runtimeConfig.relay) {
+    const relay = createWebhookRelayConnector({
+      cfg: api.config,
+      relay: runtimeConfig.relay,
+      targetsByPath,
+      ...(hasIdempotency(routes) ? { idempotencyStore: openIdempotencyStore(api) } : {}),
+      scheduleSessionTurn: api.session?.workflow?.scheduleSessionTurn ?? api.scheduleSessionTurn,
+      onAgentCompletionDispatch: async (dispatch) => {
+        await storeCompletionDispatch({
+          store: completionContextStore,
+          fallback: pendingCompletionBySessionKey,
+          dispatch,
+        });
+      },
+      loadChannelOutboundAdapter: api.runtime.channel?.outbound?.loadAdapter?.bind(
+        api.runtime.channel.outbound,
+      ),
+      logger: api.logger,
+    });
+    relay.start();
+    api.lifecycle.registerRuntimeLifecycle({
+      id: "webhook-relay",
+      description: "Webhooks relay connector cleanup.",
+      cleanup: () => relay.stop(),
+    });
+    api.logger.info?.(`[webhooks] relay websocket connector started`);
   }
 }
 

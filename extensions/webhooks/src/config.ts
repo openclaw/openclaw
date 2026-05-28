@@ -130,6 +130,24 @@ const webhookIdempotencyConfigSchema = z
   })
   .strict();
 
+const webhookRelayConfigSchema = z
+  .object({
+    enabled: z.boolean().optional().default(true),
+    mode: z.literal("websocket").default("websocket"),
+    url: z.string().trim().url(),
+    token: secretInputSchema.optional(),
+    tokenHeader: z.string().trim().min(1).optional(),
+    reconnect: z
+      .object({
+        minDelayMs: z.number().int().positive().optional(),
+        maxDelayMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+    ack: z.boolean().optional(),
+  })
+  .strict();
+
 const webhookRouteConfigSchema = z
   .object({
     enabled: z.boolean().optional().default(true),
@@ -182,6 +200,7 @@ type RawWebhookRouteConfig = z.infer<typeof webhookRouteConfigSchema>;
 const webhooksPluginConfigSchema = z
   .object({
     routes: z.record(z.string().trim().min(1), webhookRouteConfigSchema).default({}),
+    relay: webhookRelayConfigSchema.optional(),
   })
   .strict();
 
@@ -274,6 +293,18 @@ export type ConfiguredWebhookDeliveryConfig =
       timeoutMs?: number;
     };
 
+export type ConfiguredWebhookRelayConfig = {
+  mode: "websocket";
+  url: string;
+  token?: WebhookSecretInput;
+  tokenHeader: string;
+  reconnect: {
+    minDelayMs: number;
+    maxDelayMs: number;
+  };
+  ack: boolean;
+};
+
 type ConfiguredWebhookRouteBase = {
   routeId: string;
   path: string;
@@ -314,6 +345,11 @@ export type ConfiguredWebhookRouteConfig =
   | ConfiguredAgentWebhookRouteConfig
   | ConfiguredDeliverWebhookRouteConfig
   | ConfiguredAckWebhookRouteConfig;
+
+export type ConfiguredWebhooksPluginConfig = {
+  routes: ConfiguredWebhookRouteConfig[];
+  relay?: ConfiguredWebhookRelayConfig;
+};
 
 function resolveRawDispatchMode(route: {
   dispatch: {
@@ -392,16 +428,7 @@ function normalizeDeliveryConfigFromInput(
       ...(typeof extra.silent === "boolean" ? { silent: extra.silent } : {}),
     };
   }
-  const mode = raw.mode ?? (raw.channel ? "channel" : undefined);
-  if (!mode) {
-    throw new Error(
-      `webhooks.routes.${routeId}.deliver requires mode "log" or a channel for delivery.`,
-    );
-  }
-  if (mode === "log") {
-    return { mode: "log" };
-  }
-  if (mode === "exec") {
+  if (raw.mode === "exec") {
     return {
       mode: "exec",
       command: raw.command,
@@ -411,6 +438,15 @@ function normalizeDeliveryConfigFromInput(
       ...(raw.textTemplate ? { textTemplate: raw.textTemplate } : {}),
       ...(raw.timeoutMs ? { timeoutMs: raw.timeoutMs } : {}),
     };
+  }
+  const mode = raw.mode ?? (raw.channel ? "channel" : undefined);
+  if (!mode) {
+    throw new Error(
+      `webhooks.routes.${routeId}.deliver requires mode "log" or a channel for delivery.`,
+    );
+  }
+  if (mode === "log") {
+    return { mode: "log" };
   }
   if (!raw.channel) {
     throw new Error(`webhooks.routes.${routeId}.deliver requires channel for channel delivery.`);
@@ -518,26 +554,38 @@ function normalizeAgentDispatchConfig(
   };
 }
 
+function normalizeRelayConfig(
+  raw: z.infer<typeof webhookRelayConfigSchema> | undefined,
+): ConfiguredWebhookRelayConfig | undefined {
+  if (!raw?.enabled) {
+    return undefined;
+  }
+  const minDelayMs = raw.reconnect?.minDelayMs ?? 1_000;
+  const maxDelayMs = raw.reconnect?.maxDelayMs ?? 30_000;
+  return {
+    mode: "websocket",
+    url: raw.url,
+    ...(raw.token ? { token: raw.token } : {}),
+    tokenHeader: raw.tokenHeader ?? "authorization",
+    reconnect: {
+      minDelayMs,
+      maxDelayMs: Math.max(minDelayMs, maxDelayMs),
+    },
+    ack: raw.ack ?? true,
+  };
+}
+
 export function resolveWebhooksPluginConfig(params: {
   pluginConfig: unknown;
 }): ConfiguredWebhookRouteConfig[] {
   const parsed = webhooksPluginConfigSchema.parse(params.pluginConfig ?? {});
   const configuredRoutes: ConfiguredWebhookRouteConfig[] = [];
-  const seenPaths = new Map<string, string>();
 
   for (const [routeId, route] of Object.entries(parsed.routes)) {
     if (!route.enabled) {
       continue;
     }
     const path = normalizeWebhookPath(route.path ?? `/plugins/webhooks/${routeId}`);
-    const existingRouteId = seenPaths.get(path);
-    if (existingRouteId) {
-      throw new Error(
-        `webhooks.routes.${routeId}.path conflicts with routes.${existingRouteId}.path (${path}).`,
-      );
-    }
-
-    seenPaths.set(path, routeId);
     const base = {
       routeId,
       path,
@@ -608,4 +656,14 @@ export function resolveWebhooksPluginConfig(params: {
   }
 
   return configuredRoutes;
+}
+
+export function resolveWebhooksPluginRuntimeConfig(params: {
+  pluginConfig: unknown;
+}): ConfiguredWebhooksPluginConfig {
+  const parsed = webhooksPluginConfigSchema.parse(params.pluginConfig ?? {});
+  return {
+    routes: resolveWebhooksPluginConfig(params),
+    ...(parsed.relay ? { relay: normalizeRelayConfig(parsed.relay) } : {}),
+  };
 }
