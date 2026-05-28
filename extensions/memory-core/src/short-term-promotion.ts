@@ -1044,7 +1044,7 @@ export async function recordShortTermRecalls(params: {
       if (!rawSnippet || isContaminatedDreamingSnippet(rawSnippet)) {
         continue;
       }
-      const claimHash = snippet ? buildClaimHash(snippet) : undefined;
+      const claimHash = buildClaimHash(rawSnippet);
       const groundedKey = claimHash
         ? buildEntryKey({
             path: normalizedPath,
@@ -1163,6 +1163,7 @@ export async function recordGroundedShortTermCandidates(params: {
         startLine: Math.max(1, Math.floor(item.startLine)),
         endLine: Math.max(1, Math.floor(item.endLine)),
         snippet,
+        identitySnippet: rawSnippet,
         score: clampScore(item.score),
         query: normalizeSnippet(item.query ?? query),
         signalCount: Math.max(1, Math.floor(item.signalCount ?? 1)),
@@ -1187,7 +1188,7 @@ export async function recordGroundedShortTermCandidates(params: {
         continue;
       }
       const queryHash = hashQuery(effectiveQuery);
-      const claimHash = buildClaimHash(item.snippet);
+      const claimHash = buildClaimHash(item.identitySnippet);
       const key = buildEntryKey({
         path: item.path,
         startLine: item.startLine,

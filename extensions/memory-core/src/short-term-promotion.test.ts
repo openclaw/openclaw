@@ -91,9 +91,19 @@ describe("short-term promotion", () => {
 
   async function readRecallStoreEntries(
     workspaceDir: string,
-  ): Promise<Record<string, { snippet?: unknown; totalScore?: unknown }>> {
+  ): Promise<
+    Record<
+      string,
+      { claimHash?: unknown; recallCount?: unknown; snippet?: unknown; totalScore?: unknown }
+    >
+  > {
     const raw = await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8");
-    const store = JSON.parse(raw) as { entries?: Record<string, { snippet?: unknown }> };
+    const store = JSON.parse(raw) as {
+      entries?: Record<
+        string,
+        { claimHash?: unknown; recallCount?: unknown; snippet?: unknown; totalScore?: unknown }
+      >;
+    };
     return store.entries ?? {};
   }
 
@@ -221,6 +231,56 @@ describe("short-term promotion", () => {
           readEntrySnippet(entry).startsWith(`Recall entry ${maxEntries + 4} `),
         ),
       ).toBe(true);
+    });
+  });
+
+  it("keeps long-snippet claim identity stable while storing capped snippets", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
+      const longSnippet = `Stable claim identity ${"x".repeat(maxSnippetChars + 100)}`;
+      const claimHash = testing.buildClaimHash(longSnippet);
+
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "__dreaming_grounded_backfill__",
+        items: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            snippet: longSnippet,
+            score: 0.9,
+            query: "__dreaming_grounded_backfill__:candidate",
+            signalCount: 1,
+            dayBucket: "2026-04-03",
+          },
+        ],
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "stable claim",
+        nowMs: Date.parse("2026-04-03T11:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 1,
+            score: 0.8,
+            snippet: longSnippet,
+          },
+        ],
+      });
+
+      const entries = Object.entries(await readRecallStoreEntries(workspaceDir));
+      expect(entries).toHaveLength(1);
+      const [key, entry] = entries[0]!;
+      expect(key.endsWith(`:${claimHash}`)).toBe(true);
+      expect(entry.claimHash).toBe(claimHash);
+      expect(entry.recallCount).toBe(1);
+      expect(readEntrySnippet(entry).length).toBeLessThanOrEqual(maxSnippetChars);
     });
   });
 
