@@ -57,6 +57,7 @@ async function expectSafeFetchStatus(params: {
     resolveFn: params.resolveFn ?? publicResolve,
   });
   expect(res.status).toBe(params.expectedStatus);
+  await res.body?.cancel();
   return res;
 }
 
@@ -161,6 +162,21 @@ describe("safeFetch", () => {
     expect(fetchInitAt(fetchMock, 0)).toHaveProperty("redirect", "manual");
   });
 
+  it("pins the validated DNS result into the request dispatcher", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+      return new Response("ok", { status: 200 });
+    });
+
+    await expectSafeFetchStatus({
+      fetchMock,
+      url: "https://teams.sharepoint.com/file.pdf",
+      allowHosts: ["sharepoint.com"],
+      expectedStatus: 200,
+    });
+
+    expect(fetchInitAt(fetchMock, 0)).toHaveProperty("dispatcher");
+  });
+
   it("follows a redirect to an allowlisted host with public IP", async () => {
     const fetchMock = mockFetchWithRedirect({
       "https://teams.sharepoint.com/file.pdf": "https://cdn.sharepoint.com/storage/file.pdf",
@@ -218,7 +234,7 @@ describe("safeFetch", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
         resolveFn: publicResolve,
       }),
-    ).rejects.toThrow("blocked by allowlist");
+    ).rejects.toThrow("allowlist");
     // Should not have fetched the evil URL
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -245,7 +261,7 @@ describe("safeFetch", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
         resolveFn: rebindingResolve,
       }),
-    ).rejects.toThrow("private/reserved IP");
+    ).rejects.toThrow("private/internal");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -258,7 +274,7 @@ describe("safeFetch", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
         resolveFn: privateResolve("10.0.0.1"),
       }),
-    ).rejects.toThrow("Initial download URL blocked");
+    ).rejects.toThrow("private/internal");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -270,7 +286,7 @@ describe("safeFetch", () => {
         allowHosts: ["localhost"],
         fetchFn: fetchMock as unknown as typeof fetch,
       }),
-    ).rejects.toThrow("Initial download URL blocked");
+    ).rejects.toThrow("private/internal");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -283,7 +299,7 @@ describe("safeFetch", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
         resolveFn: failingResolve,
       }),
-    ).rejects.toThrow("Initial download URL blocked");
+    ).rejects.toThrow("DNS failure");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -311,6 +327,7 @@ describe("safeFetch", () => {
       resolveFn: publicResolve,
     });
     expect(res.status).toBe(200);
+    await res.body?.cancel();
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -348,7 +365,7 @@ describe("safeFetch", () => {
         fetchFn: fetchMock as unknown as typeof fetch,
         resolveFn: publicResolve,
       }),
-    ).rejects.toThrow("blocked by allowlist");
+    ).rejects.toThrow("https");
   });
 
   it("strips authorization across redirects outside auth allowlist", async () => {
@@ -375,6 +392,7 @@ describe("safeFetch", () => {
       resolveFn: publicResolve,
     });
     expect(res.status).toBe(200);
+    await res.body?.cancel();
     expect(seenAuth[0]).toContain("Bearer secret");
     expect(seenAuth[1]).toMatch(/\|$/);
   });
@@ -414,6 +432,7 @@ describe("attachment fetch auth helpers", () => {
       resolveFn: publicResolve,
     });
     expect(res.status).toBe(200);
+    await res.body?.cancel();
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

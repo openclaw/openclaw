@@ -63,13 +63,6 @@ async function fetchBotFrameworkAttachmentInfo(params: {
   logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<BotFrameworkAttachmentInfo | undefined> {
   const url = `${normalizeServiceUrl(params.serviceUrl)}/v3/attachments/${encodeURIComponent(params.attachmentId)}`;
-  // Use `safeFetchWithPolicy` instead of `fetchWithSsrFGuard`. The strict
-  // pinned undici dispatcher used by `fetchWithSsrFGuard` is incompatible
-  // with Node 24+'s built-in undici v7 and silently breaks Bot Framework
-  // attachment downloads (same root cause as the SharePoint fix in #63396).
-  // `safeFetchWithPolicy` already enforces hostname allowlist validation
-  // across every redirect hop, which is sufficient for these attachment
-  // service URLs.
   let response: Response;
   try {
     response = await safeFetchWithPolicy({
@@ -88,6 +81,7 @@ async function fetchBotFrameworkAttachmentInfo(params: {
     return undefined;
   }
   if (!response.ok) {
+    await response.body?.cancel();
     params.logger?.warn?.("msteams botFramework attachmentInfo non-ok", {
       status: response.status,
     });
@@ -118,8 +112,6 @@ async function saveBotFrameworkAttachmentView(params: {
   logger?: MSTeamsAttachmentDownloadLogger;
 }): Promise<{ path: string; contentType?: string } | undefined> {
   const url = `${normalizeServiceUrl(params.serviceUrl)}/v3/attachments/${encodeURIComponent(params.attachmentId)}/views/${encodeURIComponent(params.viewId)}`;
-  // See `fetchBotFrameworkAttachmentInfo` for why this uses
-  // `safeFetchWithPolicy` instead of `fetchWithSsrFGuard` on Node 24+ (#63396).
   let response: Response;
   try {
     response = await safeFetchWithPolicy({
@@ -138,6 +130,7 @@ async function saveBotFrameworkAttachmentView(params: {
     return undefined;
   }
   if (!response.ok) {
+    await response.body?.cancel();
     params.logger?.warn?.("msteams botFramework attachmentView non-ok", {
       status: response.status,
     });
@@ -145,6 +138,7 @@ async function saveBotFrameworkAttachmentView(params: {
   }
   const contentLength = response.headers.get("content-length");
   if (contentLength && Number(contentLength) > params.maxBytes) {
+    await response.body?.cancel();
     return undefined;
   }
   try {

@@ -7,6 +7,7 @@ import {
   normalizeHostnameSuffixAllowlist,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-policy";
+import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -535,6 +536,51 @@ export async function resolveAndValidateIP(
 
 /** Maximum number of redirects to follow in safeFetch. */
 const MAX_SAFE_REDIRECTS = 5;
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+
+function responseWithRelease(response: Response, release: () => Promise<void>): Response {
+  let released = false;
+  const releaseOnce = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    await release();
+  };
+
+  if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
+    void releaseOnce();
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          controller.close();
+          await releaseOnce();
+          return;
+        }
+        controller.enqueue(next.value);
+      } catch (err) {
+        await releaseOnce();
+        throw err;
+      }
+    },
+    async cancel(reason) {
+      void reader.cancel(reason).catch(() => {});
+      await releaseOnce();
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
 
 /**
  * Fetch a URL with redirect: "manual", validating each redirect target
@@ -557,7 +603,7 @@ export async function safeFetch(params: {
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
-  const fetchFn = params.fetchFn ?? fetch;
+  const fetchFn = params.fetchFn;
   const resolveFn = params.resolveFn ?? lookup;
   const hasDispatcher = Boolean(
     params.requestInit &&
@@ -571,6 +617,23 @@ export async function safeFetch(params: {
     throw new Error(`Initial download URL blocked: ${currentUrl}`);
   }
 
+  if (!hasDispatcher) {
+    const guarded = await fetchWithSsrFGuard({
+      url: currentUrl,
+      fetchImpl: fetchFn,
+      init: {
+        ...params.requestInit,
+        headers: currentHeaders,
+      },
+      maxRedirects: MAX_SAFE_REDIRECTS,
+      requireHttps: true,
+      policy: resolveMediaSsrfPolicy(params.allowHosts),
+      lookupFn: resolveFn as LookupFn,
+      auditContext: "msteams.attachment",
+    });
+    return responseWithRelease(guarded.response, guarded.release);
+  }
+
   if (resolveFn) {
     try {
       const initialHost = new URL(currentUrl).hostname;
@@ -581,7 +644,7 @@ export async function safeFetch(params: {
   }
 
   for (let i = 0; i <= MAX_SAFE_REDIRECTS; i++) {
-    const res = await fetchFn(currentUrl, {
+    const res = await (params.fetchFn ?? fetch)(currentUrl, {
       ...params.requestInit,
       headers: currentHeaders,
       redirect: "manual",
