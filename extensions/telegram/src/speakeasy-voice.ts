@@ -1,19 +1,38 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type {
+  OpenClawConfig,
+  TelegramInlineButtonsScope,
+} from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramInlineButtons } from "./button-types.js";
-
-const execFileAsync = promisify(execFile);
 
 export const SPEAKEASY_VOICE_CALLBACK_PREFIX = "tts:speakeasy:";
 export const SPEAKEASY_VOICE_BUTTON_LABEL = "🔊 Voice note";
 const MIN_SPEAKEASY_TEXT_CHARS = 20;
 const SPEAKEASY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SPEAKEASY_DAILY_GENERATION_CAP = 50;
+const SPEAKEASY_CACHE_LOCK_TIMEOUT_MS = 1000;
+const SPEAKEASY_TTS_TIMEOUT_MS = 120_000;
+const SPEAKEASY_VOICE_NOTE_EXTENSIONS = new Set([".oga", ".ogg", ".opus"]);
+const TELEGRAM_MAX_INLINE_BUTTON_ACTIONS = 100;
+const SPEAKEASY_STDIN_ARGV_WRAPPER = [
+  "import runpy, sys",
+  "script = sys.argv[1]",
+  "text = sys.stdin.read()",
+  "sys.argv = [script, text]",
+  "runpy.run_path(script, run_name='__main__')",
+].join("\n");
 
 type ReplyLike = {
   text?: string;
@@ -33,23 +52,54 @@ type SpeakeasyChatsConfig = {
   enabled?: string[];
 };
 
+function isSpeakeasyInlineButtonScopeAllowed(params: {
+  inlineButtonsScope?: TelegramInlineButtonsScope;
+  isGroup?: boolean;
+}): boolean {
+  const scope = params.inlineButtonsScope ?? "allowlist";
+  if (scope === "off") {
+    return false;
+  }
+  if (scope === "dm" && params.isGroup) {
+    return false;
+  }
+  if (scope === "group" && !params.isGroup) {
+    return false;
+  }
+  return true;
+}
+
 function resolveConfiguredWorkspace(cfg: OpenClawConfig): string | undefined {
   const workspace = cfg.agents?.defaults?.workspace;
   return typeof workspace === "string" && workspace.trim() ? workspace.trim() : undefined;
 }
 
+function expandHomePath(value: string): string {
+  if (value === "~") {
+    return homedir();
+  }
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(homedir(), value.slice(2));
+  }
+  return value;
+}
+
 export function resolveSpeakeasyWorkspaceDir(cfg: OpenClawConfig): string {
   const candidates = [
     process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR,
-    process.env.OPENCLAW_WORKSPACE,
+    process.env.OPENCLAW_WORKSPACE_DIR,
     resolveConfiguredWorkspace(cfg),
     process.cwd(),
     path.join(homedir(), ".openclaw", "workspace"),
   ];
   for (const candidate of candidates) {
-    if (!candidate?.trim()) continue;
-    const resolved = path.resolve(candidate);
-    if (existsSync(path.join(resolved, "config", "speakeasy-chats.json"))) return resolved;
+    if (!candidate?.trim()) {
+      continue;
+    }
+    const resolved = path.resolve(expandHomePath(candidate));
+    if (existsSync(path.join(resolved, "config", "speakeasy-chats.json"))) {
+      return resolved;
+    }
   }
   return path.join(homedir(), ".openclaw", "workspace");
 }
@@ -76,7 +126,9 @@ function emptySpeakeasyCache(): SpeakeasyVoiceCache {
 
 function pruneSpeakeasyCache(cache: SpeakeasyVoiceCache, now = Date.now()): void {
   for (const [id, entry] of Object.entries(cache.entries)) {
-    if (now - entry.createdAt > SPEAKEASY_CACHE_TTL_MS) delete cache.entries[id];
+    if (now - entry.createdAt > SPEAKEASY_CACHE_TTL_MS) {
+      delete cache.entries[id];
+    }
   }
 }
 
@@ -101,6 +153,39 @@ export function writeSpeakeasyCache(cfg: OpenClawConfig, cache: SpeakeasyVoiceCa
   writeFileSync(cachePath, `${JSON.stringify(cache, null, 2)}\n`, "utf8");
 }
 
+function waitForSpeakeasyCacheLock(): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+}
+
+function acquireSpeakeasyCacheLock(cachePath: string): () => void {
+  const lockPath = `${cachePath}.lock`;
+  const deadline = Date.now() + SPEAKEASY_CACHE_LOCK_TIMEOUT_MS;
+  mkdirSync(path.dirname(cachePath), { recursive: true });
+  while (true) {
+    let fd: number | undefined;
+    try {
+      fd = openSync(lockPath, "wx");
+      return () => {
+        if (fd !== undefined) {
+          closeSync(fd);
+        }
+        unlinkSync(lockPath);
+      };
+    } catch (err) {
+      if (
+        !err ||
+        typeof err !== "object" ||
+        !("code" in err) ||
+        err.code !== "EEXIST" ||
+        Date.now() >= deadline
+      ) {
+        throw err;
+      }
+      waitForSpeakeasyCacheLock();
+    }
+  }
+}
+
 function loadSpeakeasyChatsConfig(cfg: OpenClawConfig): SpeakeasyChatsConfig {
   return readJsonFile<SpeakeasyChatsConfig>(resolveSpeakeasyConfigPath(cfg), {});
 }
@@ -114,7 +199,9 @@ export function isSpeakeasyVoiceCallbackData(data: string): boolean {
 }
 
 function parseSpeakeasyVoiceCallbackId(data: string): string | null {
-  if (!isSpeakeasyVoiceCallbackData(data)) return null;
+  if (!isSpeakeasyVoiceCallbackData(data)) {
+    return null;
+  }
   const id = data.slice(SPEAKEASY_VOICE_CALLBACK_PREFIX.length).trim();
   return id.length > 0 ? id : null;
 }
@@ -151,6 +238,27 @@ export function markSpeakeasyVoiceGenerated(params: {
   };
 }
 
+function unmarkSpeakeasyVoiceGenerated(params: {
+  cache: SpeakeasyVoiceCache;
+  chatId: string;
+  now?: Date;
+}): void {
+  const now = params.now ?? new Date();
+  const key = generationKey(params.chatId, now);
+  const current = params.cache.generations[key];
+  if (!current || current.date !== todayKey(now)) {
+    return;
+  }
+  if (current.count <= 1) {
+    delete params.cache.generations[key];
+    return;
+  }
+  params.cache.generations[key] = {
+    date: current.date,
+    count: current.count - 1,
+  };
+}
+
 export function resolveSpeakeasyCachedText(params: {
   cfg: OpenClawConfig;
   cache: SpeakeasyVoiceCache;
@@ -163,7 +271,9 @@ export function resolveSpeakeasyCachedText(params: {
   }
   const id = parseSpeakeasyVoiceCallbackId(params.data);
   const entry = id ? params.cache.entries[id] : undefined;
-  if (!id || !entry || entry.chatId !== params.chatId) return { ok: false, reason: "miss" };
+  if (!id || !entry || entry.chatId !== params.chatId) {
+    return { ok: false, reason: "miss" };
+  }
   if ((params.now ?? Date.now()) - entry.createdAt > SPEAKEASY_CACHE_TTL_MS) {
     delete params.cache.entries[id];
     return { ok: false, reason: "expired" };
@@ -171,20 +281,80 @@ export function resolveSpeakeasyCachedText(params: {
   return { ok: true, text: entry.text };
 }
 
+function updateSpeakeasyCacheWithLock<T>(
+  cfg: OpenClawConfig,
+  updater: (cache: SpeakeasyVoiceCache) => T,
+): T {
+  const cachePath = resolveSpeakeasyCachePath(cfg);
+  const releaseLock = acquireSpeakeasyCacheLock(cachePath);
+  try {
+    const latest = loadSpeakeasyCache(cfg);
+    const result = updater(latest);
+    writeSpeakeasyCache(cfg, latest);
+    return result;
+  } finally {
+    releaseLock();
+  }
+}
+
 function createSpeakeasyCacheEntry(params: {
   cfg: OpenClawConfig;
   chatId: string;
   text: string;
 }): string {
-  const cache = loadSpeakeasyCache(params.cfg);
   const id = randomUUID().replace(/-/g, "").slice(0, 24);
-  cache.entries[id] = {
+  const entry = {
     chatId: params.chatId,
     text: params.text,
     createdAt: Date.now(),
   };
-  writeSpeakeasyCache(params.cfg, cache);
+  updateSpeakeasyCacheWithLock(params.cfg, (latest) => {
+    latest.entries[id] = entry;
+  });
   return id;
+}
+
+export function reserveSpeakeasyVoiceGeneration(params: {
+  cfg: OpenClawConfig;
+  data: string;
+  chatId: string;
+}): { ok: true; text: string } | { ok: false; reason: "miss" | "expired" | "disabled" | "limit" } {
+  return updateSpeakeasyCacheWithLock(params.cfg, (cache) => {
+    const resolved = resolveSpeakeasyCachedText({
+      cfg: params.cfg,
+      cache,
+      data: params.data,
+      chatId: params.chatId,
+    });
+    if (!resolved.ok) {
+      return resolved;
+    }
+    if (!shouldAllowSpeakeasyVoiceGeneration({ cache, chatId: params.chatId })) {
+      return { ok: false, reason: "limit" };
+    }
+    markSpeakeasyVoiceGenerated({ cache, chatId: params.chatId });
+    return resolved;
+  });
+}
+
+export function releaseSpeakeasyVoiceGenerationReservation(params: {
+  cfg: OpenClawConfig;
+  chatId: string;
+}): void {
+  updateSpeakeasyCacheWithLock(params.cfg, (cache) => {
+    unmarkSpeakeasyVoiceGenerated({ cache, chatId: params.chatId });
+  });
+}
+
+function countTelegramInlineButtonActions(buttons: TelegramInlineButtons | undefined): number {
+  return buttons?.reduce((sum, row) => sum + row.length, 0) ?? 0;
+}
+
+export function assertSpeakeasyVoiceNoteOutputPath(outputPath: string): void {
+  const extension = path.extname(outputPath).toLowerCase();
+  if (!SPEAKEASY_VOICE_NOTE_EXTENSIONS.has(extension)) {
+    throw new Error(`Speakeasy TTS output is not a Telegram voice-note file: ${outputPath}`);
+  }
 }
 
 export function shouldAttachSpeakeasyVoiceButton(params: {
@@ -193,25 +363,46 @@ export function shouldAttachSpeakeasyVoiceButton(params: {
   chatId?: string;
   isGroup?: boolean;
   hasMedia?: boolean;
+  inlineButtonsScope?: TelegramInlineButtonsScope;
 }): boolean {
-  if (params.isGroup) return false;
+  if (params.isGroup) {
+    return false;
+  }
   if (
-    !params.chatId ||
-    !params.cfg ||
-    !isSpeakeasyChatEnabled({ cfg: params.cfg, chatId: params.chatId })
+    !isSpeakeasyInlineButtonScopeAllowed({
+      inlineButtonsScope: params.inlineButtonsScope,
+      isGroup: params.isGroup,
+    })
   ) {
     return false;
   }
   const text = params.reply.text?.trim() ?? "";
-  if (text.length <= MIN_SPEAKEASY_TEXT_CHARS) return false;
+  if (text.length <= MIN_SPEAKEASY_TEXT_CHARS) {
+    return false;
+  }
   if (params.hasMedia || params.reply.mediaUrl || (params.reply.mediaUrls?.length ?? 0) > 0) {
     return false;
   }
-  if (params.reply.audioAsVoice) return false;
+  if (params.reply.audioAsVoice) {
+    return false;
+  }
   if (
     params.reply.channelData?.telegram?.buttons?.some((row) =>
       row.some((button) => button.callback_data?.startsWith(SPEAKEASY_VOICE_CALLBACK_PREFIX)),
     )
+  ) {
+    return false;
+  }
+  if (
+    countTelegramInlineButtonActions(params.reply.channelData?.telegram?.buttons) >=
+    TELEGRAM_MAX_INLINE_BUTTON_ACTIONS
+  ) {
+    return false;
+  }
+  if (
+    !params.chatId ||
+    !params.cfg ||
+    !isSpeakeasyChatEnabled({ cfg: params.cfg, chatId: params.chatId })
   ) {
     return false;
   }
@@ -224,13 +415,21 @@ export function withSpeakeasyVoiceButton<T extends ReplyLike>(params: {
   chatId?: string;
   isGroup?: boolean;
   hasMedia?: boolean;
+  inlineButtonsScope?: TelegramInlineButtonsScope;
 }): T {
-  if (!shouldAttachSpeakeasyVoiceButton(params)) return params.reply;
-  const id = createSpeakeasyCacheEntry({
-    cfg: params.cfg!,
-    chatId: params.chatId!,
-    text: params.reply.text!.trim(),
-  });
+  if (!shouldAttachSpeakeasyVoiceButton(params)) {
+    return params.reply;
+  }
+  let id: string;
+  try {
+    id = createSpeakeasyCacheEntry({
+      cfg: params.cfg!,
+      chatId: params.chatId!,
+      text: params.reply.text!.trim(),
+    });
+  } catch {
+    return params.reply;
+  }
   return {
     ...params.reply,
     channelData: {
@@ -257,13 +456,83 @@ export async function generateSpeakeasyVoiceNote(params: {
 }): Promise<string> {
   const workspaceDir = resolveSpeakeasyWorkspaceDir(params.cfg);
   const scriptPath = path.join(workspaceDir, "scripts", "tts_elevenlabs_v2.py");
-  const { stdout } = await execFileAsync(scriptPath, [params.text], {
+  const stdout = await runSpeakeasyTtsScript({
     cwd: workspaceDir,
-    maxBuffer: 1024 * 1024,
+    scriptPath,
+    text: params.text,
   });
-  const outputPath = stdout.trim().split(/\r?\n/).filter(Boolean).at(-1)?.trim();
-  if (!outputPath) {
+  const rawOutputPath = stdout
+    .trim()
+    .split(/\r?\n/)
+    .findLast((line) => line.trim().length > 0)
+    ?.trim();
+  if (!rawOutputPath) {
     throw new Error("Speakeasy TTS did not print an output path");
   }
+  const outputPath = path.isAbsolute(rawOutputPath)
+    ? rawOutputPath
+    : path.resolve(workspaceDir, rawOutputPath);
+  assertSpeakeasyVoiceNoteOutputPath(outputPath);
   return outputPath;
+}
+
+function runSpeakeasyTtsScript(params: {
+  cwd: string;
+  scriptPath: string;
+  text: string;
+}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const child = spawn("python3", ["-c", SPEAKEASY_STDIN_ARGV_WRAPPER, params.scriptPath], {
+      cwd: params.cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const timeout = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      child.kill("SIGTERM");
+      reject(new Error(`Speakeasy TTS timed out after ${SPEAKEASY_TTS_TIMEOUT_MS}ms`));
+    }, SPEAKEASY_TTS_TIMEOUT_MS);
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      if (stdout.length > 1024 * 1024) {
+        child.kill("SIGTERM");
+      }
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (err) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      reject(err);
+    });
+    child.on("close", (code, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (code === 0) {
+        resolve(stdout);
+        return;
+      }
+      reject(
+        new Error(
+          `Speakeasy TTS failed${signal ? ` with signal ${signal}` : ` with exit code ${code}`}: ${stderr.trim()}`,
+        ),
+      );
+    });
+    child.stdin.end(params.text);
+  });
 }

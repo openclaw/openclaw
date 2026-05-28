@@ -1,5 +1,5 @@
 // Telegram tests cover bot.create telegram bot plugin behavior.
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -1291,11 +1291,373 @@ describe("createTelegramBot", () => {
           allow_sending_without_reply: true,
         },
       });
-      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-speakeasy-1");
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-speakeasy-1", {
         text: "Generating voice note…",
         show_alert: false,
       });
+      expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+  it("acknowledges blocked Speakeasy callbacks before generic callback routing", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await mkdir(path.join(workspaceDir, "state"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:1234"] }),
+    );
+    await writeFile(
+      path.join(workspaceDir, "state", "speakeasy-cache.json"),
+      JSON.stringify({
+        version: 1,
+        entries: {
+          voiceid: {
+            chatId: "1234",
+            text: "This is the exact source bubble text to render as a voice note.",
+            createdAt: Date.now(),
+          },
+        },
+        generations: {},
+      }),
+    );
+    loadConfig.mockReturnValue({
+      agents: { defaults: { workspace: workspaceDir } },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], capabilities: { inlineButtons: "off" } },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    try {
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-speakeasy-blocked",
+          data: `${SPEAKEASY_VOICE_CALLBACK_PREFIX}voiceid`,
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 10,
+            text: "This is the exact source bubble text to render as a voice note.",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-speakeasy-blocked", {
+        text: "Voice note is not enabled here.",
+        show_alert: false,
+      });
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(generateSpeakeasyVoiceNoteSpy).not.toHaveBeenCalled();
+      expect(sendVoiceSpy).not.toHaveBeenCalled();
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+  it("rejects non-voice-note Speakeasy output before sendVoice", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await mkdir(path.join(workspaceDir, "state"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:1234"] }),
+    );
+    await writeFile(
+      path.join(workspaceDir, "state", "speakeasy-cache.json"),
+      JSON.stringify({
+        version: 1,
+        entries: {
+          voiceid: {
+            chatId: "1234",
+            text: "This is the exact source bubble text to render as a voice note.",
+            createdAt: Date.now(),
+          },
+        },
+        generations: {},
+      }),
+    );
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    generateSpeakeasyVoiceNoteSpy.mockResolvedValueOnce("/tmp/speakeasy.mp3");
+
+    try {
+      await expect(
+        callbackHandler({
+          callbackQuery: {
+            id: "cbq-speakeasy-invalid-output",
+            data: `${SPEAKEASY_VOICE_CALLBACK_PREFIX}voiceid`,
+            from: { id: 9, first_name: "Ada", username: "ada_bot" },
+            message: {
+              chat: { id: 1234, type: "private" },
+              date: 1736380800,
+              message_id: 10,
+              text: "This is the exact source bubble text to render as a voice note.",
+            },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ download: async () => new Uint8Array() }),
+        }),
+      ).rejects.toThrow();
+
+      expect(sendVoiceSpy).not.toHaveBeenCalled();
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+  it("counts Speakeasy generations when Telegram voice delivery fails", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await mkdir(path.join(workspaceDir, "state"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:1234"] }),
+    );
+    await writeFile(
+      path.join(workspaceDir, "state", "speakeasy-cache.json"),
+      JSON.stringify({
+        version: 1,
+        entries: {
+          voiceid: {
+            chatId: "1234",
+            text: "This is the exact source bubble text to render as a voice note.",
+            createdAt: Date.now(),
+          },
+        },
+        generations: {},
+      }),
+    );
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    sendVoiceSpy.mockRejectedValueOnce(new Error("telegram rejected voice"));
+
+    try {
+      await expect(
+        callbackHandler({
+          callbackQuery: {
+            id: "cbq-speakeasy-send-fail",
+            data: `${SPEAKEASY_VOICE_CALLBACK_PREFIX}voiceid`,
+            from: { id: 9, first_name: "Ada", username: "ada_bot" },
+            message: {
+              chat: { id: 1234, type: "private" },
+              date: 1736380800,
+              message_id: 10,
+              text: "This is the exact source bubble text to render as a voice note.",
+            },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ download: async () => new Uint8Array() }),
+        }),
+      ).rejects.toThrow();
+
+      const cache = JSON.parse(
+        await readFile(path.join(workspaceDir, "state", "speakeasy-cache.json"), "utf8"),
+      ) as { generations?: Record<string, { count: number }> };
+      const today = new Date().toISOString().slice(0, 10);
+      expect(cache.generations?.[`1234:${today}`]?.count ?? 0).toBeGreaterThanOrEqual(1);
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+  it("falls back to callback text when Speakeasy voice delivery is forbidden", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await mkdir(path.join(workspaceDir, "state"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:1234"] }),
+    );
+    await writeFile(
+      path.join(workspaceDir, "state", "speakeasy-cache.json"),
+      JSON.stringify({
+        version: 1,
+        entries: {
+          voiceid: {
+            chatId: "1234",
+            text: "This is the exact source bubble text to render as a voice note.",
+            createdAt: Date.now(),
+          },
+        },
+        generations: {},
+      }),
+    );
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    sendVoiceSpy.mockRejectedValueOnce(
+      new Error(
+        "GrammyError: Call to 'sendVoice' failed! (400: Bad Request: VOICE_MESSAGES_FORBIDDEN)",
+      ),
+    );
+
+    try {
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-speakeasy-voice-forbidden",
+          data: `${SPEAKEASY_VOICE_CALLBACK_PREFIX}voiceid`,
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 10,
+            message_thread_id: 42,
+            text: "This is the exact source bubble text to render as a voice note.",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(sendVoiceSpy).toHaveBeenCalledTimes(1);
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        1234,
+        "Telegram could not deliver that voice note. The original text is still available above.",
+        expect.objectContaining({
+          message_thread_id: 42,
+          reply_parameters: {
+            message_id: 10,
+            allow_sending_without_reply: true,
+          },
+        }),
+      );
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+  it("rolls back Speakeasy quota when voice generation fails", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await mkdir(path.join(workspaceDir, "state"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:1234"] }),
+    );
+    await writeFile(
+      path.join(workspaceDir, "state", "speakeasy-cache.json"),
+      JSON.stringify({
+        version: 1,
+        entries: {
+          voiceid: {
+            chatId: "1234",
+            text: "This is the exact source bubble text to render as a voice note.",
+            createdAt: Date.now(),
+          },
+        },
+        generations: {},
+      }),
+    );
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    generateSpeakeasyVoiceNoteSpy.mockRejectedValueOnce(new Error("tts unavailable"));
+
+    try {
+      await expect(
+        callbackHandler({
+          callbackQuery: {
+            id: "cbq-speakeasy-tts-fail",
+            data: `${SPEAKEASY_VOICE_CALLBACK_PREFIX}voiceid`,
+            from: { id: 9, first_name: "Ada", username: "ada_bot" },
+            message: {
+              chat: { id: 1234, type: "private" },
+              date: 1736380800,
+              message_id: 10,
+              text: "This is the exact source bubble text to render as a voice note.",
+            },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ download: async () => new Uint8Array() }),
+        }),
+      ).rejects.toThrow();
+
+      const cache = JSON.parse(
+        await readFile(path.join(workspaceDir, "state", "speakeasy-cache.json"), "utf8"),
+      ) as { generations?: Record<string, { count: number }> };
+      const today = new Date().toISOString().slice(0, 10);
+      expect(cache.generations?.[`1234:${today}`]?.count ?? 0).toBe(0);
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+  it("uses generic wording for expired Speakeasy callbacks", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await mkdir(path.join(workspaceDir, "state"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:1234"] }),
+    );
+    await writeFile(
+      path.join(workspaceDir, "state", "speakeasy-cache.json"),
+      JSON.stringify({
+        version: 1,
+        entries: {},
+        generations: {},
+      }),
+    );
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    try {
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-speakeasy-expired",
+          data: `${SPEAKEASY_VOICE_CALLBACK_PREFIX}missing`,
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 10,
+            text: "This is the exact source bubble text to render as a voice note.",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-speakeasy-expired", {
+        text: "Voice note expired. Ask the assistant to resend it.",
+        show_alert: false,
+      });
+      expect(generateSpeakeasyVoiceNoteSpy).not.toHaveBeenCalled();
     } finally {
       process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
       await rm(workspaceDir, { recursive: true, force: true });

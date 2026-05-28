@@ -257,6 +257,53 @@ describe("deliverReplies", () => {
     }
   });
 
+  it("preserves presentation buttons when adding Speakeasy voice-note buttons", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:123"] }),
+    );
+
+    try {
+      const runtime = createRuntime(false);
+      const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
+      const bot = createBot({ sendMessage });
+
+      await deliverWith({
+        cfg: { agents: { defaults: { workspace: workspaceDir } } },
+        replies: [
+          {
+            text: "This is a long enough reply to offer a voice note and keep actions.",
+            presentation: {
+              blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "cmd:approve" }] }],
+            },
+          },
+        ],
+        runtime,
+        bot,
+      });
+
+      const replyMarkup = sendMessage.mock.calls[0]?.[2]?.reply_markup;
+      expect(replyMarkup).toEqual({
+        inline_keyboard: [
+          [{ text: "Approve", callback_data: "cmd:approve" }],
+          [
+            {
+              text: "🔊 Voice note",
+              callback_data: expect.stringMatching(/^tts:speakeasy:/),
+            },
+          ],
+        ],
+      });
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not add Speakeasy buttons to groups, short text, or disabled chats", async () => {
     const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
     const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
@@ -285,6 +332,38 @@ describe("deliverReplies", () => {
       });
 
       expect(sendMessage.mock.calls.every((call) => !call[2]?.reply_markup)).toBe(true);
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("honors Telegram inline-button scope before adding Speakeasy buttons", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:123"] }),
+    );
+
+    try {
+      const runtime = createRuntime(false);
+      const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });
+      const bot = createBot({ sendMessage });
+
+      await deliverWith({
+        cfg: {
+          agents: { defaults: { workspace: workspaceDir } },
+          channels: { telegram: { capabilities: { inlineButtons: "off" } } },
+        },
+        replies: [{ text: "This reply is long enough but inline buttons are disabled." }],
+        runtime,
+        bot,
+      });
+
+      expect(sendMessage.mock.calls[0]?.[2]?.reply_markup).toBeUndefined();
     } finally {
       process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
       await rm(workspaceDir, { recursive: true, force: true });
