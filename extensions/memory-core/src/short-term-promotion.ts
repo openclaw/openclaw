@@ -1763,6 +1763,9 @@ function buildPromotionSection(
     const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
     const metadata = `[score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
     lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
+    // Cap only the visible MEMORY.md text. The recall store keeps the full
+    // rehydrated snippet so ranking, provenance, and dream narratives remain
+    // tied to the source entry instead of this presentation budget.
     lines.push(
       `- ${formatPromotedSnippetForMemory(candidate.snippet, maxPromotedSnippetTokens)} ${metadata}`,
     );
@@ -1777,6 +1780,7 @@ function resolvePromotedSnippetCharLimit(maxTokens: number): number {
     maxTokens,
     DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   );
+  // This is an inexpensive display-size guard, not a tokenizer contract.
   return tokenLimit * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
 }
 
@@ -1817,6 +1821,9 @@ function withTrailingNewline(content: string): string {
 
 function extractPromotionMarkers(memoryText: string): Set<string> {
   const markers = new Set<string>();
+  // Marker keys include source paths, so spaces are valid. Capture until the
+  // comment close; otherwise a path like "memory/project alpha/..." is missed
+  // and the same candidate can be appended again.
   const matches = memoryText.matchAll(/<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->/gi);
   for (const match of matches) {
     const key = match[1]?.trim();

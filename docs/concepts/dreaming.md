@@ -229,7 +229,7 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
 <ParamField path="model" type="string">
   Optional Dream Diary subagent model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.
 </ParamField>
-<ParamField path="phases.deep.maxPromotedSnippetTokens" type="number" default="120">
+<ParamField path="phases.deep.maxPromotedSnippetTokens" type="number" default="160">
   Maximum estimated token count kept from each short-term recall snippet promoted into `MEMORY.md`. Ranking provenance remains visible.
 </ParamField>
 

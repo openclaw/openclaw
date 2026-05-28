@@ -562,7 +562,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 | `enabled`                              | `boolean` | `false`       | Enable or disable dreaming entirely                                                                                              |
 | `frequency`                            | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                |
 | `model`                                | `string`  | default model | Optional Dream Diary subagent model override                                                                                     |
-| `phases.deep.maxPromotedSnippetTokens` | `number`  | `120`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible |
+| `phases.deep.maxPromotedSnippetTokens` | `number`  | `160`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible |
 
 ### Example
 
