@@ -161,7 +161,7 @@ function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): Wat
     addTrustedSymlinkSkillWatchTargets(
       targets,
       dir,
-      "openclaw-managed",
+      "openclaw-plugin",
       allowedSymlinkTargetRealPaths,
       rootDepth,
       dir,
@@ -169,7 +169,7 @@ function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): Wat
     addTrustedSymlinkSkillWatchTargets(
       targets,
       path.join(dir, "skills"),
-      "openclaw-managed",
+      "openclaw-plugin",
       allowedSymlinkTargetRealPaths,
       GROUPED_SKILLS_WATCH_DEPTH,
       dir,

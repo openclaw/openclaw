@@ -495,6 +495,39 @@ describe("ensureSkillsWatcher", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "does not watch untrusted plugin skill symlink targets",
+    async () => {
+      const pluginDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-plugin-skills-untrusted-link-"),
+      );
+      const outsideDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-plugin-skills-untrusted-target-"),
+      );
+      try {
+        await fs.mkdir(path.join(pluginDir, "skills"), { recursive: true });
+        await fs.writeFile(
+          path.join(outsideDir, "SKILL.md"),
+          "---\nname: untrusted-plugin\ndescription: Untrusted plugin\n---\n",
+        );
+        await fs.symlink(outsideDir, path.join(pluginDir, "skills", "untrusted"), "dir");
+        const pluginSkills = await import("./plugin-skills.js");
+        vi.mocked(pluginSkills.resolvePluginSkillDirs).mockReturnValueOnce([pluginDir]);
+
+        refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+
+        const target = (await fs.realpath(outsideDir)).replaceAll("\\", "/");
+        const targets = (watchMock.mock.calls as unknown as Array<[string]>).map(([p]) =>
+          p.replaceAll("\\", "/"),
+        );
+        expect(targets).not.toContain(target);
+      } finally {
+        await fs.rm(pluginDir, { recursive: true, force: true });
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each(["add", "change", "unlink", "unlinkDir"] as const)(
     "refreshes skills snapshots on %s",
     async (event) => {
