@@ -10,6 +10,7 @@ const INSTALLATION_ID_ENV = "OPENCLAW_GH_READ_INSTALLATION_ID";
 const PERMISSIONS_ENV = "OPENCLAW_GH_READ_PERMISSIONS";
 const API_VERSION = "2022-11-28";
 const DEFAULT_GITHUB_FETCH_TIMEOUT_MS = 30_000;
+const GITHUB_ERROR_BODY_MAX_CHARS = 4096;
 const DEFAULT_READ_PERMISSION_KEYS = [
   "actions",
   "checks",
@@ -190,6 +191,45 @@ async function withGitHubFetchTimeout<T>(
   }
 }
 
+export async function readBoundedGitHubErrorText(
+  response: Response,
+  maxChars = GITHUB_ERROR_BODY_MAX_CHARS,
+): Promise<string> {
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let truncated = false;
+
+  try {
+    while (text.length <= maxChars) {
+      const { done, value } = await reader.read();
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+
+      text += decoder.decode(value, { stream: true });
+      if (text.length > maxChars) {
+        text = text.slice(0, maxChars);
+        truncated = true;
+        break;
+      }
+    }
+  } finally {
+    if (truncated) {
+      await reader.cancel().catch(() => undefined);
+    } else {
+      reader.releaseLock();
+    }
+  }
+
+  return truncated ? `${text}\n[truncated]` : text;
+}
+
 export async function githubJson<T>(
   path: string,
   bearerToken: string,
@@ -219,7 +259,7 @@ export async function githubJson<T>(
       });
 
       if (!response.ok) {
-        const text = await response.text();
+        const text = await readBoundedGitHubErrorText(response);
         fail(`${init?.method ?? "GET"} ${path} failed (${response.status}): ${text}`);
       }
 
