@@ -533,6 +533,29 @@ describe("plugin gateway gauntlet helpers", () => {
     await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
   });
 
+  it("rejects non-decimal gauntlet numeric options", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--skip-qa",
+        "--allow-empty",
+        "--limit",
+        "1e3",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("--limit must be a positive integer");
+  });
+
   it("cleans the isolated run root after an explicitly empty dry run", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
     const result = spawnSync(

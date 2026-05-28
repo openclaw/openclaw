@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
-import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
-import { getRuntimeConfig, type OpenClawConfig } from "../../../config/config.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
   loadSessionStore,
@@ -51,7 +49,7 @@ import {
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
-import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
@@ -128,7 +126,6 @@ import {
 } from "../../code-mode.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
-import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import {
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
@@ -140,7 +137,6 @@ import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
-import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import { filterLocalModelLeanTools, isLocalModelLeanEnabled } from "../../local-model-lean.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
@@ -160,16 +156,9 @@ import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import {
-  sanitizeToolUseResultPairing,
-  stripToolResultDetails,
-} from "../../session-transcript-repair.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionLockMaxHoldFromTimeout,
-  resolveSessionWriteLockOptions,
-} from "../../session-write-lock.js";
-import { createAgentSession, type AgentSession, SessionManager } from "../../sessions/index.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
+import { acquireSessionWriteLock } from "../../session-write-lock.js";
+import { createAgentSession, SessionManager } from "../../sessions/index.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import {
   applySkillEnvOverrides,
@@ -190,8 +179,6 @@ import {
   buildEmptyExplicitToolAllowlistError,
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
-import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
-import { normalizeToolName } from "../../tool-policy.js";
 import {
   filterRuntimeCompatibleTools,
   type RuntimeToolSchemaDiagnostic,
@@ -203,10 +190,6 @@ import {
   createToolSearchCatalogRef,
   projectToolSearchTargetTranscriptMessages,
   resolveToolSearchConfig,
-  TOOL_CALL_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-  TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
   type ToolSearchTargetTranscriptProjection,
@@ -271,7 +254,6 @@ import {
   wrapAnthropicStreamWithRecovery,
 } from "../thinking.js";
 import {
-  collectAllowedToolNames,
   collectCoreBuiltinToolNames,
   collectRegisteredToolNames,
   AGENT_RESERVED_TOOL_NAMES,
@@ -280,7 +262,6 @@ import {
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
-  markTranscriptPromptText,
 } from "../tool-result-context-guard.js";
 import {
   resolveLiveToolResultMaxChars,
@@ -302,6 +283,10 @@ import {
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
 } from "./attempt-trajectory-status.js";
+import {
+  isPrimaryBootstrapRun,
+  remapInjectedContextFilesToWorkspace,
+} from "./attempt.bootstrap-context.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   rotateTranscriptAfterCompaction,
@@ -326,6 +311,12 @@ import {
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
+  installModelPromptTransform,
+  installRuntimeContextMessageForPrompt,
+  normalizeMessagesForCurrentPromptBoundary,
+  normalizeMessagesForLlmBoundary,
+} from "./attempt.llm-boundary.js";
+import {
   diagnosticErrorCategory,
   wrapStreamFnWithDiagnosticModelCallEvents,
 } from "./attempt.model-diagnostic-events.js";
@@ -341,6 +332,14 @@ import {
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
+import {
+  resolveAttemptStreamAuthProfileId,
+  resolveAttemptToolPolicyMessageProvider,
+  resolveEmbeddedAttemptSessionWriteLockOptions,
+  resolveUnknownToolGuardThreshold,
+  shouldRunLlmOutputHooksForAttempt,
+} from "./attempt.run-decisions.js";
 import {
   acquireEmbeddedAttemptSessionFileOwner,
   EmbeddedAttemptSessionTakeoverError,
@@ -379,6 +378,10 @@ import {
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
+import {
+  buildToolSearchRunPlan,
+  TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES,
+} from "./attempt.tool-search-run-plan.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
@@ -415,7 +418,6 @@ import {
 import {
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
-  type RuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -490,179 +492,6 @@ function logRuntimeToolSchemaQuarantine(params: {
   );
 }
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
-const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-  TOOL_SEARCH_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_CALL_RAW_TOOL_NAME,
-];
-
-export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
-  effectiveToolNames: string[];
-  autoAddedToolSearchControlNames?: Set<string>;
-  toolSearchCatalogToolCount: number;
-}): string[] {
-  return [
-    ...params.effectiveToolNames.filter(
-      (toolName) => !params.autoAddedToolSearchControlNames?.has(toolName),
-    ),
-    ...Array.from(
-      { length: params.toolSearchCatalogToolCount },
-      (_, index) => `tool-search:${index}`,
-    ),
-  ];
-}
-
-export function buildAutoAddedToolSearchControlNamesForAllowlistCheck(params: {
-  toolSearchControlsEnabled: boolean;
-  explicitAllowlistSources: Array<{ entries: string[] }>;
-  controlNames?: readonly string[];
-}): Set<string> | undefined {
-  if (!params.toolSearchControlsEnabled) {
-    return undefined;
-  }
-  const explicitlyAllowed = new Set(
-    params.explicitAllowlistSources.flatMap((source) =>
-      source.entries.map((entry) => normalizeToolName(entry)),
-    ),
-  );
-  return new Set(
-    (params.controlNames ?? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES).filter(
-      (controlName) => !explicitlyAllowed.has(normalizeToolName(controlName)),
-    ),
-  );
-}
-
-export type ToolSearchRunPlan = {
-  visibleAllowedToolNames: Set<string>;
-  replayAllowedToolNames: Set<string>;
-  autoAddedControlNames?: Set<string>;
-  emptyAllowlistCallableNames: string[];
-};
-
-type CollectAllowedToolNamesParams = Parameters<typeof collectAllowedToolNames>[0];
-
-function collectExplicitlyAllowedClientToolNames(params: {
-  clientTools?: CollectAllowedToolNamesParams["clientTools"];
-  explicitAllowlistSources: Array<{ entries: string[] }>;
-}): string[] {
-  const explicitNames = new Set(
-    params.explicitAllowlistSources.flatMap((source) =>
-      source.entries.map((entry) => normalizeToolName(entry)),
-    ),
-  );
-  return (params.clientTools ?? [])
-    .map((tool) => tool.function?.name)
-    .filter((name): name is string => Boolean(name?.trim()))
-    .filter((name) => explicitNames.has(normalizeToolName(name)));
-}
-
-export function buildToolSearchRunPlan(params: {
-  visibleTools: CollectAllowedToolNamesParams["tools"];
-  uncompactedTools: CollectAllowedToolNamesParams["tools"];
-  clientTools?: CollectAllowedToolNamesParams["clientTools"];
-  catalogRegistered: boolean;
-  catalogToolCount: number;
-  controlsEnabled: boolean;
-  controlNames?: readonly string[];
-  explicitAllowlistSources: Array<{ entries: string[] }>;
-}): ToolSearchRunPlan {
-  const visibleAllowedToolNames = collectAllowedToolNames({
-    tools: params.visibleTools,
-    clientTools: params.catalogRegistered ? undefined : params.clientTools,
-  });
-  const replayAllowedToolNames = collectAllowedToolNames({
-    tools: params.uncompactedTools,
-    clientTools: params.clientTools,
-  });
-  if (params.controlsEnabled) {
-    for (const controlName of params.controlNames ?? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES) {
-      if (visibleAllowedToolNames.has(controlName)) {
-        replayAllowedToolNames.add(controlName);
-      }
-    }
-  }
-  const autoAddedControlNames = buildAutoAddedToolSearchControlNamesForAllowlistCheck({
-    toolSearchControlsEnabled: params.controlsEnabled,
-    explicitAllowlistSources: params.explicitAllowlistSources,
-    controlNames: params.controlNames,
-  });
-  const clientCatalogCallableNames = params.catalogRegistered
-    ? collectExplicitlyAllowedClientToolNames({
-        clientTools: params.clientTools,
-        explicitAllowlistSources: params.explicitAllowlistSources,
-      }).map((name) => `tool-search-client:${name}`)
-    : [];
-  return {
-    visibleAllowedToolNames,
-    replayAllowedToolNames,
-    autoAddedControlNames,
-    emptyAllowlistCallableNames: [
-      ...buildCallableToolNamesForEmptyAllowlistCheck({
-        effectiveToolNames: [...visibleAllowedToolNames],
-        autoAddedToolSearchControlNames: autoAddedControlNames,
-        toolSearchCatalogToolCount: params.catalogToolCount,
-      }),
-      ...clientCatalogCallableNames,
-    ],
-  };
-}
-
-export function resolveUnknownToolGuardThreshold(loopDetection?: {
-  enabled?: boolean;
-  unknownToolThreshold?: number;
-}): number {
-  // The unknown-tool guard is a safety net against the model hallucinating a
-  // tool name or calling a tool that has since been removed from the allowlist
-  // (for example after a `skills.allowBundled` config change). After `threshold`
-  // consecutive unknown-tool attempts the stream wrapper rewrites the assistant
-  // message content to tell the model to stop, which breaks otherwise-infinite
-  // Tool-not-found loops against the provider. Unlike the genericRepeat /
-  // pingPong / pollNoProgress detectors this guard has no false-positive
-  // surface because the tool is objectively not registered in this run, so it
-  // stays on regardless of `tools.loopDetection.enabled`.
-  const raw = loopDetection?.unknownToolThreshold;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
-  }
-  return UNKNOWN_TOOL_THRESHOLD;
-}
-
-export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
-  return !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey);
-}
-
-function isRelativePathInsideOrEqual(relativePath: string): boolean {
-  return (
-    relativePath === "" ||
-    (relativePath !== ".." &&
-      !relativePath.startsWith(`..${path.sep}`) &&
-      !path.isAbsolute(relativePath))
-  );
-}
-
-export function remapInjectedContextFilesToWorkspace(params: {
-  files: EmbeddedContextFile[];
-  sourceWorkspaceDir: string;
-  targetWorkspaceDir: string;
-}): EmbeddedContextFile[] {
-  if (params.sourceWorkspaceDir === params.targetWorkspaceDir) {
-    return params.files;
-  }
-  return params.files.map((file) => {
-    const relative = path.relative(params.sourceWorkspaceDir, file.path);
-    const canRemap = isRelativePathInsideOrEqual(relative);
-    return canRemap
-      ? {
-          ...file,
-          path:
-            relative === ""
-              ? params.targetWorkspaceDir
-              : path.join(params.targetWorkspaceDir, relative),
-        }
-      : file;
-  });
-}
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
@@ -727,540 +556,6 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
-export type EmbeddedAgentActiveSessionSteerTarget = {
-  agent?: unknown;
-  getSteeringMessages?(): readonly string[];
-  steer(text: string): Promise<void>;
-  subscribe(listener: (event: unknown) => void): () => void;
-};
-
-const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
-
-function extractQueuedUserMessageText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const record = message as { content?: unknown; role?: unknown };
-  if (record.role !== "user") {
-    return undefined;
-  }
-  if (typeof record.content === "string") {
-    return record.content;
-  }
-  if (!Array.isArray(record.content)) {
-    return undefined;
-  }
-  const text = record.content
-    .map((block) => {
-      if (!block || typeof block !== "object") {
-        return undefined;
-      }
-      const typedBlock = block as { text?: unknown; type?: unknown };
-      return typedBlock.type === "text" && typeof typedBlock.text === "string"
-        ? typedBlock.text
-        : undefined;
-    })
-    .filter((part): part is string => part !== undefined)
-    .join("");
-  return text || undefined;
-}
-
-function isQueuedUserMessageEnd(event: unknown, text: string): boolean {
-  if (!event || typeof event !== "object") {
-    return false;
-  }
-  const record = event as { message?: unknown; type?: unknown };
-  return record.type === "message_end" && extractQueuedUserMessageText(record.message) === text;
-}
-
-function isTerminalActiveSessionEvent(event: unknown): boolean {
-  return Boolean(
-    event && typeof event === "object" && (event as { type?: unknown }).type === "agent_end",
-  );
-}
-
-function isAutoRetryStartEvent(event: unknown): boolean {
-  return Boolean(
-    event && typeof event === "object" && (event as { type?: unknown }).type === "auto_retry_start",
-  );
-}
-
-function isCompactionStartEvent(event: unknown): boolean {
-  return Boolean(
-    event && typeof event === "object" && (event as { type?: unknown }).type === "compaction_start",
-  );
-}
-
-function getAgentSteeringQueueMessages(agent: unknown): unknown[] | undefined {
-  if (!agent || typeof agent !== "object") {
-    return undefined;
-  }
-  const queue = (agent as { steeringQueue?: unknown }).steeringQueue;
-  if (!queue || typeof queue !== "object") {
-    return undefined;
-  }
-  const messages = (queue as { messages?: unknown }).messages;
-  return Array.isArray(messages) ? messages : undefined;
-}
-
-async function cancelQueuedSteeringMessage(
-  activeSession: EmbeddedAgentActiveSessionSteerTarget,
-  text: string,
-): Promise<boolean> {
-  const queuedMessages = getAgentSteeringQueueMessages(activeSession.agent);
-  if (!queuedMessages) {
-    return false;
-  }
-  // The session runtime exposes only all-queue clears publicly; mutate the exact pending message
-  // so unrelated queued messages keep their full payloads.
-  const queueIndex = queuedMessages.findIndex(
-    (message) => extractQueuedUserMessageText(message) === text,
-  );
-  if (queueIndex === -1) {
-    return false;
-  }
-  queuedMessages.splice(queueIndex, 1);
-  const uiSteeringMessages = activeSession.getSteeringMessages?.();
-  if (Array.isArray(uiSteeringMessages)) {
-    const uiIndex = uiSteeringMessages.indexOf(text);
-    if (uiIndex !== -1) {
-      uiSteeringMessages.splice(uiIndex, 1);
-    }
-  }
-  return true;
-}
-
-export const testing = {
-  cancelQueuedSteeringMessage,
-  insertRuntimeContextMessageForPrompt,
-  resolveEmbeddedAttemptSessionWriteLockOptions,
-  resolveAttemptStreamAuthProfileId,
-  steerAndWaitForTranscriptCommit,
-};
-
-function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
-  config?: OpenClawConfig;
-  compactionTimeoutMs: number;
-  env?: NodeJS.ProcessEnv;
-}): { timeoutMs: number; staleMs: number; maxHoldMs: number } {
-  // Bound embedded-attempt lock holds to the compaction window, not the full run timeout.
-  // With defaults this permits roughly 900s compaction time plus the shared 120s
-  // timeout grace before the watchdog releases a stuck live-process lock.
-  return resolveSessionWriteLockOptions(params.config, {
-    env: params.env,
-    maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
-      timeoutMs: params.compactionTimeoutMs,
-    }),
-  });
-}
-
-function resolveAttemptStreamAuthProfileId(
-  params: Pick<EmbeddedRunAttemptParams, "authProfileId" | "runtimePlan">,
-): string | undefined {
-  return params.runtimePlan?.auth.forwardedAuthProfileId;
-}
-
-async function steerAndWaitForTranscriptCommit(
-  activeSession: EmbeddedAgentActiveSessionSteerTarget,
-  text: string,
-  timeoutMs: number,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let unsubscribe: (() => void) | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let terminalTimer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (err?: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (terminalTimer) {
-        clearTimeout(terminalTimer);
-      }
-      unsubscribe?.();
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve();
-    };
-    const rejectAfterCancellation = (message: string) => {
-      void cancelQueuedSteeringMessage(activeSession, text)
-        .then((removed) => {
-          if (!removed) {
-            log.warn("failed to find queued steering message for cancellation");
-          }
-        })
-        .catch((err: unknown) => {
-          log.warn(`failed to cancel queued steering message: ${String(err)}`);
-        })
-        .finally(() => {
-          finish(new Error(message));
-        });
-    };
-    const scheduleTerminalCancellation = () => {
-      if (terminalTimer) {
-        return;
-      }
-      terminalTimer = setTimeout(() => {
-        terminalTimer = undefined;
-        rejectAfterCancellation(
-          "active session ended before queued steering message was committed to the transcript",
-        );
-      }, 0);
-      terminalTimer.unref?.();
-    };
-    timer = setTimeout(
-      () => {
-        rejectAfterCancellation(
-          "queued steering message was not committed to the transcript before timeout",
-        );
-      },
-      Math.max(1, timeoutMs),
-    );
-    timer.unref?.();
-    unsubscribe = activeSession.subscribe((event) => {
-      if (isAutoRetryStartEvent(event) || isCompactionStartEvent(event)) {
-        if (terminalTimer) {
-          clearTimeout(terminalTimer);
-          terminalTimer = undefined;
-        }
-        return;
-      }
-      if (isQueuedUserMessageEnd(event, text)) {
-        finish();
-        return;
-      }
-      if (isTerminalActiveSessionEvent(event)) {
-        // AgentSession emits agent_end before announcing auto-retry or
-        // auto-compaction continuations. Defer cancellation one tick so those
-        // continuation events can keep draining this message.
-        scheduleTerminalCancellation();
-      }
-    });
-    activeSession.steer(text).catch((err: unknown) => {
-      finish(err);
-    });
-  });
-}
-
-async function steerActiveSessionWithOptionalDeliveryWait(
-  activeSession: EmbeddedAgentActiveSessionSteerTarget,
-  text: string,
-  options: { deliveryTimeoutMs?: number; waitForTranscriptCommit?: boolean } | undefined,
-): Promise<void> {
-  if (options?.waitForTranscriptCommit !== true) {
-    await activeSession.steer(text);
-    return;
-  }
-  await steerAndWaitForTranscriptCommit(
-    activeSession,
-    text,
-    options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
-  );
-}
-
-export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
-  const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
-  const withoutHistoricalInboundMetadata =
-    stripHistoricalInboundMetadataFromUserMessages(normalized);
-  return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
-}
-
-function normalizeMessagesForCurrentPromptBoundary(params: {
-  messages: AgentMessage[];
-  prompt: string;
-}): AgentMessage[] {
-  const promptMessage = {
-    role: "user" as const,
-    content: [{ type: "text" as const, text: params.prompt }],
-    timestamp: Date.now(),
-  };
-  return normalizeMessagesForLlmBoundary([...params.messages, promptMessage]).slice(0, -1);
-}
-
-function installRuntimeContextMessageForPrompt(params: {
-  session: AgentSession;
-  message?: RuntimeContextCustomMessage;
-}): () => void {
-  const { message, session } = params;
-  if (!message) {
-    return () => undefined;
-  }
-  const installBeforePrompt = () => {
-    if (!session.messages.includes(message)) {
-      session.agent.state.messages = appendRuntimeContextMessageForPrompt({
-        message,
-        messages: session.messages,
-      });
-    }
-  };
-  const installBeforeRetry = () => {
-    if (!session.messages.includes(message)) {
-      session.agent.state.messages = insertRuntimeContextMessageForPrompt({
-        message,
-        messages: session.messages,
-      });
-    }
-  };
-  installBeforePrompt();
-  const agent = session.agent;
-  const originalContinue = Reflect.get(agent, "continue", agent) as unknown;
-  if (typeof originalContinue === "function") {
-    const continueWithAgent = originalContinue.bind(agent) as () => Promise<void>;
-    agent.continue = function continueWithRuntimeContext(this: typeof agent): Promise<void> {
-      // Pi overflow recovery can rebuild state from the persisted branch before retrying.
-      installBeforeRetry();
-      return continueWithAgent();
-    };
-  }
-  return () => {
-    if (typeof originalContinue === "function") {
-      agent.continue = originalContinue as typeof agent.continue;
-    }
-    session.agent.state.messages = session.messages.filter((candidate) => candidate !== message);
-  };
-}
-
-function replaceLastUserTextPrompt(params: {
-  messages: AgentMessage[];
-  shouldCapture?: (message: AgentMessage) => boolean;
-  transcriptText?: string;
-  replace: (text: string) => string | undefined;
-}): AgentMessage[] {
-  const userIndex = params.messages.findLastIndex((message) => message.role === "user");
-  if (userIndex === -1) {
-    return params.messages;
-  }
-  const message = params.messages[userIndex];
-  if (!message || message.role !== "user") {
-    return params.messages;
-  }
-  if (params.shouldCapture && !params.shouldCapture(message)) {
-    return params.messages;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    const replacement = params.replace(content);
-    if (replacement === undefined) {
-      return params.messages;
-    }
-    const next = params.messages.slice();
-    next[userIndex] = { ...message, content: replacement } as AgentMessage;
-    if (params.transcriptText !== undefined) {
-      markTranscriptPromptText(next[userIndex], params.transcriptText);
-    }
-    return next;
-  }
-  if (!Array.isArray(content)) {
-    return params.messages;
-  }
-  let replaced = false;
-  const nextContent = content.map((block) => {
-    if (replaced || !block || typeof block !== "object") {
-      return block;
-    }
-    const textBlock = block as { type?: unknown; text?: unknown };
-    if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
-      return block;
-    }
-    const replacement = params.replace(textBlock.text);
-    if (replacement === undefined) {
-      return block;
-    }
-    replaced = true;
-    return Object.assign({}, block, { text: replacement });
-  });
-  if (!replaced) {
-    return params.messages;
-  }
-  const next = params.messages.slice();
-  next[userIndex] = { ...message, content: nextContent } as AgentMessage;
-  if (params.transcriptText !== undefined) {
-    markTranscriptPromptText(next[userIndex], params.transcriptText);
-  }
-  return next;
-}
-
-function composeModelPromptContext(params: {
-  prompt: string;
-  prependContext?: string;
-  appendContext?: string;
-}): string {
-  return [params.prependContext, params.prompt, params.appendContext]
-    .filter((value): value is string => Boolean(value?.trim()))
-    .join("\n\n");
-}
-
-function installModelPromptTransform(params: {
-  session: AgentSession;
-  transcriptPrompt: string;
-  modelPrompt?: string;
-  prependContext?: string;
-  appendContext?: string;
-  shouldCapturePrompt: () => boolean;
-}): () => void {
-  const modelPrompt = params.modelPrompt;
-  const hasPromptContext =
-    Boolean(params.prependContext?.trim()) || Boolean(params.appendContext?.trim());
-  if ((!modelPrompt?.trim() || modelPrompt === params.transcriptPrompt) && !hasPromptContext) {
-    return () => undefined;
-  }
-  const agent = params.session.agent as {
-    transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
-  };
-  const originalTransformContext = agent.transformContext;
-  let targetPromptTimestamp: number | undefined;
-  agent.transformContext = async (messages, signal) => {
-    const promptMessages = replaceLastUserTextPrompt({
-      messages,
-      transcriptText: params.transcriptPrompt,
-      shouldCapture: (message) => {
-        const timestamp = (message as { timestamp?: unknown }).timestamp;
-        if (targetPromptTimestamp !== undefined) {
-          return timestamp === targetPromptTimestamp;
-        }
-        if (!params.shouldCapturePrompt()) {
-          return false;
-        }
-        if (typeof timestamp === "number") {
-          targetPromptTimestamp = timestamp;
-        }
-        return true;
-      },
-      replace: (text) => {
-        if (modelPrompt?.trim() && text === params.transcriptPrompt) {
-          return modelPrompt;
-        }
-        if (!hasPromptContext) {
-          return undefined;
-        }
-        const replacement = composeModelPromptContext({
-          prompt: text,
-          prependContext: params.prependContext,
-          appendContext: params.appendContext,
-        });
-        return replacement === text ? undefined : replacement;
-      },
-    });
-    return originalTransformContext
-      ? await originalTransformContext.call(agent, promptMessages, signal)
-      : promptMessages;
-  };
-  return () => {
-    agent.transformContext = originalTransformContext;
-  };
-}
-
-function appendRuntimeContextMessageForPrompt(params: {
-  message: RuntimeContextCustomMessage;
-  messages: AgentMessage[];
-}): AgentMessage[] {
-  if (params.messages.includes(params.message)) {
-    return params.messages;
-  }
-  return [...params.messages, params.message];
-}
-
-function insertRuntimeContextMessageForPrompt(params: {
-  message: RuntimeContextCustomMessage;
-  messages: AgentMessage[];
-}): AgentMessage[] {
-  if (params.messages.includes(params.message)) {
-    return params.messages;
-  }
-  const activeUserMessageIndex = findActiveUserMessageIndex(params.messages);
-  if (activeUserMessageIndex === -1) {
-    return [...params.messages, params.message];
-  }
-  return [
-    ...params.messages.slice(0, activeUserMessageIndex),
-    params.message,
-    ...params.messages.slice(activeUserMessageIndex),
-  ];
-}
-
-function stripHistoricalInboundMetadataFromUserMessages(messages: AgentMessage[]): AgentMessage[] {
-  const activeUserMessageIndex = findActiveUserMessageIndex(messages);
-  let changed = false;
-  const nextMessages = messages.map((message, index) => {
-    if (message.role !== "user" || index === activeUserMessageIndex) {
-      return message;
-    }
-    const content = (message as { content?: unknown }).content;
-    if (typeof content === "string") {
-      const stripped = stripInboundMetadata(content);
-      if (stripped === content) {
-        return message;
-      }
-      changed = true;
-      return { ...message, content: stripped } as AgentMessage;
-    }
-    if (!Array.isArray(content)) {
-      return message;
-    }
-    let contentChanged = false;
-    const nextContent = content.map((block) => {
-      if (!block || typeof block !== "object") {
-        return block;
-      }
-      const textBlock = block as { type?: unknown; text?: unknown };
-      if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
-        return block;
-      }
-      const stripped = stripInboundMetadata(textBlock.text);
-      if (stripped === textBlock.text) {
-        return block;
-      }
-      contentChanged = true;
-      return Object.assign({}, block, { text: stripped });
-    });
-    if (!contentChanged) {
-      return message;
-    }
-    changed = true;
-    return { ...message, content: nextContent } as AgentMessage;
-  });
-  return changed ? nextMessages : messages;
-}
-
-function findActiveUserMessageIndex(messages: AgentMessage[]): number {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!message) {
-      continue;
-    }
-    if (message.role === "user") {
-      return index;
-    }
-    if (message.role === "assistant" && !isToolCallAssistantMessage(message)) {
-      return -1;
-    }
-  }
-  return -1;
-}
-
-function isToolCallAssistantMessage(message: AgentMessage): boolean {
-  if (message.role !== "assistant") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const type = (block as { type?: unknown }).type;
-    return type === "toolCall" || type === "toolUse" || type === "functionCall";
-  });
-}
-
 function cloneHookMessages(messages: AgentMessage[]): AgentMessage[] {
   return messages.map((message) => structuredClone(message));
 }
@@ -1278,10 +573,6 @@ function sessionMessagesContainIdempotencyKey(
 
 function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionManager>): void {
   (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
-}
-
-export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
-  return params.promptErrorSource !== "hook:before_agent_run";
 }
 
 function shouldPreservePromptErrorAfterCleanupError(params: {
@@ -1364,13 +655,6 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
   }
   mutableSessionManager.leafId = lastEntry.parentId ?? null;
   mutableSessionManager.rewriteFile();
-}
-
-export function resolveAttemptToolPolicyMessageProvider(params: {
-  messageProvider?: string;
-  messageChannel?: string;
-}): string | undefined {
-  return params.messageProvider ?? params.messageChannel;
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {
@@ -5543,4 +4827,3 @@ export async function runEmbeddedAttempt(
     restoreSkillEnv?.();
   }
 }
-export { testing as __testing };

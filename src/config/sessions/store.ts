@@ -18,6 +18,11 @@ import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./d
 import { deriveSessionMetaPatch } from "./metadata.js";
 import { resolveStorePath } from "./paths.js";
 import {
+  ensureSessionStorePromptBlobsForPersistence,
+  projectSessionStoreForPersistence,
+  type SessionSkillPromptBlobProjection,
+} from "./skill-prompt-blobs.js";
+import {
   cloneSessionStoreRecord,
   dropSessionStoreObjectCache,
   dropSessionStoreSnapshotCache,
@@ -207,6 +212,7 @@ function updateSessionStoreWriteCaches(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   serialized: string;
+  cloneSerialized?: string;
   takeOwnership?: boolean;
 }): void {
   const fileStat = getFileStatSnapshot(params.storePath);
@@ -222,6 +228,7 @@ function updateSessionStoreWriteCaches(params: {
     mtimeMs: fileStat?.mtimeMs,
     sizeBytes: fileStat?.sizeBytes,
     serialized: params.serialized,
+    cloneSerialized: params.cloneSerialized,
     takeOwnership: params.takeOwnership,
   });
   dropSessionStoreSnapshotCache(params.storePath);
@@ -243,14 +250,20 @@ function restoreUnchangedSessionStoreCache(
     invalidateSessionStoreCache(storePath);
     return;
   }
+  const serialized = getSerializedSessionStore(storePath);
   writeSessionStoreCache({
     storePath,
     store,
     mtimeMs: loadedFileStat?.mtimeMs,
     sizeBytes: loadedFileStat?.sizeBytes,
-    serialized: getSerializedSessionStore(storePath),
+    serialized,
     takeOwnership: true,
   });
+  if (serialized !== undefined) {
+    // Keep hydrated blob prompts in the object cache, but preserve the disk JSON
+    // comparison string so repeated no-op saves do not rewrite sessions.json.
+    setSerializedSessionStore(storePath, serialized, loadedFileStat?.sizeBytes);
+  }
 }
 
 function loadMutableSessionStoreForWriter(storePath: string): Record<string, SessionEntry> {
@@ -493,12 +506,20 @@ async function saveSessionStoreUnlocked(
   }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  const json = JSON.stringify(store, null, 2);
+  const persisted = projectSessionStoreForPersistence({ storePath, store });
+  const promptBlobs = [...persisted.promptBlobs.values()];
+  const json = JSON.stringify(persisted.store, null, 2);
+  const cloneSerialized = persisted.changed ? undefined : json;
   if (getSerializedSessionStore(storePath) === json) {
+    await ensureSessionStorePromptBlobsForPersistence({
+      storePath,
+      promptBlobs,
+    });
     updateSessionStoreWriteCaches({
       storePath,
       store,
       serialized: json,
+      cloneSerialized,
       takeOwnership: opts?.takeCacheOwnership,
     });
     return;
@@ -512,6 +533,8 @@ async function saveSessionStoreUnlocked(
           storePath,
           store,
           serialized: json,
+          cloneSerialized,
+          promptBlobs,
           takeOwnership: opts?.takeCacheOwnership,
         });
         return;
@@ -537,6 +560,8 @@ async function saveSessionStoreUnlocked(
       storePath,
       store,
       serialized: json,
+      cloneSerialized,
+      promptBlobs,
       takeOwnership: opts?.takeCacheOwnership,
     });
   } catch (err) {
@@ -550,6 +575,8 @@ async function saveSessionStoreUnlocked(
           storePath,
           store,
           serialized: json,
+          cloneSerialized,
+          promptBlobs,
           takeOwnership: opts?.takeCacheOwnership,
         });
       } catch (err2) {
@@ -664,6 +691,8 @@ async function writeSessionStoreAtomic(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   serialized: string;
+  cloneSerialized?: string;
+  promptBlobs: Iterable<SessionSkillPromptBlobProjection>;
   takeOwnership?: boolean;
 }): Promise<void> {
   // Stage the temp as `sessions.json.<pid>.<uuid>.tmp` (not the generic
@@ -673,11 +702,18 @@ async function writeSessionStoreAtomic(params: {
     durable: false,
     mode: 0o600,
     tempPrefix: path.basename(params.storePath),
+    beforeRename: async () => {
+      await ensureSessionStorePromptBlobsForPersistence({
+        storePath: params.storePath,
+        promptBlobs: params.promptBlobs,
+      });
+    },
   });
   updateSessionStoreWriteCaches({
     storePath: params.storePath,
     store: params.store,
     serialized: params.serialized,
+    cloneSerialized: params.cloneSerialized,
     takeOwnership: params.takeOwnership,
   });
 }

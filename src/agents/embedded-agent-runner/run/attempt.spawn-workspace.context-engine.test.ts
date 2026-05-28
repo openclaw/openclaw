@@ -238,6 +238,62 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(options.toolSearchCatalogRef).toEqual({});
   });
 
+  it("quarantines unsupported tool schemas before creating the model session", async () => {
+    hoisted.createOpenClawCodingToolsMock.mockReturnValue([
+      {
+        name: "healthy_lookup",
+        label: "Healthy Lookup",
+        description: "Look up safe data.",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ text: "ok" }),
+      },
+      {
+        name: "dofbot_move_angles",
+        label: "Dofbot Move Angles",
+        description: "Move robot joints.",
+        parameters: {
+          type: "object",
+          properties: {
+            target: { $dynamicRef: "#target" },
+          },
+        },
+        execute: async () => ({ text: "bad" }),
+      },
+    ]);
+
+    const activeToolNames: string[][] = [];
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        config: {
+          tools: {
+            codeMode: { enabled: false },
+            toolSearch: false,
+          },
+        } as OpenClawConfig,
+      },
+      createSession: () => {
+        const session = createDefaultEmbeddedSession();
+        session.setActiveToolsByName = (toolNames) => {
+          activeToolNames.push([...toolNames]);
+        };
+        return session;
+      },
+    });
+
+    const sessionOptions = mockParams(
+      hoisted.createAgentSessionMock,
+      0,
+      "createAgentSession options",
+    );
+    const customTools = requireRecords(sessionOptions.customTools, "customTools");
+    expect(customTools.map((tool) => tool.name)).toEqual(["healthy_lookup"]);
+    expect(activeToolNames).toEqual([["healthy_lookup"]]);
+  });
+
   it("enforces code-mode payload surface from active-agent config during an embedded attempt", async () => {
     const observedOptions: Array<Record<string, unknown>> = [];
     const payloads: Array<Record<string, unknown>> = [];

@@ -8,6 +8,10 @@ import {
   resolveNodeFromNodeList,
   type NodeMatchCandidate,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -69,41 +73,6 @@ export type CanvasCliDependencies = {
 
 type CanvasNodeCandidate = NodeMatchCandidate;
 type CanvasSnapshotRequestFormat = "png" | "jpeg";
-
-function normalizeNumericString(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function parseStrictPositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isSafeInteger(value) && value > 0 ? value : undefined;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeNumericString(value);
-  if (!normalized || !/^\+?\d+$/.test(normalized)) {
-    return undefined;
-  }
-  const parsed = Number(normalized);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function parseStrictFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeNumericString(value);
-  if (!normalized || !/^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i.test(normalized)) {
-    return undefined;
-  }
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
 
 function parseCanvasSnapshotRequestFormat(raw: unknown): CanvasSnapshotRequestFormat {
   const format = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "jpg");

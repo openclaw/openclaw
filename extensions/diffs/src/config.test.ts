@@ -6,7 +6,7 @@ import {
   validateJsonSchemaValue,
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
   DEFAULT_DIFFS_TOOL_DEFAULTS,
@@ -17,6 +17,7 @@ import {
   resolveDiffsPluginViewerBaseUrl,
 } from "./config.js";
 import { resolveDiffsLanguagePackAvailability } from "./plugin.js";
+import { ensureCuratedViewerRuntimeForTests } from "./test-helpers.js";
 import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
 import {
   getServedLanguagePackViewerAsset,
@@ -45,6 +46,10 @@ const FULL_DEFAULTS = {
   mode: "file",
   ttlSeconds: 21_600,
 } as const;
+
+beforeAll(async () => {
+  await ensureCuratedViewerRuntimeForTests();
+});
 
 function compileManifestConfigSchema() {
   const manifest = JSON.parse(

@@ -290,7 +290,12 @@ describe("resolveEffectiveToolInventory", () => {
           name: "dofbot_move_angles",
           label: "Dofbot Move Angles",
           description: "Move robot joints",
-          parameters: { type: "array", items: { type: "number" } },
+          parameters: {
+            type: "object",
+            properties: {
+              target: { $dynamicRef: "#target" },
+            },
+          },
         }),
       ],
       pluginMeta: { dofbot_move_angles: { pluginId: "dofbot" } },
@@ -304,7 +309,7 @@ describe("resolveEffectiveToolInventory", () => {
         id: "unsupported-tool-schema:dofbot_move_angles",
         severity: "warning",
         message:
-          'Tool "dofbot_move_angles" from plugin "dofbot" has an unsupported runtime input schema (dofbot_move_angles.parameters.type must be "object") and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
+          'Tool "dofbot_move_angles" from plugin "dofbot" has an unsupported runtime input schema (dofbot_move_angles.parameters.properties.target.$dynamicRef) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
       },
     ]);
   });
