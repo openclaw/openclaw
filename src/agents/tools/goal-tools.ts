@@ -7,7 +7,7 @@ import {
 } from "../../config/sessions/goals.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
   type AnyAgentTool,
@@ -20,6 +20,7 @@ import {
 type GoalToolOptions = {
   agentSessionKey?: string;
   runSessionKey?: string;
+  sessionAgentId?: string;
   config?: OpenClawConfig;
 };
 
@@ -51,10 +52,15 @@ function resolveGoalSessionScope(options: GoalToolOptions): GoalSessionScope {
   if (!sessionKey) {
     throw new ToolInputError("session key required");
   }
+  const parsedSessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  const parsedAgentSessionAgentId = parseAgentSessionKey(options.agentSessionKey)?.agentId;
+  const agentId = normalizeAgentId(
+    parsedSessionAgentId ?? parsedAgentSessionAgentId ?? options.sessionAgentId,
+  );
   return {
     sessionKey,
     storePath: resolveStorePath(options.config?.session?.store, {
-      agentId: resolveAgentIdFromSessionKey(sessionKey),
+      agentId,
     }),
   };
 }

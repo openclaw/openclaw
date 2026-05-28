@@ -426,16 +426,19 @@ export function createOpenClawTools(
     createGetGoalTool({
       agentSessionKey: options?.agentSessionKey,
       runSessionKey: options?.runSessionKey,
+      sessionAgentId,
       config: resolvedConfig,
     }),
     createCreateGoalTool({
       agentSessionKey: options?.agentSessionKey,
       runSessionKey: options?.runSessionKey,
+      sessionAgentId,
       config: resolvedConfig,
     }),
     createUpdateGoalTool({
       agentSessionKey: options?.agentSessionKey,
       runSessionKey: options?.runSessionKey,
+      sessionAgentId,
       config: resolvedConfig,
     }),
     ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),
