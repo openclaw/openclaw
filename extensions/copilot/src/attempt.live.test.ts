@@ -135,7 +135,7 @@ function createAttemptParams(params: {
     prompt: params.prompt,
     provider: "github-copilot",
     runId: `copilot-live-smoke-${now}`,
-    sessionFile: "copilot-live-smoke.session.json",
+    sessionFile: join(params.copilotHome, "copilot-live-smoke.session.json"),
     sessionId: `copilot-live-smoke-session-${now}`,
     timeoutMs: 90_000,
     workspaceDir: process.cwd(),
