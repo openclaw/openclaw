@@ -1,6 +1,6 @@
 import path from "node:path";
-import { safePathSegmentHashed } from "../../infra/install-safe-path.js";
-import { resolveConfigDir } from "../../utils.js";
+import { safePathSegmentHashed } from "../infra/install-safe-path.js";
+import { resolveConfigDir } from "../utils.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import type { SkillEntry } from "./types.js";
 

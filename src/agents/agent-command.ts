@@ -39,6 +39,8 @@ import {
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { hydrateResolvedSkillsAsync } from "../skills/snapshot-hydration.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -98,8 +100,6 @@ import {
 } from "./model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
-import type { SkillSnapshot } from "./skills/types.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -117,9 +117,9 @@ type CliCompactionRuntime = typeof import("./command/cli-compaction.js");
 type TranscriptResolveRuntime = typeof import("../config/sessions/transcript-resolve.runtime.js");
 type CliDepsRuntime = typeof import("../cli/deps.js");
 type ExecDefaultsRuntime = typeof import("./exec-defaults.js");
-type SkillsRuntime = typeof import("./skills.js");
-type SkillsFilterRuntime = typeof import("./skills/filter.js");
-type SkillsRefreshStateRuntime = typeof import("./skills/refresh-state.js");
+type SkillsRuntime = typeof import("../skills/index.js");
+type SkillsFilterRuntime = typeof import("../skills/filter.js");
+type SkillsRefreshStateRuntime = typeof import("../skills/refresh-state.js");
 type SkillsRemoteRuntime = typeof import("../infra/skills-remote.js");
 
 const attemptExecutionRuntimeLoader = createLazyImportLoader<AttemptExecutionRuntime>(
@@ -153,12 +153,14 @@ const cliDepsRuntimeLoader = createLazyImportLoader<CliDepsRuntime>(() => import
 const execDefaultsRuntimeLoader = createLazyImportLoader<ExecDefaultsRuntime>(
   () => import("./exec-defaults.js"),
 );
-const skillsRuntimeLoader = createLazyImportLoader<SkillsRuntime>(() => import("./skills.js"));
+const skillsRuntimeLoader = createLazyImportLoader<SkillsRuntime>(
+  () => import("../skills/index.js"),
+);
 const skillsFilterRuntimeLoader = createLazyImportLoader<SkillsFilterRuntime>(
-  () => import("./skills/filter.js"),
+  () => import("../skills/filter.js"),
 );
 const skillsRefreshStateRuntimeLoader = createLazyImportLoader<SkillsRefreshStateRuntime>(
-  () => import("./skills/refresh-state.js"),
+  () => import("../skills/refresh-state.js"),
 );
 const skillsRemoteRuntimeLoader = createLazyImportLoader<SkillsRemoteRuntime>(
   () => import("../infra/skills-remote.js"),

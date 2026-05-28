@@ -41,7 +41,7 @@ vi.mock("./exec-defaults.js", () => ({
   canExecRequestNode: vi.fn(() => false),
 }));
 
-vi.mock("./skills.js", () => ({
+vi.mock("../skills/index.js", () => ({
   syncSkillsToWorkspace: syncSkillsToWorkspaceMock,
 }));
 

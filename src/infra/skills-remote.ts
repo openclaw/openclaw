@@ -1,6 +1,3 @@
-import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
-import type { SkillEligibilityContext, SkillEntry } from "../agents/skills/types.js";
-import { loadWorkspaceSkillEntries } from "../agents/skills/workspace.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { NodeRegistry } from "../gateway/node-registry.js";
@@ -10,6 +7,9 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { bumpSkillsSnapshotVersion } from "../skills/refresh-state.js";
+import type { SkillEligibilityContext, SkillEntry } from "../skills/types.js";
+import { loadWorkspaceSkillEntries } from "../skills/workspace.js";
 import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
 
 type RemoteNodeRecord = {

@@ -47,13 +47,13 @@ type ExecDockerRawFn = (
 const DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS = 5000;
 
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
-let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
+let skillsModulePromise: Promise<typeof import("../skills/index.js")> | undefined;
 let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
 let agentScopeModulePromise: Promise<typeof import("../agents/agent-scope.js")> | undefined;
 let agentWorkspaceDirsModulePromise:
   | Promise<typeof import("../agents/workspace-dirs.js")>
   | undefined;
-let skillSourceModulePromise: Promise<typeof import("../agents/skills/source.js")> | undefined;
+let skillSourceModulePromise: Promise<typeof import("../skills/source.js")> | undefined;
 let sandboxDockerModulePromise: Promise<typeof import("../agents/sandbox/docker.js")> | undefined;
 let sandboxConstantsModulePromise:
   | Promise<typeof import("../agents/sandbox/constants.js")>
@@ -63,7 +63,7 @@ let auditFsModulePromise: Promise<typeof import("./audit-fs.js")> | undefined;
 let skillScannerModulePromise: Promise<typeof import("./skill-scanner.js")> | undefined;
 
 function loadSkillsModule() {
-  skillsModulePromise ??= import("../agents/skills.js");
+  skillsModulePromise ??= import("../skills/index.js");
   return skillsModulePromise;
 }
 
@@ -88,7 +88,7 @@ function loadAgentWorkspaceDirsModule() {
 }
 
 function loadSkillSourceModule() {
-  skillSourceModulePromise ??= import("../agents/skills/source.js");
+  skillSourceModulePromise ??= import("../skills/source.js");
   return skillSourceModulePromise;
 }
 

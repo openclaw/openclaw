@@ -2,7 +2,6 @@ import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js"
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
-import type { SkillSnapshot } from "../../agents/skills.js";
 import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
@@ -27,6 +26,7 @@ import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { SkillSnapshot } from "../../skills/index.js";
 import {
   hasExplicitCronDeliveryTarget,
   resolveCronDeliveryPlan,

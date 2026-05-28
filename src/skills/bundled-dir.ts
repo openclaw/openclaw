@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 
 function looksLikeSkillsDir(dir: string): boolean {
   try {

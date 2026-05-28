@@ -3,10 +3,10 @@ import {
   resolveThinkingDefaultWithRuntimeCatalog,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
-import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { SkillCommandSpec } from "../../skills/index.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";

@@ -21,6 +21,7 @@ import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "../shared/string-coerce.js";
+import { resolveEffectiveAgentSkillFilter } from "../skills/agent-filter.js";
 import { resolveUserPath } from "../utils.js";
 import {
   listAgentIds,
@@ -28,7 +29,6 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "./agent-scope-config.js";
-import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
 export {
   listAgentEntries,
   listAgentIds,

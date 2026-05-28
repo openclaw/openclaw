@@ -131,7 +131,7 @@ vi.mock("../infra/skills-remote.js", () => ({
   getRemoteSkillEligibility: () => ({}),
 }));
 
-vi.mock("../agents/skills.js", () => ({
+vi.mock("../skills/index.js", () => ({
   buildWorkspaceSkillCommandSpecs,
 }));
 

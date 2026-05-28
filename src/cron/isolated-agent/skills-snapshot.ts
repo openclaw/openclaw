@@ -1,7 +1,7 @@
-import type { SkillSnapshot } from "../../agents/skills.js";
-import { matchesSkillFilter } from "../../agents/skills/filter.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { matchesSkillFilter } from "../../skills/filter.js";
+import type { SkillSnapshot } from "../../skills/index.js";
 
 const skillsSnapshotRuntimeLoader = createLazyImportLoader(
   () => import("./skills-snapshot.runtime.js"),

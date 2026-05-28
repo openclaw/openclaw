@@ -8,7 +8,6 @@ import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.runtime.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSenderToolPolicy } from "../../agents/sender-tool-policy.js";
-import type { SkillCommandSpec } from "../../agents/skills.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -29,6 +28,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
+import type { SkillCommandSpec } from "../../skills/index.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
 import { extractExplicitGroupId } from "./group-id.js";

@@ -2,11 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { buildWorkspaceSkillsPrompt, syncSkillsToWorkspace } from "../skills/workspace.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
-import { buildWorkspaceSkillsPrompt, syncSkillsToWorkspace } from "./skills/workspace.js";
 
-vi.mock("./skills/plugin-skills.js", () => ({
+vi.mock("../skills/plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
 }));
 

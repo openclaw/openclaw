@@ -31,6 +31,8 @@ import {
   type PluginHookToolKind,
 } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { resolveSkillTelemetrySource, resolveSkillTelemetrySourceValue } from "../skills/source.js";
+import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
 import { isPlainObject } from "../utils.js";
 import { adjustedParamsByToolCallId } from "./agent-tools.before-tool-call.state.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
@@ -42,8 +44,6 @@ import {
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { resolveSkillTelemetrySource, resolveSkillTelemetrySourceValue } from "./skills/source.js";
-import type { SkillSnapshot, SkillTelemetrySource } from "./skills/types.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";

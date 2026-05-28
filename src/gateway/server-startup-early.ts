@@ -130,10 +130,7 @@ export async function startGatewayEarlyRuntime(params: {
     ? () => {}
     : await measureStartup(params.startupTrace, "runtime.early.skills-listener", async () => {
         const [{ registerSkillsChangeListener }, { refreshRemoteBinsForConnectedNodes }] =
-          await Promise.all([
-            import("../agents/skills/refresh.js"),
-            import("../infra/skills-remote.js"),
-          ]);
+          await Promise.all([import("../skills/refresh.js"), import("../infra/skills-remote.js")]);
         return registerSkillsChangeListener((event) => {
           if (event.reason === "remote-node") {
             return;

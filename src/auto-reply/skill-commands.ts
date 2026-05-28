@@ -5,7 +5,6 @@ import {
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import { canExecRequestNode } from "../agents/exec-defaults.js";
-import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
@@ -14,6 +13,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { uniqueStrings } from "../shared/string-normalization.js";
+import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../skills/index.js";
 import { listReservedChatSlashCommandNames } from "./skill-commands-base.js";
 export {
   listReservedChatSlashCommandNames,

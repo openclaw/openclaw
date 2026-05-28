@@ -4,11 +4,11 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveEmbeddedRunSkillEntries } from "../../agents/embedded-agent-runner/skills-runtime.js";
 import { createCanonicalFixtureSkill } from "../../agents/skills.test-helpers.js";
-import type { Skill } from "../../agents/skills/skill-contract.js";
+import type { Skill } from "../../skills/skill-contract.js";
 import {
   hydrateResolvedSkills,
   hydrateResolvedSkillsAsync,
-} from "../../agents/skills/snapshot-hydration.js";
+} from "../../skills/snapshot-hydration.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import type { SessionEntry, SessionSkillPromptRef, SessionSkillSnapshot } from "./types.js";
 

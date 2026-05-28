@@ -596,16 +596,16 @@ vi.mock("./provider-auth-aliases.js", () => ({
     provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
 }));
 
-vi.mock("./skills.js", () => ({
+vi.mock("../skills/index.js", () => ({
   buildWorkspaceSkillSnapshot: (workspaceDir: string, opts: unknown) =>
     state.buildWorkspaceSkillSnapshotMock(workspaceDir, opts),
 }));
 
-vi.mock("./skills/filter.js", () => ({
+vi.mock("../skills/filter.js", () => ({
   matchesSkillFilter: () => true,
 }));
 
-vi.mock("./skills/refresh-state.js", () => ({
+vi.mock("../skills/refresh-state.js", () => ({
   getSkillsSnapshotVersion: () => 0,
   shouldRefreshSnapshotForVersion: () => false,
 }));

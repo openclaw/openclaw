@@ -11,10 +11,6 @@ import {
   type SkillInstallSpecMetadata,
 } from "../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
-import { resolveUserPath } from "../utils.js";
-import { installDownloadSpec } from "./skills-install-download.js";
-import { formatInstallFailureMessage } from "./skills-install-output.js";
-import type { SkillInstallResult } from "./skills-install.types.js";
 import {
   hasBinary as defaultHasBinary,
   loadWorkspaceSkillEntries as defaultLoadWorkspaceSkillEntries,
@@ -22,8 +18,12 @@ import {
   type SkillEntry,
   type SkillInstallSpec,
   type SkillsInstallPreferences,
-} from "./skills.js";
-import { resolveSkillSource } from "./skills/source.js";
+} from "../skills/index.js";
+import { resolveSkillSource } from "../skills/source.js";
+import { resolveUserPath } from "../utils.js";
+import { installDownloadSpec } from "./skills-install-download.js";
+import { formatInstallFailureMessage } from "./skills-install-output.js";
+import type { SkillInstallResult } from "./skills-install.types.js";
 
 export type SkillInstallRequest = InstallSafetyOverrides & {
   workspaceDir: string;

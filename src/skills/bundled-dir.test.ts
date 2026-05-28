@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
 import { writeSkill } from "../skills.e2e-test-helpers.js";
+import { captureEnv } from "../test-utils/env.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 
 describe("resolveBundledSkillsDir", () => {

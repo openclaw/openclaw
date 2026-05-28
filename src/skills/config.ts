@@ -1,13 +1,13 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SkillConfig } from "../../config/types.skills.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SkillConfig } from "../config/types.skills.js";
 import {
   evaluateRuntimeEligibility,
   hasBinary,
   isConfigPathTruthyWithDefaults,
   resolveConfigPath,
   resolveRuntimePlatform,
-} from "../../shared/config-eval.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+} from "../shared/config-eval.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { resolveSkillSource } from "./source.js";
 import type { SkillEligibilityContext, SkillEntry } from "./types.js";

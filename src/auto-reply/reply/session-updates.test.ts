@@ -53,15 +53,15 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: resolveSessionAgentIdMock,
 }));
 
-vi.mock("../../agents/skills.js", () => ({
+vi.mock("../../skills/index.js", () => ({
   buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
 }));
 
-vi.mock("../../agents/skills/refresh.js", () => ({
+vi.mock("../../skills/refresh.js", () => ({
   ensureSkillsWatcher: ensureSkillsWatcherMock,
 }));
 
-vi.mock("../../agents/skills/refresh-state.js", () => ({
+vi.mock("../../skills/refresh-state.js", () => ({
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
   shouldRefreshSnapshotForVersion: shouldRefreshSnapshotForVersionMock,
 }));

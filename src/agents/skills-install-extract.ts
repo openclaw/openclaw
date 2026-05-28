@@ -10,8 +10,8 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { hasBinary } from "../skills/index.js";
 import { parseTarVerboseMetadata } from "./skills-install-tar-verbose.js";
-import { hasBinary } from "./skills.js";
 
 export type ArchiveExtractResult = { stdout: string; stderr: string; code: number | null };
 type TarPreflightResult = {

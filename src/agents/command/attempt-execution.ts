@@ -19,6 +19,7 @@ import {
   appendUserTurnTranscriptMessage,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
+import { buildWorkspaceSkillSnapshot } from "../../skills/index.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -36,7 +37,6 @@ import { resolveOpenAIRuntimeProvider } from "../openai-codex-routing.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { acquireSessionWriteLock, resolveSessionWriteLockOptions } from "../session-write-lock.js";
-import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
   buildClaudeCliFallbackContextPrelude,

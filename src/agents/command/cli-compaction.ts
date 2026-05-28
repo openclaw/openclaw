@@ -5,6 +5,7 @@ import { ensureContextEnginesInitialized as ensureContextEnginesInitializedImpl 
 import { resolveContextEngine as resolveContextEngineImpl } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { SkillSnapshot } from "../../skills/index.js";
 import { createPreparedEmbeddedAgentSettingsManager as createPreparedEmbeddedAgentSettingsManagerImpl } from "../agent-project-settings.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -27,7 +28,6 @@ import { ensureSelectedAgentHarnessPlugin as ensureSelectedAgentHarnessPluginImp
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "../harness/selection.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { SessionManager } from "../sessions/index.js";
-import type { SkillSnapshot } from "../skills.js";
 import { recordCliCompactionInStore as recordCliCompactionInStoreImpl } from "./session-store.js";
 
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;

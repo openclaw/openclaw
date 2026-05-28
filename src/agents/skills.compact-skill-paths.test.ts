@@ -1,11 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import {
   testing as workspaceSkillsTesting,
   buildWorkspaceSkillsPrompt,
-} from "./skills/workspace.js";
+} from "../skills/workspace.js";
+import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 
 describe("compactSkillPaths", () => {
   function buildPromptForFixtureSkill(params: {

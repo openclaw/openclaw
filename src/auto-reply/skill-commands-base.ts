@@ -1,8 +1,8 @@
-import type { SkillCommandSpec } from "../agents/skills.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import type { SkillCommandSpec } from "../skills/index.js";
 import { getChatCommands } from "./commands-registry.data.js";
 
 export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {

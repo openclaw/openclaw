@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { openRootFileSync } from "../../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
 import type { ParsedSkillFrontmatter } from "./types.js";

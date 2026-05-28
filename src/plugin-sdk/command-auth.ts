@@ -99,7 +99,7 @@ export {
   resolveSkillCommandInvocation,
 } from "../auto-reply/skill-commands.js";
 export { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "../plugins/command-specs.js";
-export type { SkillCommandSpec } from "../agents/skills.js";
+export type { SkillCommandSpec } from "../skills/index.js";
 export {
   buildModelsProviderData,
   formatModelsAvailableHeader,

@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadWorkspaceSkillEntries, type SkillEntry, type SkillSnapshot } from "../skills.js";
-import { resolveSkillRuntimeConfig } from "../skills/runtime-config.js";
+import {
+  loadWorkspaceSkillEntries,
+  type SkillEntry,
+  type SkillSnapshot,
+} from "../../skills/index.js";
+import { resolveSkillRuntimeConfig } from "../../skills/runtime-config.js";
 
 export function resolveEmbeddedRunSkillEntries(params: {
   workspaceDir: string;

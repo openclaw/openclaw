@@ -5,10 +5,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   testing as acpRuntimeTesting,
   registerAcpRuntimeBackend,
-} from "../../acp/runtime/registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
-import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+} from "../acp/runtime/registry.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { testing } from "./plugin-skills.js";
 
 const hoisted = vi.hoisted(() => {
@@ -32,16 +32,16 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../plugins/manifest-registry-installed.js", () => ({
+vi.mock("../plugins/manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: hoisted.loadPluginManifestRegistryForInstalledIndex,
 }));
 
-vi.mock("../../plugins/plugin-registry.js", () => ({
+vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: hoisted.loadPluginManifestRegistryForPluginRegistry,
   loadPluginRegistrySnapshot: hoisted.loadPluginRegistrySnapshot,
 }));
 
-vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
 }));

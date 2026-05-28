@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { SkillEntry } from "../skills/types.js";
+import { loadWorkspaceSkillEntries } from "../skills/workspace.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
-import type { SkillEntry } from "./skills/types.js";
-import { loadWorkspaceSkillEntries } from "./skills/workspace.js";
 
 const tempDirs: string[] = [];
 

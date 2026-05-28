@@ -53,6 +53,11 @@ import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
+  applySkillEnvOverrides,
+  applySkillEnvOverridesFromSnapshot,
+  resolveSkillsPromptForRun,
+} from "../../../skills/index.js";
+import {
   buildTrajectoryArtifacts,
   buildTrajectoryRunMetadata,
 } from "../../../trajectory/metadata.js";
@@ -160,11 +165,6 @@ import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { createAgentSession, SessionManager } from "../../sessions/index.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
-import {
-  applySkillEnvOverrides,
-  applySkillEnvOverridesFromSnapshot,
-  resolveSkillsPromptForRun,
-} from "../../skills.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
 import {
   isSubagentEnvelopeSession,

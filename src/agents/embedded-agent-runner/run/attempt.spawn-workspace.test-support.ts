@@ -379,7 +379,7 @@ vi.mock("../../bootstrap-files.js", async () => {
   };
 });
 
-vi.mock("../../skills.js", () => ({
+vi.mock("../../../skills/index.js", () => ({
   applySkillEnvOverrides: () => () => {},
   applySkillEnvOverridesFromSnapshot: () => () => {},
   resolveSkillsPromptForRun: (...args: unknown[]) => hoisted.resolveSkillsPromptForRunMock(...args),

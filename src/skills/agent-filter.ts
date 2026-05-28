@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../../config/types.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeSkillFilter } from "./filter.js";
 
 type AgentSkillsLimits = {

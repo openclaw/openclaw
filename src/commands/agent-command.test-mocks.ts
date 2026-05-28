@@ -240,21 +240,21 @@ vi.mock("../agents/workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
 }));
 
-vi.mock("../agents/skills.js", () => ({
+vi.mock("../skills/index.js", () => ({
   buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
   loadWorkspaceSkillEntries: vi.fn(() => []),
 }));
 
-vi.mock("../agents/skills/refresh.js", () => ({
+vi.mock("../skills/refresh.js", () => ({
   getSkillsSnapshotVersion: vi.fn(() => 0),
 }));
 
-vi.mock("../agents/skills/refresh-state.js", () => ({
+vi.mock("../skills/refresh-state.js", () => ({
   getSkillsSnapshotVersion: vi.fn(() => 0),
   shouldRefreshSnapshotForVersion: vi.fn(() => false),
 }));
 
-vi.mock("../agents/skills/filter.js", () => ({
+vi.mock("../skills/filter.js", () => ({
   normalizeSkillFilter: vi.fn((skillFilter?: ReadonlyArray<unknown>) =>
     skillFilter ? normalizeStringEntries(skillFilter) : undefined,
   ),

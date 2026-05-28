@@ -25,6 +25,11 @@ import {
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import {
+  applySkillEnvOverrides,
+  applySkillEnvOverridesFromSnapshot,
+  resolveSkillsPromptForRun,
+} from "../../skills/index.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -106,6 +111,7 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../skills.js";
+import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../tool-schema-quarantine.js";
 import {

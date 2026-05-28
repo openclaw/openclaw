@@ -1,10 +1,10 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { loadEnabledClaudeBundleCommands } from "../plugins/bundle-commands.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
+} from "../shared/string-coerce.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import type { SkillEligibilityContext, SkillCommandSpec, SkillEntry } from "./types.js";

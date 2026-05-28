@@ -755,7 +755,7 @@ export async function loadCompactHooksHarness(): Promise<{
     limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs.slice(0, 2)),
   }));
 
-  vi.doMock("../skills.js", () => ({
+  vi.doMock("../../skills/index.js", () => ({
     applySkillEnvOverrides: vi.fn(() => () => {}),
     applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
     loadWorkspaceSkillEntries: vi.fn(() => []),

@@ -1,6 +1,6 @@
-import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { coerceSecretRef } from "../../config/types.secrets.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 
 function hasConfiguredSkillApiKeyRef(config?: OpenClawConfig): boolean {
   const entries = config?.skills?.entries;

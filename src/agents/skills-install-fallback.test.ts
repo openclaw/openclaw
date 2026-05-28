@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SkillEntry, SkillInstallSpec } from "../skills/index.js";
 import { captureEnv } from "../test-utils/env.js";
 import { hasBinaryMock, runCommandWithTimeoutMock } from "./skills-install.test-mocks.js";
-import type { SkillEntry, SkillInstallSpec } from "./skills.js";
 
 const skillsMocks = vi.hoisted(() => ({
   loadWorkspaceSkillEntries: vi.fn(),
@@ -18,8 +18,8 @@ vi.mock("../plugins/install-security-scan.js", () => ({
   scanSkillInstallSource: vi.fn(async () => undefined),
 }));
 
-vi.mock("./skills.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./skills.js")>();
+vi.mock("../skills/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../skills/index.js")>();
   return {
     ...actual,
     loadWorkspaceSkillEntries: skillsMocks.loadWorkspaceSkillEntries,

@@ -2,15 +2,8 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
-import { CONFIG_DIR } from "../utils.js";
-import {
-  readClawHubSkillsLockfileStatusSync,
-  resolveClawHubSkillStatusLinkSync,
-  resolveLocalSkillCardStatusSync,
-  type ClawHubSkillStatusLink,
-  type ClawHubSkillsLockfileStatusRead,
-  type LocalSkillCardStatus,
-} from "./skills-clawhub.js";
+import { resolveEffectiveAgentSkillFilter } from "../skills/agent-filter.js";
+import { resolveBundledSkillsContext } from "../skills/bundled-context.js";
 import {
   hasBinary,
   isBundledSkillAllowed,
@@ -23,10 +16,17 @@ import {
   type SkillEligibilityContext,
   type SkillInstallSpec,
   type SkillsInstallPreferences,
-} from "./skills.js";
-import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
-import { resolveBundledSkillsContext } from "./skills/bundled-context.js";
-import { resolveSkillSource } from "./skills/source.js";
+} from "../skills/index.js";
+import { resolveSkillSource } from "../skills/source.js";
+import { CONFIG_DIR } from "../utils.js";
+import {
+  readClawHubSkillsLockfileStatusSync,
+  resolveClawHubSkillStatusLinkSync,
+  resolveLocalSkillCardStatusSync,
+  type ClawHubSkillStatusLink,
+  type ClawHubSkillsLockfileStatusRead,
+  type LocalSkillCardStatus,
+} from "./skills-clawhub.js";
 
 export type SkillStatusConfigCheck = RequirementConfigCheck;
 

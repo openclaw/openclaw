@@ -1,5 +1,5 @@
-import { validateRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
-import { parseFrontmatterBlock } from "../../markdown/frontmatter.js";
+import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
 import {
   applyOpenClawManifestInstallCommonFields,
   getFrontmatterString,
@@ -10,8 +10,8 @@ import {
   resolveOpenClawManifestInstall,
   resolveOpenClawManifestOs,
   resolveOpenClawManifestRequires,
-} from "../../shared/frontmatter.js";
-import { readStringValue } from "../../shared/string-coerce.js";
+} from "../shared/frontmatter.js";
+import { readStringValue } from "../shared/string-coerce.js";
 import type { Skill } from "./skill-contract.js";
 import type {
   OpenClawSkillMetadata,

@@ -57,7 +57,7 @@ async function ensureSandboxWorkspaceLayout(params: {
           await Promise.all([
             import("../../infra/skills-remote.js"),
             import("../exec-defaults.js"),
-            import("../skills.js"),
+            import("../../skills/index.js"),
           ]);
         await syncSkillsToWorkspace({
           sourceWorkspaceDir: agentWorkspaceDir,

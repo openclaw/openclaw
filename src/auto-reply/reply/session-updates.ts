@@ -2,14 +2,6 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
-import { buildWorkspaceSkillSnapshot, type SkillSnapshot } from "../../agents/skills.js";
-import { matchesSkillFilter } from "../../agents/skills/filter.js";
-import {
-  getSkillsSnapshotVersion,
-  shouldRefreshSnapshotForVersion,
-} from "../../agents/skills/refresh-state.js";
-import { ensureSkillsWatcher } from "../../agents/skills/refresh.js";
-import { hydrateResolvedSkills } from "../../agents/skills/snapshot-hydration.js";
 import { stableStringify } from "../../agents/stable-stringify.js";
 import {
   canonicalizeAbsoluteSessionFilePath,
@@ -30,6 +22,14 @@ import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { matchesSkillFilter } from "../../skills/filter.js";
+import { buildWorkspaceSkillSnapshot, type SkillSnapshot } from "../../skills/index.js";
+import {
+  getSkillsSnapshotVersion,
+  shouldRefreshSnapshotForVersion,
+} from "../../skills/refresh-state.js";
+import { ensureSkillsWatcher } from "../../skills/refresh.js";
+import { hydrateResolvedSkills } from "../../skills/snapshot-hydration.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
 

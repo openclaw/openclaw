@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { sanitizeEnvVars, validateEnvVarValue } from "../agents/sandbox/sanitize-env-vars.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
-} from "../../infra/host-env-security.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { sanitizeEnvVars, validateEnvVarValue } from "../sandbox/sanitize-env-vars.js";
+} from "../infra/host-env-security.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveSkillConfig } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { resolveSkillRuntimeConfig } from "./runtime-config.js";

@@ -14,6 +14,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import type { SkillSnapshot } from "../../skills/index.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
@@ -22,7 +23,6 @@ import type {
   CurrentInboundPromptContext,
   EmbeddedRunTrigger,
 } from "../embedded-agent-runner/run/params.js";
-import type { SkillSnapshot } from "../skills.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
 export type RunCliAgentParams = {

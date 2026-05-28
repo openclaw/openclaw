@@ -1,13 +1,13 @@
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createSyntheticSourceInfo } from "../skills/skill-contract.js";
+import type { OpenClawSkillMetadata, SkillEntry } from "../skills/types.js";
+import { buildWorkspaceSkillsPrompt } from "../skills/workspace.js";
 import { withEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
-import { createSyntheticSourceInfo } from "./skills/skill-contract.js";
-import type { OpenClawSkillMetadata, SkillEntry } from "./skills/types.js";
-import { buildWorkspaceSkillsPrompt } from "./skills/workspace.js";
 
-vi.mock("./skills/plugin-skills.js", () => ({
+vi.mock("../skills/plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
 }));
 
