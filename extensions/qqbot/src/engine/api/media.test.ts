@@ -258,6 +258,26 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
+  it("rejects bracketed IPv4-mapped literal RFC 2544 URL hosts under the real SSRF resolver", async () => {
+    await useRealSsrfResolverOnce();
+    const client = mockApiClient();
+    const tokenManager = mockTokenManager();
+    const api = new MediaApi(client, tokenManager);
+
+    await expect(
+      api.uploadMedia(
+        "c2c",
+        "user-openid",
+        MediaFileType.IMAGE,
+        { appId: "app-id", clientSecret: "client-secret" },
+        { url: "https://[::ffff:198.18.0.42]/assets/photo.png" },
+      ),
+    ).rejects.toThrow("Blocked hostname");
+
+    expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
   it("allows public hostnames whose DNS resolves into the fake-IP RFC 2544 range", async () => {
     // Simulate the sing-box / Clash / Surge fake-IP proxy deployment: a public
     // hostname (`cdn.example.com`) whose local DNS resolver returns a 198.18.x.x
