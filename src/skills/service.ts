@@ -3,6 +3,8 @@ import path from "node:path";
 import { stableStringify } from "../agents/stable-stringify.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
+import { normalizeSkillFilter } from "./filter.js";
 import { getSkillsSnapshotVersion } from "./refresh-state.js";
 import { buildSkillIndex, skillIndexEntries, type SkillIndex } from "./registry.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "./types.js";
@@ -71,7 +73,7 @@ export class SkillsService {
   }
 
   buildSnapshot(workspaceDir: string, opts?: SkillSnapshotBuildOptions): SkillSnapshot {
-    if (opts?.entries) {
+    if (opts?.entries || hasEmptyEffectiveSkillFilter(opts)) {
       return buildWorkspaceSkillSnapshotFromEntries(workspaceDir, opts);
     }
     const request = {
@@ -147,6 +149,14 @@ function stableHash(value: unknown): string {
 
 function normalizedOptionalPath(value?: string): string {
   return value ? path.resolve(value) : "";
+}
+
+function hasEmptyEffectiveSkillFilter(opts?: SkillSnapshotBuildOptions): boolean {
+  const filter =
+    opts?.skillFilter !== undefined
+      ? normalizeSkillFilter(opts.skillFilter)
+      : resolveEffectiveAgentSkillFilter(opts?.config, opts?.agentId);
+  return filter !== undefined && filter.length === 0;
 }
 
 export function buildSkillIndexCacheKey(request: SkillIndexRequest): string {

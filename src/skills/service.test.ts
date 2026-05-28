@@ -30,6 +30,33 @@ afterEach(async () => {
 });
 
 describe("SkillsService", () => {
+  it("does not load an index when the effective skill filter is empty", () => {
+    type LoadIndexPatch = {
+      loadIndex: () => never;
+    };
+    const service = new SkillsService();
+    const patch = service as unknown as LoadIndexPatch;
+    patch.loadIndex = () => {
+      throw new Error("empty skill filters must not scan skill roots");
+    };
+    const config = {
+      agents: { defaults: { skills: [] } },
+    } satisfies OpenClawConfig;
+
+    const explicit = service.buildSnapshot("/workspace/that/does/not/exist", {
+      skillFilter: [],
+      snapshotVersion: 11,
+    });
+    const fromConfig = service.buildSnapshot("/workspace/that/does/not/exist", {
+      config,
+      agentId: "demo-agent",
+      snapshotVersion: 12,
+    });
+
+    expect(explicit).toMatchObject({ prompt: "", skills: [], resolvedSkills: [], version: 11 });
+    expect(fromConfig).toMatchObject({ prompt: "", skills: [], resolvedSkills: [], version: 12 });
+  });
+
   it("builds snapshots from the index without changing prompt output", async () => {
     const workspaceDir = await makeTempWorkspace();
     await writeWorkspaceSkills(workspaceDir, [
