@@ -2378,6 +2378,9 @@ export async function runEmbeddedAgent(
             };
           }
 
+          const hasRecoverableCodexAppServerTimeoutOutcome = Boolean(
+            attempt.codexAppServerFailure && attempt.promptTimeoutOutcome,
+          );
           if (promptError && !aborted && promptErrorSource !== "compaction") {
             // Retry replay-safe Codex app-server failures.
             const codexAppServerRecoveryRetry = resolveCodexAppServerRecoveryRetry({
@@ -2394,12 +2397,17 @@ export async function runEmbeddedAgent(
               );
               continue;
             }
-            if (attempt.codexAppServerFailure) {
+            if (attempt.codexAppServerFailure && !hasRecoverableCodexAppServerTimeoutOutcome) {
               throw promptError;
             }
           }
 
-          if (promptError && !aborted && promptErrorSource !== "compaction") {
+          if (
+            promptError &&
+            !aborted &&
+            promptErrorSource !== "compaction" &&
+            !hasRecoverableCodexAppServerTimeoutOutcome
+          ) {
             // Normalize wrapped errors (e.g. abort-wrapped RESOURCE_EXHAUSTED) into
             // FailoverError so rate-limit classification works even for nested shapes.
             //

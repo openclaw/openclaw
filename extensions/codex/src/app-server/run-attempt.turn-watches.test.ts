@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   embeddedAgentLog,
@@ -31,6 +32,7 @@ import {
   turnStartResult,
 } from "./run-attempt-test-harness.js";
 import { testing } from "./run-attempt.js";
+import { resolveCodexAppServerBindingPath } from "./session-binding.js";
 
 setupRunAttemptTestHooks();
 
@@ -70,6 +72,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       path.join(tempDir, "workspace"),
     );
     params.timeoutMs = 200;
+    const bindingPath = resolveCodexAppServerBindingPath(params.sessionFile);
 
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { turnCompletionIdleTimeoutMs: 5 } },
@@ -115,6 +118,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
         ),
       { interval: 1 },
     );
+    await expect(fs.stat(bindingPath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
   });
 

@@ -3,7 +3,6 @@ import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixt
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
-  MockedFailoverError,
   mockedClassifyFailoverReason,
   mockedMarkAuthProfileFailure,
   mockedRunEmbeddedAttempt,
@@ -175,7 +174,14 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     mockedClassifyFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       codexTurnCompletionIdleTimeoutAttempt({
+        timedOut: true,
         replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        promptTimeoutOutcome: {
+          message:
+            "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+          replayInvalid: true,
+          livenessState: "abandoned",
+        },
         codexAppServerFailure: {
           kind: "turn_completion_idle_timeout",
           transport: "stdio",
@@ -187,7 +193,7 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
       }),
     );
 
-    const promise = runEmbeddedAgent({
+    const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "codex",
       model: "gpt-5.5",
@@ -204,10 +210,12 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
       }),
     });
 
-    await expect(promise).rejects.not.toBeInstanceOf(MockedFailoverError);
-    await expect(promise).rejects.toThrow(
-      "codex app-server turn idle timed out waiting for turn/completed",
-    );
+    expect(result.payloads?.[0]).toMatchObject({
+      isError: true,
+      text: "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+    });
+    expect(result.meta.replayInvalid).toBe(true);
+    expect(result.meta.livenessState).toBe("abandoned");
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });

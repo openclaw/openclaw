@@ -1881,11 +1881,15 @@ export async function runCodexAppServerAttempt(
   const abortListener = () => {
     const shouldRetireClient = timedOut;
     if (shouldRetireClient) {
-      void retireCodexAppServerClientAfterTimedOutTurn(client, {
-        threadId: thread.threadId,
-        turnId: activeTurnId,
-        reason: String(runAbortController.signal.reason ?? "timeout"),
-      }).finally(() => {
+      void (async () => {
+        // Timed-out native turns cannot be safely resumed on the same thread.
+        await clearCodexAppServerBinding(activeSessionFile);
+        await retireCodexAppServerClientAfterTimedOutTurn(client, {
+          threadId: thread.threadId,
+          turnId: activeTurnId,
+          reason: String(runAbortController.signal.reason ?? "timeout"),
+        });
+      })().finally(() => {
         resolveCompletion?.();
       });
       return;
