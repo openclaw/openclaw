@@ -1035,7 +1035,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight, pnpm-store-warmup]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'ubuntu-24.04') || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1141,7 +1141,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight, pnpm-store-warmup]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' && needs.pnpm-store-warmup.result == 'success' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && matrix.runner || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
