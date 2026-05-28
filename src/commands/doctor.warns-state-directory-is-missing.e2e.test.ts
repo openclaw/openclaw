@@ -386,6 +386,56 @@ describe("doctor command", () => {
     );
   });
 
+  it("does not let OPENCLAW_GATEWAY_TOKEN hide an unresolved SecretRef-managed token", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_MISSING_GATEWAY_REF_TOKEN",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+    });
+
+    const previousFallbackToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    const previousRefToken = process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token-1234567890";
+    delete process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN;
+    try {
+      await doctorCommand(createDoctorRuntime(), {
+        nonInteractive: true,
+        workspaceSuggestions: false,
+      });
+    } finally {
+      if (previousFallbackToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousFallbackToken;
+      }
+      if (previousRefToken === undefined) {
+        delete process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN;
+      } else {
+        process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN = previousRefToken;
+      }
+    }
+
+    const gatewayAuthNote = requireTerminalNote({ title: "Gateway auth" });
+    expect(String(gatewayAuthNote[0])).toContain(
+      "Gateway token SecretRef could not be resolved: gateway.auth.token SecretRef is unresolved",
+    );
+  });
+
   it("skips gateway auth warning when SecretRef-managed token resolves", async () => {
     mockDoctorConfigSnapshot({
       config: {

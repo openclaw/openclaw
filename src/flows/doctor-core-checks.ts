@@ -191,11 +191,12 @@ const gatewayAuthCheck: HealthCheck = {
       authConfig: ctx.cfg.gateway?.auth,
       tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
     });
+    const hasInlineToken = typeof auth.token === "string" && auth.token.trim() !== "";
     const needsToken =
       auth.mode !== "password" &&
       auth.mode !== "none" &&
       auth.mode !== "trusted-proxy" &&
-      (auth.mode !== "token" || !auth.token);
+      (auth.mode !== "token" || !hasInlineToken || Boolean(gatewayTokenRef));
     if (!needsToken) {
       return [];
     }
@@ -211,9 +212,9 @@ const gatewayAuthCheck: HealthCheck = {
           cfg: ctx.cfg,
           env: process.env,
           unresolvedReasonStyle: "detailed",
-          envFallback: "always",
+          envFallback: "never",
         });
-        if (resolvedToken.token) {
+        if (resolvedToken.source === "secretRef") {
           return [];
         }
         unresolvedRefReason = resolvedToken.unresolvedRefReason;
@@ -223,9 +224,9 @@ const gatewayAuthCheck: HealthCheck = {
         cfg: ctx.cfg,
         env: process.env,
         unresolvedReasonStyle: "detailed",
-        envFallback: "always",
+        envFallback: gatewayTokenRef ? "never" : "always",
       });
-      if (resolvedToken.token) {
+      if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
         return [];
       }
       unresolvedRefReason = resolvedToken.unresolvedRefReason;

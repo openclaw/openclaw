@@ -191,11 +191,12 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   // This aligns with hasExplicitGatewayInstallAuthMode() in auth-install-policy.ts.
   // Previously, only "password" and "token" (with a token present) were excluded,
   // causing doctor --fix to overwrite trusted-proxy/none configs with token mode.
+  const hasInlineToken = typeof auth.token === "string" && auth.token.trim() !== "";
   const needsToken =
     auth.mode !== "password" &&
     auth.mode !== "none" &&
     auth.mode !== "trusted-proxy" &&
-    (auth.mode !== "token" || !auth.token);
+    (auth.mode !== "token" || !hasInlineToken || Boolean(gatewayTokenRef));
   if (!needsToken) {
     return;
   }
@@ -212,9 +213,9 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
         cfg: ctx.cfg,
         env: ctx.env ?? process.env,
         unresolvedReasonStyle: "detailed",
-        envFallback: "always",
+        envFallback: "never",
       });
-      if (resolvedToken.token) {
+      if (resolvedToken.source === "secretRef") {
         return;
       }
       unresolvedRefReason = resolvedToken.unresolvedRefReason;
@@ -224,9 +225,9 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
       cfg: ctx.cfg,
       env: ctx.env ?? process.env,
       unresolvedReasonStyle: "detailed",
-      envFallback: "always",
+      envFallback: gatewayTokenRef ? "never" : "always",
     });
-    if (resolvedToken.token) {
+    if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
       return;
     }
     unresolvedRefReason = resolvedToken.unresolvedRefReason;
