@@ -907,7 +907,7 @@ export async function processDiscordMessage(
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
         beforeDeliver: beforeDiscordPayloadDelivery,
         onReplyStart: onDiscordReplyStart,
-        onSettled: deliverPendingToolWarningFinalIfNeeded,
+        onFreshSettledDelivery: deliverPendingToolWarningFinalIfNeeded,
       },
       delivery: {
         deliver: deliverDiscordPayload,
