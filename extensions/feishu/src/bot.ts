@@ -1302,6 +1302,7 @@ export async function handleFeishuMessage(params: {
             starterBody: threadContext.threadStarterBody,
             historyBody: threadContext.threadHistoryBody,
             label: threadContext.threadLabel,
+            senderAllowed: true,
           },
           groupSystemPrompt: isGroup
             ? normalizeOptionalString(groupConfig?.systemPrompt)
