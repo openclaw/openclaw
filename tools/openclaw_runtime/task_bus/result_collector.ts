@@ -53,8 +53,8 @@ export async function collectResults(
 ): Promise<void> {
   const db = new Database(dbPath);
   try {
-    const insertMany = db.transaction((rows: LearningEventRow[]) => {
-      for (const row of rows) insertRow(db, row);
+    const insertMany = db.transaction((rows: unknown) => {
+      for (const row of rows as LearningEventRow[]) insertRow(db, row);
     });
     insertMany(results.map(buildRow));
   } finally {

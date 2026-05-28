@@ -44,14 +44,14 @@ quote status、paper automation loop、learning summary、promotion gate，
 以及 cron check，並只輸出 read-only 的下一步。
 
 ```powershell
-pnpm brokerdesk:auto-trading
-pnpm brokerdesk:auto-trading-loop
-pnpm brokerdesk:auto-trading-watch
-pnpm brokerdesk:auto-trading-watch-state:check
-pnpm brokerdesk:auto-trading-learning-snapshot
-pnpm brokerdesk:auto-trading-learning-snapshot:check
-pnpm brokerdesk:auto-trading-tick-diagnostic
-pnpm brokerdesk:auto-trading-tick-diagnostic:check
+pnpm capital-hft:auto-trading
+pnpm capital-hft:auto-trading-loop
+pnpm capital-hft:auto-trading-watch
+pnpm capital-hft:auto-trading-watch-state:check
+pnpm capital-hft:auto-trading-learning-snapshot
+pnpm capital-hft:auto-trading-learning-snapshot:check
+pnpm capital-hft:auto-trading-tick-diagnostic
+pnpm capital-hft:auto-trading-tick-diagnostic:check
 ```
 
 ## 7x24 Monitoring
@@ -63,10 +63,10 @@ separation. This is the always-on companion to the control center.
 Recommended checks:
 
 ```powershell
-pnpm brokerdesk:quote:status
-pnpm brokerdesk:auto-trading-tick-diagnostic
-pnpm brokerdesk:auto-trading-watch --once
-pnpm brokerdesk:auto-trading-watch:daemon-check
+pnpm capital-hft:quote:status
+pnpm capital-hft:auto-trading-tick-diagnostic
+pnpm capital-hft:auto-trading-watch --once
+pnpm capital-hft:auto-trading-watch:daemon-check
 ```
 
 ## API Integration Notes
@@ -92,8 +92,8 @@ Key points from that note:
 - use `OnOFOpenInterestGWReport` for overseas open-interest reports
 - never present a stale callback as the current quote; `tradeQuote` means fresh
   only, and `latestTradeQuote` is the raw latest callback for debug/reference
-- use the active BrokerDesk staging state directory when the live build is
-  running from `D:\群益及元大API\BrokerDesk\dist-staging-*`
+- use the active CapitalHftService state directory when the live build is
+  running from `D:\群益及元大API\CapitalHftService\`
 - article examples may use `TXFR1` for the near-month futures code; OpenClaw
   accepts `TX00AM`, `TX00`, and `TXFR1` as aliases for the same paper target
 
@@ -107,16 +107,12 @@ Key points from that note:
 .openclaw\ui\auto-trading-learning-summary.md
 ```
 
-`pnpm brokerdesk:auto-trading-watch` 會持續監看 BrokerDesk 的 quote callback
+`pnpm capital-hft:auto-trading-watch` 會持續監看 CapitalHftService 的 quote callback
 相關檔案；當新的報價進來時，它會自動刷新 paper-only loop 與 control center。
-`pnpm brokerdesk:auto-trading-watch-state:check` 會驗證 watch 狀態與 alias 狀態一致，並確認學習摘要檔存在。
-`pnpm brokerdesk:auto-trading-learning-snapshot` 會把 blocker / learning / next task 固化成單一學習快照，並同步輸出可讀的 Markdown 摘要。
+`pnpm capital-hft:auto-trading-watch-state:check` 會驗證 watch 狀態與 alias 狀態一致，並確認學習摘要檔存在。
+`pnpm capital-hft:auto-trading-learning-snapshot` 會把 blocker / learning / next task 固化成單一學習快照，並同步輸出可讀的 Markdown 摘要。
 學習快照會列出 execution plan，包含 entry / exit side、style、trigger 與 action summary，方便即時看見報價後的操作方式。
-`pnpm brokerdesk:auto-trading-tick-diagnostic` 會把 monitor freshness 與 realtime tick freshness 分開診斷，直接輸出是否真的進入即時 tick。
+`pnpm capital-hft:auto-trading-tick-diagnostic` 會把 monitor freshness 與 realtime tick freshness 分開診斷，直接輸出是否真的進入即時 tick。
 當控制中心顯示 `blocked_quote_stale` 時，下一個安全任務仍是等待新的
 `SKQuoteLib` quote callback；不要登入、不要推進 `StartIndex`，不要啟用
 真實下單。
-
-
-
-

@@ -1,0 +1,147 @@
+{
+  "$schema": "openclaw.instrument-registry.v1",
+  "description": "OpenClaw 統一商品註冊表 — 所有 agent、skill、策略引擎共用",
+  "updatedAt": "2026-05-23",
+  "sources": {
+    "capital_domestic": {
+      "provider": "群益 SKCOM",
+      "service": "CapitalHftService",
+      "stateDir": "D:\\群益及元大API\\CapitalHftService",
+      "quoteFeed": "capital_quote_events.jsonl",
+      "scanner": "scripts/openclaw-capital-market-scanner.mjs --market domestic"
+    },
+    "capital_overseas": {
+      "provider": "群益 SKCOM (海外)",
+      "service": "CapitalHftService",
+      "stateDir": "D:\\群益及元大API\\CapitalHftService",
+      "quoteFeed": "os_symbol_cache.json",
+      "scanner": "scripts/openclaw-capital-market-scanner.mjs --market overseas"
+    },
+    "okx": {
+      "provider": "OKX",
+      "api": "REST v5 (公開，不需 API Key)",
+      "scanner": "scripts/openclaw-okx-market-scanner.mjs"
+    }
+  },
+  "instruments": {
+    "domestic_futures": {
+      "market": "domestic",
+      "source": "capital_domestic",
+      "session": "08:45-13:45 TPE (weekday)",
+      "products": [
+        { "id": "TX00", "name": "台指期近月", "type": "index_futures", "decimal": 2 },
+        { "id": "TX06", "name": "台指期06月", "type": "index_futures", "decimal": 2 },
+        { "id": "TX06AM", "name": "台指期06月(盤前)", "type": "index_futures", "decimal": 2 },
+        { "id": "MTX00AM", "name": "小台期近月", "type": "index_futures", "decimal": 2 },
+        { "id": "TE00", "name": "電子期近月", "type": "index_futures", "decimal": 2 },
+        { "id": "XE00", "name": "小電子期近月", "type": "index_futures", "decimal": 2 },
+        { "id": "TF00", "name": "金融期近月", "type": "index_futures", "decimal": 2 }
+      ]
+    },
+    "overseas_futures": {
+      "market": "overseas",
+      "source": "capital_overseas",
+      "session": "Mon 06:00 - Sat 05:00 TPE",
+      "products": [
+        { "id": "CN0000", "name": "富時A50指數", "group": "亞洲指數" },
+        { "id": "NK0000", "name": "美元日經225", "group": "亞洲指數" },
+        { "id": "AP0000", "name": "雪梨指數", "group": "亞洲指數" },
+        { "id": "ES0000", "name": "小S&P 500", "group": "美國指數" },
+        { "id": "NQ0000", "name": "小那斯達克", "group": "美國指數" },
+        { "id": "YM0000", "name": "小道瓊", "group": "美國指數" },
+        { "id": "RTY0000", "name": "小羅素2000", "group": "美國指數" },
+        { "id": "MES0000", "name": "微小S&P", "group": "美國指數" },
+        { "id": "MNQ0000", "name": "微小那斯達克", "group": "美國指數" },
+        { "id": "MYM0000", "name": "微小道瓊", "group": "美國指數" },
+        { "id": "M2K0000", "name": "微小羅素", "group": "美國指數" },
+        { "id": "DAX0000", "name": "德國指數", "group": "歐洲指數" },
+        { "id": "DXM0000", "name": "小德指", "group": "歐洲指數" },
+        { "id": "DXS0000", "name": "微德指", "group": "歐洲指數" },
+        { "id": "ESX0000", "name": "歐洲藍籌50", "group": "歐洲指數" },
+        { "id": "CL0000", "name": "輕原油", "group": "能源" },
+        { "id": "MCL0000", "name": "微輕原油", "group": "能源" },
+        { "id": "QM0000", "name": "小輕原油", "group": "能源" },
+        { "id": "BZ0000", "name": "布蘭特原油", "group": "能源" },
+        { "id": "NG0000", "name": "天然氣", "group": "能源" },
+        { "id": "QG0000", "name": "小天然氣", "group": "能源" },
+        { "id": "HO0000", "name": "熱燃油", "group": "能源" },
+        { "id": "RB0000", "name": "無鉛汽油", "group": "能源" },
+        { "id": "GC0000", "name": "黃金", "group": "貴金屬" },
+        { "id": "MGC0000", "name": "微黃金", "group": "貴金屬" },
+        { "id": "SI0000", "name": "白銀", "group": "貴金屬" },
+        { "id": "HG0000", "name": "銅", "group": "基礎金屬" },
+        { "id": "S0000", "name": "黃豆", "group": "農產品" },
+        { "id": "YK0000", "name": "小黃豆", "group": "農產品" },
+        { "id": "SM0000", "name": "黃豆粉", "group": "農產品" },
+        { "id": "BO0000", "name": "黃豆油", "group": "農產品" },
+        { "id": "MZL0000", "name": "微黃豆油", "group": "農產品" },
+        { "id": "C0000", "name": "玉米", "group": "農產品" },
+        { "id": "YC0000", "name": "小玉米", "group": "農產品" },
+        { "id": "W0000", "name": "小麥", "group": "農產品" },
+        { "id": "YW0000", "name": "小小麥", "group": "農產品" },
+        { "id": "O0000", "name": "燕麥", "group": "農產品" },
+        { "id": "RR0000", "name": "粗米", "group": "農產品" },
+        { "id": "CD0000", "name": "加幣", "group": "外匯" },
+        { "id": "TY0000", "name": "十年債", "group": "債券" },
+        { "id": "TN0000", "name": "長十年債", "group": "債券" },
+        { "id": "TU0000", "name": "二年債", "group": "債券" },
+        { "id": "FV0000", "name": "五年債", "group": "債券" },
+        { "id": "US0000", "name": "30年債", "group": "債券" },
+        { "id": "UB0000", "name": "超長債", "group": "債券" },
+        { "id": "10Y0000", "name": "10年殖利率", "group": "債券" },
+        { "id": "FF0000", "name": "30天利率", "group": "利率" },
+        { "id": "IB0000", "name": "30天利率(澳)", "group": "利率" },
+        { "id": "IBHY0000", "name": "高收益債指數", "group": "債券" },
+        { "id": "IR0000", "name": "90天票券", "group": "利率" },
+        { "id": "XT0000", "name": "澳洲十年債", "group": "債券" },
+        { "id": "YT0000", "name": "澳洲三年債", "group": "債券" },
+        { "id": "RX0000", "name": "不動產指數", "group": "不動產" },
+        { "id": "VX0000", "name": "波動率指數", "group": "波動率" },
+        { "id": "VXM0000", "name": "小波動率", "group": "波動率" }
+      ]
+    },
+    "okx_crypto": {
+      "market": "crypto",
+      "source": "okx",
+      "session": "24/7",
+      "note": "全商品由 okx:market-scanner 動態掃描，此處列主要交易對",
+      "majorPairs": [
+        "BTC-USDT",
+        "ETH-USDT",
+        "SOL-USDT",
+        "XRP-USDT",
+        "DOGE-USDT",
+        "ADA-USDT",
+        "AVAX-USDT",
+        "DOT-USDT",
+        "LINK-USDT",
+        "MATIC-USDT",
+        "UNI-USDT",
+        "ATOM-USDT",
+        "FIL-USDT",
+        "LTC-USDT",
+        "BCH-USDT",
+        "APT-USDT",
+        "ARB-USDT",
+        "OP-USDT",
+        "SUI-USDT",
+        "PEPE-USDT"
+      ]
+    }
+  },
+  "scannerCommands": {
+    "全部群益商品": "pnpm capital:market-scanner",
+    "國內期貨": "pnpm capital:market-scanner:domestic",
+    "海外期貨": "pnpm capital:market-scanner:overseas",
+    "OKX現貨全部": "pnpm okx:market-scanner",
+    "OKX永續合約": "pnpm okx:market-scanner:swap",
+    "OKX交割合約": "pnpm okx:market-scanner:futures"
+  },
+  "agentUsage": {
+    "strategyEngine": "import registry, filter by market/group, feed to strategy",
+    "freshnesMatrix": "uses domestic tx-front + overseas a50-hot as required products",
+    "quoteRouter": "multi-source: SkcomSource (domestic+overseas) + OkxSource (crypto)",
+    "marketScanner": "periodic scan all instruments, rank by price-volume signals",
+    "tradingAssistant": "reference registry for valid symbols and session hours"
+  }
+}

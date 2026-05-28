@@ -1,0 +1,89 @@
+{
+  "version": "R8.1",
+  "scope": {
+    "appliesTo": ["openclaw", "claude", "codex"],
+    "executionInterfaces": ["desktop", "cli"],
+    "sharedDecisionCore": true
+  },
+  "principles": {
+    "fullModuleBlueprintBeforeTickets": true,
+    "singleTicketExecutionAfterBlueprint": true,
+    "simulateBeforeComplete": true,
+    "immediateFixAndSameCaseRerun": true,
+    "evidenceLockRequired": true,
+    "p0p1MustBeZero": true
+  },
+  "gates": {
+    "fmbg": {
+      "requiredCoveragePct": {
+        "moduleCoverage": 100,
+        "dependencyCoverage": 100,
+        "contractCoverage": 100,
+        "testMappingCoverage": 100,
+        "rollbackMappingCoverage": 100
+      },
+      "requiredFields": [
+        "module_id",
+        "owner",
+        "responsibility_boundary",
+        "dependencies",
+        "input_output_contract",
+        "risk_level",
+        "validation_scenarios",
+        "rollback_plan",
+        "skill_matrix"
+      ]
+    },
+    "vfc": {
+      "enabled": true,
+      "severityPolicy": {
+        "P0": "must_fix_same_round",
+        "P1": "must_fix_same_round",
+        "P2": "fix_before_adopt",
+        "P3": "can_schedule_but_must_track"
+      },
+      "requiresSameCaseRerunPass": true,
+      "requiresRegressionPass": true
+    },
+    "release": {
+      "l2RequiresCanary": true,
+      "l2RequiresAutoRollbackVerification": true,
+      "freezeOnRepeatedErrorCount": 2
+    }
+  },
+  "validationThresholds": {
+    "ruleUpgradeSimulationRuns": 500,
+    "maxFailRatePct": 2.0,
+    "maxEscapeRatePct": 2.0,
+    "maxRolloutIncidentPct": 0.5,
+    "maxFlakyFalseBlockPct": 1.0
+  },
+  "r8DetectionTargets": {
+    "d0": 0.92,
+    "d1": 0.96,
+    "d2": 0.99,
+    "flakyContainment": 0.97,
+    "architectureDetection": 0.99,
+    "asvsL1": 0.95,
+    "asvsL2": 0.98,
+    "asvsL3": 0.99,
+    "canaryDetection": 0.99,
+    "evidenceCoverage": 0.999
+  },
+  "sccp": {
+    "enabled": true,
+    "policy": "shortest_correct_code",
+    "selectionRule": "if_correctness_equal_choose_shorter_else_choose_more_correct",
+    "mustPreserveMaintainability": true
+  },
+  "outputContract": [
+    "core_result",
+    "files_changed",
+    "validation_result",
+    "error_fix_result",
+    "remaining_blockers",
+    "risk",
+    "rollback_path",
+    "next_safe_task"
+  ]
+}

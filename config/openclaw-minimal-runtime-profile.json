@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "profileId": "openclaw-minimal-runtime",
+  "description": "Smallest offline OpenClaw runtime surface for gateway, sessions, diagnostics, and the controlled runner.",
+  "mode": "local-offline",
+  "requiredSurfaces": [
+    {
+      "id": "gateway",
+      "kind": "runtime",
+      "path": "src/gateway"
+    },
+    {
+      "id": "session",
+      "kind": "runtime",
+      "path": "src/config/sessions"
+    },
+    {
+      "id": "diagnostics",
+      "kind": "runtime",
+      "path": "src/infra/diagnostic-events.ts"
+    },
+    {
+      "id": "controlled-runner",
+      "kind": "automation",
+      "path": "scripts/openclaw-controlled-task-runner.mjs"
+    }
+  ],
+  "disabledExternalSurfaces": [
+    "browser-control",
+    "global-codex-skills",
+    "live-model-api",
+    "live-trading",
+    "message-channels"
+  ],
+  "runtimeEnv": {
+    "OPENCLAW_DISABLE_BONJOUR": "1",
+    "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER": "1",
+    "OPENCLAW_SKIP_CANVAS_HOST": "1",
+    "OPENCLAW_SKIP_CHANNELS": "1",
+    "OPENCLAW_SKIP_GMAIL_WATCHER": "1",
+    "OPENCLAW_SKIP_PROVIDERS": "1"
+  },
+  "safety": {
+    "externalApi": false,
+    "globalSkillDependency": false,
+    "liveTrading": false,
+    "writesOutsideRepo": false
+  },
+  "validation": [
+    "node scripts/check-openclaw-minimal-runtime-profile.mjs --check",
+    "pnpm autonomous:inventory:check"
+  ]
+}

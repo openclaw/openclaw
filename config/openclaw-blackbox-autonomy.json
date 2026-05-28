@@ -1,0 +1,22 @@
+{
+  "schema": "openclaw.blackbox.autonomy.config.v1",
+  "mode": "paper_only_blackbox",
+  "intervalMs": 60000,
+  "phases": ["observe", "generate", "debate", "validate", "decide", "self_heal"],
+  "safety": {
+    "allowLiveTrading": false,
+    "noOrderWrite": true,
+    "sentOrder": false,
+    "writeBrokerOrders": false,
+    "maxFailureStreak": 3
+  },
+  "dmad": {
+    "enabled": true,
+    "timeoutMs": 20000,
+    "command": ["pnpm", "dmad:smoke-test"]
+  },
+  "sync": {
+    "downstreamStatusPath": "reports/hermes-agent/state/openclaw-live-architecture-feedback-latest.json",
+    "reportPath": "reports/hermes-agent/state/openclaw-blackbox-sync-latest.json"
+  }
+}

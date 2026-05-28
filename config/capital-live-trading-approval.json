@@ -1,0 +1,53 @@
+{
+  "schema": "openclaw.capital.live-trading-approval.v1",
+  "humanApproved": true,
+  "approvalStatus": "live_trading_enabled",
+  "accountAllowlist": [
+    "TF,F020000,B17,1723186,F127922154,葉明修,0",
+    "OF,F020000,B17,1723186,F127922154,葉明修,0"
+  ],
+  "killSwitch": true,
+  "rollbackPlan": "operator deactivate and keep live/write off",
+  "reviewChecklist": {
+    "paperPromotionPassed": true,
+    "quoteFreshnessVerified": true,
+    "positionQueryVerified": true,
+    "orderModeDryRunVerified": true,
+    "telegramNotificationVerified": true,
+    "manualOperatorConfirmed": true,
+    "telegramSemiApprovalAction": "approve_paper_simulated",
+    "manualApprovalAction": "approve"
+  },
+  "safety": {
+    "allowLiveTrading": false,
+    "writeBrokerOrders": false,
+    "sentOrder": false,
+    "createdByAutomation": true,
+    "manualEditRequired": true
+  },
+  "instructions": [
+    "Do not set humanApproved=true until a human operator verifies the account allowlist, kill switch, rollback plan, and broker write adapter.",
+    "Do not enable allowLiveTrading or writeBrokerOrders in this file; runtime risk controls must remain separately gated.",
+    "This file is a review template only and does not authorize real orders."
+  ],
+  "accountAllowlistSource": "auto_detected_from_hft_service_status",
+  "accountAllowlistSyncedAt": "2026-05-28T06:30:55.352Z",
+  "autoDetectedAccountCount": 2,
+  "manualAccountReviewRequired": false,
+  "telegramSemiApprovalCallback": {
+    "action": "approve_paper_simulated",
+    "updatedAt": "2026-05-21T07:23:33.964Z",
+    "grantsLiveTrading": false,
+    "sentOrder": false
+  },
+  "manualApproval": {
+    "action": "approve",
+    "operator": "telegram-owner",
+    "tokenSha256": "846B001A261512341C2A38E57FE1B51BE9663865541E2D907178CB281B7D17CD",
+    "approvedAt": "2026-05-25T07:28:36.924Z",
+    "deniedAt": "",
+    "grantsLiveTrading": true,
+    "grantsBrokerWrite": true,
+    "sentOrder": false
+  }
+}

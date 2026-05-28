@@ -1,0 +1,141 @@
+{
+  "schema": "openclaw.capital.energy-contract-catalog.v1",
+  "generatedAt": "2026-05-24",
+  "readOnly": true,
+  "liveTradingEnabled": false,
+  "writeTradingEnabled": false,
+  "description": "Official-source-backed energy futures contract month and rollover rules for Capital route validation. This fixture does not enable broker writes; fresh matched callback is still required before strategy use.",
+  "sources": [
+    {
+      "id": "cme-nymex-chapter-200-cl",
+      "provider": "CME Group / NYMEX Rulebook",
+      "url": "https://www.cmegroup.com/rulebook/NYMEX/2/200.pdf",
+      "evidence": "Light Sweet Crude Oil futures trade in all calendar months; termination is the third business day before the 25th calendar day of the month before delivery, with the rulebook holiday adjustment."
+    },
+    {
+      "id": "cme-micro-wti-fact-card",
+      "provider": "CME Group",
+      "url": "https://www.cmegroup.com/trading/energy/files/micro-wti-crude-oil-futures-fact-card.pdf",
+      "evidence": "MCL, QM, and CL are the WTI crude product codes; Micro WTI is monthly and expires the day before the standard counterpart."
+    },
+    {
+      "id": "cme-nymex-chapter-220-ng",
+      "provider": "CME Group / NYMEX Rulebook",
+      "url": "https://www.cmegroup.com/content/dam/cmegroup/rulebook/NYMEX/2/220.pdf",
+      "evidence": "Henry Hub Natural Gas futures terminate on the third business day before the first day of the delivery month, with rulebook holiday adjustment."
+    },
+    {
+      "id": "cme-nymex-chapter-698-bz",
+      "provider": "CME Group / NYMEX Rulebook",
+      "url": "https://www.cmegroup.com/content/dam/cmegroup/rulebook/NYMEX/6/698.pdf",
+      "evidence": "Brent Crude Oil Last Day Financial Futures use code BZ and terminate on the ICE Brent termination day; for current rule text, the last UK business day of the second month before the contract month, with New Year's exception."
+    }
+  ],
+  "products": [
+    {
+      "marketCode": "CL",
+      "productName": "輕原油",
+      "contractRoot": "CL",
+      "venue": "NYM",
+      "cycle": "monthly",
+      "registryRuntimeSymbols": ["CL0000"],
+      "symbolTemplates": {
+        "currentMonth": ["NYM,CL{YYMM}", "CL{YYMM}"],
+        "nextMonth": ["NYM,CL{NEXT_YYMM}", "CL{NEXT_YYMM}"],
+        "frontMonth": ["CL0000"],
+        "hotMonth": ["CL0000"]
+      },
+      "rolloverRule": {
+        "basis": "nymex_light_sweet_crude_rule_200102f",
+        "sourceId": "cme-nymex-chapter-200-cl",
+        "terminationRule": "third_business_day_before_25th_calendar_day_of_month_preceding_delivery_month",
+        "preRollWatchWindow": "T-5 business days before rulebook termination date",
+        "autoRollConfigured": true
+      }
+    },
+    {
+      "marketCode": "QM",
+      "productName": "小輕原油",
+      "contractRoot": "QM",
+      "venue": "NYM",
+      "cycle": "monthly",
+      "registryRuntimeSymbols": ["QM0000"],
+      "symbolTemplates": {
+        "currentMonth": ["QM{YYMM}"],
+        "nextMonth": ["QM{NEXT_YYMM}"],
+        "frontMonth": ["QM0000"],
+        "hotMonth": ["QM0000"]
+      },
+      "rolloverRule": {
+        "basis": "nymex_wti_family_calendar_month",
+        "sourceId": "cme-micro-wti-fact-card",
+        "terminationRule": "wti_family_rulebook_calendar_required",
+        "preRollWatchWindow": "T-5 business days before WTI family termination guard",
+        "autoRollConfigured": true
+      }
+    },
+    {
+      "marketCode": "MCL",
+      "productName": "微輕原油",
+      "contractRoot": "MCL",
+      "venue": "NYM",
+      "cycle": "monthly",
+      "registryRuntimeSymbols": ["MCL0000"],
+      "symbolTemplates": {
+        "currentMonth": ["MCL{YYMM}"],
+        "nextMonth": ["MCL{NEXT_YYMM}"],
+        "frontMonth": ["MCL0000"],
+        "hotMonth": ["MCL0000"]
+      },
+      "rolloverRule": {
+        "basis": "cme_micro_wti_expires_before_standard_counterpart",
+        "sourceId": "cme-micro-wti-fact-card",
+        "terminationRule": "one_business_day_before_standard_wti_counterpart",
+        "preRollWatchWindow": "T-5 business days before Micro WTI termination guard",
+        "autoRollConfigured": true
+      }
+    },
+    {
+      "marketCode": "BZ",
+      "productName": "布蘭特原油",
+      "contractRoot": "BZ",
+      "venue": "NYM",
+      "cycle": "monthly",
+      "registryRuntimeSymbols": ["BZ0000"],
+      "symbolTemplates": {
+        "currentMonth": ["BZ{YYMM}"],
+        "nextMonth": ["BZ{NEXT_YYMM}"],
+        "frontMonth": ["BZ0000"],
+        "hotMonth": ["BZ0000"]
+      },
+      "rolloverRule": {
+        "basis": "nymex_brent_last_day_financial_rule_698102e",
+        "sourceId": "cme-nymex-chapter-698-bz",
+        "terminationRule": "ice_brent_same_termination_day_last_uk_business_day_second_month_before_contract_month",
+        "preRollWatchWindow": "T-5 UK business days before Brent termination guard",
+        "autoRollConfigured": true
+      }
+    },
+    {
+      "marketCode": "NG",
+      "productName": "天然氣",
+      "contractRoot": "NG",
+      "venue": "NYM",
+      "cycle": "monthly",
+      "registryRuntimeSymbols": ["NG0000"],
+      "symbolTemplates": {
+        "currentMonth": ["NG{YYMM}"],
+        "nextMonth": ["NG{NEXT_YYMM}"],
+        "frontMonth": ["NG0000"],
+        "hotMonth": ["NG0000"]
+      },
+      "rolloverRule": {
+        "basis": "nymex_henry_hub_natural_gas_rule_220102f",
+        "sourceId": "cme-nymex-chapter-220-ng",
+        "terminationRule": "third_business_day_before_first_day_of_delivery_month",
+        "preRollWatchWindow": "T-5 business days before rulebook termination date",
+        "autoRollConfigured": true
+      }
+    }
+  ]
+}

@@ -10,7 +10,10 @@ export {
   isApprovalRequired,
 } from "./task_bus/task_router.js";
 export { collectResult, collectResults } from "./task_bus/result_collector.js";
-export { writebackToCausal, syncHermesToCausal } from "./task_bus/writeback.js";
+export {
+  syncHermesToCausal,
+  syncHermesToCausal as writebackToCausal,
+} from "./task_bus/writeback.js";
 
 // adapters
 export { callClaudeCli } from "./adapters/claude_code_cli_adapter.js";

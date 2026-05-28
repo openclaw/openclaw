@@ -1,0 +1,44 @@
+{
+  "schema": "openclaw.capital.paper-positions.v1",
+  "mode": "paper",
+  "allowLiveTrading": false,
+  "writeBrokerOrders": false,
+  "autoResolveFreshSymbols": true,
+  "capital": 2000000,
+  "maxQuoteAgeSeconds": 30,
+  "defaultStopLossAmount": 100000,
+  "defaultTakeProfitAmount": 150000,
+  "positions": [
+    {
+      "symbol": "CN0000",
+      "instrument": "CN",
+      "qty": 1,
+      "side": "long",
+      "entry": 15539,
+      "pointValue": 1,
+      "currency": "USD"
+    },
+    {
+      "symbol": "CD0000",
+      "instrument": "6C",
+      "qty": 1,
+      "side": "long",
+      "entry": 7282.5,
+      "pointValue": 1,
+      "currency": "USD"
+    }
+  ],
+  "availableSymbols": {
+    "CN0000": "SGX A50 front/hot futures, currently receiving SKOSQuoteLib callbacks",
+    "CD0000": "CAD futures front/hot, currently receiving SKOSQuoteLib callbacks",
+    "ES0000": "E-mini S&P 500 futures",
+    "NQ0000": "E-mini Nasdaq-100 futures",
+    "MES0000": "Micro E-mini S&P 500 futures",
+    "MNQ0000": "Micro E-mini Nasdaq-100 futures",
+    "GC0000": "Gold futures",
+    "MGC0000": "Micro Gold futures",
+    "CL0000": "WTI crude oil futures",
+    "TX00AM": "TAIFEX TX front month day session",
+    "TX00PM": "TAIFEX TX front month night session"
+  }
+}

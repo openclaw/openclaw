@@ -2,7 +2,7 @@
 name: tengyi-401-pdf-autonomous-trainer
 description: Execute the controlled Tengyi 401 PDF autonomous training loop from OpenClaw without overwriting source PDFs.
 user-invocable: true
-metadata: { "openclaw": { "emoji": "📄" } }
+metadata: { "openclaw": { "emoji": "📄", "criticality": "important" } }
 ---
 
 # Tengyi 401 PDF Autonomous Trainer

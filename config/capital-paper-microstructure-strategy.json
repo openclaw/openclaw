@@ -5,21 +5,13 @@
   "enabled": true,
   "allowLiveTrading": false,
   "writeBrokerOrders": false,
-  "symbol": "TX00AM",
-  "marketCode": "TXF",
-  "targetStockNo": "TX00AM",
-  "targetStockNos": [
-    "TX00AM",
-    "TX00",
-    "TXFR1"
-  ],
-  "quoteAliases": [
-    "TX00AM",
-    "TX00",
-    "TXFR1",
-    "TXF"
-  ],
-  "targetStockName": "台指近",
+  "symbol": "CN0000",
+  "marketCode": "A50",
+  "targetStockNo": "CN0000",
+  "targetStockNos": ["CN0000", "CN", "CNM1"],
+  "quoteAliases": ["CN0000", "CN", "CNM1", "A50"],
+  "useAnyFreshAllowedSymbol": true,
+  "targetStockName": "A50",
   "quantity": 1,
   "maxSpreadTicks": 40,
   "tickSize": 1,
@@ -27,9 +19,11 @@
   "signalPolicy": "passive_bid_probe",
   "requirePositiveBidAsk": true,
   "learning": {
-    "status": "candidate",
+    "status": "approved_paper",
     "minReadyCyclesForPaper": 20,
     "blockAfterConsecutiveReadinessBlocks": 20,
-    "promoteLiveAutomatically": false
+    "promoteLiveAutomatically": false,
+    "approvedAt": "2026-05-20T19:07:11.275Z",
+    "approvedBy": "auto-review"
   }
 }

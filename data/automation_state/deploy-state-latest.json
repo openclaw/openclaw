@@ -1,0 +1,33 @@
+{
+  "schema": "openclaw.daily-automation-deploy.v1",
+  "generatedAt": "2026-05-26T06:53:22.581Z",
+  "dryRun": false,
+  "live": true,
+  "preflight": {
+    "ok": true,
+    "login": "connected",
+    "cert": true,
+    "quote": true,
+    "osQuote": true,
+    "order": true,
+    "domesticTicks": 69,
+    "overseasTicks": 799,
+    "riskControls": {
+      "allowLiveTrading": true,
+      "writeBrokerOrders": true,
+      "maxPositionContracts": 5,
+      "maxDailyPaperLossTwd": 50000
+    }
+  },
+  "strategiesTotal": 1750,
+  "strategiesEnabled": 1750,
+  "strategiesLoaded": 1750,
+  "positionSync": {
+    "synced": 1,
+    "skipped": 0,
+    "total": 1
+  },
+  "status": "running",
+  "mode": "LIVE",
+  "startedAt": "2026-05-26T06:53:23.094Z"
+}

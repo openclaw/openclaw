@@ -1,0 +1,13 @@
+{
+  "schema": "openclaw.capital.verified-position-snapshot.v1",
+  "verified": true,
+  "verifiedAt": "2026-05-27T22:00:57.6449245+08:00",
+  "verifiedBy": "operator-confirmed-via-hft-os-position",
+  "positions": [
+    {
+      "symbol": "CN0000",
+      "side": "long",
+      "qty": 1
+    }
+  ]
+}
