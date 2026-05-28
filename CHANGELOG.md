@@ -5578,7 +5578,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Sub-agents: allow `sessions_spawn.model`, `agents.defaults.subagents.model`, and per-agent sub-agent model overrides to use `"inherit"` so child sessions can follow the requester session's active model.
 - Onboard/wizard: restyle the setup security disclaimer with a single yellow warning banner, section headings and bulleted checklists, and un-dim the note body so key guidance is easy to scan; add a loading spinner during the initial model catalog load so the wizard no longer goes blank while it runs; add an "API key" placeholder to provider API key prompts. (#69553) Thanks @Patrick-Erichsen.
 - Agents/prompts: strengthen the default system prompt and OpenAI GPT-5 overlay with clearer completion bias, live-state checks, weak-result recovery, and verification-before-final guidance.
 - Models/costs: support tiered model pricing from cached catalogs and configured models, and include bundled Moonshot Kimi K2.6/K2.5 cost estimates for token-usage reports. (#67605) Thanks @sliverp.
