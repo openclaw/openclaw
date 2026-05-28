@@ -300,7 +300,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     await fs.mkdir(path.join(pluginRoot, "commands"), { recursive: true });
     await fs.writeFile(
       path.join(pluginRoot, ".claude-plugin", "plugin.json"),
-      `${JSON.stringify({ name: "compound-bundle" }, null, 2)}\n`,
+      `${JSON.stringify({ name: "compound-bundle", commands: "commands" }, null, 2)}\n`,
       "utf-8",
     );
     await fs.writeFile(

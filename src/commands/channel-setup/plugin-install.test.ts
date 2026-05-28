@@ -1030,6 +1030,19 @@ describe("ensureChannelSetupPluginInstalled", () => {
       onlyPluginIds: ["custom-external-chat-plugin"],
     });
     expect(sawTrustedCandidate).toBe(true);
+    const manifestCall = loadPluginManifestRegistry.mock.calls
+      .map((call) => call[0])
+      .filter(isRecord)
+      .find((args) =>
+        requireArray(args.candidates, "manifest candidates").some((candidate) => {
+          const record = requireRecord(candidate, "manifest candidate");
+          return record.idHint === "custom-external-chat-plugin" && record.origin === "bundled";
+        }),
+      );
+    expectRecordFields(manifestCall, "manifest registry args", {
+      config: cfg,
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
   });
 
   it("uses live manifest discovery for activation-declared setup scoping", () => {
