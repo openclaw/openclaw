@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Diffs: split the default language pack and expand default Diffs language coverage while keeping the host floor aligned. (#87370, #87372) Thanks @RomneyDa.
 - ClawHub: add plugin display names plus skill verification and trust surfaces. (#87354, #86699) Thanks @thewilloftheshadow and @Patrick-Erichsen.
 - Docs: clarify Codex computer-use setup, paste-token stdin auth setup, macOS gateway sleep troubleshooting, native Codex hook relay recovery, container model auth, install deployment cards, device-token admin gating, and backport targets. (#87313, #63050) Thanks @bdjben, @liaoandi, and @thewilloftheshadow.
+- Agents/ZAI: auto-inject an `X-Session-Id` request header on z.ai (GLM) provider calls from the agent `sessionId` so the z.ai load balancer keeps prefix-identical turns on the same inference node, raising prompt-cache hit rate for long sessions. Per ZhipuAI support team's recommended best practice for prompt cache stickiness; analogous to OpenAI's `prompt_cache_key` and xAI's `x-grok-conv-id`. No-ops for missing, empty, whitespace-only, or >256-char session ids. (#68079)
 
 ### Fixes
 
@@ -5317,7 +5318,6 @@ Docs: https://docs.openclaw.ai
 - Plugins/Comfy: read workflow and cloud auth configuration from `plugins.entries.comfy.config` while preserving legacy Comfy config fallback, so image, video, and music workflows pass config validation. Fixes #61915. (#63058) Thanks @547895019.
 - Gateway/secrets: restart secret-backed channels such as Slack and Zalo during `secrets.reload` so rotated webhook secrets take effect immediately, with the reload serialized and per-channel restart errors isolated. (#70720) Thanks @drobison00.
 - Plugins/tokenjuice: preserve `node_modules/tokenjuice/dist/rules/tests/*.json` during bundled plugin runtime staging so the plugin stops failing to load with `Cannot find module '../rules/tests/bun-test.json'`. The global basename prune treats any `tests/` directory as test cargo, but tokenjuice's `dist/rules/tests/` is runtime-loaded rule data consumed by `dist/core/builtin-rules.generated.js`. Adds an opt-in `keepDirectories` field to the per-package prune rule so packages with asset directories that collide with pruned basenames can stage cleanly.
-
 ## 2026.4.22
 
 ### Changes
