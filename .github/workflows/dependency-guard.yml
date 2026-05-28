@@ -14,8 +14,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dependency-guard:
+  dependency-guard-detect:
     if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      autoscrub: ${{ steps.guard.outputs.autoscrub }}
+    steps:
+      - name: Check out trusted base workflow scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Detect dependency changes
+        id: guard
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENCLAW_DEPENDENCY_GUARD_MODE: detect
+          OPENCLAW_SECURITY_APPROVERS: vincentkoc,steipete,joshavant
+          OPENCLAW_SECURITY_TEAM_SLUG: openclaw-secops
+        run: node scripts/github/dependency-guard.mjs
+
+  dependency-guard-autoscrub:
+    if: ${{ !github.event.pull_request.draft && needs.dependency-guard-detect.outputs.autoscrub == 'true' }}
+    needs: dependency-guard-detect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Check out trusted base workflow scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Remove package lockfile changes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENCLAW_DEPENDENCY_GUARD_MODE: autoscrub
+          OPENCLAW_SECURITY_APPROVERS: vincentkoc,steipete,joshavant
+          OPENCLAW_SECURITY_TEAM_SLUG: openclaw-secops
+        run: node scripts/github/dependency-guard.mjs
+
+  dependency-guard:
+    if: ${{ !github.event.pull_request.draft && always() }}
+    needs:
+      - dependency-guard-detect
+      - dependency-guard-autoscrub
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -25,9 +74,10 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
 
-      - name: Label, comment, and guard dependency changes
+      - name: Enforce dependency guard
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          OPENCLAW_DEPENDENCY_GUARD_MODE: enforce
           OPENCLAW_SECURITY_APPROVERS: vincentkoc,steipete,joshavant
           OPENCLAW_SECURITY_TEAM_SLUG: openclaw-secops
         run: node scripts/github/dependency-guard.mjs
