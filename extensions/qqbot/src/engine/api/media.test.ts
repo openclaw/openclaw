@@ -1,10 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MediaFileType, type UploadMediaResponse } from "../types.js";
+import { MAX_UPLOAD_SIZE } from "../utils/file-utils.js";
 import { ApiClient } from "./api-client.js";
 import { MediaApi } from "./media.js";
 import { TokenManager } from "./token.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const readResponseWithLimitMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/response-limit-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/response-limit-runtime")>();
+  return {
+    ...actual,
+    readResponseWithLimit: readResponseWithLimitMock,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
@@ -52,6 +63,8 @@ function mockTokenManager(): TokenManager {
 describe("MediaApi.uploadMedia direct URL uploads", () => {
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
+    readResponseWithLimitMock.mockReset();
+    readResponseWithLimitMock.mockResolvedValue(MEDIA_BYTES);
     mockGuardedResponse();
   });
 
@@ -78,7 +91,13 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
         url,
         maxRedirects: 0,
+        timeoutMs: 30_000,
       });
+      expect(readResponseWithLimitMock).toHaveBeenCalledWith(
+        expect.any(Response),
+        MAX_UPLOAD_SIZE,
+        { chunkTimeoutMs: 10_000 },
+      );
       expect(tokenManager.getAccessToken).toHaveBeenCalledWith("app-id", "client-secret");
       expect(client.request).toHaveBeenCalledWith(
         "token-1",
@@ -264,6 +283,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
       url: "http://93.184.216.34/assets/photo.png",
       maxRedirects: 0,
+      timeoutMs: 30_000,
     });
   });
 
@@ -283,6 +303,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
       url: "https://cdn.example.com/assets/photo.png",
       maxRedirects: 0,
+      timeoutMs: 30_000,
     });
     expect(client.request).toHaveBeenCalledWith(
       "token-1",

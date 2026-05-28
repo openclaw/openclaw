@@ -53,6 +53,9 @@ interface MediaApiConfig {
   sanitizeFileName?: SanitizeFileNameFn;
 }
 
+const DIRECT_UPLOAD_DOWNLOAD_TIMEOUT_MS = 30_000;
+const DIRECT_UPLOAD_READ_IDLE_TIMEOUT_MS = 10_000;
+
 function assertDirectUploadDownloadHostAllowed(hostname: string): void {
   if (isBlockedHostnameOrIp(hostname)) {
     throw new Error("Blocked hostname or private/internal/special-use IP address");
@@ -75,12 +78,15 @@ async function downloadDirectUploadUrl(url: string): Promise<Buffer> {
   const { response, release } = await fetchWithSsrFGuard({
     url: parsed.toString(),
     maxRedirects: 0,
+    timeoutMs: DIRECT_UPLOAD_DOWNLOAD_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {
       throw new Error(`Direct-upload media URL returned HTTP ${response.status}`);
     }
-    return await readResponseWithLimit(response, MAX_UPLOAD_SIZE);
+    return await readResponseWithLimit(response, MAX_UPLOAD_SIZE, {
+      chunkTimeoutMs: DIRECT_UPLOAD_READ_IDLE_TIMEOUT_MS,
+    });
   } finally {
     await release?.();
   }
