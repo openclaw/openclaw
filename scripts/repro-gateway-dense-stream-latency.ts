@@ -27,7 +27,7 @@ type LatencySummary = {
   p99: number;
 };
 
-type DenseOllamaServer = {
+type DenseStreamServer = {
   chatRequests: () => number;
   close: () => Promise<void>;
   port: number;
@@ -71,10 +71,10 @@ function parseOptions(argv: string[]): Options {
   const options: Options = {
     ...DEFAULT_OPTIONS,
     chunks:
-      parsePositiveInteger(process.env.OPENCLAW_REPRO_OLLAMA_DENSE_CHUNKS, "chunks") ??
+      parsePositiveInteger(process.env.OPENCLAW_REPRO_DENSE_STREAM_CHUNKS, "chunks") ??
       DEFAULT_OPTIONS.chunks,
     chunkSize:
-      parsePositiveInteger(process.env.OPENCLAW_REPRO_OLLAMA_DENSE_CHUNK_SIZE, "chunk-size") ??
+      parsePositiveInteger(process.env.OPENCLAW_REPRO_DENSE_STREAM_CHUNK_SIZE, "chunk-size") ??
       DEFAULT_OPTIONS.chunkSize,
   };
 
@@ -120,7 +120,7 @@ function parseOptions(argv: string[]): Options {
 }
 
 function printHelp(): void {
-  console.log(`Usage: node --import tsx scripts/repro-ollama-dense-gateway-latency.ts [options]
+  console.log(`Usage: node --import tsx scripts/repro-gateway-dense-stream-latency.ts [options]
 
 Starts a real OpenClaw gateway and points the Ollama provider at a local
 Ollama-compatible endpoint that emits dense native /api/chat NDJSON.
@@ -166,7 +166,7 @@ function writeJson(res: ServerResponse, value: unknown): void {
   res.end(`${JSON.stringify(value)}\n`);
 }
 
-async function createDenseOllamaServer(options: Options): Promise<DenseOllamaServer> {
+async function createDenseStreamServer(options: Options): Promise<DenseStreamServer> {
   const port = await getFreePort();
   let chatRequests = 0;
   const chunkText = "x".repeat(options.chunkSize);
@@ -375,11 +375,11 @@ function finalTextLength(events: EventLike[], runId: string): number {
 
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
-  const denseOllama = await createDenseOllamaServer(options);
+  const denseStreamServer = await createDenseStreamServer(options);
   const gatewayPort = await getFreePort();
   const gatewayToken = `gateway-token-${randomUUID()}`;
   const state = await createOpenClawTestState({
-    label: `ollama-dense-gateway-repro-${Date.now()}`,
+    label: `gateway-dense-stream-repro-${Date.now()}`,
     layout: "home",
     applyEnv: false,
   });
@@ -393,7 +393,7 @@ async function main(): Promise<void> {
       providers: {
         ollama: {
           api: "ollama",
-          baseUrl: `http://127.0.0.1:${String(denseOllama.port)}`,
+          baseUrl: `http://127.0.0.1:${String(denseStreamServer.port)}`,
           apiKey: "ollama-local",
           models: [
             {
@@ -450,7 +450,7 @@ async function main(): Promise<void> {
       url: `ws://127.0.0.1:${String(gatewayPort)}`,
       token: gatewayToken,
       role: "operator",
-      clientDisplayName: "ollama-dense-repro-run",
+      clientDisplayName: "dense-stream-repro-run",
       timeoutMs: 30_000,
       onEvent: (event) => events.push(event),
     });
@@ -458,7 +458,7 @@ async function main(): Promise<void> {
       url: `ws://127.0.0.1:${String(gatewayPort)}`,
       token: gatewayToken,
       role: "operator",
-      clientDisplayName: "ollama-dense-repro-ping",
+      clientDisplayName: "dense-stream-repro-ping",
       timeoutMs: 30_000,
     });
 
@@ -477,7 +477,7 @@ async function main(): Promise<void> {
       const sendResult = await runClient.request(
         "chat.send",
         {
-          sessionKey: "agent:main:ollama-dense-gateway-repro",
+          sessionKey: "agent:main:gateway-dense-stream-repro",
           idempotencyKey: runId,
           message: "Reply normally.",
         },
@@ -495,12 +495,12 @@ async function main(): Promise<void> {
       const during = summarizeLatency(pingResult.samples);
       const result = {
         liveGateway: true,
-        nativeOllamaHttpPath: true,
-        realOllamaDaemon: false,
+        providerProtocol: "ollama-native-compatible",
+        realProviderDaemon: false,
         chunks: options.chunks,
         chunkBytes: options.chunkSize,
         finalExpectedChars: options.chunks * options.chunkSize,
-        chatRequests: denseOllama.chatRequests(),
+        chatRequests: denseStreamServer.chatRequests(),
         sendStatus:
           sendResult && typeof sendResult === "object"
             ? (sendResult as { status?: unknown }).status
@@ -535,7 +535,7 @@ async function main(): Promise<void> {
       proc.kill("SIGKILL");
     }
     await state.cleanup();
-    await denseOllama.close();
+    await denseStreamServer.close();
   }
 }
 
