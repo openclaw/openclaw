@@ -1981,6 +1981,34 @@ describe("persistInlineDirectives session directive persistence policy", () => {
     expect(sessionEntry.verboseLevel).toBe("full");
   });
 
+  it("allows authorized external provider callers when surface carries webchat metadata", async () => {
+    const sessionEntry = await persistInternalOperatorWriteDirective(
+      "/exec host=node security=allowlist ask=always node=worker-1",
+      {
+        messageProvider: "telegram",
+        surface: "webchat",
+        gatewayClientScopes: ["operator.write"],
+        commandAuthorized: true,
+      },
+    );
+
+    expect(sessionEntry.execHost).toBe("node");
+    expect(sessionEntry.execSecurity).toBe("allowlist");
+    expect(sessionEntry.execAsk).toBe("always");
+    expect(sessionEntry.execNode).toBe("worker-1");
+  });
+
+  it("allows authorized external provider verbose callers when surface carries webchat metadata", async () => {
+    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
+      messageProvider: "telegram",
+      surface: "webchat",
+      gatewayClientScopes: ["operator.write"],
+      commandAuthorized: true,
+    });
+
+    expect(sessionEntry.verboseLevel).toBe("full");
+  });
+
   it("allows exec persistence for local callers without channel context", async () => {
     const sessionEntry = await persistInternalOperatorWriteDirective(
       "/exec host=node security=allowlist ask=always node=worker-1",
@@ -2001,6 +2029,17 @@ describe("persistInlineDirectives session directive persistence policy", () => {
     const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
       messageProvider: "webchat",
       surface: "forum",
+    });
+
+    expect(sessionEntry.verboseLevel).toBeUndefined();
+  });
+
+  it("keeps internal provider authoritative over authorized external surface metadata", async () => {
+    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
+      messageProvider: "webchat",
+      surface: "telegram",
+      gatewayClientScopes: ["operator.write"],
+      commandAuthorized: true,
     });
 
     expect(sessionEntry.verboseLevel).toBeUndefined();
