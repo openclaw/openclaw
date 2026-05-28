@@ -12,8 +12,6 @@
  */
 
 import * as fs from "node:fs";
-import * as net from "node:net";
-import { normalizeHostname } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   MediaFileType,
@@ -65,17 +63,10 @@ async function assertDirectUploadUrlAllowed(url: string): Promise<string> {
     throw new Error("Direct-upload media URL must use HTTP or HTTPS");
   }
 
-  // urlDirectUpload is documented as public-URL support. Use the generic
-  // SSRF guard here; the QQ/Tencent host allowlist belongs to fallback downloads.
-  // Only allow the RFC 2544 fake-IP range for hostnames whose DNS may legitimately
-  // resolve into 198.18.0.0/15 under sing-box/Clash/Surge proxy stacks. Literal
-  // IP URLs do not benefit from fake-IP DNS, so passing the flag for them would
-  // accept special-use/private literals (incl. 198.18.0.0/15) at the sink.
-  const policy =
-    net.isIP(normalizeHostname(parsed.hostname)) !== 0
-      ? undefined
-      : { allowRfc2544BenchmarkRange: true };
-  await resolvePinnedHostnameWithPolicy(parsed.hostname, { policy });
+  // urlDirectUpload forwards the original URL to QQ/Tencent for the fetch, so
+  // this must validate as a public remote-provider URL. Local fake-IP DNS
+  // allowances are only safe for guarded local downloads that use the pinned lookup.
+  await resolvePinnedHostnameWithPolicy(parsed.hostname, { policy: {} });
   return parsed.toString();
 }
 

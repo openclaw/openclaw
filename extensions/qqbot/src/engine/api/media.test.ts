@@ -68,7 +68,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
 
       expect(result).toBe(UPLOAD_RESPONSE);
       expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("cdn.example.com", {
-        policy: { allowRfc2544BenchmarkRange: true },
+        policy: {},
       });
       expect(tokenManager.getAccessToken).toHaveBeenCalledWith("app-id", "client-secret");
       expect(client.request).toHaveBeenCalledWith(
@@ -148,10 +148,8 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
         ),
       ).rejects.toThrow("Blocked hostname");
 
-      // Literal IP hosts must not receive the fake-IP DNS allowance, so the
-      // policy field stays undefined and the default SSRF policy applies.
       expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith(host, {
-        policy: undefined,
+        policy: {},
       });
       expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
       expect(client.request).not.toHaveBeenCalled();
@@ -228,7 +226,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     ).rejects.toThrow("resolves to private");
 
     expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("attacker.example", {
-      policy: { allowRfc2544BenchmarkRange: true },
+      policy: {},
     });
     expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
     expect(client.request).not.toHaveBeenCalled();
@@ -240,10 +238,6 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     const tokenManager = mockTokenManager();
     const api = new MediaApi(client, tokenManager);
 
-    // The fake-IP DNS allowance must only apply to non-literal hostnames whose
-    // local resolver returns a synthetic 198.18.0.0/15 answer. A literal
-    // 198.18.x.x URL does not benefit from that allowance and must be rejected
-    // at the sink before any token lookup or QQ API call.
     await expect(
       api.uploadMedia(
         "c2c",
@@ -278,45 +272,28 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
-  it("allows public hostnames whose DNS resolves into the fake-IP RFC 2544 range", async () => {
-    // Simulate the sing-box / Clash / Surge fake-IP proxy deployment: a public
-    // hostname (`cdn.example.com`) whose local DNS resolver returns a 198.18.x.x
-    // answer. The SSRF helper must receive the RFC 2544 allowance for the
-    // hostname so this DNS answer does not block the upload.
-    resolvePinnedHostnameWithPolicyMock.mockResolvedValueOnce({
-      hostname: "cdn.example.com",
-      addresses: ["198.18.0.42"],
-      lookup: vi.fn(),
-    });
+  it("rejects hostname DNS answers in the RFC 2544 fake-IP range", async () => {
+    resolvePinnedHostnameWithPolicyMock.mockRejectedValueOnce(
+      new Error("Blocked hostname or private/internal/special-use IP address"),
+    );
     const client = mockApiClient();
     const tokenManager = mockTokenManager();
     const api = new MediaApi(client, tokenManager);
 
-    const result = await api.uploadMedia(
-      "c2c",
-      "user-openid",
-      MediaFileType.IMAGE,
-      { appId: "app-id", clientSecret: "client-secret" },
-      { url: "https://cdn.example.com/assets/photo.png" },
-    );
+    await expect(
+      api.uploadMedia(
+        "c2c",
+        "user-openid",
+        MediaFileType.IMAGE,
+        { appId: "app-id", clientSecret: "client-secret" },
+        { url: "https://cdn.example.com/assets/photo.png" },
+      ),
+    ).rejects.toThrow("Blocked hostname");
 
-    expect(result).toBe(UPLOAD_RESPONSE);
     expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("cdn.example.com", {
-      policy: { allowRfc2544BenchmarkRange: true },
+      policy: {},
     });
-    expect(client.request).toHaveBeenCalledWith(
-      "token-1",
-      "POST",
-      expect.any(String),
-      {
-        file_type: MediaFileType.IMAGE,
-        srv_send_msg: false,
-        url: "https://cdn.example.com/assets/photo.png",
-      },
-      {
-        redactBodyKeys: ["file_data"],
-        uploadRequest: true,
-      },
-    );
+    expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalled();
   });
 });
