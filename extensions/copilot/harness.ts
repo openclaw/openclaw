@@ -164,65 +164,74 @@ export function createCopilotAgentHarness(
     },
 
     async runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult> {
-      if (disposed) {
-        throw new Error("[copilot] harness has been disposed; cannot start new attempts");
-      }
-      const { runCopilotAttempt } = await import("./src/attempt.js");
-      const pool = await getPool();
-      const openclawSessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+      const attemptPromise = (async () => {
+        if (disposed) {
+          throw new Error("[copilot] harness has been disposed; cannot start new attempts");
+        }
+        const { runCopilotAttempt } = await import("./src/attempt.js");
+        if (disposed) {
+          throw new Error("[copilot] harness was disposed while starting an attempt");
+        }
+        const pool = await getPool();
+        if (disposed) {
+          throw new Error("[copilot] harness was disposed while starting an attempt");
+        }
+        const openclawSessionId =
+          typeof params.sessionId === "string" ? params.sessionId : undefined;
 
-      // Dogfood finding #4: reuse the SDK session across turns within
-      // the same OpenClaw session so that the GitHub Copilot agent runtime's prompt
-      // cache, tool-call history, and any server-side compaction state
-      // survive turn boundaries. Without this, every turn called
-      // `createSession()` and lost cache + thread continuity — the
-      // smoking gun was distinct `${sdkSessionId}` scopes per turn in
-      // the playground transcript.
-      //
-      // Safety:
-      //   - Only inject when the tracked compatKey still matches the
-      //     current attempt's fingerprint (provider/model/cwd/auth).
-      //     Mismatch falls through to `createSession` and the new SDK
-      //     session replaces the tracked entry below.
-      //   - Preserve any caller-provided `replayInvalid: true` — never
-      //     downgrade an orchestrator-issued safety signal to false.
-      //     `decideReplayAction` treats undefined as resumable already.
-      //   - On resume failure, `attempt.ts` recovers via the
-      //     `replay-shim` (`resumeFailureRecovered:true`) and falls
-      //     back to `createSession`, so a stale-session error never
-      //     surfaces as a prompt error.
-      const currentCompatKey = computeSessionCompatKey(params);
-      const tracked = openclawSessionId ? trackedSessions.get(openclawSessionId) : undefined;
-      const resumableSessionId =
-        tracked && tracked.compatKey === currentCompatKey ? tracked.sdkSessionId : undefined;
-      const effectiveParams: AgentHarnessAttemptParams = resumableSessionId
-        ? ({
-            ...params,
-            initialReplayState: {
-              ...params.initialReplayState,
-              sdkSessionId: resumableSessionId,
-            },
-          } as AgentHarnessAttemptParams)
-        : params;
-
-      const attemptPromise = runCopilotAttempt(effectiveParams, {
-        pool,
-        onSessionEstablished: openclawSessionId
+        // Dogfood finding #4: reuse the SDK session across turns within
+        // the same OpenClaw session so that the GitHub Copilot agent runtime's prompt
+        // cache, tool-call history, and any server-side compaction state
+        // survive turn boundaries. Without this, every turn called
+        // `createSession()` and lost cache + thread continuity — the
+        // smoking gun was distinct `${sdkSessionId}` scopes per turn in
+        // the playground transcript.
+        //
+        // Safety:
+        //   - Only inject when the tracked compatKey still matches the
+        //     current attempt's fingerprint (provider/model/cwd/auth).
+        //     Mismatch falls through to `createSession` and the new SDK
+        //     session replaces the tracked entry below.
+        //   - Preserve any caller-provided `replayInvalid: true` — never
+        //     downgrade an orchestrator-issued safety signal to false.
+        //     `decideReplayAction` treats undefined as resumable already.
+        //   - On resume failure, `attempt.ts` recovers via the
+        //     `replay-shim` (`resumeFailureRecovered:true`) and falls
+        //     back to `createSession`, so a stale-session error never
+        //     surfaces as a prompt error.
+        const currentCompatKey = computeSessionCompatKey(params);
+        const tracked = openclawSessionId ? trackedSessions.get(openclawSessionId) : undefined;
+        const resumableSessionId =
+          tracked && tracked.compatKey === currentCompatKey ? tracked.sdkSessionId : undefined;
+        const effectiveParams: AgentHarnessAttemptParams = resumableSessionId
           ? ({
-              sdkSessionId,
-              pooledClient,
-            }: {
-              sdkSessionId: string;
-              pooledClient: PooledClient;
-            }) => {
-              trackedSessions.set(openclawSessionId, {
+              ...params,
+              initialReplayState: {
+                ...params.initialReplayState,
+                sdkSessionId: resumableSessionId,
+              },
+            } as AgentHarnessAttemptParams)
+          : params;
+
+        return runCopilotAttempt(effectiveParams, {
+          pool,
+          onSessionEstablished: openclawSessionId
+            ? ({
                 sdkSessionId,
-                client: pooledClient.client,
-                compatKey: currentCompatKey,
-              });
-            }
-          : undefined,
-      });
+                pooledClient,
+              }: {
+                sdkSessionId: string;
+                pooledClient: PooledClient;
+              }) => {
+                trackedSessions.set(openclawSessionId, {
+                  sdkSessionId,
+                  client: pooledClient.client,
+                  compatKey: currentCompatKey,
+                });
+              }
+            : undefined,
+        });
+      })();
       inFlight.add(attemptPromise);
       try {
         return await attemptPromise;

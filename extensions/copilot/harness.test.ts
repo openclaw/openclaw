@@ -240,6 +240,20 @@ describe("createCopilotAgentHarness", () => {
     expect(mocks.createCopilotClientPool).not.toHaveBeenCalled();
   });
 
+  it("dispose during lazy startup prevents the attempt from creating a pool", async () => {
+    const harness = createCopilotAgentHarness();
+
+    const attemptPromise = harness.runAttempt(ATTEMPT_PARAMS);
+    const disposePromise = harness.dispose?.();
+
+    await expect(attemptPromise).rejects.toThrow(
+      "[copilot] harness was disposed while starting an attempt",
+    );
+    await expect(disposePromise).resolves.toBeUndefined();
+    expect(mocks.createCopilotClientPool).not.toHaveBeenCalled();
+    expect(mocks.runCopilotAttempt).not.toHaveBeenCalled();
+  });
+
   it("dispose after pool creation calls pool.dispose once even when called twice", async () => {
     const pool = makePoolMock();
     mocks.createCopilotClientPool.mockReturnValue(pool);

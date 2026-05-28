@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { modelSelectionShouldEnsureCopilotSdk as routingShouldEnsure } from "../agents/copilot-routing.js";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -53,7 +53,12 @@ export const COPILOT_SDK_INSTALL_MANIFEST_DIR = fileURLToPath(
   new URL("./copilot-sdk-install-manifest/", import.meta.url),
 );
 
-export type CopilotSdkInstallStatus = "already-installed" | "installed" | "declined" | "failed";
+export type CopilotSdkInstallStatus =
+  | "already-installed"
+  | "installed"
+  | "declined"
+  | "failed"
+  | "nix-mode";
 
 export type CopilotSdkInstallResult = {
   cfg: OpenClawConfig;
@@ -321,6 +326,14 @@ export async function ensureCopilotSdkForModelSelection(params: {
       installed: false,
       status: "already-installed",
     };
+  }
+
+  if (resolveIsNixMode()) {
+    await params.prompter.note(
+      "Nix mode detected (OPENCLAW_NIX_MODE=1). The Copilot agent runtime SDK cannot be auto-installed; add the pinned @github/copilot-sdk manifest dependency to the Nix-managed OpenClaw package set, then rebuild.",
+      COPILOT_SDK_PACKAGE_LABEL,
+    );
+    return { cfg: params.cfg, required: true, installed: false, status: "nix-mode" };
   }
 
   const proceed = await params.prompter.confirm({

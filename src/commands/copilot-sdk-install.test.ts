@@ -138,6 +138,39 @@ describe("ensureCopilotSdkForModelSelection", () => {
     expect(install).not.toHaveBeenCalled();
   });
 
+  it("does not prompt or auto-install in Nix mode", async () => {
+    const previousNixMode = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      const confirm = vi.fn();
+      const install = vi.fn();
+      const note = vi.fn();
+      const result = await ensureCopilotSdkForModelSelection({
+        cfg: cfgWithCopilotRuntime(),
+        model: "github-copilot/gpt-4o",
+        prompter: fakePrompter({ confirm, note }),
+        runtime: fakeRuntime(),
+        isInstalled: () => false,
+        install,
+      });
+      expect(result).toMatchObject({
+        required: true,
+        installed: false,
+        status: "nix-mode",
+      });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(install).not.toHaveBeenCalled();
+      expect(note).toHaveBeenCalledOnce();
+      expect(String(note.mock.calls[0]?.[0])).toContain("OPENCLAW_NIX_MODE=1");
+    } finally {
+      if (previousNixMode === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previousNixMode;
+      }
+    }
+  });
+
   it("prompts and installs when SDK is missing and user confirms", async () => {
     const confirm = vi.fn(async () => true);
     const install = vi.fn(async () => ({
