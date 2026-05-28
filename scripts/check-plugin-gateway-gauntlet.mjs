@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,6 +25,7 @@ const DEFAULT_CPU_CORE_WARN = 0.9;
 const DEFAULT_HOT_WALL_WARN_MS = 30_000;
 const DEFAULT_MAX_RSS_WARN_MB = 1536;
 const DEFAULT_QA_PLUGIN_CHUNK_SIZE = 12;
+const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
 function parseArgs(argv) {
@@ -396,7 +397,7 @@ export function runMeasuredCommand(params) {
     env: params.env,
     encoding: "utf8",
     timeout: params.timeoutMs,
-    maxBuffer: 16 * 1024 * 1024,
+    maxBuffer: params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES,
     ...(mode === "none" ? (params.spawnOptions ?? {}) : {}),
   });
   const wallMs = performance.now() - started;
@@ -434,6 +435,180 @@ export function runMeasuredCommand(params) {
     logPath,
     ...parseTimedMetrics(stderr, wallMs, mode),
   };
+}
+
+export function runMeasuredCommandLive(params) {
+  const { command, args, mode } =
+    params.timeMode === "none"
+      ? { command: params.command, args: params.args, mode: "none" }
+      : timeWrapperArgs(params.command, params.args);
+  const started = performance.now();
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+    let spawnError = null;
+    let timedOut = false;
+    let settled = false;
+    let forceKillTimeout = null;
+    const maxBufferBytes = params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES;
+    const timeoutKillGraceMs = params.timeoutKillGraceMs ?? 5_000;
+    const spawnOptions = mode === "none" ? (params.spawnOptions ?? {}) : {};
+    const useProcessGroup =
+      process.platform !== "win32" &&
+      params.killProcessGroup !== false &&
+      spawnOptions.detached !== false;
+    const child = spawn(command, args, {
+      cwd: params.cwd,
+      env: params.env,
+      ...spawnOptions,
+      ...(useProcessGroup ? { detached: true } : {}),
+    });
+    const killMeasuredProcess = (signal = "SIGTERM") => {
+      if (useProcessGroup && child.pid) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {}
+      }
+      child.kill(signal);
+    };
+    const parentSignalHandlers = new Map();
+    const removeParentSignalHandlers = () => {
+      for (const [signal, handler] of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.clear();
+    };
+    const parentSignals =
+      process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+    for (const signal of parentSignals) {
+      const handler = () => {
+        killMeasuredProcess(signal);
+        removeParentSignalHandlers();
+        process.kill(process.pid, signal);
+      };
+      parentSignalHandlers.set(signal, handler);
+      process.once(signal, handler);
+    }
+    const appendCapturedOutput = (streamName, chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const currentBytes = streamName === "stdout" ? stdoutBytes : stderrBytes;
+      const alreadyTruncated = streamName === "stdout" ? stdoutTruncated : stderrTruncated;
+      if (alreadyTruncated) {
+        return;
+      }
+      const remainingBytes = maxBufferBytes - currentBytes;
+      const appendTruncation = () => {
+        const message = `\n[${streamName} truncated after ${maxBufferBytes} bytes]\n`;
+        if (streamName === "stdout") {
+          stdout += message;
+          stdoutTruncated = true;
+        } else {
+          stderr += message;
+          stderrTruncated = true;
+        }
+      };
+      if (remainingBytes <= 0) {
+        appendTruncation();
+        return;
+      }
+      const capturedBuffer =
+        buffer.length > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer;
+      if (streamName === "stdout") {
+        stdout += capturedBuffer.toString("utf8");
+        stdoutBytes += capturedBuffer.length;
+      } else {
+        stderr += capturedBuffer.toString("utf8");
+        stderrBytes += capturedBuffer.length;
+      }
+      if (buffer.length > remainingBytes) {
+        appendTruncation();
+      }
+    };
+    const appendOutput = (streamName, chunk) => {
+      const text = chunk.toString("utf8");
+      if (streamName === "stdout") {
+        process.stdout.write(text);
+      } else {
+        process.stderr.write(text);
+      }
+      appendCapturedOutput(streamName, chunk);
+    };
+    child.stdout?.on("data", (chunk) => appendOutput("stdout", chunk));
+    child.stderr?.on("data", (chunk) => appendOutput("stderr", chunk));
+    const timeout =
+      params.timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            spawnError = {
+              code: "ETIMEDOUT",
+              message: `Command timed out after ${params.timeoutMs}ms`,
+            };
+            killMeasuredProcess();
+            forceKillTimeout = setTimeout(() => {
+              killMeasuredProcess("SIGKILL");
+            }, timeoutKillGraceMs);
+            forceKillTimeout.unref?.();
+          }, params.timeoutMs)
+        : null;
+    timeout?.unref?.();
+    const finish = (status, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (timedOut) {
+        killMeasuredProcess("SIGKILL");
+      }
+      if (forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+      }
+      removeParentSignalHandlers();
+      const wallMs = performance.now() - started;
+      const finalStatus = status ?? (signal || spawnError ? 1 : 0);
+      const finalStderr = [
+        stderr,
+        spawnError ? `[spawn error] ${spawnError.code ?? "unknown"} ${spawnError.message}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const diagnosticFailure = detectCommandDiagnosticFailure(stdout, finalStderr);
+      const logPath = writeCommandLog({
+        logDir: params.logDir,
+        label: params.label,
+        command: [params.command, ...params.args],
+        stdout,
+        stderr: finalStderr,
+      });
+      resolve({
+        label: params.label,
+        phase: params.phase,
+        pluginId: params.pluginId ?? null,
+        status: finalStatus,
+        diagnosticFailure,
+        signal: signal ?? null,
+        timedOut,
+        spawnError,
+        logPath,
+        ...parseTimedMetrics(finalStderr, wallMs, mode),
+      });
+    };
+    child.on("error", (error) => {
+      spawnError = {
+        code: typeof error.code === "string" ? error.code : null,
+        message: error.message,
+      };
+      finish(null, null);
+    });
+    child.on("close", (status, signal) => finish(status, signal));
+  });
 }
 
 function runPluginLifecycle(params) {
@@ -559,14 +734,18 @@ async function main() {
       limit: options.limit,
     });
     const rows = [];
+    const commandEnv = buildGauntletPrebuildEnv(env, {
+      includePrivateQa: !options.skipQa,
+      buildIds: selectedPlugins.map((plugin) => plugin.buildId),
+      skipDeclarationBuild: true,
+    });
     if (!options.skipPrebuild && (selectedPlugins.length > 0 || !options.skipQa)) {
       process.stderr.write("[plugin-gauntlet] prebuild\n");
-      const prebuildEnv = buildGauntletPrebuildEnv(env, { includePrivateQa: !options.skipQa });
       const prebuildCommand = createGauntletPrebuildCommand(repoRoot);
       rows.push(
-        runMeasuredCommand({
+        await runMeasuredCommandLive({
           cwd: repoRoot,
-          env: prebuildEnv,
+          env: commandEnv,
           logDir: path.join(options.outputDir, "logs", "prebuild"),
           command: prebuildCommand.command,
           args: prebuildCommand.args,
@@ -583,7 +762,7 @@ async function main() {
       runPluginLifecycle({
         repoRoot,
         outputDir: options.outputDir,
-        env,
+        env: commandEnv,
         plugins: selectedPlugins,
         rows,
         commandTimeoutMs: options.commandTimeoutMs,
@@ -593,7 +772,7 @@ async function main() {
       runSlashHelpProbes({
         repoRoot,
         outputDir: options.outputDir,
-        env,
+        env: commandEnv,
         plugins: selectedPlugins,
         rows,
         commandTimeoutMs: options.commandTimeoutMs,
@@ -605,7 +784,7 @@ async function main() {
         : runQaChunks({
             repoRoot,
             outputDir: options.outputDir,
-            env,
+            env: commandEnv,
             plugins: selectedPlugins,
             qaBaseline: options.qaBaseline,
             rows,

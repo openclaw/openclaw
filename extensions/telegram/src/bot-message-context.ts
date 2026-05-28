@@ -15,7 +15,7 @@ import {
   expandTelegramAllowFromWithAccessGroups,
   resolveTelegramDmAllow,
 } from "./access-groups.js";
-import { mergeTelegramAccountConfig, resolveDefaultTelegramAccountId } from "./accounts.js";
+import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
@@ -33,6 +33,7 @@ import {
   buildTypingThreadParams,
   extractTelegramForumFlag,
   resolveTelegramForumFlag,
+  resolveTelegramBotHasTopicsEnabled,
   resolveTelegramThreadSpec,
   shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
@@ -240,7 +241,6 @@ export const buildTelegramMessageContext = async ({
   const freshCfg =
     loadFreshConfig?.() ??
     (runtime?.getRuntimeConfig ?? (await loadTelegramMessageContextRuntime()).getRuntimeConfig)();
-  const telegramCfg = mergeTelegramAccountConfig(freshCfg, account.accountId);
   let { route, configuredBinding, configuredBindingSessionKey } = resolveTelegramConversationRoute({
     cfg: freshCfg,
     accountId: account.accountId,
@@ -406,9 +406,7 @@ export const buildTelegramMessageContext = async ({
   });
   const useDmThreadSession = shouldUseTelegramDmThreadSession({
     dmThreadId,
-    accountConfig: telegramCfg,
-    directConfig,
-    topicConfig,
+    botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
   });
   const threadKeys =
     useDmThreadSession && dmThreadId != null

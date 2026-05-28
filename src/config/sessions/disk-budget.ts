@@ -176,14 +176,16 @@ function resolveReferencedSessionArtifactPaths(params: {
       referenced.add(resolved);
     }
     for (const checkpoint of entry.compactionCheckpoints ?? []) {
-      const checkpointFile = checkpoint.preCompaction.sessionFile?.trim();
-      if (!checkpointFile) {
-        continue;
-      }
-      const resolvedCheckpointPath = canonicalizePathForComparison(checkpointFile);
-      const relative = path.relative(resolvedSessionsDir, resolvedCheckpointPath);
-      if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
-        referenced.add(resolvedCheckpointPath);
+      const checkpointFiles = [
+        checkpoint.preCompaction.sessionFile?.trim(),
+        checkpoint.postCompaction.sessionFile?.trim(),
+      ].filter((filePath): filePath is string => Boolean(filePath));
+      for (const checkpointFile of checkpointFiles) {
+        const resolvedCheckpointPath = canonicalizePathForComparison(checkpointFile);
+        const relative = path.relative(resolvedSessionsDir, resolvedCheckpointPath);
+        if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+          referenced.add(resolvedCheckpointPath);
+        }
       }
     }
   }

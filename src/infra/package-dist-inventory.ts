@@ -7,6 +7,7 @@ import { readJsonIfExists, writeJson } from "./json-files.js";
 export { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
+const PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY = 32;
 const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
 const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
 const OMITTED_QA_EXTENSION_PREFIXES = [
@@ -42,6 +43,35 @@ const OMITTED_DIST_SUBTREE_PATTERNS = [
 ] as const;
 const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
 type ExternalizedBundledExtensionIds = ReadonlySet<string>;
+type PackageDistInventoryScanContext = {
+  activeFsOps: number;
+  fsConcurrency: number;
+  waiters: Array<() => void>;
+};
+
+function createPackageDistInventoryScanContext(): PackageDistInventoryScanContext {
+  return {
+    activeFsOps: 0,
+    fsConcurrency: PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY,
+    waiters: [],
+  };
+}
+
+async function withPackageDistInventoryFsSlot<T>(
+  context: PackageDistInventoryScanContext,
+  task: () => Promise<T>,
+): Promise<T> {
+  while (context.activeFsOps >= context.fsConcurrency) {
+    await new Promise<void>((resolve) => context.waiters.push(resolve));
+  }
+  context.activeFsOps += 1;
+  try {
+    return await task();
+  } finally {
+    context.activeFsOps -= 1;
+    context.waiters.shift()?.();
+  }
+}
 
 function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/");
@@ -175,19 +205,22 @@ async function collectRelativeFiles(
   rootDir: string,
   baseDir: string,
   externalizedExtensionIds: ExternalizedBundledExtensionIds,
+  context: PackageDistInventoryScanContext,
 ): Promise<string[]> {
   const rootRelativePath = normalizeRelativePath(path.relative(baseDir, rootDir));
   if (rootRelativePath && isOmittedDistSubtree(rootRelativePath, externalizedExtensionIds)) {
     return [];
   }
   try {
-    const rootStats = await fs.lstat(rootDir);
+    const rootStats = await withPackageDistInventoryFsSlot(context, () => fs.lstat(rootDir));
     if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
       throw new Error(
         `Unsafe package dist path: ${normalizeRelativePath(path.relative(baseDir, rootDir))}`,
       );
     }
-    const entries = await fs.readdir(rootDir, { withFileTypes: true });
+    const entries = await withPackageDistInventoryFsSlot(context, () =>
+      fs.readdir(rootDir, { withFileTypes: true }),
+    );
     const files = await Promise.all(
       entries.map(async (entry) => {
         const entryPath = path.join(rootDir, entry.name);
@@ -196,7 +229,7 @@ async function collectRelativeFiles(
           throw new Error(`Unsafe package dist path: ${relativePath}`);
         }
         if (entry.isDirectory()) {
-          return await collectRelativeFiles(entryPath, baseDir, externalizedExtensionIds);
+          return await collectRelativeFiles(entryPath, baseDir, externalizedExtensionIds, context);
         }
         if (entry.isFile()) {
           return isPackagedDistPath(relativePath, externalizedExtensionIds) ? [relativePath] : [];
@@ -215,10 +248,12 @@ async function collectRelativeFiles(
 
 export async function collectPackageDistInventory(packageRoot: string): Promise<string[]> {
   const externalizedExtensionIds = await collectExternalizedBundledExtensionIds(packageRoot);
+  const scanContext = createPackageDistInventoryScanContext();
   return await collectRelativeFiles(
     path.join(packageRoot, "dist"),
     packageRoot,
     externalizedExtensionIds,
+    scanContext,
   );
 }
 

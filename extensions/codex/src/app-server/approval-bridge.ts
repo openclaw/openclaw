@@ -60,6 +60,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
   threadId: string;
   turnId: string;
   nativeHookRelay?: Pick<NativeHookRelayRegistrationHandle, "allowedEvents" | "relayId">;
+  autoApprove?: boolean;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
   const requestParams = isJsonObject(params.requestParams) ? params.requestParams : undefined;
@@ -96,6 +97,18 @@ export async function handleCodexAppServerApprovalRequest(params: {
         message: policyOutcome.reason,
       });
       return buildApprovalResponse(params.method, context.requestParams, "denied");
+    }
+    if (params.autoApprove === true) {
+      emitApprovalEvent(params.paramsForRun, {
+        phase: "resolved",
+        kind: context.kind,
+        status: "approved",
+        title: context.title,
+        ...context.eventDetails,
+        ...approvalEventScope(params.method, "approved-session"),
+        message: "Codex app-server approval auto-approved by runtime policy.",
+      });
+      return buildApprovalResponse(params.method, context.requestParams, "approved-session");
     }
     const requestResult = await requestPluginApproval({
       paramsForRun: params.paramsForRun,

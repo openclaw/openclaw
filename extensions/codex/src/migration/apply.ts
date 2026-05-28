@@ -25,7 +25,7 @@ import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache
 import {
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerEnvApiKeyCacheKey,
+  resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "../app-server/auth-bridge.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -393,7 +393,7 @@ async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext):
   });
   const envApiKeyFingerprint = authProfileId
     ? undefined
-    : resolveCodexAppServerEnvApiKeyCacheKey({
+    : resolveCodexAppServerFallbackApiKeyCacheKey({
         startOptions: appServer.start,
       });
   return buildCodexPluginAppCacheKey({

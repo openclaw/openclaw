@@ -49,6 +49,7 @@ import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
+  resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -735,11 +736,20 @@ export async function runPreflightCompactionIfNeeded(params: {
       ? projectedTokenCount
       : undefined;
 
-  const threshold = contextWindowTokens - reserveTokensFloor - softThresholdTokens;
+  const serverCompactionThreshold = resolveResponsesServerCompactionThreshold({
+    cfg: params.cfg,
+    provider: params.followupRun.run.provider,
+    modelId: params.followupRun.run.model ?? params.defaultModel,
+  });
+  const threshold = Math.max(
+    contextWindowTokens - reserveTokensFloor - softThresholdTokens,
+    serverCompactionThreshold ?? 0,
+  );
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${threshold} ` +
+      `serverCompactionThreshold=${serverCompactionThreshold ?? "undefined"} ` +
       `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
@@ -755,6 +765,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     contextWindowTokens,
     reserveTokensFloor,
     softThresholdTokens,
+    minimumThresholdTokens: serverCompactionThreshold,
   });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
@@ -803,11 +814,12 @@ export async function runPreflightCompactionIfNeeded(params: {
     bashElevated: params.followupRun.run.bashElevated,
     trigger: "budget",
     currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
+    contextTokenBudget: contextWindowTokens,
     ownerNumbers: params.followupRun.run.ownerNumbers,
     abortSignal: params.replyOperation.abortSignal,
   });
 
-  if (!result?.ok || !result.compacted) {
+  if (!result?.ok) {
     const reason = result?.reason ?? "not_compacted";
     logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
     if (isRecoverableNativeHarnessBindingFailure(result)) {
@@ -817,6 +829,12 @@ export async function runPreflightCompactionIfNeeded(params: {
       return entry ?? params.sessionEntry;
     }
     throw new Error(`Preflight compaction required but failed: ${reason}`);
+  }
+
+  if (!result.compacted) {
+    const reason = result.reason ?? "not_compacted";
+    logVerbose(`preflightCompaction no-op: sessionKey=${params.sessionKey} reason=${reason}`);
+    return entry ?? params.sessionEntry;
   }
 
   await incrementCompactionCount({

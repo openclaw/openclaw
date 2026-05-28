@@ -22,6 +22,16 @@ type EdgeActivationNameCandidate = {
   strongBoundary: boolean;
 };
 
+type PreparedActivationName = {
+  activationName: string;
+  compact: string;
+};
+
+type PreparedEdgeActivationNameCandidate = {
+  candidate: EdgeActivationNameCandidate;
+  compact: string;
+};
+
 export function realtimeVoiceActivationNameWordCount(value: string): number {
   return Array.from(value.matchAll(/[a-z0-9]+/gi)).length;
 }
@@ -72,25 +82,37 @@ export function matchRealtimeVoiceActivationName(
   activationNames: string[],
   maxWords = REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS,
 ): Extract<RealtimeVoiceActivationNameTranscriptResult, { allowed: true }> | undefined {
+  const preparedActivationNames: PreparedActivationName[] = [];
+  for (const activationName of activationNames) {
+    const normalizedActivationName = normalizeActivationNameCandidate(activationName);
+    if (!normalizedActivationName) {
+      continue;
+    }
+    preparedActivationNames.push({
+      activationName,
+      compact: compactActivationName(normalizedActivationName),
+    });
+  }
+  if (preparedActivationNames.length === 0) {
+    return undefined;
+  }
+
   const candidates = [
     ...leadingActivationNameCandidates(text, maxWords),
     ...trailingActivationNameCandidates(text, maxWords),
-  ].toSorted(
-    (left, right) =>
-      compactActivationName(right.heardName).length - compactActivationName(left.heardName).length,
-  );
+  ]
+    .map(
+      (candidate): PreparedEdgeActivationNameCandidate => ({
+        candidate,
+        compact: compactActivationName(candidate.heardName),
+      }),
+    )
+    .toSorted((left, right) => right.compact.length - left.compact.length);
 
-  for (const candidate of candidates) {
-    for (const activationName of activationNames) {
-      const normalizedActivationName = normalizeActivationNameCandidate(activationName);
-      if (!normalizedActivationName) {
-        continue;
-      }
-      const heardCompact = compactActivationName(candidate.heardName);
-      const activationCompact = compactActivationName(normalizedActivationName);
+  for (const { candidate, compact: heardCompact } of candidates) {
+    for (const { activationName, compact: activationCompact } of preparedActivationNames) {
       const exactMatch = heardCompact === activationCompact;
-      const fuzzyMatch =
-        candidate.edge === "leading" && isFuzzyActivationNameMatch(candidate, activationName);
+      const fuzzyMatch = isFuzzyActivationNameMatch(candidate, heardCompact, activationCompact);
       if (exactMatch || fuzzyMatch) {
         return {
           allowed: true,
@@ -187,6 +209,8 @@ function trailingActivationNameCandidates(
     if (!/(^|[\s,.:;!?-])$/.test(text.slice(0, startIndex))) {
       break;
     }
+    const directAddressBoundary = /(^|[,.:;!?-]\s*)$/.test(text.slice(0, startIndex));
+    const trailingQuestion = /\?\s*$/.test(text);
     if (wordCount > 1) {
       const previousToken = tokens[tokens.length - wordCount + 1];
       const between = previousToken
@@ -205,7 +229,7 @@ function trailingActivationNameCandidates(
       heardName,
       startIndex,
       endIndex,
-      strongBoundary: true,
+      strongBoundary: directAddressBoundary && trailingQuestion,
     });
   }
 
@@ -223,9 +247,13 @@ function levenshteinDistance(left: string, right: string): number {
     return left.length;
   }
 
-  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  let previous = new Uint32Array(right.length + 1);
+  let current = new Uint32Array(right.length + 1);
+  for (let index = 0; index <= right.length; index += 1) {
+    previous[index] = index;
+  }
   for (let leftIndex = 0; leftIndex < left.length; leftIndex += 1) {
-    const current = [leftIndex + 1];
+    current[0] = leftIndex + 1;
     for (let rightIndex = 0; rightIndex < right.length; rightIndex += 1) {
       const cost = left[leftIndex] === right[rightIndex] ? 0 : 1;
       current[rightIndex + 1] = Math.min(
@@ -234,9 +262,11 @@ function levenshteinDistance(left: string, right: string): number {
         previous[rightIndex] + cost,
       );
     }
-    previous = current;
+    const nextPrevious = current;
+    current = previous;
+    previous = nextPrevious;
   }
-  return previous[right.length] ?? Math.max(left.length, right.length);
+  return previous[right.length];
 }
 
 function hasOnlyPhoneticSubstitutions(left: string, right: string): boolean {
@@ -274,14 +304,9 @@ function commonPrefixLength(left: string, right: string): number {
 
 function isFuzzyActivationNameMatch(
   candidate: EdgeActivationNameCandidate,
-  activationName: string,
+  heardCompact: string,
+  activationCompact: string,
 ): boolean {
-  const normalizedActivationName = normalizeActivationNameCandidate(activationName);
-  if (!normalizedActivationName) {
-    return false;
-  }
-  const heardCompact = compactActivationName(candidate.heardName);
-  const activationCompact = compactActivationName(normalizedActivationName);
   if (!heardCompact || !activationCompact || activationCompact.length < 5) {
     return false;
   }
@@ -292,6 +317,12 @@ function isFuzzyActivationNameMatch(
     return false;
   }
   const distance = levenshteinDistance(heardCompact, activationCompact);
+  if (candidate.edge === "trailing") {
+    return (
+      heardCompact.length === activationCompact.length &&
+      hasOnlyPhoneticSubstitutions(heardCompact, activationCompact)
+    );
+  }
   if (distance <= 1) {
     return true;
   }

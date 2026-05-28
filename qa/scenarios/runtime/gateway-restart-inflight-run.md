@@ -98,7 +98,7 @@ steps:
           - expr: started.runId
           - expr: liveTurnTimeoutMs(env, 180000)
       - assert:
-          expr: "waited.status === 'ok' || waited.status === 'timeout' || (waited.status === 'error' && String(waited.error ?? '').includes('EmbeddedAttemptSessionTakeoverError'))"
+          expr: "waited.status === 'ok' || waited.status === 'timeout' || (waited.status === 'error' && (String(waited.error ?? '').includes('EmbeddedAttemptSessionTakeoverError') || String(waited.error ?? '').includes('AbortError') || String(waited.error ?? '').includes('This operation was aborted')))"
           message:
             expr: "`interrupted agent run ended with unexpected status: ${JSON.stringify(waited)}`"
       - set: interruptedMatches

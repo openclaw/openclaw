@@ -23,6 +23,7 @@ import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import type {
+  OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
   SkillEntry,
@@ -31,6 +32,8 @@ import type {
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
+const SKILL_SOURCE_ORIGIN_RELATIVE_PATH = path.join(".openclaw", "source-origin.json");
+const MAX_SKILL_SOURCE_ORIGIN_BYTES = 16 * 1024;
 
 /**
  * Replace the user's home directory prefix with `~` in skill file paths
@@ -405,6 +408,48 @@ function loadContainedSkillRecords(params: {
   return canonicalSkillDir
     ? records.map((record) => canonicalizeLoadedSkillRecord(record, canonicalSkillDir))
     : records;
+}
+
+function readSourceInstallSkillKey(skillDir: string): string | undefined {
+  try {
+    const sourceOriginPath = path.join(skillDir, SKILL_SOURCE_ORIGIN_RELATIVE_PATH);
+    const stat = fs.lstatSync(sourceOriginPath);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SKILL_SOURCE_ORIGIN_BYTES) {
+      return undefined;
+    }
+    const skillDirRealPath = tryRealpath(skillDir);
+    const sourceOriginRealPath = tryRealpath(sourceOriginPath);
+    if (
+      !skillDirRealPath ||
+      !sourceOriginRealPath ||
+      !isPathInside(skillDirRealPath, sourceOriginRealPath)
+    ) {
+      return undefined;
+    }
+    const raw = fs.readFileSync(sourceOriginPath, "utf8");
+    const parsed = JSON.parse(raw) as { slug?: unknown };
+    return normalizeOptionalString(parsed.slug);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveSkillEntryMetadata(params: {
+  frontmatter: ParsedSkillFrontmatter;
+  skillDir: string;
+}): OpenClawSkillMetadata | undefined {
+  const metadata = resolveOpenClawMetadata(params.frontmatter);
+  if (metadata?.skillKey) {
+    return metadata;
+  }
+  const sourceInstallSkillKey = readSourceInstallSkillKey(params.skillDir);
+  if (!sourceInstallSkillKey) {
+    return metadata;
+  }
+  return {
+    ...metadata,
+    skillKey: sourceInstallSkillKey,
+  };
 }
 
 function canonicalizeLoadedSkillRecord(
@@ -932,7 +977,7 @@ function loadSkillEntries(
       return {
         skill,
         frontmatter,
-        metadata: resolveOpenClawMetadata(frontmatter),
+        metadata: resolveSkillEntryMetadata({ frontmatter, skillDir: skill.baseDir }),
         invocation,
         ...(record.syncSourceDir !== undefined ? { syncSourceDir: record.syncSourceDir } : {}),
         ...(record.syncDirName !== undefined ? { syncDirName: record.syncDirName } : {}),

@@ -28,13 +28,13 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type {
+  DiagnosticEventPrivateData,
   DiagnosticEventInput,
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
-import type { MeetingNotesSourceProviderPlugin as MeetingNotesSourceProviderCapability } from "../meeting-notes/provider-types.js";
 import type { UnifiedModelCatalogEntry, UnifiedModelCatalogKind } from "../model-catalog/types.js";
 import type { MusicGenerationProvider } from "../music-generation/types.js";
 import type {
@@ -59,6 +59,7 @@ import type {
   RealtimeVoiceProviderId,
   RealtimeVoiceProviderResolveConfigContext,
 } from "../talk/provider-types.js";
+import type { TranscriptSourceProvider as TranscriptsSourceProviderCapability } from "../transcripts/provider-types.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -1878,10 +1879,10 @@ export type PluginRealtimeTranscriptionProviderEntry = RealtimeTranscriptionProv
   pluginId: string;
 };
 
-/** Meeting-notes source capability registered by a channel or meeting plugin. */
-export type MeetingNotesSourceProviderPlugin = MeetingNotesSourceProviderCapability;
+/** Transcript source capability registered by a channel or meeting plugin. */
+export type TranscriptSourceProvider = TranscriptsSourceProviderCapability;
 
-export type PluginMeetingNotesSourceProviderEntry = MeetingNotesSourceProviderPlugin & {
+export type PluginTranscriptsSourceProviderEntry = TranscriptSourceProvider & {
   pluginId: string;
 };
 
@@ -2309,9 +2310,13 @@ export type OpenClawPluginServiceContext = {
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
   };
   internalDiagnostics?: {
-    emit: (event: DiagnosticEventInput) => void;
+    emit: (event: DiagnosticEventInput, privateData?: DiagnosticEventPrivateData) => void;
     onEvent: (
-      listener: (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => void,
+      listener: (
+        event: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+        privateData: DiagnosticEventPrivateData,
+      ) => void,
     ) => () => void;
   };
 };
@@ -2687,8 +2692,8 @@ export type OpenClawPluginApi = {
   registerRealtimeVoiceProvider: (provider: RealtimeVoiceProviderPlugin) => void;
   /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
-  /** Register a meeting-notes source provider (live or imported meeting transcript capability). */
-  registerMeetingNotesSourceProvider: (provider: MeetingNotesSourceProviderPlugin) => void;
+  /** Register a transcripts source provider (live or imported meeting transcript capability). */
+  registerTranscriptSourceProvider: (provider: TranscriptSourceProvider) => void;
   /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
   /** Register a video generation provider (video generation capability). */

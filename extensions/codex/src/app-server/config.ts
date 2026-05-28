@@ -148,6 +148,12 @@ export type CodexPluginConfig = {
   };
 };
 
+export function shouldAutoApproveCodexAppServerApprovals(
+  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "sandbox">,
+): boolean {
+  return appServer.approvalPolicy === "never" && appServer.sandbox === "danger-full-access";
+}
+
 export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "mode",
   "transport",
@@ -529,7 +535,11 @@ export function resolveCodexComputerUseConfig(
 
 export function codexAppServerStartOptionsKey(
   options: CodexAppServerStartOptions,
-  params: { authProfileId?: string; agentDir?: string } = {},
+  params: {
+    authProfileId?: string;
+    agentDir?: string;
+    fallbackApiKeyCacheKey?: string;
+  } = {},
 ): string {
   return JSON.stringify({
     transport: options.transport,
@@ -547,6 +557,7 @@ export function codexAppServerStartOptionsKey(
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
     authProfileId: params.authProfileId ?? null,
     agentDir: params.agentDir ?? null,
+    fallbackApiKeyCacheKey: params.fallbackApiKeyCacheKey ?? null,
   });
 }
 

@@ -1,11 +1,10 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  migrateSessionEntries,
-  type FileEntry as PiSessionFileEntry,
-  type SessionEntry as PiSessionEntry,
-  type SessionHeader,
+import type {
+  FileEntry as PiSessionFileEntry,
+  SessionEntry as PiSessionEntry,
+  SessionHeader,
 } from "@earendil-works/pi-coding-agent";
 import { pathExists } from "../../infra/fs-safe.js";
 import { isRecord } from "../../shared/record-coerce.js";
@@ -42,6 +41,11 @@ type SessionExportWarningSummary = {
 
 async function loadTemplate(fileName: string): Promise<string> {
   return await fsp.readFile(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
+}
+
+async function migratePiSessionEntries(fileEntries: PiSessionFileEntry[]): Promise<void> {
+  const { migrateSessionEntries } = await import("@earendil-works/pi-coding-agent");
+  migrateSessionEntries(fileEntries);
 }
 
 function replaceHtmlPlaceholder(template: string, name: string, value: string): string {
@@ -243,7 +247,7 @@ async function readSessionDataFromTranscript(sessionFile: string): Promise<{
 }> {
   const raw = await fsp.readFile(sessionFile, "utf-8");
   const { entries: fileEntries, warnings } = parseSessionEntriesWithWarnings(raw);
-  migrateSessionEntries(fileEntries);
+  await migratePiSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const entries = fileEntries.filter((entry): entry is PiSessionEntry => entry.type !== "session");

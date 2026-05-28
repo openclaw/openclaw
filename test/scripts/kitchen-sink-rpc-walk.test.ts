@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   appendBoundedOutput,
@@ -10,18 +11,26 @@ import {
   fetchJson,
   findDistCallGatewayModuleFiles,
   makeEnv,
+  runCommand,
   sampleProcess,
   sampleWindowsProcessByPort,
   summarizeProcessSamples,
   usesBuiltOpenClawEntry,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
 
+const posixIt = process.platform === "win32" ? it.skip : it;
+
 describe("kitchen-sink RPC isolated state", () => {
   it("cleans up the generated temporary home tree", async () => {
     const { root, env } = makeEnv();
 
     expect(root).toContain("openclaw-kitchen-sink-rpc-");
-    expect(existsSync(env.OPENCLAW_HOME)).toBe(true);
+    expect(env.HOME).toBe(path.join(root, "home"));
+    expect(env.USERPROFILE).toBe(env.HOME);
+    expect(env.OPENCLAW_HOME).toBe(env.HOME);
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.join(env.HOME, ".openclaw"));
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"));
+    expect(existsSync(env.OPENCLAW_STATE_DIR)).toBe(true);
 
     await expect(cleanupKitchenSinkEnv(root)).resolves.toBe(true);
 
@@ -36,6 +45,52 @@ describe("kitchen-sink RPC command output capture", () => {
 
     const second = appendBoundedOutput(first, "ghij", 5);
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
+  });
+
+  posixIt("kills timed command process groups", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-timeout-"));
+    const scriptPath = path.join(root, "trap-term.mjs");
+    const grandchildPidPath = path.join(root, "grandchild.pid");
+    let grandchildPid = 0;
+
+    writeFileSync(
+      scriptPath,
+      `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchild = spawn(process.execPath, [
+  "-e",
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+], { stdio: "ignore" });
+fs.writeFileSync(process.argv[2], String(grandchild.pid));
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath], {
+      detached: undefined,
+      timeoutKillGraceMs: 50,
+      timeoutMs: 2000,
+    });
+
+    try {
+      await waitFor(() => existsSync(grandchildPidPath));
+      grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+      expect(Number.isInteger(grandchildPid)).toBe(true);
+      expect(isProcessAlive(grandchildPid)).toBe(true);
+
+      await expect(runPromise).rejects.toThrow("timed out after 2000ms");
+      await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
+    } finally {
+      await runPromise.catch(() => {});
+      if (grandchildPid && isProcessAlive(grandchildPid)) {
+        process.kill(grandchildPid, "SIGKILL");
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -207,6 +262,74 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(sample).toEqual({ cpuPercent: 12.5, rssMiB: 256 });
   });
 
+  it("samples the POSIX gateway child instead of the pnpm launcher", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "linux",
+      posixCommandLineNeedles: ["gateway", "--port", "19080"],
+      runCommand: async (command: string, args: string[]) => {
+        expect(command).toBe("ps");
+        expect(args).toEqual(["-axo", "pid=,ppid=,rss=,pcpu=,command="]);
+        return {
+          stdout: [
+            " 4321     1   16384   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
+            " 4322  4321  262144  12.5 node dist/index.js gateway --port 19080 --bind loopback",
+            " 4323  4322   32768   1.5 node helper.js",
+          ].join("\n"),
+          stderr: "",
+        };
+      },
+    });
+
+    expect(sample).toEqual({ cpuPercent: 12.5, processId: 4322, rssMiB: 256 });
+  });
+
+  it("falls back to the POSIX gateway process title when the port arg is rewritten", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "darwin",
+      posixCommandLineNeedles: ["gateway", "--port", "19080"],
+      runCommand: async () => ({
+        stdout: [
+          " 4321     1 1048576   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
+          " 4322  4321  262144  12.5 openclaw-gateway",
+          " 4323  4322   32768   1.5 node helper.js",
+        ].join("\n"),
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toEqual({ cpuPercent: 12.5, processId: 4322, rssMiB: 256 });
+  });
+
+  it("falls back to the largest POSIX child when the gateway command line is unavailable", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "linux",
+      posixCommandLineNeedles: ["gateway", "--port", "19080"],
+      runCommand: async () => ({
+        stdout: [
+          " 4321     1 1048576   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
+          " 4322  4321  262144  12.5 node",
+          " 4323  4322   32768   1.5 node helper.js",
+        ].join("\n"),
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toEqual({ cpuPercent: 12.5, processId: 4322, rssMiB: 256 });
+  });
+
+  it("does not accept a POSIX launcher sample when the gateway child is missing", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "darwin",
+      posixCommandLineNeedles: ["gateway", "--port", "19080"],
+      runCommand: async () => ({
+        stdout: " 4321     1   16384   0.0 node /usr/local/bin/corepack pnpm openclaw status\n",
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toBeNull();
+  });
+
   it("retries transient loopback fetch resets from Windows HTTP probes", async () => {
     const reset = new TypeError("fetch failed", {
       cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
@@ -251,3 +374,26 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(() => assertResourceCeiling(null)).toThrow("gateway RSS sample was not captured");
   });
 });
+
+function readText(file: string) {
+  return readFileSync(file, "utf8");
+}
+
+async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("timed out waiting for condition");
+    }
+    await delay(25);
+  }
+}
+
+function isProcessAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}

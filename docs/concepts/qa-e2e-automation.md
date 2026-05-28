@@ -93,12 +93,25 @@ That script starts a local OTLP/HTTP receiver, runs the `otel-trace-smoke` QA
 scenario with the `diagnostics-otel` plugin enabled, then asserts traces,
 metrics, and logs are exported. It decodes the exported protobuf trace spans
 and checks the release-critical shape:
-`openclaw.run`, `openclaw.harness.run`, `openclaw.model.call`,
-`openclaw.context.assembled`, and `openclaw.message.delivery` must be present;
+`openclaw.run`, `openclaw.harness.run`, a latest GenAI semantic-convention
+model-call span, `openclaw.context.assembled`, and `openclaw.message.delivery`
+must be present. The smoke forces
+`OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, so the model-call
+span must use the `{gen_ai.operation.name} {gen_ai.request.model}` name;
 model calls must not export `StreamAbandoned` on successful turns; raw diagnostic IDs and
 `openclaw.content.*` attributes must stay out of the trace. The raw OTLP
 payloads must not contain the prompt sentinel, response sentinel, or QA session
 key. It writes `otel-smoke-summary.json` next to the QA suite artifacts.
+
+For a collector-backed OpenTelemetry smoke, run:
+
+```bash
+pnpm qa:otel:collector-smoke
+```
+
+That lane puts a real OpenTelemetry Collector Docker container in front of the
+same local receiver. Use it when changing endpoint wiring, collector
+compatibility, or OTLP export behavior that the in-process receiver could mask.
 
 For the protected Prometheus scrape smoke, run:
 
@@ -116,6 +129,13 @@ To run both observability smokes back to back, use:
 
 ```bash
 pnpm qa:observability:smoke
+```
+
+For the collector-backed OpenTelemetry lane plus the protected Prometheus scrape
+smoke, use:
+
+```bash
+pnpm qa:observability:collector-smoke
 ```
 
 Observability QA stays source-checkout only. The npm tarball intentionally omits

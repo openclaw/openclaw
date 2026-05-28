@@ -985,6 +985,14 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     statusTimer = null;
   };
 
+  const stopStatusTimeout = () => {
+    if (!statusTimeout) {
+      return;
+    }
+    clearTimeout(statusTimeout);
+    statusTimeout = null;
+  };
+
   const startWaitingTimer = () => {
     if (waitingTimer) {
       return;
@@ -1047,7 +1055,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     connectionStatus = text;
     renderStatus();
     if (statusTimeout) {
-      clearTimeout(statusTimeout);
+      stopStatusTimeout();
     }
     if (ttlMs && ttlMs > 0) {
       statusTimeout = setTimeout(() => {
@@ -1258,6 +1266,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       .then(() => drainAndStopTuiSafely(tui))
       .finally(() => {
         clearTimeout(hardExitTimer);
+        stopStatusTimeout();
       })
       .catch((err) => {
         if (!isTuiTerminalLossError(err)) {
