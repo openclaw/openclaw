@@ -204,6 +204,7 @@ vi.mock("./agents-utils.ts", () => ({
 function renderQueue(params: {
   queue: ChatQueueItem[];
   canAbort?: boolean;
+  onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
 }) {
   const container = document.createElement("div");
@@ -211,6 +212,7 @@ function renderQueue(params: {
     renderChatQueue({
       queue: params.queue,
       canAbort: params.canAbort ?? true,
+      onQueueRetry: params.onQueueRetry,
       onQueueSteer: params.onQueueSteer,
       onQueueRemove: () => undefined,
     }),
@@ -1166,6 +1168,34 @@ describe("chat queue", () => {
     });
 
     expect(inactiveContainer.querySelector(".chat-queue__steer")).toBeNull();
+  });
+
+  it("renders failed send state with retry and remove affordances", () => {
+    const onQueueRetry = vi.fn();
+    const container = renderQueue({
+      onQueueRetry,
+      queue: [
+        {
+          id: "failed-1",
+          text: "still recoverable",
+          createdAt: 1,
+          sendError: "send blocked by session policy",
+          sendRunId: "run-failed-1",
+          sendState: "failed",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe("Failed");
+    expect(container.querySelector(".chat-queue__error")?.textContent?.trim()).toBe(
+      "send blocked by session policy",
+    );
+    const retry = container.querySelector<HTMLButtonElement>(".chat-queue__retry");
+    expect(retry?.textContent?.trim()).toBe("Retry");
+
+    retry?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onQueueRetry).toHaveBeenCalledWith("failed-1");
   });
 });
 

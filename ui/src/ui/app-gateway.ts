@@ -7,6 +7,8 @@ import {
   clearPendingQueueItemsForRun,
   createChatSessionsLoadOverrides,
   flushChatQueueForEvent,
+  hasReconnectableQueuedChatSends,
+  markQueuedChatSendsWaitingForReconnect,
   refreshChatAvatar,
 } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -581,7 +583,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
           clearRunStatus: !hadOrphanedRun,
         },
       );
-      if (shutdownHost.resumeChatQueueAfterReconnect) {
+      if (
+        shutdownHost.resumeChatQueueAfterReconnect ||
+        hasReconnectableQueuedChatSends(
+          host as unknown as Parameters<typeof hasReconnectableQueuedChatSends>[0],
+        )
+      ) {
         // The interrupted run will never emit its terminal event now that the
         // old client is gone, so resume any deferred commands after hello.
         shutdownHost.resumeChatQueueAfterReconnect = false;
@@ -609,6 +616,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      markQueuedChatSendsWaitingForReconnect(
+        host as unknown as Parameters<typeof markQueuedChatSendsWaitingForReconnect>[0],
+      );
       clearSessionsChangedReloadTimer(host);
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =

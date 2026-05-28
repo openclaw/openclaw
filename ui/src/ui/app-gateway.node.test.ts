@@ -946,6 +946,39 @@ describe("connectGateway", () => {
     expect(host.pendingAbort).toBeNull();
   });
 
+  it("retries reconnectable queued chat sends after reconnect hello", async () => {
+    const host = createHost();
+    host.chatQueue = [
+      {
+        id: "pending-send",
+        text: "retry this prompt",
+        createdAt: 1,
+        sendRunId: "run-retry-1",
+        sendState: "waiting-reconnect",
+        sessionKey: "main",
+      },
+    ];
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "retry this prompt",
+        deliver: false,
+        idempotencyKey: "run-retry-1",
+        attachments: undefined,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(host.chatQueue).toStrictEqual([]);
+      expect(host.chatRunId).toBe("run-retry-1");
+    });
+  });
+
   it("logs and drops stale queued chat abort failures after reconnect", async () => {
     const host = createHost();
     host.pendingAbort = { runId: "run-stale", sessionKey: "main" };

@@ -1241,14 +1241,122 @@ describe("handleSendChat", () => {
     const second = handleSendChat(host, "same prompt");
 
     expect(request).toHaveBeenCalledTimes(1);
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatMessages).toHaveLength(1);
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]?.text).toBe("same prompt");
+    expect(host.chatQueue[0]?.sendState).toBe("sending");
+    expect(host.chatMessages).toStrictEqual([]);
 
-    sent.resolve({ runId: host.chatRunId, status: "started" });
+    const queuedRunId = host.chatQueue[0]?.sendRunId;
+    sent.resolve({ runId: queuedRunId, status: "started" });
     await Promise.all([first, second]);
 
     expect(request).toHaveBeenCalledTimes(1);
+    expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatMessages).toHaveLength(1);
+  });
+
+  it("keeps normal prompt text visible as pending until chat.send is acknowledged", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "do not lose this",
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(host.chatMessage).toBe("");
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]).toMatchObject({
+      text: "do not lose this",
+      sendState: "sending",
+      sessionKey: "agent:main",
+    });
+    const runId = host.chatQueue[0]?.sendRunId;
+    expect(typeof runId).toBe("string");
+
+    sent.resolve({ runId, status: "started" });
+    await send;
+
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatRunId).toBe(runId);
+    expect(host.chatMessages).toHaveLength(1);
+    const userMessage = requireRecord(host.chatMessages[0], "user message");
+    expect(userMessage.role).toBe("user");
+  });
+
+  it("keeps a pre-ack socket close recoverable with the same run id", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        throw new Error("gateway closed (1006): network lost");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "retry after reconnect",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatQueue).toHaveLength(1);
+    const queued = host.chatQueue[0];
+    expect(queued?.text).toBe("retry after reconnect");
+    expect(queued?.sendState).toBe("waiting-reconnect");
+    expect(queued?.sendRunId).toEqual(expect.any(String));
+    expect(host.lastError).toBe("Message will send when the Gateway reconnects.");
+  });
+
+  it("queues normal sends made while disconnected", async () => {
+    const host = makeHost({
+      client: null,
+      connected: false,
+      chatMessage: "send after reconnect",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessage).toBe("");
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]).toMatchObject({
+      text: "send after reconnect",
+      sendState: "waiting-reconnect",
+      sessionKey: "agent:main",
+    });
+    expect(host.chatQueue[0]?.sendRunId).toEqual(expect.any(String));
+  });
+
+  it("marks validation failures visible and restores the composer", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        throw new Error("send blocked by session policy");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "blocked prompt",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessage).toBe("blocked prompt");
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]).toMatchObject({
+      text: "blocked prompt",
+      sendState: "failed",
+      sendError: "send blocked by session policy",
+    });
   });
 
   it("restores the BTW draft when detached send fails", async () => {

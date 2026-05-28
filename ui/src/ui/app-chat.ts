@@ -21,11 +21,13 @@ import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";
+import { formatConnectError } from "./connect-error.ts";
 import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
   abortChatRun,
+  appendUserChatMessage,
   loadChatHistory,
-  sendChatMessage,
+  requestChatSend,
   sendDetachedChatMessage,
   sendSteerChatMessage,
   type ChatState,
@@ -36,7 +38,7 @@ import {
   type LoadSessionsOverrides,
   type SessionsState,
 } from "./controllers/sessions.ts";
-import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
 import { isSessionRunActive } from "./session-run-state.ts";
@@ -223,24 +225,24 @@ function enqueueChatMessage(
   attachments?: ChatAttachment[],
   refreshSessions?: boolean,
   localCommand?: { args: string; name: string },
-) {
+): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
   if (!trimmed && !hasAttachments) {
-    return;
+    return null;
   }
-  host.chatQueue = [
-    ...host.chatQueue,
-    {
-      id: generateUUID(),
-      text: trimmed,
-      createdAt: Date.now(),
-      attachments: hasAttachments ? cloneChatAttachmentsMetadata(attachments ?? []) : undefined,
-      refreshSessions,
-      localCommandArgs: localCommand?.args,
-      localCommandName: localCommand?.name,
-    },
-  ];
+  const item: ChatQueueItem = {
+    id: generateUUID(),
+    text: trimmed,
+    createdAt: Date.now(),
+    attachments: hasAttachments ? cloneChatAttachmentsMetadata(attachments ?? []) : undefined,
+    refreshSessions,
+    localCommandArgs: localCommand?.args,
+    localCommandName: localCommand?.name,
+    sessionKey: host.sessionKey,
+  };
+  host.chatQueue = [...host.chatQueue, item];
+  return item;
 }
 
 function enqueuePendingRunMessage(
@@ -267,10 +269,213 @@ function enqueuePendingRunMessage(
   ];
 }
 
+function enqueuePendingSendMessage(
+  host: ChatHost,
+  text: string,
+  attachments?: ChatAttachment[],
+  refreshSessions?: boolean,
+): ChatQueueItem | null {
+  const trimmed = text.trim();
+  const hasAttachments = Boolean(attachments && attachments.length > 0);
+  if (!trimmed && !hasAttachments) {
+    return null;
+  }
+  const pending: ChatQueueItem = {
+    id: generateUUID(),
+    text: trimmed,
+    createdAt: Date.now(),
+    attachments: hasAttachments ? attachments : undefined,
+    refreshSessions,
+    sendAttempts: 0,
+    sendRunId: generateUUID(),
+    sendState: host.connected && host.client ? "sending" : "waiting-reconnect",
+    sessionKey: host.sessionKey,
+  };
+  host.chatQueue = [...host.chatQueue, pending];
+  return pending;
+}
+
+function updateQueuedMessage(
+  host: ChatHost,
+  id: string,
+  update: (item: ChatQueueItem) => ChatQueueItem,
+): ChatQueueItem | null {
+  let nextItem: ChatQueueItem | null = null;
+  host.chatQueue = host.chatQueue.map((item) => {
+    if (item.id !== id) {
+      return item;
+    }
+    nextItem = update(item);
+    return nextItem;
+  });
+  return nextItem;
+}
+
+function removeQueuedMessageWithoutReleasing(host: ChatHost, id: string): ChatQueueItem | null {
+  const item = host.chatQueue.find((entry) => entry.id === id) ?? null;
+  host.chatQueue = host.chatQueue.filter((entry) => entry.id !== id);
+  return item;
+}
+
+function isRecoverableChatSendError(err: unknown, formattedError: string): boolean {
+  if (err instanceof GatewayRequestError) {
+    return err.retryable;
+  }
+  return /gateway (?:not connected|closed)|websocket|disconnected/i.test(formattedError);
+}
+
+function restoreComposerAfterFailedSend(
+  host: ChatHost,
+  opts: {
+    previousAttachments?: ChatAttachment[];
+    previousDraft?: string;
+  },
+) {
+  if (opts.previousDraft != null && !host.chatMessage.trim()) {
+    host.chatMessage = opts.previousDraft;
+  }
+  if (opts.previousAttachments?.length && host.chatAttachments.length === 0) {
+    host.chatAttachments = opts.previousAttachments;
+  }
+}
+
+type QueuedChatSendResult = "sent" | "pending" | "failed";
+
+function ensureQueuedSendState(host: ChatHost, item: ChatQueueItem): ChatQueueItem {
+  if (item.sendRunId && item.sendState) {
+    return item;
+  }
+  const prepared: ChatQueueItem = {
+    ...item,
+    sendAttempts: item.sendAttempts ?? 0,
+    sendRunId: item.sendRunId ?? generateUUID(),
+    sendState: host.connected && host.client ? "sending" : "waiting-reconnect",
+    sessionKey: item.sessionKey ?? host.sessionKey,
+  };
+  updateQueuedMessage(host, item.id, () => prepared);
+  return prepared;
+}
+
+async function sendQueuedChatMessage(
+  host: ChatHost,
+  id: string,
+  opts?: {
+    previousAttachments?: ChatAttachment[];
+    previousDraft?: string;
+  },
+): Promise<QueuedChatSendResult> {
+  const queued = host.chatQueue.find((item) => item.id === id);
+  if (!queued || queued.pendingRunId || queued.localCommandName) {
+    return "failed";
+  }
+  const prepared = ensureQueuedSendState(host, queued);
+  const message = prepared.text.trim();
+  const attachments = prepared.attachments ?? [];
+  const hasAttachments = attachments.length > 0;
+  if (!message && !hasAttachments) {
+    removeQueuedMessageWithoutReleasing(host, id);
+    return "sent";
+  }
+  if (!host.connected || !host.client) {
+    updateQueuedMessage(host, id, (item) => ({
+      ...item,
+      sendState: "waiting-reconnect",
+      sendError: undefined,
+    }));
+    return "pending";
+  }
+
+  const runId = prepared.sendRunId ?? generateUUID();
+  const sessionKey = prepared.sessionKey ?? host.sessionKey;
+  const startedAt = Date.now();
+  updateQueuedMessage(host, id, (item) => ({
+    ...item,
+    sendAttempts: (item.sendAttempts ?? 0) + 1,
+    sendError: undefined,
+    sendRunId: runId,
+    sendState: "sending",
+    sessionKey,
+  }));
+  host.chatSending = true;
+  host.lastError = null;
+  reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+    clearRunStatus: true,
+  });
+
+  try {
+    const ack = await requestChatSend(host as unknown as ChatState, {
+      message,
+      attachments: hasAttachments ? attachments : undefined,
+      runId,
+      sessionKey,
+    });
+    removeQueuedMessageWithoutReleasing(host, id);
+    appendUserChatMessage(
+      host as unknown as ChatState,
+      message,
+      hasAttachments ? attachments : undefined,
+      startedAt,
+    );
+    if (ack.status === "ok") {
+      reconcileChatRunLifecycle(
+        host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          sessionStatus: "done",
+          runId: ack.runId,
+          sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+          clearToolStream: true,
+          clearSideResultTerminalRuns: true,
+          clearRunStatus: true,
+        },
+      );
+      void loadChatHistory(host as unknown as ChatState);
+    } else {
+      host.chatRunId = ack.runId;
+      host.chatStream = "";
+      (host as ChatHost & { chatStreamStartedAt?: number | null }).chatStreamStartedAt = startedAt;
+    }
+    if (prepared.refreshSessions) {
+      if (ack.status === "ok") {
+        void loadSessions(host as unknown as SessionsState, {
+          ...createChatSessionsLoadOverrides(host),
+        });
+      } else {
+        host.refreshSessionsAfterChat.add(ack.runId);
+      }
+    }
+    discardChatAttachmentDataUrls(excludeComposerAttachments(host, attachments));
+    return "sent";
+  } catch (err) {
+    const error = formatConnectError(err);
+    if (isRecoverableChatSendError(err, error)) {
+      updateQueuedMessage(host, id, (item) => ({
+        ...item,
+        sendError: error,
+        sendState: "waiting-reconnect",
+      }));
+      host.lastError = "Message will send when the Gateway reconnects.";
+      return "pending";
+    }
+    updateQueuedMessage(host, id, (item) => ({
+      ...item,
+      sendError: error,
+      sendState: "failed",
+    }));
+    host.lastError = error;
+    restoreComposerAfterFailedSend(host, opts ?? {});
+    return "failed";
+  } finally {
+    host.chatSending = false;
+  }
+}
+
 async function sendChatMessageNow(
   host: ChatHost,
   message: string,
   opts?: {
+    queueItemId?: string;
     previousDraft?: string;
     restoreDraft?: boolean;
     attachments?: ChatAttachment[];
@@ -282,14 +487,18 @@ async function sendChatMessageNow(
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
   // Reset scroll state before sending to ensure auto-scroll works for the response
   resetChatScroll(host as unknown as Parameters<typeof resetChatScroll>[0]);
-  const runId = await sendChatMessage(host as unknown as ChatState, message, opts?.attachments);
-  const ok = Boolean(runId);
-  if (!ok && opts?.previousDraft != null) {
-    host.chatMessage = opts.previousDraft;
+  const queued =
+    opts?.queueItemId != null
+      ? (host.chatQueue.find((item) => item.id === opts.queueItemId) ?? null)
+      : enqueuePendingSendMessage(host, message, opts?.attachments, opts?.refreshSessions);
+  if (!queued) {
+    return false;
   }
-  if (!ok && opts?.previousAttachments) {
-    host.chatAttachments = opts.previousAttachments;
-  }
+  const result = await sendQueuedChatMessage(host, queued.id, {
+    previousDraft: opts?.previousDraft,
+    previousAttachments: opts?.previousAttachments,
+  });
+  const ok = result === "sent";
   if (ok) {
     setLastActiveSessionKey(
       host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
@@ -307,12 +516,6 @@ async function sendChatMessageNow(
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
   if (ok && !host.chatRunId) {
     void flushChatQueue(host);
-  }
-  if (ok && opts?.refreshSessions && runId) {
-    host.refreshSessionsAfterChat.add(runId);
-  }
-  if (ok) {
-    discardChatAttachmentDataUrls(excludeComposerAttachments(host, opts?.attachments));
   }
   return ok;
 }
@@ -504,19 +707,26 @@ async function flushChatQueue(host: ChatHost) {
   if (!host.connected || isChatBusy(host)) {
     return;
   }
-  const nextIndex = host.chatQueue.findIndex((item) => !item.pendingRunId);
+  const nextIndex = host.chatQueue.findIndex(
+    (item) =>
+      !item.pendingRunId &&
+      item.sendState !== "sending" &&
+      item.sendState !== "failed" &&
+      (item.sessionKey == null || item.sessionKey === host.sessionKey),
+  );
   if (nextIndex < 0) {
     return;
   }
   const next = host.chatQueue[nextIndex];
-  host.chatQueue = host.chatQueue.filter((_, index) => index !== nextIndex);
   let ok = false;
   try {
     if (next.localCommandName) {
+      host.chatQueue = host.chatQueue.filter((_, index) => index !== nextIndex);
       await dispatchSlashCommand(host, next.localCommandName, next.localCommandArgs ?? "");
       ok = true;
     } else {
       ok = await sendChatMessageNow(host, next.text, {
+        queueItemId: next.id,
         attachments: next.attachments,
         refreshSessions: next.refreshSessions,
       });
@@ -524,9 +734,9 @@ async function flushChatQueue(host: ChatHost) {
   } catch (err) {
     host.lastError = String(err);
   }
-  if (!ok) {
+  if (!ok && next.localCommandName) {
     host.chatQueue = [next, ...host.chatQueue];
-  } else if (host.chatQueue.length > 0) {
+  } else if (ok && host.chatQueue.length > 0) {
     // Continue draining — local commands don't block on server response
     void flushChatQueue(host);
   }
@@ -536,7 +746,7 @@ export function removeQueuedMessage(host: ChatHost, id: string) {
   const removed = host.chatQueue.filter((item) => item.id === id);
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
   for (const item of removed) {
-    releaseChatAttachmentPayloads(item.attachments);
+    releaseChatAttachmentPayloads(excludeComposerAttachments(host, item.attachments));
   }
 }
 
@@ -547,7 +757,44 @@ export function clearPendingQueueItemsForRun(host: ChatHost, runId: string | und
   const removed = host.chatQueue.filter((item) => item.pendingRunId === runId);
   host.chatQueue = host.chatQueue.filter((item) => item.pendingRunId !== runId);
   for (const item of removed) {
-    releaseChatAttachmentPayloads(item.attachments);
+    releaseChatAttachmentPayloads(excludeComposerAttachments(host, item.attachments));
+  }
+}
+
+export function hasReconnectableQueuedChatSends(host: { chatQueue: ChatQueueItem[] }): boolean {
+  return host.chatQueue.some((item) => item.sendRunId && item.sendState === "waiting-reconnect");
+}
+
+export function markQueuedChatSendsWaitingForReconnect(host: { chatQueue: ChatQueueItem[] }) {
+  let changed = false;
+  const nextQueue = host.chatQueue.map((item) => {
+    if (!item.sendRunId || item.sendState !== "sending") {
+      return item;
+    }
+    changed = true;
+    return {
+      ...item,
+      sendState: "waiting-reconnect" as const,
+    };
+  });
+  if (changed) {
+    host.chatQueue = nextQueue;
+  }
+}
+
+export async function retryQueuedChatMessage(host: ChatHost, id: string) {
+  const item = host.chatQueue.find((entry) => entry.id === id);
+  if (!item || item.localCommandName || item.pendingRunId || item.sendState === "sending") {
+    return;
+  }
+  updateQueuedMessage(host, id, (entry) => ({
+    ...entry,
+    sendError: undefined,
+    sendState: host.connected && host.client ? "sending" : "waiting-reconnect",
+  }));
+  await sendQueuedChatMessage(host, id);
+  if (!host.chatRunId) {
+    void flushChatQueue(host);
   }
 }
 
@@ -556,9 +803,6 @@ export async function handleSendChat(
   messageOverride?: string,
   opts?: ChatSendOptions,
 ) {
-  if (!host.connected) {
-    return;
-  }
   const previousDraft = host.chatMessage;
   const message = (messageOverride ?? host.chatMessage).trim();
   const submittedSessionKey = host.sessionKey;
