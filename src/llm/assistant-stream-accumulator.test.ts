@@ -50,6 +50,19 @@ describe("createAssistantStreamAccumulator", () => {
     expectTextContent(delta.partial, "Hello");
   });
 
+  it("marks replacement text deltas and keeps the final message converged", () => {
+    const accumulator = createAssistantStreamAccumulator({ model, timestamp: 123 });
+
+    accumulator.start();
+    accumulator.startText(0);
+    accumulator.appendTextDelta(0, "Final answer");
+    const replacement = accumulator.appendTextDelta(0, "Final answer only.", { replace: true });
+
+    expect(replacement.replace).toBe(true);
+    expect(replacement.delta).toBe("Final answer only.");
+    expect(accumulator.endText(0).content).toBe("Final answer only.");
+  });
+
   it("accumulates thinking and tool-call boundaries without provider policy", () => {
     const accumulator = createAssistantStreamAccumulator({ model, timestamp: 123 });
 

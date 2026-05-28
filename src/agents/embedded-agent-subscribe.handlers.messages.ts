@@ -588,16 +588,20 @@ export function handleMessageUpdate(
   const parsedFull = shouldUsePhaseAwareBlockReply
     ? parseReplyDirectives(splitTrailingDirective(phaseAwareVisibleText).text)
     : null;
+  const isReplacementDelta =
+    !shouldUsePhaseAwareBlockReply && evtType === "text_delta" && assistantRecord?.replace === true;
   const cleanedText = shouldUsePhaseAwareBlockReply
     ? (parsedFull?.text ?? "")
-    : `${previousCleaned}${parsedStreamDirectives?.text ?? ""}`;
+    : isReplacementDelta
+      ? (parsedStreamDirectives?.text ?? "")
+      : `${previousCleaned}${parsedStreamDirectives?.text ?? ""}`;
   const next = shouldUsePhaseAwareBlockReply ? phaseAwareVisibleText : cleanedText;
-  if (next) {
+  const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
+  const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
+  if (next || hasMedia || hasAudio) {
     if (shouldUsePhaseAwareBlockReply) {
       recordPendingAssistantReplyDirectives(ctx.state, parsedStreamDirectives);
     }
-    const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
-    const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
 
     let shouldEmit = false;
     let deltaText = "";
@@ -605,7 +609,8 @@ export function handleMessageUpdate(
     if (!hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice: hasAudio })) {
       shouldEmit = false;
     } else {
-      replace = Boolean(previousCleaned && !cleanedText.startsWith(previousCleaned));
+      replace =
+        isReplacementDelta || Boolean(previousCleaned && !cleanedText.startsWith(previousCleaned));
       deltaText = replace ? "" : cleanedText.slice(previousCleaned.length);
       shouldEmit = replace
         ? cleanedText !== previousCleaned || hasMedia || hasAudio
