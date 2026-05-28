@@ -51,7 +51,7 @@ describe("plugin lifecycle resource sampler", () => {
     expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS");
     expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS");
     expect(script).toContain("detached: true");
-    expect(script).toContain("process.kill(-child.pid, signal)");
+    expect(script).toContain('process.kill(-child.pid, signal)');
     expect(script).toContain('const summarySignal = timedOut ? "timeout"');
     expect(script).toContain("process.exit(124)");
   });
@@ -78,9 +78,7 @@ describe("plugin lifecycle resource sampler", () => {
 
       expect(result.status).toBe(124);
       expect(result.stdout).toContain("signal=timeout");
-      expect(readFileSync(summary, "utf8")).toMatch(
-        /^wedged\t\d+\t[\d.]+\t\d+\t[\d.]+\ttimeout$/mu,
-      );
+      expect(readFileSync(summary, "utf8")).toMatch(/^wedged\t\d+\t[\d.]+\t\d+\t[\d.]+\ttimeout$/mu);
     },
   );
 

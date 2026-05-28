@@ -113,7 +113,9 @@ const resolveExpectedVitestCliEntry = () => {
   return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
 };
 const resolveExpectedVitestNodeArgs = (env: NodeJS.ProcessEnv) =>
-  ["1", "true", "yes", "on"].includes(env.OPENCLAW_VITEST_ENABLE_MAGLEV?.trim().toLowerCase() ?? "")
+  ["1", "true", "yes", "on"].includes(
+    env.OPENCLAW_VITEST_ENABLE_MAGLEV?.trim().toLowerCase() ?? "",
+  )
     ? []
     : ["--no-maglev"];
 const VITEST_NODE_PREFIX = [

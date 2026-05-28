@@ -4,9 +4,7 @@ export type OpenClawAgentToolResult<TResult = unknown> = AgentToolResult<TResult
 
 export type AgentToolResultMiddlewareRuntime = "openclaw" | "codex";
 /** @deprecated Use AgentToolResultMiddlewareRuntime. */
-export type AgentToolResultMiddlewareHarness =
-  | AgentToolResultMiddlewareRuntime
-  | "codex-app-server";
+export type AgentToolResultMiddlewareHarness = AgentToolResultMiddlewareRuntime | "codex-app-server";
 
 export type AgentToolResultMiddlewareEvent = {
   threadId?: string;

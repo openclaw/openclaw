@@ -49,7 +49,9 @@ function parseCpuPercent(raw) {
 
 function assertSampleValue(value, raw, name, label) {
   if (value === undefined) {
-    throw new Error(`docker stats sample for ${label} had invalid ${name}: ${JSON.stringify(raw)}`);
+    throw new Error(
+      `docker stats sample for ${label} had invalid ${name}: ${JSON.stringify(raw)}`,
+    );
   }
 }
 

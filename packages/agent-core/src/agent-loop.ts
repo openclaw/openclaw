@@ -52,13 +52,11 @@ export function agentLoop(
     signal,
     streamFn,
     runtime,
-  )
-    .then((messages) => {
-      stream.end(messages);
-    })
-    .catch((error) => {
-      pushLoopFailure(stream, config, error, signal?.aborted === true);
-    });
+  ).then((messages) => {
+    stream.end(messages);
+  }).catch((error) => {
+    pushLoopFailure(stream, config, error, signal?.aborted === true);
+  });
 
   return stream;
 }
@@ -97,13 +95,11 @@ export function agentLoopContinue(
     signal,
     streamFn,
     runtime,
-  )
-    .then((messages) => {
-      stream.end(messages);
-    })
-    .catch((error) => {
-      pushLoopFailure(stream, config, error, signal?.aborted === true);
-    });
+  ).then((messages) => {
+    stream.end(messages);
+  }).catch((error) => {
+    pushLoopFailure(stream, config, error, signal?.aborted === true);
+  });
 
   return stream;
 }
