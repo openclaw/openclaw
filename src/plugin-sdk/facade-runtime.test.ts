@@ -5,6 +5,13 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/
 import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
 import {
+  clearCurrentPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
   evaluateBundledPluginPublicSurfaceAccess,
   resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess,
   throwForBundledPluginPublicSurfaceAccess,
@@ -91,6 +98,7 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   clearRuntimeConfigSnapshot();
+  clearCurrentPluginMetadataSnapshot();
   resetFacadeRuntimeStateForTest();
   setBundledPluginsDirOverrideForTest(undefined);
   vi.doUnmock("../plugins/manifest-registry.js");
@@ -566,6 +574,138 @@ describe("plugin-sdk facade runtime", () => {
     ).toEqual({
       allowed: true,
       pluginId: "demo",
+    });
+  });
+
+  it("validates current snapshot against facade boundary config and ignores on mismatch", () => {
+    const dir = createTempDirSync("openclaw-facade-snapshot-validate-");
+    fs.mkdirSync(path.join(dir, "demo"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "demo", "runtime-api.js"),
+      'export const marker = "snapshot-validate";\n',
+      "utf8",
+    );
+    // Do NOT write openclaw.plugin.json on disk to force fallback to registry scan
+    useBundledPluginDirOverrideForTest(dir);
+
+    function createTestSnapshot(
+      params: { config?: any; plugins?: any[] } = {},
+    ): PluginMetadataSnapshot {
+      return {
+        policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+        index: {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+          generatedAtMs: 1,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        registryDiagnostics: [],
+        manifestRegistry: { plugins: params.plugins ?? [], diagnostics: [] },
+        plugins: [],
+        diagnostics: [],
+        byPluginId: new Map(),
+        normalizePluginId: (pluginId) => pluginId,
+        owners: {
+          channels: new Map(),
+          channelConfigs: new Map(),
+          providers: new Map(),
+          modelCatalogProviders: new Map(),
+          cliBackends: new Map(),
+          setupProviders: new Map(),
+          commandAliases: new Map(),
+          contracts: new Map(),
+        },
+        metrics: {
+          registrySnapshotMs: 0,
+          manifestRegistryMs: 0,
+          ownerMapsMs: 0,
+          totalMs: 0,
+          indexPluginCount: 0,
+          manifestPluginCount: 0,
+        },
+      };
+    }
+
+    const configWithPaths = {
+      plugins: {
+        load: { paths: ["/path/one"] },
+        entries: {
+          "demo-snapshot": { enabled: true },
+          demo: { enabled: true },
+        },
+      },
+    };
+    const matchedSnapshot = createTestSnapshot({
+      config: configWithPaths,
+      plugins: [
+        {
+          id: "demo-snapshot",
+          rootDir: path.join(dir, "demo"),
+          channels: ["demo"],
+          origin: "bundled" as const,
+        },
+      ],
+    });
+
+    // 1. Snapshot has load paths: ["/path/one"] and entries
+    setCurrentPluginMetadataSnapshot(matchedSnapshot, { config: configWithPaths });
+
+    // 2. Set the active config of the facade to mismatched load paths: ["/path/two"]
+    setRuntimeConfigSnapshot(
+      {
+        plugins: {
+          load: { paths: ["/path/two"] },
+          entries: {
+            "demo-snapshot": { enabled: true },
+            demo: { enabled: true },
+          },
+        },
+      },
+      {
+        plugins: {
+          load: { paths: ["/path/two"] },
+          entries: {
+            "demo-snapshot": { enabled: true },
+            demo: { enabled: true },
+          },
+        },
+      },
+    );
+
+    // This should resolve to allowed: false because mismatched snapshot was rejected and ignored, and there is no manifest on disk
+    expect(
+      resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "demo",
+        artifactBasename: "runtime-api.js",
+        location: null,
+        sourceExtensionsRoot: dir,
+        resolutionKey: "snapshot-validate-demo",
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "no bundled plugin manifest found for demo",
+    });
+
+    // 3. Set the active config of the facade to match load paths: ["/path/one"] and entries
+    setRuntimeConfigSnapshot(configWithPaths, configWithPaths);
+
+    // This should resolve 'demo-snapshot' from the snapshot (because matched snapshot was accepted and reused)
+    expect(
+      resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "demo",
+        artifactBasename: "runtime-api.js",
+        location: null,
+        sourceExtensionsRoot: dir,
+        resolutionKey: "snapshot-validate-demo",
+      }),
+    ).toEqual({
+      allowed: true,
+      pluginId: "demo-snapshot",
     });
   });
 });

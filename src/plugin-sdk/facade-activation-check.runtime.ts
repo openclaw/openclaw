@@ -95,7 +95,9 @@ function getFacadeManifestRegistry(params: {
   env?: NodeJS.ProcessEnv;
 }): readonly PluginManifestRecord[] {
   const envOption = params.env ? { env: params.env } : {};
+  const resolved = getFacadeBoundaryResolvedConfig();
   const current = getCurrentPluginMetadataSnapshot({
+    config: resolved.config,
     ...envOption,
     allowWorkspaceScopedSnapshot: true,
   });
@@ -103,7 +105,7 @@ function getFacadeManifestRegistry(params: {
     return current.manifestRegistry.plugins;
   }
   return loadPluginManifestRegistry({
-    config: getFacadeBoundaryResolvedConfig().config,
+    config: resolved.config,
     ...envOption,
   }).plugins;
 }
