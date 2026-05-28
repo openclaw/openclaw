@@ -144,6 +144,7 @@ const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 18_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
 const DEFAULT_MIN_RAW_ENTRIES_PER_DIRECTORY_SCAN = 1_000;
 const DEFAULT_MAX_RAW_ENTRIES_PER_DIRECTORY_SCAN = 10_000;
+const IGNORED_SKILL_DIRECTORY_NAMES = new Set(["_archive", "_archived"]);
 
 type ResolvedSkillsLimits = {
   maxCandidatesPerRoot: number;
@@ -205,7 +206,10 @@ function listChildDirectories(
     maxEntries: maxRawEntriesToScan,
     symlinks: "follow",
     include: (entry) =>
-      entry.kind === "directory" && !entry.name.startsWith(".") && entry.name !== "node_modules",
+      entry.kind === "directory" &&
+      !entry.name.startsWith(".") &&
+      entry.name !== "node_modules" &&
+      !IGNORED_SKILL_DIRECTORY_NAMES.has(entry.name),
   });
   if (scan.scannedEntryCount === 0 && scan.entries.length === 0) {
     return { dirs: [], scannedEntryCount: 0, truncated: false };

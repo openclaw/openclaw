@@ -152,6 +152,9 @@ that up as `<workspace>/skills` on the next session.
 Configured skill roots also support one grouping level, such as
 `skills/<group>/<skill>/SKILL.md`, so related third-party skills can be
 kept under a shared folder without broad recursive scanning.
+Archive folders named `_archive` or `_archived` are ignored during discovery at
+both direct and grouped skill levels. Move retired skills there when you want to
+preserve their files without exposing them to agents.
 
 Git and local directory installs expect a `SKILL.md` at the source root. The
 install slug comes from `SKILL.md` frontmatter `name` when it is a valid slug,

@@ -86,6 +86,9 @@ Rules:
 
 - Built-in skill roots always include `~/.openclaw/skills`, `~/.agents/skills`,
   `<workspace>/.agents/skills`, and `<workspace>/skills`.
+- Skill discovery ignores folders named `_archive` or `_archived`, including
+  grouped skill layouts under those folders. Use those names for retired skill
+  material that should stay on disk without remaining agent-visible.
 - `allowBundled`: optional allowlist for **bundled** skills only. When set, only
   bundled skills in the list are eligible (managed, agent, and workspace skills unaffected).
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
