@@ -1217,7 +1217,7 @@
         "maxChars": {
           "description": "Max chars returned; truncates.",
           "minimum": 100,
-          "type": "number"
+          "type": "integer"
         },
         "url": {
           "description": "HTTP(S) URL.",
