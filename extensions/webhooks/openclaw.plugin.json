@@ -206,6 +206,12 @@
       }
     },
     "properties": {
+      "publicUrl": {
+        "type": "string",
+        "format": "uri",
+        "pattern": "^https?://",
+        "description": "Reachable HTTP(S) base URL used when printing dynamic webhook subscription URLs."
+      },
       "routes": {
         "type": "object",
         "additionalProperties": {

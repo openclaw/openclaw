@@ -50,6 +50,7 @@ function registerWebhookRoutes(api: OpenClawPluginApi): void {
   const subscriptionStore = createWebhookSubscriptionStore({
     api,
     staticRoutes: routes,
+    publicUrl: runtimeConfig.publicUrl,
   });
   const pendingCompletionBySessionKey = new Map<string, CompletionRunContext>();
   const completionContextStore = routes.some(

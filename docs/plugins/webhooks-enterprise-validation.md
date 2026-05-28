@@ -20,6 +20,12 @@ sending to a Gateway on a developer laptop, you need some reachable ingress such
 as a reverse proxy, Cloudflare Tunnel, ngrok, Tailscale Funnel, or an enterprise
 API gateway.
 
+OpenClaw's Gateway WebSocket is the control plane used by the CLI and SDK for
+operations such as dynamic subscription management and route tests. It is not a
+replacement for provider webhook delivery. GitHub, Codebase, Meego, and similar
+systems still deliver events by HTTP `POST` to the configured route; the
+WebSocket path is how an operator tells the Gateway which routes to manage.
+
 ## What was verified
 
 The enterprise webhook implementation was verified with three layers:
@@ -37,6 +43,12 @@ The enterprise webhook implementation was verified with three layers:
   `pull_request` and `pull_request_review` events to a local Gateway through a
   public HTTPS tunnel, and OpenClaw scheduled matching `plugin:webhooks` agent
   turns.
+- A live Codebase MR end-to-end run where a real merge request update delivered
+  to the Webhooks plugin, scheduled an OpenClaw agent turn, and wrote the agent
+  completion back as a Codebase MR review note.
+- A live GitHub PR end-to-end run where a real pull request update delivered to
+  the Webhooks plugin, scheduled an OpenClaw agent turn, and wrote the agent
+  completion back as a GitHub PR comment.
 
 The focused verification command was:
 
@@ -44,7 +56,9 @@ The focused verification command was:
 node scripts/run-vitest.mjs run --config test/vitest/vitest.extension-misc.config.ts extensions/webhooks/src/config.test.ts extensions/webhooks/src/http.test.ts extensions/webhooks/index.test.ts
 ```
 
-The test suite passed 44 targeted Webhooks plugin tests.
+The targeted Webhooks plugin suite now covers auth, event allowlists,
+idempotency, templating, agent dispatch, dynamic subscriptions, and completion
+delivery.
 
 A local HTTP smoke test also posted real HTTP requests to a running Node server
 using the Webhooks plugin handler. The first batched event returned `ack` with
@@ -56,12 +70,12 @@ replaying the same request returned `duplicate: true`.
 The comparison below is based on the local source trees for Hermes Agent,
 OpenClaw, Claude Code, and Codex.
 
-| System | Webhook surface | Auth and filtering | Dispatch model | Fit |
-| --- | --- | --- | --- | --- |
-| Hermes Agent | A generic `gateway/platforms/webhook.py` adapter exposes `/webhooks/{route_name}` with static and dynamic routes. Telegram and Feishu also have channel-specific webhook modes. | HMAC-style signature checks, GitLab token support, route event allowlists, route rate limits, body limits, and in-memory idempotency. | Converts a webhook into a messaging `MessageEvent`, starts an agent run, and stores delivery metadata so the final agent response can be logged, posted to GitHub, or delivered to another platform. | Strong for agent-as-chat-platform semantics and response delivery. Less typed, more route-specific behavior lives inside one adapter. |
-| OpenClaw | A bundled Webhooks plugin registers exact Gateway HTTP routes such as `/plugins/webhooks/github-pr-review`. | Per-route bearer, header, or `hmac-sha256` auth; route-specific auth even on shared paths; event allowlists; body, rate, and in-flight guards; persistent idempotency when plugin state is available with in-memory fallback. | Dispatches to `ack`, managed TaskFlow, scheduled agent turn, or channel delivery. Prompt rendering supports body, headers, raw JSON, event type, idempotency key, and array payload paths. | Strong for enterprise ingress because routes are typed plugin config and core remains plugin-agnostic. |
-| Claude Code | Feature-gated GitHub PR activity integration. Source references include `KAIROS_GITHUB_WEBHOOKS`, `SubscribePRTool`, `subscribe_pr_activity`, and `<github-webhook-activity>` message rendering. | The checked local tree shows client/tool and rendering hooks, not a generic webhook receiver implementation in the CLI source. | GitHub PR events arrive as user messages in the Claude Code session. The coordinator prompt says mergeability still needs polling because GitHub does not webhook that state. | Narrow PR-subscription workflow, not general enterprise webhook ingress. |
-| Codex | The local app-server source exposes protocol operations such as `review/start` over the app-server transport. It also has authenticated WebSocket/app-server transport code, but no generic webhook receiver comparable to Hermes or OpenClaw. | App-server auth protects Codex protocol transport; it is not vendor webhook verification. | Clients call Codex protocol methods such as review start, command exec, and thread operations. | Strong protocol/server integration, but webhook ingestion belongs in an external bridge or host application. |
+| System       | Webhook surface                                                                                                                                                                                                                                | Auth and filtering                                                                                                                                                                                                            | Dispatch model                                                                                                                                                                                       | Fit                                                                                                                                   |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Hermes Agent | A generic `gateway/platforms/webhook.py` adapter exposes `/webhooks/{route_name}` with static and dynamic routes. Telegram and Feishu also have channel-specific webhook modes.                                                                | HMAC-style signature checks, GitLab token support, route event allowlists, route rate limits, body limits, and in-memory idempotency.                                                                                         | Converts a webhook into a messaging `MessageEvent`, starts an agent run, and stores delivery metadata so the final agent response can be logged, posted to GitHub, or delivered to another platform. | Strong for agent-as-chat-platform semantics and response delivery. Less typed, more route-specific behavior lives inside one adapter. |
+| OpenClaw     | A bundled Webhooks plugin registers exact Gateway HTTP routes such as `/plugins/webhooks/github-pr-review`.                                                                                                                                    | Per-route bearer, header, or `hmac-sha256` auth; route-specific auth even on shared paths; event allowlists; body, rate, and in-flight guards; persistent idempotency when plugin state is available with in-memory fallback. | Dispatches to `ack`, managed TaskFlow, scheduled agent turn, or channel delivery. Prompt rendering supports body, headers, raw JSON, event type, idempotency key, and array payload paths.           | Strong for enterprise ingress because routes are typed plugin config and core remains plugin-agnostic.                                |
+| Claude Code  | Feature-gated GitHub PR activity integration. Source references include `KAIROS_GITHUB_WEBHOOKS`, `SubscribePRTool`, `subscribe_pr_activity`, and `<github-webhook-activity>` message rendering.                                               | The checked local tree shows client/tool and rendering hooks, not a generic webhook receiver implementation in the CLI source.                                                                                                | GitHub PR events arrive as user messages in the Claude Code session. The coordinator prompt says mergeability still needs polling because GitHub does not webhook that state.                        | Narrow PR-subscription workflow, not general enterprise webhook ingress.                                                              |
+| Codex        | The local app-server source exposes protocol operations such as `review/start` over the app-server transport. It also has authenticated WebSocket/app-server transport code, but no generic webhook receiver comparable to Hermes or OpenClaw. | App-server auth protects Codex protocol transport; it is not vendor webhook verification.                                                                                                                                     | Clients call Codex protocol methods such as review start, command exec, and thread operations.                                                                                                       | Strong protocol/server integration, but webhook ingestion belongs in an external bridge or host application.                          |
 
 The main product difference is where the external event becomes agent input.
 Hermes treats generic webhooks as a messaging platform. Claude Code treats PR
@@ -76,28 +90,28 @@ Use one route per application or event family. Each route should have its own
 secret, event allowlist, idempotency key, and prompt template. The examples below
 are fully expanded in [Enterprise webhook integrations](/plugins/webhooks-enterprise-integrations).
 
-| Application | Typical events | Recommended auth | Idempotency key | Connection notes |
-| --- | --- | --- | --- | --- |
-| GitHub | PR opened, synchronized, review submitted | `hmac-sha256` with `x-hub-signature-256` | `x-github-delivery` | Configure the repository webhook directly when the Gateway URL is reachable. |
-| GitLab | Merge request hook | Header token | `x-gitlab-event-uuid` | Use project webhooks and allow only merge request events. |
-| Jira | Issue created, issue updated | Bearer token or edge-added header | `webhookEventId` | If Jira cannot add custom auth, put an API gateway in front. |
-| PagerDuty | Incident triggered, acknowledged, resolved | Bearer token or edge-added header | `event.id` | Announce high-priority incidents only when the target session should see them. |
-| Sentry | Issue or error events | Header token | `id` | Preserve `{__raw__}` so missing fields can still be debugged. |
-| Datadog | Monitor and service check alerts | Header token | `id` | Keep noisy monitor recovery events out with `events`. |
-| Stripe | Billing lifecycle events | Edge-verified signature plus forward token | `id` | Verify `Stripe-Signature` before forwarding normalized JSON. |
-| Shopify | Order create/update events | Edge-verified HMAC plus forward token | `x-shopify-webhook-id` | Deduplicate retries; do not forward payment details unless required. |
-| HubSpot | Deal or contact property changes | Bearer token | `eventId` | App webhooks often benefit from a small verifier or normalizer. |
-| Salesforce | Platform events or CDC | Bearer token | `ChangeEventHeader.commitNumber` | Use an event relay, MuleSoft, or a private HTTP bridge. |
-| ServiceNow | Incident created/updated | Bearer token | `sys_id` | Send only selected record fields from a flow action or outbound REST message. |
-| Zendesk | Ticket created/updated | Bearer token | `id` | Attach the webhook to a trigger with a narrow condition. |
-| Slack workflow | Workflow step or form submitted | Bearer token | `event_id` | Good for human-initiated OpenClaw workflows. |
-| Teams and Power Automate | Approval or flagged message events | Bearer token | `triggerId` | Use an HTTP action to set the bearer token and JSON body. |
-| Notion | Page created/updated | Bearer token | `id` | Use automation or middleware that can call HTTP endpoints. |
-| Airtable | Record created/updated | Bearer token | `webhook.id` | Include base, table, record id, and changed fields. |
-| Google Forms | Form submitted | Bearer token | `responseId` | Use Apps Script to post normalized JSON. |
-| Jenkins | Build completed/failed | Header token | `build.id` | Send from a post-build action or HTTP Request step. |
-| Argo CD | App synced/degraded | Bearer token | `app.metadata.uid` plus revision when possible | Keep deployment event prompts explicit about whether action is allowed. |
-| Prometheus Alertmanager | Firing/resolved alert groups | Bearer token | `groupKey` or alert fingerprint | Route only actionable severities to agent dispatch. |
+| Application              | Typical events                             | Recommended auth                           | Idempotency key                                | Connection notes                                                               |
+| ------------------------ | ------------------------------------------ | ------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------ |
+| GitHub                   | PR opened, synchronized, review submitted  | `hmac-sha256` with `x-hub-signature-256`   | `x-github-delivery`                            | Configure the repository webhook directly when the Gateway URL is reachable.   |
+| GitLab                   | Merge request hook                         | Header token                               | `x-gitlab-event-uuid`                          | Use project webhooks and allow only merge request events.                      |
+| Jira                     | Issue created, issue updated               | Bearer token or edge-added header          | `webhookEventId`                               | If Jira cannot add custom auth, put an API gateway in front.                   |
+| PagerDuty                | Incident triggered, acknowledged, resolved | Bearer token or edge-added header          | `event.id`                                     | Announce high-priority incidents only when the target session should see them. |
+| Sentry                   | Issue or error events                      | Header token                               | `id`                                           | Preserve `{__raw__}` so missing fields can still be debugged.                  |
+| Datadog                  | Monitor and service check alerts           | Header token                               | `id`                                           | Keep noisy monitor recovery events out with `events`.                          |
+| Stripe                   | Billing lifecycle events                   | Edge-verified signature plus forward token | `id`                                           | Verify `Stripe-Signature` before forwarding normalized JSON.                   |
+| Shopify                  | Order create/update events                 | Edge-verified HMAC plus forward token      | `x-shopify-webhook-id`                         | Deduplicate retries; do not forward payment details unless required.           |
+| HubSpot                  | Deal or contact property changes           | Bearer token                               | `eventId`                                      | App webhooks often benefit from a small verifier or normalizer.                |
+| Salesforce               | Platform events or CDC                     | Bearer token                               | `ChangeEventHeader.commitNumber`               | Use an event relay, MuleSoft, or a private HTTP bridge.                        |
+| ServiceNow               | Incident created/updated                   | Bearer token                               | `sys_id`                                       | Send only selected record fields from a flow action or outbound REST message.  |
+| Zendesk                  | Ticket created/updated                     | Bearer token                               | `id`                                           | Attach the webhook to a trigger with a narrow condition.                       |
+| Slack workflow           | Workflow step or form submitted            | Bearer token                               | `event_id`                                     | Good for human-initiated OpenClaw workflows.                                   |
+| Teams and Power Automate | Approval or flagged message events         | Bearer token                               | `triggerId`                                    | Use an HTTP action to set the bearer token and JSON body.                      |
+| Notion                   | Page created/updated                       | Bearer token                               | `id`                                           | Use automation or middleware that can call HTTP endpoints.                     |
+| Airtable                 | Record created/updated                     | Bearer token                               | `webhook.id`                                   | Include base, table, record id, and changed fields.                            |
+| Google Forms             | Form submitted                             | Bearer token                               | `responseId`                                   | Use Apps Script to post normalized JSON.                                       |
+| Jenkins                  | Build completed/failed                     | Header token                               | `build.id`                                     | Send from a post-build action or HTTP Request step.                            |
+| Argo CD                  | App synced/degraded                        | Bearer token                               | `app.metadata.uid` plus revision when possible | Keep deployment event prompts explicit about whether action is allowed.        |
+| Prometheus Alertmanager  | Firing/resolved alert groups               | Bearer token                               | `groupKey` or alert fingerprint                | Route only actionable severities to agent dispatch.                            |
 
 ## How each application should connect
 

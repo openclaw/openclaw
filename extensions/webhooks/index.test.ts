@@ -206,7 +206,9 @@ describe("webhooks plugin registration", () => {
 
       plugin.register(
         createApi({
-          pluginConfig: {},
+          pluginConfig: {
+            publicUrl: "https://gateway.example.com",
+          },
           registerHttpRoute,
           registerGatewayMethod,
           registerCli,
@@ -233,8 +235,12 @@ describe("webhooks plugin registration", () => {
         prompt: "Review GitHub PR {body.pull_request.html_url}. Payload: {__raw__}",
       });
       expect(subscribe.ok).toBe(true);
-      const secret = (subscribe.payload as { secret: string }).secret;
+      const payload = subscribe.payload as { secret: string; webhookUrl?: string };
+      const secret = payload.secret;
       expect(secret).toBeTypeOf("string");
+      expect(payload.webhookUrl).toBe(
+        "https://gateway.example.com/plugins/webhooks/github-pr-review",
+      );
 
       const body = { pull_request: { html_url: "https://github.com/openclaw/test/pull/1" } };
       const rawBody = JSON.stringify(body);

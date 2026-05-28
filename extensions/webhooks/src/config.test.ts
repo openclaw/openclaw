@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { resolveWebhooksPluginConfig, resolveWebhooksPluginRuntimeConfig } from "./config.js";
 
 describe("resolveWebhooksPluginConfig", () => {
+  it("keeps the public URL used for dynamic subscription output", () => {
+    const cfg = resolveWebhooksPluginRuntimeConfig({
+      pluginConfig: {
+        publicUrl: "https://gateway.example.com/base",
+      },
+    });
+
+    expect(cfg).toEqual({
+      publicUrl: "https://gateway.example.com/base",
+      routes: [],
+    });
+  });
+
+  it("rejects WebSocket URLs for webhook public URL output", () => {
+    expect(() =>
+      resolveWebhooksPluginRuntimeConfig({
+        pluginConfig: {
+          publicUrl: "wss://gateway.example.com",
+        },
+      }),
+    ).toThrow("publicUrl must be an HTTP(S) URL");
+  });
+
   it("keeps SecretRef-backed secrets on the route config", () => {
     const routes = resolveWebhooksPluginConfig({
       pluginConfig: {

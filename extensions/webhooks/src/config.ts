@@ -181,6 +181,18 @@ type RawWebhookRouteConfig = z.infer<typeof webhookRouteConfigSchema>;
 
 const webhooksPluginConfigSchema = z
   .object({
+    publicUrl: z
+      .string()
+      .trim()
+      .url()
+      .refine(
+        (value) => {
+          const protocol = new URL(value).protocol;
+          return protocol === "http:" || protocol === "https:";
+        },
+        { message: "publicUrl must be an HTTP(S) URL" },
+      )
+      .optional(),
     routes: z.record(z.string().trim().min(1), webhookRouteConfigSchema).default({}),
   })
   .strict();
@@ -316,6 +328,7 @@ export type ConfiguredWebhookRouteConfig =
   | ConfiguredAckWebhookRouteConfig;
 
 export type ConfiguredWebhooksPluginConfig = {
+  publicUrl?: string;
   routes: ConfiguredWebhookRouteConfig[];
 };
 
@@ -608,7 +621,9 @@ export function resolveWebhooksPluginConfig(params: {
 export function resolveWebhooksPluginRuntimeConfig(params: {
   pluginConfig: unknown;
 }): ConfiguredWebhooksPluginConfig {
+  const parsed = webhooksPluginConfigSchema.parse(params.pluginConfig ?? {});
   return {
+    ...(parsed.publicUrl ? { publicUrl: parsed.publicUrl } : {}),
     routes: resolveWebhooksPluginConfig(params),
   };
 }

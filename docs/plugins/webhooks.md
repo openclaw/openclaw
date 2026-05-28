@@ -20,6 +20,11 @@ prompt to an agent, TaskFlow, or chat channel.
 The plugin runs inside the Gateway process. If your Gateway runs on another
 machine, configure the plugin on that Gateway host and restart the Gateway.
 
+The `openclaw webhooks` CLI manages dynamic subscriptions through the Gateway
+WebSocket/RPC control plane. That WebSocket is not the provider delivery path:
+GitHub, Codebase, Meego, and other systems still send normal HTTP `POST`
+requests to the route URL.
+
 Only expose the specific webhook paths you need. Keep the dashboard and other
 Gateway surfaces private behind loopback, a tailnet, or a trusted reverse proxy.
 
@@ -347,6 +352,45 @@ The integration is simple when the source can send HTTPS JSON and provide a
 stable auth secret plus delivery id. Systems without outbound webhooks, stable
 event identifiers, or reachable network access still need an adapter, polling
 job, or gateway-side connector.
+
+## Dynamic subscriptions
+
+Static routes are best when you want reviewable config, SecretRefs, and
+environment-specific rollout. Dynamic subscriptions are useful for experiments
+and operator-managed routes that should be created without editing config:
+
+```bash
+openclaw webhooks subscribe github-pr-review \
+  --agent-id webhook-reviewer \
+  --session-key github/pr-review \
+  --event-header x-github-event \
+  --events pull_request,pull_request_review \
+  --idempotency-header x-github-delivery \
+  --prompt 'Review GitHub PR {{body.pull_request.html_url}}. Payload: {{__raw__}}'
+```
+
+The command returns the subscription path, generated HMAC secret, and a full
+`webhookUrl` when `plugins.entries.webhooks.config.publicUrl` is set:
+
+```json5
+{
+  plugins: {
+    entries: {
+      webhooks: {
+        enabled: true,
+        config: {
+          publicUrl: "https://gateway.example.com",
+          routes: {},
+        },
+      },
+    },
+  },
+}
+```
+
+`publicUrl` only affects CLI output. It does not open a network path. The source
+system must still be able to reach the HTTP route through public HTTPS, private
+ingress, an enterprise gateway, or a temporary development tunnel.
 
 ## Best practices
 
