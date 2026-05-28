@@ -136,4 +136,47 @@ describe("cleanupEmbeddedAttemptResources", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledTimes(1);
   });
+
+  it("disposes the materialized bundle MCP and LSP runtimes during cleanup", async () => {
+    const disposeMcp = vi.fn();
+    const disposeLsp = vi.fn();
+    const release = vi.fn(async () => {});
+
+    await cleanupEmbeddedAttemptResources({
+      flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
+      session: {
+        agent: {},
+        dispose: vi.fn(),
+      },
+      sessionManager: {},
+      sessionLock: { release },
+      bundleMcpRuntime: { dispose: disposeMcp },
+      bundleLspRuntime: { dispose: disposeLsp },
+    });
+
+    expect(disposeMcp).toHaveBeenCalledTimes(1);
+    expect(disposeLsp).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the session lock even when bundle MCP runtime dispose throws", async () => {
+    const release = vi.fn(async () => {});
+
+    await cleanupEmbeddedAttemptResources({
+      flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
+      session: {
+        agent: {},
+        dispose: vi.fn(),
+      },
+      sessionManager: {},
+      sessionLock: { release },
+      bundleMcpRuntime: {
+        dispose: () => {
+          throw new Error("MCP dispose failed");
+        },
+      },
+    });
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
 });
