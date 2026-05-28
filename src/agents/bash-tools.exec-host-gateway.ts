@@ -447,11 +447,15 @@ export async function processGatewayAllowlist(
         autoReviewSegment.raw.trim() === params.command.trim())
         ? autoReviewSegment.argv
         : undefined;
+    const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
     const canAutoReviewApprovalMiss =
       params.autoReview === true &&
       hostAsk !== "always" &&
+      autoReviewHasBoundCommand &&
       !requiresSecurityAuditSuppressionApproval;
-    let autoReviewRequiresHumanApproval = false;
+    let autoReviewRequiresHumanApproval =
+      (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
+      requiresSecurityAuditSuppressionApproval;
     if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       const decision = await reviewer({

@@ -571,6 +571,84 @@ describe("processGatewayAllowlist", () => {
     expect(result.pendingResult?.details.status).toBe("approval-pending");
   });
 
+  it("requests human approval when auto-review cannot bind a single parsed command", async () => {
+    requiresExecApprovalMock.mockReturnValue(true);
+    evaluateShellAllowlistMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: false,
+      segments: [
+        { raw: "echo ok", resolution: null, argv: ["echo", "ok"] },
+        { raw: "pwd", resolution: null, argv: ["pwd"] },
+      ],
+      segmentAllowlistEntries: [],
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "echo ok; pwd",
+      ask: "on-miss",
+      autoReview: true,
+    });
+
+    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("does not use fallback-full when auto-review cannot parse the command", async () => {
+    requiresExecApprovalMock.mockReturnValue(true);
+    evaluateShellAllowlistMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: false,
+      allowlistSatisfied: false,
+      segments: [],
+      segmentAllowlistEntries: [],
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "full",
+    });
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: true },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
+    enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation((value) =>
+      value.requiresAutoReviewHumanApproval === true && value.baseDecision.timedOut
+        ? { approvedByAsk: false, deniedReason: "approval-timeout" }
+        : { approvedByAsk: value.approvedByAsk, deniedReason: value.deniedReason },
+    );
+
+    const result = await runGatewayAllowlist({
+      command: "echo 'unterminated",
+      ask: "on-miss",
+      autoReview: true,
+      turnSourceChannel: "webchat",
+    });
+
+    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+    expect(enforceStrictInlineEvalApprovalBoundaryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requiresAutoReviewHumanApproval: true,
+      }),
+    );
+    expect(result.deniedResult?.details.status).toBe("failed");
+    expect(result.deniedResult?.content[0]).toEqual(
+      expect.objectContaining({
+        text: "Exec denied (gateway id=req-1, approval-timeout): echo 'unterminated",
+      }),
+    );
+  });
+
   it("does not use fallback-full when auto-review asks for human approval", async () => {
     requiresExecApprovalMock.mockReturnValue(true);
     evaluateShellAllowlistMock.mockReturnValue({
