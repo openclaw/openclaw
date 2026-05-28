@@ -1240,6 +1240,12 @@ async function sendSubagentAnnounceDirectly(params: {
           return textDelivery;
         }
       }
+      if (activeRequesterWakeFailed && agentMediatedCompletion && expectedMediaUrls.length > 0) {
+        const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
+        if (generatedMediaDelivery) {
+          return generatedMediaDelivery;
+        }
+      }
       // The requester-agent handoff is the delivery contract for background
       // completions. A failed handoff should retry/fail visibly instead
       // of sending the child result directly to the external channel.
