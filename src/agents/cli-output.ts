@@ -398,6 +398,7 @@ export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onToolUse?: (tool: { name: string; toolCallId?: string; args?: Record<string, unknown> }) => void;
 }) {
   let lineBuffer = "";
   let assistantText = "";
@@ -406,7 +407,45 @@ export function createCliJsonlStreamingParser(params: {
   let output: CliOutput | null = null;
   const texts: string[] = [];
 
+  let pendingToolName: string | undefined;
+  let pendingToolCallId: string | undefined;
+  let pendingToolInput = "";
+
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
+    if (params.onToolUse) {
+      const evt = (isRecord(parsed.event) ? parsed.event : parsed) as Record<string, unknown>;
+      if (evt?.type === "content_block_start") {
+        const block = isRecord(evt.content_block) ? evt.content_block : undefined;
+        if (block?.type === "tool_use" && typeof block.name === "string") {
+          pendingToolName = block.name;
+          pendingToolCallId = typeof block.id === "string" ? block.id : undefined;
+          pendingToolInput = "";
+          params.onToolUse({
+            name: block.name,
+            toolCallId: pendingToolCallId,
+          });
+        }
+      } else if (evt?.type === "content_block_delta") {
+        const delta = isRecord(evt.delta) ? evt.delta : undefined;
+        if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") {
+          pendingToolInput += delta.partial_json;
+        }
+      } else if (evt?.type === "content_block_stop" && pendingToolName) {
+        if (pendingToolInput) {
+          try {
+            const args = JSON.parse(pendingToolInput) as Record<string, unknown>;
+            params.onToolUse({
+              name: pendingToolName,
+              toolCallId: pendingToolCallId,
+              args,
+            });
+          } catch {}
+        }
+        pendingToolName = undefined;
+        pendingToolCallId = undefined;
+        pendingToolInput = "";
+      }
+    }
     sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
     if (!sessionId && typeof parsed.thread_id === "string") {
       sessionId = parsed.thread_id.trim();

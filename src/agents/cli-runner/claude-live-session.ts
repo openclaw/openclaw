@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
-import { isRecord } from "../../shared/record-coerce.js";
 import {
   loadExecApprovals,
   maxAsk,
   minSecurity,
   resolveExecApprovalsFromFile,
 } from "../../infra/exec-approvals.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   createCliJsonlStreamingParser,
@@ -204,8 +204,11 @@ export function buildClaudeLiveArgs(params: {
     upsertArgValue(
       upsertArgValue(
         upsertArgValue(
-          stripLiveProcessArgs(params.args, params.backend,
-            params.useResume && params.backend.systemPromptWhen !== "always"),
+          stripLiveProcessArgs(
+            params.args,
+            params.backend,
+            params.useResume && params.backend.systemPromptWhen !== "always",
+          ),
           "--input-format",
           "stream-json",
         ),
@@ -956,6 +959,7 @@ function createTurn(params: {
   context: PreparedCliRunContext;
   noOutputTimeoutMs: number;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onToolUse?: (tool: { name: string; toolCallId?: string; args?: Record<string, unknown> }) => void;
   session: ClaudeLiveSession;
   resolve: (output: CliOutput) => void;
   reject: (error: unknown) => void;
@@ -972,6 +976,7 @@ function createTurn(params: {
       backend: params.context.preparedBackend.backend,
       providerId: params.context.backendResolved.id,
       onAssistantDelta: params.onAssistantDelta,
+      onToolUse: params.onToolUse,
     }),
     resolve: params.resolve,
     reject: params.reject,
@@ -1037,6 +1042,7 @@ export async function runClaudeLiveSessionTurn(params: {
   noOutputTimeoutMs: number;
   getProcessSupervisor: () => ProcessSupervisor;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onToolUse?: (tool: { name: string; toolCallId?: string; args?: Record<string, unknown> }) => void;
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
@@ -1158,6 +1164,7 @@ export async function runClaudeLiveSessionTurn(params: {
       context: params.context,
       noOutputTimeoutMs: params.noOutputTimeoutMs,
       onAssistantDelta: params.onAssistantDelta,
+      onToolUse: params.onToolUse,
       session: liveSession,
       resolve,
       reject,

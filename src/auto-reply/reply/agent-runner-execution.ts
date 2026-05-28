@@ -2035,6 +2035,25 @@ export async function runAgentTurnWithFallback(params: {
                   onReasoningText: async (text) => {
                     await params.opts?.onReasoningStream?.({ text });
                   },
+                  onToolEvent: async ({ phase, name, args }) => {
+                    if (
+                      params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only"
+                    ) {
+                      return;
+                    }
+                    if (phase === "start" || phase === "update") {
+                      const toolStartProgressPromise = params.opts?.onToolStart?.({
+                        name,
+                        phase,
+                        args,
+                        detailMode: params.toolProgressDetail,
+                      });
+                      await Promise.all([
+                        params.typingSignals.signalToolStart(),
+                        toolStartProgressPromise,
+                      ]);
+                    }
+                  },
                   onErrorBeforeLifecycle: async () => {
                     if (!rollbackFallbackCandidateSelection) {
                       return;
