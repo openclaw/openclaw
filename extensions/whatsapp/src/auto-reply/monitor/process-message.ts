@@ -93,7 +93,7 @@ function readWhatsAppMessageReceivedHookOptIn(value: unknown): boolean | undefin
   if (pluginHooks?.messageReceived === undefined) {
     return undefined;
   }
-  return pluginHooks?.messageReceived === true;
+  return pluginHooks.messageReceived;
 }
 
 function shouldEmitWhatsAppMessageReceivedHooks(params: {
@@ -108,19 +108,11 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
       ? channelConfig.accounts[params.accountId]
       : undefined;
 
-  // Try channel/account config first (documented path)
-  const channelOptIn =
+  return (
     readWhatsAppMessageReceivedHookOptIn(accountConfig) ??
-    readWhatsAppMessageReceivedHookOptIn(channelConfig);
-  if (channelOptIn !== undefined) {
-    return channelOptIn;
-  }
-
-  // Fallback to plugin config path for compatibility
-  const pluginConfig = params.cfg.plugins?.entries?.whatsapp?.config as
-    | WhatsAppMessageReceivedHookConfig
-    | undefined;
-  return readWhatsAppMessageReceivedHookOptIn(pluginConfig) ?? false;
+    readWhatsAppMessageReceivedHookOptIn(channelConfig) ??
+    false
+  );
 }
 
 function emitWhatsAppMessageReceivedHooks(params: {

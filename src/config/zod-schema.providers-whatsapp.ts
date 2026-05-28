@@ -48,6 +48,13 @@ const WhatsAppAckReactionSchema = z
   .strict()
   .optional();
 
+const WhatsAppPluginHooksSchema = z
+  .object({
+    messageReceived: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 function stripDeprecatedWhatsAppNoopKeys(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return value;
@@ -97,6 +104,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     replyToMode: ReplyToModeSchema.optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
+    pluginHooks: WhatsAppPluginHooksSchema,
   };
 }
 
@@ -150,12 +158,6 @@ const WhatsAppAccountObjectSchema = z
     /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
     authDir: z.string().optional(),
     mediaMaxMb: z.number().int().positive().optional(),
-    pluginHooks: z
-      .object({
-        messageReceived: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict();
 
@@ -175,12 +177,6 @@ const WhatsAppConfigObjectSchema = z
         reactions: z.boolean().optional(),
         sendMessage: z.boolean().optional(),
         polls: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-    pluginHooks: z
-      .object({
-        messageReceived: z.boolean().optional(),
       })
       .strict()
       .optional(),
