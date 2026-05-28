@@ -1066,9 +1066,12 @@ function renderSlashMenu(
   `;
 }
 
+let katexPreloadTriggered = false;
+
 export function renderChat(props: ChatProps) {
-  // Preload KaTeX when math rendering is enabled
-  if (props.mathRendering === "katex") {
+  // Preload KaTeX when math rendering is enabled (one-shot guard to prevent infinite render loop)
+  if (props.mathRendering === "katex" && !katexPreloadTriggered) {
+    katexPreloadTriggered = true;
     preloadKatex().then(() => {
       clearMarkdownCache();
       const requestUpdate = props.onRequestUpdate ?? (() => {});
