@@ -2220,4 +2220,63 @@ describe("short-term promotion", () => {
       });
     });
   });
+
+  it("shows signalCount instead of just recallCount in promotion annotations", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.parse("2026-05-28T10:00:00.000Z");
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "test signal count display",
+        nowMs,
+        results: [
+          {
+            path: "memory/2026-05-28.md",
+            startLine: 5,
+            endLine: 6,
+            score: 0.85,
+            snippet: "Entry with dailyCount signals but zero recallCount.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      const storeJson = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      const entryKey = Object.keys(storeJson.entries)[0];
+      storeJson.entries[entryKey].dailyCount = 6;
+      storeJson.entries[entryKey].recallCount = 0;
+      storeJson.entries[entryKey].groundedCount = 1;
+      await fs.writeFile(storePath, JSON.stringify(storeJson, null, 2), "utf-8");
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs,
+      });
+
+      expect(ranked.length).toBe(1);
+      expect(ranked[0].recallCount).toBe(0);
+      expect(ranked[0].dailyCount).toBe(6);
+      expect(ranked[0].groundedCount).toBe(1);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs,
+      });
+
+      expect(applied.applied).toBe(1);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+
+      expect(memoryText).toContain("signals=7");
+      expect(memoryText).toContain("recalls=0");
+      expect(memoryText).not.toMatch(/recalls=7/);
+    });
+  });
 });

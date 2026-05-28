@@ -1398,11 +1398,12 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
             `${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`,
           )}`,
         );
+        const signalCount = candidate.signalCount ?? (candidate.recallCount + (candidate.dailyCount ?? 0) + (candidate.groundedCount ?? 0));
         lines.push(
           colorize(
             rich,
             theme.muted,
-            `recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
+            `signals=${signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
           ),
         );
         if (candidate.conceptTags.length > 0) {

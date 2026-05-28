@@ -1672,9 +1672,10 @@ function buildPromotionSection(
   for (const candidate of candidates) {
     const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
     const snippet = candidate.snippet || "(no snippet captured)";
+    const signalCount = candidate.signalCount ?? totalSignalCountForEntry(candidate);
     lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
     lines.push(
-      `- ${snippet.replace(/^- +/, "")} [score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`,
+      `- ${snippet.replace(/^- +/, "")} [score=${candidate.score.toFixed(3)} signals=${signalCount} recalls=${candidate.recallCount ?? 0} avg=${candidate.avgScore.toFixed(3)} source=${source}]`,
     );
   }
 
