@@ -38,7 +38,13 @@ export async function createChildAdapter(params: {
     env: baseEnv,
   });
 
-  const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
+  const stdinMode =
+    params.stdinMode ??
+    (params.input !== undefined
+      ? "pipe-closed"
+      : isServiceManagedRuntime()
+        ? "pipe-closed"
+        : "inherit");
 
   // In service-managed mode keep children attached so systemd/launchd can
   // stop the full process tree reliably. Outside service mode preserve the
