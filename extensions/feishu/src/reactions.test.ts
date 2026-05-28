@@ -79,6 +79,16 @@ describe("normalizeFeishuEmoji", () => {
     expect(normalizeFeishuEmoji("\u{2705}")).toBe("CheckMark");
   });
 
+  it("maps eyes emoji (👀, U+1F440) to documented GLANCE type", () => {
+    // Original #66406 report includes a `emoji 👀 failed` line, so this case
+    // must route through normalizeFeishuEmoji to the documented `GLANCE`
+    // emoji_type instead of falling through as raw unicode (which Feishu
+    // rejects with code 231001).
+    expect(normalizeFeishuEmoji("\u{1F440}")).toBe("GLANCE");
+    expect(normalizeFeishuEmoji("GLANCE")).toBe("GLANCE");
+    expect(normalizeFeishuEmoji("glance")).toBe("GLANCE");
+  });
+
   it("trims whitespace before normalizing", () => {
     expect(normalizeFeishuEmoji("  THUMBSUP  ")).toBe("THUMBSUP");
     expect(normalizeFeishuEmoji(" \u{1F525} ")).toBe("Fire");

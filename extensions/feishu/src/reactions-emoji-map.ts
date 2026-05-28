@@ -37,6 +37,7 @@ export const FeishuEmoji = {
   OK: "OK",
   FISTBUMP: "FISTBUMP",
   PARTY: "PARTY",
+  GLANCE: "GLANCE",
   // PascalCase group (documented case — DO NOT uppercase)
   ThumbsDown: "ThumbsDown",
   Fire: "Fire",
@@ -71,6 +72,7 @@ const KNOWN_FEISHU_EMOJI_TYPES: readonly string[] = [
   "OK",
   "FISTBUMP",
   "PARTY",
+  "GLANCE",
   "ThumbsDown",
   "Fire",
   "CheckMark",
@@ -121,6 +123,7 @@ const unicodeToFeishuEmoji: Record<string, string> = {
   "\u{2714}\u{FE0F}": "CheckMark", // ✔️
   "\u{2714}": "CheckMark", // ✔
   "\u{274C}": "CrossMark", // ❌
+  "\u{1F440}": "GLANCE", // 👀 — original bug report on #66406 cited this emoji.
 };
 
 /**
