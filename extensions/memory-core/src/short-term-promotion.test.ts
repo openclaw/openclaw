@@ -193,8 +193,8 @@ describe("short-term promotion", () => {
 
   it("caps short-term recall store entries and snippets during normal recording", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      const maxEntries = __testing.SHORT_TERM_RECALL_MAX_ENTRIES;
-      const maxSnippetChars = __testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
+      const maxEntries = testing.SHORT_TERM_RECALL_MAX_ENTRIES;
+      const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
       await recordShortTermRecalls({
         workspaceDir,
         query: "bounded recall",
@@ -1931,8 +1931,8 @@ describe("short-term promotion", () => {
 
   it("audits and repairs oversized recall stores", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      const maxEntries = __testing.SHORT_TERM_RECALL_MAX_ENTRIES;
-      const maxSnippetChars = __testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
+      const maxEntries = testing.SHORT_TERM_RECALL_MAX_ENTRIES;
+      const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
       await fs.writeFile(
         storePath,
