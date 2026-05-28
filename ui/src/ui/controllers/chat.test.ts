@@ -441,6 +441,28 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Alpha");
   });
 
+  it("clears the stream for empty replacement deltas", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Alpha beta",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      deltaText: "",
+      replace: true,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("");
+  });
+
   it("returns final for another run when payload has no message", () => {
     const state = createActiveStreamingState();
     const payload: ChatEventPayload = {

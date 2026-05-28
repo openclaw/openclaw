@@ -480,6 +480,163 @@ describe("handleMessageUpdate text signatures", () => {
     expect(context.state.blockBuffer).toBe("Corrected answer");
   });
 
+  it("resets block parsers before replacement text deltas", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      consumePartialReplyDirectives: vi.fn((text: string) => ({ text })),
+      state: {
+        deltaBuffer: "<think>stale",
+        blockBuffer: "stale",
+        blockState: {
+          thinking: true,
+          final: true,
+          inlineCode: createInlineCodeState(),
+          pendingTagFragment: "<thi",
+        },
+        partialBlockState: {
+          thinking: true,
+          final: true,
+          inlineCode: createInlineCodeState(),
+          pendingTagFragment: "<fin",
+        },
+        lastStreamedAssistantCleaned: "stale",
+        emittedAssistantUpdate: true,
+      },
+    });
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "Corrected answer",
+        replace: true,
+        partial: {
+          role: "assistant",
+          content: [],
+          stopReason: "stop",
+          api: "ollama",
+          provider: "ollama",
+          model: "qwen3:32b",
+          usage: {},
+          timestamp: 0,
+        },
+      },
+    } as never);
+
+    expect(context.state.blockState).toMatchObject({
+      thinking: false,
+      final: false,
+      pendingTagFragment: undefined,
+    });
+    expect(context.state.partialBlockState).toMatchObject({
+      thinking: false,
+      final: false,
+      pendingTagFragment: undefined,
+    });
+    expect(context.state.deltaBuffer).toBe("Corrected answer");
+    expect(context.state.blockBuffer).toBe("Corrected answer");
+  });
+
+  it("emits empty replacement text deltas to clear stale streamed text", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      consumePartialReplyDirectives: vi.fn((text: string) => ({ text })),
+      state: {
+        deltaBuffer: "stale",
+        blockBuffer: "stale",
+        lastStreamedAssistantCleaned: "stale",
+        emittedAssistantUpdate: true,
+      },
+    });
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "",
+        replace: true,
+        partial: {
+          role: "assistant",
+          content: [],
+          stopReason: "stop",
+          api: "ollama",
+          provider: "ollama",
+          model: "qwen3:32b",
+          usage: {},
+          timestamp: 0,
+        },
+      },
+    } as never);
+
+    expect(firstMockArg(onAgentEvent, "agent event")).toEqual({
+      stream: "assistant",
+      data: {
+        text: "",
+        delta: "",
+        replace: true,
+        mediaUrls: undefined,
+        phase: undefined,
+      },
+    });
+    expect(context.state.lastStreamedAssistantCleaned).toBe("");
+    expect(context.state.deltaBuffer).toBe("");
+    expect(context.state.blockBuffer).toBe("");
+  });
+
+  it("resets assistant text stream state before replacement text deltas", () => {
+    const onAgentEvent = vi.fn();
+    const accumulator = createStreamingDirectiveAccumulator();
+    const resetAssistantTextStreamState = vi.fn(() => accumulator.reset());
+    accumulator.consume("\nMEDIA");
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      consumePartialReplyDirectives: vi.fn((text: string, options?: { final?: boolean }) =>
+        accumulator.consume(text, options),
+      ),
+      resetAssistantTextStreamState,
+      state: {
+        lastStreamedAssistantCleaned: "stale",
+        emittedAssistantUpdate: true,
+      },
+    });
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "Corrected answer",
+        replace: true,
+        partial: {
+          role: "assistant",
+          content: [],
+          stopReason: "stop",
+          api: "ollama",
+          provider: "ollama",
+          model: "qwen3:32b",
+          usage: {},
+          timestamp: 0,
+        },
+      },
+    } as never);
+
+    expect(resetAssistantTextStreamState).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
+      data: {
+        text: "Corrected answer",
+        mediaUrls: undefined,
+        replace: true,
+      },
+    });
+  });
+
   it("emits media-only unphased streaming directives", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({
@@ -1055,6 +1212,39 @@ describe("handleMessageEnd", () => {
     expect(onAgentEvent).not.toHaveBeenCalled();
     expect(emitBlockReply).not.toHaveBeenCalled();
     expect(finalizeAssistantTexts).not.toHaveBeenCalled();
+  });
+
+  it("emits final text after an empty replacement cleared the stream", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createMessageEndContext({
+      onAgentEvent,
+      state: {
+        emittedAssistantUpdate: true,
+        lastStreamedAssistantCleaned: "",
+        deltaBuffer: "",
+        blockBuffer: "",
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    } as never);
+
+    expect(firstMockArg(onAgentEvent, "agent event")).toEqual({
+      stream: "assistant",
+      data: {
+        text: "Final answer",
+        delta: "Final answer",
+        replace: undefined,
+        mediaUrls: undefined,
+        phase: undefined,
+      },
+    });
   });
 
   it("does not duplicate block reply for text_end channels when text was already delivered", () => {

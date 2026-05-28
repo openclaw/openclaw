@@ -747,20 +747,36 @@ describe("OpenClaw SDK", () => {
           payload: {
             runId: "run_chat_only",
             sessionKey: "chat-only",
-            state: "final",
+            state: "delta",
+            deltaText: "",
+            replace: true,
             message: {
               role: "assistant",
-              content: [{ type: "text", text: "reset" }],
+              content: [{ type: "text", text: "" }],
               timestamp: ts + 3,
             },
           },
         });
         fake.emit({
-          event: "custom.debug",
+          event: "chat",
           seq: 5,
           payload: {
             runId: "run_chat_only",
-            ts: ts + 4,
+            sessionKey: "chat-only",
+            state: "final",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "reset" }],
+              timestamp: ts + 4,
+            },
+          },
+        });
+        fake.emit({
+          event: "custom.debug",
+          seq: 6,
+          payload: {
+            runId: "run_chat_only",
+            ts: ts + 5,
             data: { ok: true },
           },
         });
@@ -807,11 +823,20 @@ describe("OpenClaw SDK", () => {
       const fourth = await iterator.next();
       expect(fourth.done).toBe(false);
       if (fourth.done !== false) {
+        throw new Error("expected empty replacement chat projection event");
+      }
+      expect(fourth.value.type).toBe("assistant.delta");
+      expect(fourth.value.data).toEqual({ text: "", delta: "", replace: true });
+      expect(fourth.value.raw?.event).toBe("chat");
+
+      const fifth = await iterator.next();
+      expect(fifth.done).toBe(false);
+      if (fifth.done !== false) {
         throw new Error("expected chat projection completion event");
       }
-      expect(fourth.value.type).toBe("run.completed");
-      expect(fourth.value.data).toEqual({ phase: "end", outputText: "reset" });
-      expect(fourth.value.raw?.event).toBe("chat");
+      expect(fifth.value.type).toBe("run.completed");
+      expect(fifth.value.data).toEqual({ phase: "end", outputText: "reset" });
+      expect(fifth.value.raw?.event).toBe("chat");
     } finally {
       await iterator.return?.();
     }

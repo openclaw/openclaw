@@ -47,15 +47,26 @@ describe("server chat stream text merge", () => {
     ).toBe("Hello world");
   });
 
-  it("honors replacement snapshots even when they are shorter prefixes", () => {
+  it("honors explicit replacements even when the new text is a shorter prefix", () => {
     expect(
       resolveMergedAssistantText({
         previousText: "Hello world",
         nextText: "Hello",
         nextDelta: "",
-        replace: true,
+        nextReplace: true,
       }),
     ).toBe("Hello");
+  });
+
+  it("honors explicit empty replacements", () => {
+    expect(
+      resolveMergedAssistantText({
+        previousText: "Hello world",
+        nextText: "",
+        nextDelta: "",
+        nextReplace: true,
+      }),
+    ).toBe("");
   });
 
   it("keeps non-prefix incremental segments after tool calls", () => {

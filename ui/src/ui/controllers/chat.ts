@@ -286,9 +286,18 @@ export type ChatEventPayload = {
   runId?: string;
   sessionKey: string;
   state: "delta" | "final" | "aborted" | "error";
+  deltaText?: string;
+  replace?: boolean;
   message?: unknown;
   errorMessage?: string;
 };
+
+function readChatDeltaText(payload: ChatEventPayload): string | null {
+  if (payload.replace === true && typeof payload.deltaText === "string") {
+    return payload.deltaText;
+  }
+  return extractText(payload.message);
+}
 
 function maybeResetToolStream(state: ChatState) {
   const toolHost = state as ChatState & Partial<Parameters<typeof resetToolStream>[0]>;
@@ -752,11 +761,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     });
 
   if (payload.state === "delta") {
-    const next = extractText(payload.message);
+    const next = readChatDeltaText(payload);
+    const isEmptyReplacementDelta = payload.replace === true && payload.deltaText === "";
     if (
       typeof next === "string" &&
       !isSilentReplyStream(next) &&
-      !isAssistantHeartbeatAckForDisplay(payload.message)
+      (isEmptyReplacementDelta || !isAssistantHeartbeatAckForDisplay(payload.message))
     ) {
       state.chatStream = next;
     }
