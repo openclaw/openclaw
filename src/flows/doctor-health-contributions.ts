@@ -732,15 +732,11 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
     credentialPlan.localTokenSurfaceActive || ambiguousLocalAuthRefs
       ? credentialPlan.localToken.refPath
       : undefined,
-    (credentialPlan.localPasswordCanWin && !credentialPlan.envPassword) || ambiguousLocalAuthRefs
+    credentialPlan.localPasswordCanWin || ambiguousLocalAuthRefs
       ? credentialPlan.localPassword.refPath
       : undefined,
-    credentialPlan.remoteTokenActive && !credentialPlan.envToken
-      ? credentialPlan.remoteToken.refPath
-      : undefined,
-    credentialPlan.remotePasswordActive && !credentialPlan.envPassword
-      ? credentialPlan.remotePassword.refPath
-      : undefined,
+    credentialPlan.remoteTokenActive ? credentialPlan.remoteToken.refPath : undefined,
+    credentialPlan.remotePasswordActive ? credentialPlan.remotePassword.refPath : undefined,
   ].filter((path): path is NonNullable<typeof path> => Boolean(path));
   const hasActiveExecCredential = activeSecretRefPaths.some((path) => {
     const ref = resolveSecretInputRef({

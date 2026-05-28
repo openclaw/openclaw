@@ -558,6 +558,55 @@ describe("doctor command", () => {
     });
   });
 
+  it("skips remote exec token probes even when env token fallback is set", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "https://gateway.example.test",
+            token: {
+              source: "exec",
+              provider: "default",
+              id: "gateway/remote-token",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: {
+              source: "exec",
+              command: process.execPath,
+            },
+          },
+        },
+      },
+    });
+
+    const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token";
+    try {
+      callGateway.mockClear();
+      await doctorCommand(createDoctorRuntime(), {
+        nonInteractive: true,
+        workspaceSuggestions: false,
+      });
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+      }
+    }
+
+    expect(callGateway).not.toHaveBeenCalled();
+    requireTerminalNote({
+      title: "Gateway",
+      messageIncludes:
+        "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+    });
+  });
+
   it("keeps gateway health probes for non-token auth with exec SecretRefs", async () => {
     mockDoctorConfigSnapshot({
       config: {
