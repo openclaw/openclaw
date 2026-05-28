@@ -327,6 +327,41 @@ function parseJsonValuePrefix(
   }
 }
 
+function readSmartQuotedEditArray(
+  raw: string,
+  startIndex: number,
+): ToolCallRepairJsonValue | undefined {
+  if (raw[startIndex] !== "[") {
+    return undefined;
+  }
+
+  const edits: Record<string, unknown>[] = [];
+  let index = skipWhitespace(raw, startIndex + 1);
+  if (raw[index] === "]") {
+    return { value: edits, endIndex: index + 1 };
+  }
+
+  while (index < raw.length) {
+    const edit = parseSmartQuotedToolCallObject(raw, index);
+    if (!edit) {
+      return undefined;
+    }
+    edits.push(edit.args);
+
+    index = skipWhitespace(raw, edit.endIndex);
+    if (raw[index] === ",") {
+      index = skipWhitespace(raw, index + 1);
+      continue;
+    }
+    if (raw[index] === "]") {
+      return { value: edits, endIndex: index + 1 };
+    }
+    return undefined;
+  }
+
+  return undefined;
+}
+
 function readObjectValue(
   raw: string,
   startIndex: number,
@@ -338,6 +373,9 @@ function readObjectValue(
   }
   if (isToolCallRepairSmartQuote(char)) {
     return readSmartQuotedValue(raw, startIndex, key);
+  }
+  if (key === "edits" && char === "[") {
+    return readSmartQuotedEditArray(raw, startIndex);
   }
   return readJsonValue(raw, startIndex);
 }

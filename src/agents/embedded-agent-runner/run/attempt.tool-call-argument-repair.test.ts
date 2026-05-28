@@ -282,6 +282,21 @@ const re = /\d+/;
     });
   });
 
+  it("repairs smart-quoted edit args that use the current edits array schema", async () => {
+    const result = await runToolCallRepairCase({
+      toolName: "edit",
+      delta: String.raw` {“path”:“notes/报告.md”,“edits”:[{“oldText”:“旧的 **草稿**”,“newText”:“更新 \"草稿\"\nnext”},{“oldText”:“tail”,“newText”:“done”}]}`,
+    });
+
+    expectAllToolCallArgs(result, {
+      path: "notes/报告.md",
+      edits: [
+        { oldText: "旧的 **草稿**", newText: '更新 "草稿"\nnext' },
+        { oldText: "tail", newText: "done" },
+      ],
+    });
+  });
+
   it("preserves smart quotes inside ASCII-delimited JSON content with trailing junk", async () => {
     const result = await runToolCallRepairCase({
       toolName: "read",
