@@ -65,6 +65,7 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   promptContext?: string;
   developerInstructions?: string;
   turnScopedDeveloperInstructions?: string;
+  memoryCollaborationInstructions?: string;
   heartbeatCollaborationInstructions?: string;
 };
 
@@ -297,6 +298,12 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       turnScopedDeveloperInstructions: renderCodexWorkspaceCollaborationDeveloperInstructions(
         turnScopedDeveloperInstructionFiles,
       ),
+      memoryCollaborationInstructions: shouldInjectCodexOpenClawPromptContext(params.params)
+        ? renderCodexWorkspaceMemoryReference({
+            files: memoryReferenceFiles,
+            toolNames: params.memoryToolNames,
+          })
+        : undefined,
       heartbeatCollaborationInstructions:
         renderCodexWorkspaceHeartbeatReference(heartbeatReferenceFiles),
     };
@@ -547,18 +554,12 @@ function readNonEmptyString(value: unknown): string | undefined {
 
 export function buildCodexOpenClawPromptContext(params: {
   params: EmbeddedRunAttemptParams;
-  skillsPrompt?: string;
   workspacePromptContext?: string;
-  workspaceMemoryReference?: string;
 }): string | undefined {
   if (!shouldInjectCodexOpenClawPromptContext(params.params)) {
     return undefined;
   }
   const sections = [
-    params.skillsPrompt?.trim()
-      ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
-      : undefined,
-    params.workspaceMemoryReference?.trim() ? params.workspaceMemoryReference.trim() : undefined,
     params.workspacePromptContext?.trim()
       ? ["## OpenClaw Workspace Context", "", params.workspacePromptContext.trim()].join("\n")
       : undefined,
@@ -580,6 +581,18 @@ function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams
   return !(
     params.bootstrapContextMode === "lightweight" && params.bootstrapContextRunKind === "cron"
   );
+}
+
+export function renderCodexSkillsCollaborationInstructions(params: {
+  attempt: EmbeddedRunAttemptParams;
+  skillsPrompt?: string;
+}): string | undefined {
+  if (!shouldInjectCodexOpenClawPromptContext(params.attempt)) {
+    return undefined;
+  }
+  return params.skillsPrompt?.trim()
+    ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
+    : undefined;
 }
 
 export function prependCodexOpenClawPromptContext(

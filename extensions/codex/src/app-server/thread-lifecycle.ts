@@ -918,6 +918,8 @@ export function buildTurnStartParams(
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
     turnScopedDeveloperInstructions?: string;
+    skillsCollaborationInstructions?: string;
+    memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
   },
 ): CodexTurnStartParams {
@@ -936,6 +938,8 @@ export function buildTurnStartParams(
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
+      skillsCollaborationInstructions: options.skillsCollaborationInstructions,
+      memoryCollaborationInstructions: options.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
     }),
   };
@@ -960,6 +964,8 @@ export function buildTurnCollaborationMode(
   params: EmbeddedRunAttemptParams,
   options: {
     turnScopedDeveloperInstructions?: string;
+    skillsCollaborationInstructions?: string;
+    memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
   } = {},
 ): CodexTurnCollaborationMode {
@@ -977,27 +983,28 @@ function buildTurnScopedCollaborationInstructions(
   params: EmbeddedRunAttemptParams,
   options: {
     turnScopedDeveloperInstructions?: string;
+    skillsCollaborationInstructions?: string;
+    memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
   } = {},
 ): string | null {
+  const contextInstructions = joinPresentSections(
+    options.turnScopedDeveloperInstructions,
+    options.skillsCollaborationInstructions,
+    options.memoryCollaborationInstructions,
+  );
   if (params.trigger === "cron") {
-    return joinPresentSections(
-      buildCronCollaborationInstructions(),
-      options.turnScopedDeveloperInstructions,
-    );
+    return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
   }
   if (params.trigger === "heartbeat") {
     return joinPresentSections(
       buildHeartbeatCollaborationInstructions(),
-      options.turnScopedDeveloperInstructions,
+      contextInstructions,
       options.heartbeatCollaborationInstructions,
     );
   }
-  if (options.turnScopedDeveloperInstructions?.trim()) {
-    return joinPresentSections(
-      buildDefaultCollaborationInstructions(),
-      options.turnScopedDeveloperInstructions,
-    );
+  if (contextInstructions?.trim()) {
+    return joinPresentSections(buildDefaultCollaborationInstructions(), contextInstructions);
   }
   return null;
 }

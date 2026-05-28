@@ -61,7 +61,7 @@ import {
   prependCodexOpenClawPromptContext,
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
-  renderCodexWorkspaceMemoryReference,
+  renderCodexSkillsCollaborationInstructions,
   resolveContextEngineBootstrapProjectionDecision,
   shouldProjectMirroredHistoryForCodexStart,
 } from "./attempt-context.js";
@@ -671,12 +671,11 @@ export async function runCodexAppServerAttempt(
   );
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
-    skillsPrompt: params.skillsSnapshot?.prompt,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
-    workspaceMemoryReference: renderCodexWorkspaceMemoryReference({
-      files: workspaceBootstrapContext.memoryReferenceFiles ?? [],
-      toolNames: workspaceBootstrapContext.memoryToolNames,
-    }),
+  });
+  const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
+    attempt: params,
+    skillsPrompt: params.skillsSnapshot?.prompt,
   });
   let promptText = params.prompt;
   let developerInstructions = baseDeveloperInstructions;
@@ -798,6 +797,8 @@ export async function runCodexAppServerAttempt(
   const buildCodexTurnCollaborationDeveloperInstructions = () =>
     buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
+      skillsCollaborationInstructions,
+      memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions:
         workspaceBootstrapContext.heartbeatCollaborationInstructions,
     }).settings.developer_instructions ?? undefined;
@@ -866,7 +867,7 @@ export async function runCodexAppServerAttempt(
     workspaceDir: effectiveWorkspace,
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     workspaceBootstrapContext,
-    skillsPrompt: openClawPromptContext ? (params.skillsSnapshot?.prompt ?? "") : "",
+    skillsPrompt: skillsCollaborationInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
     tools: toolBridge.availableSpecs,
   });
   const trajectoryRecorder = createCodexTrajectoryRecorder({
@@ -1693,6 +1694,8 @@ export async function runCodexAppServerAttempt(
       sandboxPolicy: codexSandboxPolicy,
       environmentSelection: codexEnvironmentSelection,
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
+      skillsCollaborationInstructions,
+      memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions:
         workspaceBootstrapContext.heartbeatCollaborationInstructions,
     });
