@@ -508,6 +508,72 @@ describe("speech-core native voice-note routing", () => {
     expect(result.providerModel).toBe("eleven_multilingual_v2");
   });
 
+  it("maps speakerVoice provider config to provider-compatible voice fields", async () => {
+    const result = await synthesizeSpeech({
+      text: "Use the configured speaker.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            providers: {
+              mock: {
+                speakerVoice: "cedar",
+                speakerVoiceId: "voice-123",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.providerVoice).toBe("voice-123");
+    const request = requireFirstSynthesisRequest("speaker voice synthesis request");
+    expect(request.providerConfig).toMatchObject({
+      speakerVoice: "cedar",
+      voice: "cedar",
+      voiceName: "cedar",
+      speakerVoiceId: "voice-123",
+      voiceId: "voice-123",
+    });
+  });
+
+  it("maps speakerVoice persona provider config to provider-compatible voice fields", async () => {
+    const result = await synthesizeSpeech({
+      text: "Use the persona speaker.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            persona: "narrator",
+            personas: {
+              narrator: {
+                providers: {
+                  mock: {
+                    speakerVoice: "marin",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.providerVoice).toBe("marin");
+    const request = requireFirstSynthesisRequest("persona speaker voice synthesis request");
+    expect(request.providerConfig).toMatchObject({
+      speakerVoice: "marin",
+      voice: "marin",
+      voiceName: "marin",
+    });
+  });
+
   it.each(["feishu", "whatsapp"] as const)(
     "marks %s voice-note TTS for channel-side transcoding when provider returns mp3",
     async (channel) => {
@@ -816,7 +882,7 @@ describe("speech-core native voice-note routing", () => {
       overrides: {
         providerOverrides: {
           mock: {
-            voice: "directed-voice",
+            speakerVoice: "directed-voice",
           },
         },
       },
@@ -830,7 +896,7 @@ describe("speech-core native voice-note routing", () => {
       requireFirstCallParam(synthesizeTelephony.mock.calls, "telephony synthesis"),
       "telephony synthesis request",
     );
-    expect(telephonyRequest.providerOverrides).toEqual({ voice: "directed-voice" });
+    expect(telephonyRequest.providerOverrides).toEqual({ speakerVoice: "directed-voice" });
   });
 
   it("uses provider defaults when fallback policy allows missing persona bindings", async () => {

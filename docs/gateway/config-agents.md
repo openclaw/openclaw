@@ -1056,7 +1056,7 @@ for provider examples and precedence.
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
         tts: {
           providers: {
-            elevenlabs: { voiceId: "EXAVITQu4vr4xnSDxMaL" },
+            elevenlabs: { speakerVoiceId: "EXAVITQu4vr4xnSDxMaL" },
           },
         },
         skills: ["docs-search"], // replaces agents.defaults.skills when set
@@ -1415,7 +1415,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
         elevenlabs: {
           apiKey: "elevenlabs_api_key",
           baseUrl: "https://api.elevenlabs.io",
-          voiceId: "voice_id",
+          speakerVoiceId: "voice_id",
           modelId: "eleven_multilingual_v2",
           seed: 42,
           applyTextNormalization: "auto",
@@ -1429,7 +1429,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
           },
         },
         microsoft: {
-          voice: "en-US-AvaMultilingualNeural",
+          speakerVoice: "en-US-AvaMultilingualNeural",
           lang: "en-US",
           outputFormat: "audio-24khz-48kbitrate-mono-mp3",
         },
@@ -1437,7 +1437,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
           apiKey: "openai_api_key",
           baseUrl: "https://api.openai.com/v1",
           model: "gpt-4o-mini-tts",
-          voice: "alloy",
+          speakerVoice: "alloy",
         },
       },
     },
@@ -1465,7 +1465,7 @@ Defaults for Talk mode (macOS/iOS/Android).
     provider: "elevenlabs",
     providers: {
       elevenlabs: {
-        voiceId: "elevenlabs_voice_id",
+        speakerVoiceId: "elevenlabs_voice_id",
         voiceAliases: {
           Clawd: "EXAVITQu4vr4xnSDxMaL",
           Roger: "CwhRBWXzGAHq8TQ4Fs17",
@@ -1489,7 +1489,7 @@ Defaults for Talk mode (macOS/iOS/Android).
       providers: {
         openai: {
           model: "gpt-realtime-2",
-          voice: "cedar",
+          speakerVoice: "cedar",
         },
       },
       instructions: "Speak warmly and keep answers brief.",

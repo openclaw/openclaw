@@ -360,6 +360,23 @@ function asProviderConfig(value: unknown): SpeechProviderConfig {
     : {};
 }
 
+function withSpeakerSelectionCompat(config: SpeechProviderConfig): SpeechProviderConfig {
+  const speakerVoice = normalizeOptionalString(config.speakerVoice);
+  const speakerVoiceId = normalizeOptionalString(config.speakerVoiceId);
+  const voice = normalizeOptionalString(config.voice);
+  const voiceName = normalizeOptionalString(config.voiceName);
+  const voiceId = normalizeOptionalString(config.voiceId);
+  return {
+    ...config,
+    ...(speakerVoice && !voice ? { voice: speakerVoice } : {}),
+    ...(speakerVoice && !voiceName ? { voiceName: speakerVoice } : {}),
+    ...(speakerVoiceId && !voiceId ? { voiceId: speakerVoiceId } : {}),
+    ...(voice && !speakerVoice ? { speakerVoice: voice } : {}),
+    ...(voiceName && !speakerVoice ? { speakerVoice: voiceName } : {}),
+    ...(voiceId && !speakerVoiceId ? { speakerVoiceId: voiceId } : {}),
+  };
+}
+
 function asProviderConfigMap(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -380,7 +397,7 @@ function normalizeProviderConfigMap(
   const next: Record<string, SpeechProviderConfig> = {};
   for (const [providerId, providerConfig] of Object.entries(rawMap)) {
     const normalized = normalizeConfiguredSpeechProviderId(providerId) ?? providerId;
-    next[normalized] = asProviderConfig(providerConfig);
+    next[normalized] = withSpeakerSelectionCompat(asProviderConfig(providerConfig));
   }
   return next;
 }
@@ -456,7 +473,7 @@ function resolveRawProviderConfig(
   }
   const rawProviders = asProviderConfigMap(raw.providers);
   const direct = rawProviders[providerId] ?? (raw as Record<string, unknown>)[providerId];
-  return asProviderConfig(direct);
+  return withSpeakerSelectionCompat(asProviderConfig(direct));
 }
 
 function resolveLazyProviderConfig(
@@ -472,18 +489,28 @@ function resolveLazyProviderConfig(
     return existing;
   }
   const rawConfig = resolveRawProviderConfig(config.rawConfig, canonical);
+  const rawBaseConfig = config.rawConfig as Record<string, unknown> | undefined;
+  const rawProviders = asProviderConfigMap(config.rawConfig?.providers);
+  const rawProviderConfig = rawProviders[canonical] ?? rawBaseConfig?.[canonical];
+  const compatRawProviderConfig = withSpeakerSelectionCompat(asProviderConfig(rawProviderConfig));
+  const rawConfigForProvider = {
+    ...rawBaseConfig,
+    providers: {
+      ...rawProviders,
+      [canonical]: compatRawProviderConfig,
+    },
+    [canonical]: compatRawProviderConfig,
+  };
   const resolvedProvider = getSpeechProvider(canonical, effectiveCfg);
-  const next =
+  const next = withSpeakerSelectionCompat(
     effectiveCfg && resolvedProvider?.resolveConfig
       ? resolvedProvider.resolveConfig({
           cfg: effectiveCfg,
-          rawConfig: {
-            ...(config.rawConfig as Record<string, unknown> | undefined),
-            providers: asProviderConfigMap(config.rawConfig?.providers),
-          },
+          rawConfig: rawConfigForProvider,
           timeoutMs: resolveSpeechProviderTimeoutMs({ config, provider: resolvedProvider }),
         })
-      : rawConfig;
+      : rawConfig,
+  );
   config.providerConfigs[canonical] = next;
   return next;
 }
@@ -493,7 +520,7 @@ function collectDirectProviderConfigEntries(raw: TtsConfig): Record<string, Spee
   const rawProviders = asProviderConfigMap(raw.providers);
   for (const [providerId, value] of Object.entries(rawProviders)) {
     const normalized = normalizeConfiguredSpeechProviderId(providerId) ?? providerId;
-    entries[normalized] = asProviderConfig(value);
+    entries[normalized] = withSpeakerSelectionCompat(asProviderConfig(value));
   }
   const reservedKeys = new Set([
     "auto",
@@ -517,7 +544,7 @@ function collectDirectProviderConfigEntries(raw: TtsConfig): Record<string, Spee
       continue;
     }
     const normalized = normalizeConfiguredSpeechProviderId(key) ?? key;
-    entries[normalized] ??= asProviderConfig(value);
+    entries[normalized] ??= withSpeakerSelectionCompat(asProviderConfig(value));
   }
   return entries;
 }
@@ -1201,9 +1228,13 @@ function resolveTtsResultVoice(
   providerOverrides?: SpeechProviderOverrides,
 ): string | undefined {
   return (
+    readTtsResultString(providerOverrides?.speakerVoiceId) ??
+    readTtsResultString(providerOverrides?.speakerVoice) ??
     readTtsResultString(providerOverrides?.voiceId) ??
     readTtsResultString(providerOverrides?.voiceName) ??
     readTtsResultString(providerOverrides?.voice) ??
+    readTtsResultString(providerConfig.speakerVoiceId) ??
+    readTtsResultString(providerConfig.speakerVoice) ??
     readTtsResultString(providerConfig.voiceId) ??
     readTtsResultString(providerConfig.voiceName) ??
     readTtsResultString(providerConfig.voice)
