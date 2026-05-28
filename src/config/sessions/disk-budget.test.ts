@@ -8,6 +8,7 @@ import {
 } from "../../trajectory/paths.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { enforceSessionDiskBudget, pruneUnreferencedSessionArtifacts } from "./disk-budget.js";
+import { saveSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 async function expectPathExists(targetPath: string): Promise<void> {
@@ -219,6 +220,76 @@ describe("enforceSessionDiskBudget", () => {
       expect(result.overBudget).toBe(false);
       expect(result.removedEntries).toBe(0);
       expect(Object.keys(store)).toHaveLength(12);
+    });
+  });
+
+  it("removes unreferenced skills prompt blobs when evicting sessions", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const activeKey = "agent:main:active";
+      const oldKey = "agent:main:old";
+      const oldPrompt = `<available_skills>\n${"old prompt\n".repeat(200)}</available_skills>`;
+      const activePrompt = `<available_skills>\n${"active prompt\n".repeat(200)}</available_skills>`;
+      const store: Record<string, SessionEntry> = {
+        [oldKey]: {
+          sessionId: "old",
+          updatedAt: 1,
+          skillsSnapshot: {
+            prompt: oldPrompt,
+            skills: [{ name: "old" }],
+            version: 1,
+          },
+        },
+        [activeKey]: {
+          sessionId: "active",
+          updatedAt: 2,
+          skillsSnapshot: {
+            prompt: activePrompt,
+            skills: [{ name: "active" }],
+            version: 1,
+          },
+        },
+      };
+      await saveSessionStore(storePath, store, { skipMaintenance: true });
+      const raw = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+      const oldHash = raw[oldKey]?.skillsSnapshot?.promptRef?.hash;
+      const activeHash = raw[activeKey]?.skillsSnapshot?.promptRef?.hash;
+      if (!oldHash || !activeHash) {
+        throw new Error("expected prompt refs");
+      }
+      const oldBlob = path.join(
+        dir,
+        "skills-prompts",
+        "sha256",
+        oldHash.slice(0, 2),
+        `${oldHash}.txt`,
+      );
+      const activeBlob = path.join(
+        dir,
+        "skills-prompts",
+        "sha256",
+        activeHash.slice(0, 2),
+        `${activeHash}.txt`,
+      );
+      await expectPathExists(oldBlob);
+      await expectPathExists(activeBlob);
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: activeKey,
+        maintenance: {
+          maxDiskBytes: 1,
+          highWaterBytes: 1,
+        },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(store).not.toHaveProperty(oldKey);
+      expect(store).toHaveProperty(activeKey);
+      await expectPathMissing(oldBlob);
+      await expectPathExists(activeBlob);
     });
   });
 
