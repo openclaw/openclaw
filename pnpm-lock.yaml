@@ -1322,6 +1322,9 @@ importers:
       '@openclaw/whatsapp':
         specifier: workspace:*
         version: link:../whatsapp
+      '@slack/web-api':
+        specifier: 7.16.0
+        version: 7.16.0
       openclaw:
         specifier: workspace:*
         version: link:../..
