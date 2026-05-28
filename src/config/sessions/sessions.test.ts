@@ -725,6 +725,7 @@ describe("session store writer queue", () => {
     expect(writtenText).toBeTypeOf("string");
     expect(writeOptions?.durable).toBe(false);
     expect(writeOptions?.mode).toBe(0o600);
+    expect(writeOptions?.beforeRename).toBeTypeOf("function");
     writeSpy.mockRestore();
   });
 

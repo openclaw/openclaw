@@ -155,15 +155,13 @@ export function projectSessionStoreForPersistence(params: {
   return { store: persisted, changed, promptBlobs };
 }
 
-export async function prepareSessionStoreForPersistence(params: {
+export async function ensureSessionStorePromptBlobsForPersistence(params: {
   storePath: string;
-  store: Record<string, SessionEntry>;
-}): Promise<PersistedSessionStore> {
-  const projected = projectSessionStoreForPersistence(params);
-  for (const blob of projected.promptBlobs.values()) {
+  promptBlobs: Iterable<SessionSkillPromptBlobProjection>;
+}): Promise<void> {
+  for (const blob of params.promptBlobs) {
     await ensurePromptBlob(params.storePath, blob.prompt);
   }
-  return projected;
 }
 
 function parsePromptRef(value: unknown): SessionSkillPromptRef | null {

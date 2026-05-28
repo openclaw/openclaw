@@ -1,3 +1,4 @@
+import type { MakeDirectoryOptions, Mode, PathLike } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -284,6 +285,52 @@ describe("session store strips resolvedSkills from persistence", () => {
     const refreshed = await fs.stat(blobPath);
     expect(refreshed.mtimeMs).toBeGreaterThan(oldTime.getTime());
     expect(await fs.readFile(blobPath, "utf-8")).toBe(prompt);
+  });
+
+  it("rewrites prompt blobs when the session dir is recreated before store commit", async () => {
+    const prompt = `<available_skills>\n${"recreated dir prompt\n".repeat(200)}</available_skills>`;
+    const store = {
+      "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
+    };
+    const realMkdir = fs.mkdir.bind(fs);
+    let storeDirMkdirs = 0;
+    const mkdirSpy = vi
+      .spyOn(fs, "mkdir")
+      .mockImplementation(
+        async (dirPath: PathLike, options?: MakeDirectoryOptions | Mode | null) => {
+          if (typeof dirPath === "string" && path.resolve(dirPath) === path.resolve(testDir)) {
+            storeDirMkdirs += 1;
+            if (storeDirMkdirs === 2) {
+              await fs.rm(testDir, { recursive: true, force: true });
+            }
+          }
+          return await realMkdir(dirPath, options ?? undefined);
+        },
+      );
+
+    try {
+      await saveSessionStore(storePath, store, { skipMaintenance: true });
+    } finally {
+      mkdirSpy.mockRestore();
+    }
+
+    expect(storeDirMkdirs).toBeGreaterThanOrEqual(2);
+    const raw = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+    const hash = raw["agent:main:test:1"]?.skillsSnapshot?.promptRef?.hash;
+    if (!hash) {
+      throw new Error("expected prompt ref");
+    }
+    const blobPath = path.join(
+      testDir,
+      "skills-prompts",
+      "sha256",
+      hash.slice(0, 2),
+      `${hash}.txt`,
+    );
+    expect(await fs.readFile(blobPath, "utf-8")).toBe(prompt);
+    expect(
+      loadSessionStore(storePath, { skipCache: true })["agent:main:test:1"]?.skillsSnapshot?.prompt,
+    ).toBe(prompt);
   });
 
   it("keeps cache clones hydrated when disk JSON uses prompt refs", async () => {

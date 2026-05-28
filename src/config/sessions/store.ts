@@ -17,7 +17,11 @@ import { getRuntimeConfig } from "../io.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import { resolveStorePath } from "./paths.js";
-import { prepareSessionStoreForPersistence } from "./skill-prompt-blobs.js";
+import {
+  ensureSessionStorePromptBlobsForPersistence,
+  projectSessionStoreForPersistence,
+  type SessionSkillPromptBlobProjection,
+} from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
   dropSessionStoreObjectCache,
@@ -502,10 +506,15 @@ async function saveSessionStoreUnlocked(
   }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  const persisted = await prepareSessionStoreForPersistence({ storePath, store });
+  const persisted = projectSessionStoreForPersistence({ storePath, store });
+  const promptBlobs = [...persisted.promptBlobs.values()];
   const json = JSON.stringify(persisted.store, null, 2);
   const cloneSerialized = persisted.changed ? undefined : json;
   if (getSerializedSessionStore(storePath) === json) {
+    await ensureSessionStorePromptBlobsForPersistence({
+      storePath,
+      promptBlobs,
+    });
     updateSessionStoreWriteCaches({
       storePath,
       store,
@@ -525,6 +534,7 @@ async function saveSessionStoreUnlocked(
           store,
           serialized: json,
           cloneSerialized,
+          promptBlobs,
           takeOwnership: opts?.takeCacheOwnership,
         });
         return;
@@ -551,6 +561,7 @@ async function saveSessionStoreUnlocked(
       store,
       serialized: json,
       cloneSerialized,
+      promptBlobs,
       takeOwnership: opts?.takeCacheOwnership,
     });
   } catch (err) {
@@ -565,6 +576,7 @@ async function saveSessionStoreUnlocked(
           store,
           serialized: json,
           cloneSerialized,
+          promptBlobs,
           takeOwnership: opts?.takeCacheOwnership,
         });
       } catch (err2) {
@@ -680,6 +692,7 @@ async function writeSessionStoreAtomic(params: {
   store: Record<string, SessionEntry>;
   serialized: string;
   cloneSerialized?: string;
+  promptBlobs: Iterable<SessionSkillPromptBlobProjection>;
   takeOwnership?: boolean;
 }): Promise<void> {
   // Stage the temp as `sessions.json.<pid>.<uuid>.tmp` (not the generic
@@ -689,6 +702,12 @@ async function writeSessionStoreAtomic(params: {
     durable: false,
     mode: 0o600,
     tempPrefix: path.basename(params.storePath),
+    beforeRename: async () => {
+      await ensureSessionStorePromptBlobsForPersistence({
+        storePath: params.storePath,
+        promptBlobs: params.promptBlobs,
+      });
+    },
   });
   updateSessionStoreWriteCaches({
     storePath: params.storePath,
