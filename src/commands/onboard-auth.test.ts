@@ -27,6 +27,7 @@ const providerEnvVarsById = vi.hoisted(
 );
 
 vi.mock("../config/paths.js", () => ({
+  isExplicitOpenClawHomeStateDir: () => false,
   resolveStateDir: () => process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state",
 }));
 

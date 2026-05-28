@@ -204,6 +204,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
+  isExplicitOpenClawHomeStateDir: () => false,
   resolveIsNixMode: () => false,
   resolveStateDir: () => resolveStateDir(),
 }));
