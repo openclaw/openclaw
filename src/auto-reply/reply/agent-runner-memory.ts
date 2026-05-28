@@ -396,7 +396,7 @@ function resolveSessionLogPath(
 function deriveTranscriptUsageSnapshot(
   snapshot:
     | {
-        usage: ReturnType<typeof normalizeUsage> | undefined;
+        usage?: ReturnType<typeof normalizeUsage>;
         trailingBytes?: number;
       }
     | undefined,
@@ -472,8 +472,23 @@ async function readSessionLogSnapshot(params: {
   }
 
   const snapshot: SessionLogSnapshot = {};
+  let usageScan: SessionLogUsageScan | undefined;
+
+  if (params.includeUsage) {
+    try {
+      usageScan = await readLastNonzeroUsageFromSessionLog(logPath);
+      snapshot.usage = deriveTranscriptUsageSnapshot(usageScan);
+    } catch {
+      snapshot.usage = undefined;
+    }
+  }
 
   if (params.includeByteSize) {
+    const scannedSize = usageScan?.byteSize;
+    if (typeof scannedSize === "number" && Number.isFinite(scannedSize) && scannedSize >= 0) {
+      snapshot.byteSize = Math.floor(scannedSize);
+      return snapshot;
+    }
     try {
       const stat = await fs.promises.stat(logPath);
       const size = Math.floor(stat.size);
@@ -483,19 +498,16 @@ async function readSessionLogSnapshot(params: {
     }
   }
 
-  if (params.includeUsage) {
-    try {
-      const lastUsage = await readLastNonzeroUsageFromSessionLog(logPath);
-      snapshot.usage = deriveTranscriptUsageSnapshot(lastUsage);
-    } catch {
-      snapshot.usage = undefined;
-    }
-  }
-
   return snapshot;
 }
 
-async function readLastNonzeroUsageFromSessionLog(logPath: string) {
+type SessionLogUsageScan = {
+  usage?: ReturnType<typeof normalizeUsage>;
+  trailingBytes?: number;
+  byteSize: number;
+};
+
+async function readLastNonzeroUsageFromSessionLog(logPath: string): Promise<SessionLogUsageScan> {
   const handle = await fs.promises.open(logPath, "r");
   try {
     const stat = await handle.stat();
@@ -525,6 +537,7 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string) {
           return {
             usage,
             trailingBytes: suffixBytesOutsideCombined + trailingBytesInChunk,
+            byteSize: stat.size,
           };
         }
       }
@@ -535,8 +548,9 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string) {
       ? {
           usage,
           trailingBytes: Math.max(0, stat.size - Buffer.byteLength(leadingPartial, "utf8")),
+          byteSize: stat.size,
         }
-      : undefined;
+      : { byteSize: stat.size };
   } finally {
     await handle.close();
   }

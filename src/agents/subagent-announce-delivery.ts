@@ -43,6 +43,7 @@ import {
   dispatchGatewayMethodInProcess,
   getGlobalHookRunner,
   isEmbeddedAgentRunActive,
+  isEmbeddedRunAbandoned,
   getRuntimeConfig,
   formatEmbeddedAgentQueueFailureSummary,
   loadSessionStore,
@@ -73,6 +74,7 @@ type SubagentAnnounceDeliveryDeps = {
     sessionId?: string;
     isActive: boolean;
   };
+  isRequesterSessionAbandoned: (requesterSessionKey: string, sessionId?: string) => boolean;
   queueEmbeddedAgentMessageWithOutcome: (
     sessionId: string,
     text: string,
@@ -93,6 +95,8 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
       isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
     };
   },
+  isRequesterSessionAbandoned: (requesterSessionKey, sessionId) =>
+    isEmbeddedRunAbandoned({ sessionKey: requesterSessionKey, sessionId }),
   queueEmbeddedAgentMessageWithOutcome: queueEmbeddedAgentMessageWithOutcomeAsync,
   sendMessage,
 };
@@ -569,6 +573,9 @@ async function maybeSteerSubagentAnnounce(params: {
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
   const { sessionId, isActive } = resolveRequesterSessionActivity(canonicalKey);
+  if (subagentAnnounceDeliveryDeps.isRequesterSessionAbandoned(canonicalKey, sessionId)) {
+    return { status: "none" };
+  }
   if (!sessionId || !isActive) {
     return { status: "none" };
   }
@@ -1055,6 +1062,19 @@ async function sendSubagentAnnounceDirectly(params: {
       completionRouteRequiresMessageToolDelivery ||
       (agentMediatedCompletion && expectedMediaUrls.length > 0);
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
+    if (
+      params.expectsCompletionMessage &&
+      subagentAnnounceDeliveryDeps.isRequesterSessionAbandoned(
+        canonicalRequesterSessionKey,
+        requesterActivity.sessionId,
+      )
+    ) {
+      return {
+        delivered: false,
+        path: "none",
+        error: "requester session abandoned after timeout",
+      };
+    }
     let activeRequesterWakeFailed = false;
     const tryGeneratedMediaDirectDelivery = async (announceResponse?: unknown) => {
       if (requesterActivity.isActive && !activeRequesterWakeFailed) {
