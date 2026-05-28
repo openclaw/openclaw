@@ -9,7 +9,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
 import {
   clearApnsRegistrationIfCurrent,
-  loadApnsRegistration,
+  loadApnsRegistrations,
   resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv,
   sendApnsExecApprovalAlert,
@@ -21,7 +21,6 @@ import {
 } from "../infra/push-apns.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 
 const APPROVALS_SCOPE = "operator.approvals";
 const OPERATOR_ROLE = "operator";
@@ -97,17 +96,10 @@ function shouldTargetDevice(params: {
 async function loadRegisteredTargets(params: {
   deviceIds: readonly string[];
 }): Promise<DeliveryTarget[]> {
-  const { results, firstError, hasError } = await runTasksWithConcurrency({
-    tasks: params.deviceIds.map((nodeId) => async () => {
-      const registration = await loadApnsRegistration(nodeId);
-      return registration ? ({ nodeId, registration } as DeliveryTarget) : null;
-    }),
-    limit: 10,
-  });
-  if (hasError) {
-    throw firstError;
+  if (params.deviceIds.length === 0) {
+    return [];
   }
-  return results.filter((target): target is DeliveryTarget => target != null);
+  return await loadApnsRegistrations(params.deviceIds);
 }
 
 async function resolvePairedTargets(params: {
