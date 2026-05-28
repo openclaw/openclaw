@@ -500,6 +500,22 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("rejects password parameter for native PDF providers", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await expect(
+        tool.execute("t1", {
+          prompt: "summarize",
+          pdf: "/tmp/doc.pdf",
+          password: "secret",
+        }),
+      ).rejects.toThrow("password is not supported with native PDF providers");
+    });
+  });
+
   it("uses extraction fallback for non-native models", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
@@ -528,6 +544,58 @@ describe("createPdfTool", () => {
         model: OPENAI_PDF_MODEL,
       });
       expect(firstCompletionContext()?.systemPrompt).toBeUndefined();
+    });
+  });
+
+  it("passes password to PDF extraction fallback", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Encrypted content",
+        images: [],
+      });
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "fallback summary" }],
+      } as never);
+
+      const cfg = withPdfModel(OPENAI_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+        password: "secret",
+      });
+
+      expect(extractSpy).toHaveBeenCalledWith(expect.objectContaining({ password: "secret" }));
+    });
+  });
+
+  it("preserves PDF password whitespace before extraction fallback", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Plain content",
+        images: [],
+      });
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "fallback summary" }],
+      } as never);
+
+      const cfg = withPdfModel(OPENAI_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+        password: " secret ",
+      });
+
+      expect(extractSpy).toHaveBeenCalledWith(expect.objectContaining({ password: " secret " }));
     });
   });
 
@@ -615,6 +683,7 @@ describe("createPdfTool", () => {
     expect(props).toHaveProperty("pdf");
     expect(props).toHaveProperty("pdfs");
     expect(props).toHaveProperty("pages");
+    expect(props).toHaveProperty("password");
     expect(props).toHaveProperty("model");
     expect(props).toHaveProperty("maxBytesMb");
   });
