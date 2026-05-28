@@ -791,7 +791,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       expect(replay.status).toBe(200);
       expect(replay.headers.get("content-type")).toContain("text/xml");
       expect(await replay.text()).toContain("<Wait");
-      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
+      expect(parseWebhookEvent).not.toHaveBeenCalled();
       expect(processEvent).not.toHaveBeenCalled();
     } finally {
       parseWebhookEvent.mockRestore();
@@ -1017,7 +1017,8 @@ describe("VoiceCallWebhookServer replay handling", () => {
       });
 
       expect(first.status).toBe(200);
-      expect(await first.text()).toContain("server-token");
+      const firstBody = await first.text();
+      expect(firstBody).toContain("server-token");
       await expectTwilioReplayTwiML(replay);
       expect(buildTwiMLPayload).toHaveBeenCalledTimes(1);
       expect(parseWebhookEvent).not.toHaveBeenCalled();
