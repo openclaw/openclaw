@@ -358,6 +358,34 @@ describe("GatewayClient security checks", () => {
     client.stop();
   });
 
+  it("does not treat hostnames starting with 127 as loopback", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.example.com:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expectSecurityConnectError(onConnectError, { expectTailscaleHint: true });
+    expect(wsInstances.length).toBe(0);
+    client.stop();
+  });
+
+  it("allows ws:// to IPv4-mapped loopback addresses", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://[::ffff:127.0.0.1]:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1);
+    client.stop();
+  });
+
   it("bootstraps inherited managed proxy routing before proxy-mode loopback WebSocket creation", () => {
     process.env.OPENCLAW_PROXY_ACTIVE = "1";
     process.env.OPENCLAW_PROXY_LOOPBACK_MODE = "proxy";

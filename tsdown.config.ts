@@ -142,6 +142,17 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
   };
 }
 
+function nodeWorkspacePackageBuildConfig(config: UserConfig): UserConfig {
+  return {
+    ...config,
+    env,
+    format: "esm",
+    platform: "node",
+    sourcemap: OUTPUT_SOURCE_MAPS,
+    inputOptions: buildInputOptions,
+  };
+}
+
 const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 const productionPluginSdkEntrypoints = shouldBuildPrivateQaEntries
@@ -337,6 +348,25 @@ function buildAgentCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildGatewayProtocolDistEntries(): Record<string, string> {
+  return {
+    index: "packages/gateway-protocol/src/index.ts",
+    "client-info": "packages/gateway-protocol/src/client-info.ts",
+    "connect-error-details": "packages/gateway-protocol/src/connect-error-details.ts",
+    schema: "packages/gateway-protocol/src/schema.ts",
+    "startup-unavailable": "packages/gateway-protocol/src/startup-unavailable.ts",
+    version: "packages/gateway-protocol/src/version.ts",
+  };
+}
+
+function buildGatewayClientDistEntries(): Record<string, string> {
+  return {
+    index: "packages/gateway-client/src/index.ts",
+    readiness: "packages/gateway-client/src/readiness.ts",
+    timeouts: "packages/gateway-client/src/timeouts.ts",
+  };
+}
+
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
     id === "ignore" ||
@@ -346,6 +376,19 @@ function shouldExternalizeAgentCoreDependency(id: string): boolean {
     id.startsWith("typebox/") ||
     id === "yaml" ||
     id.startsWith("yaml/")
+  );
+}
+
+function shouldExternalizeGatewayProtocolDependency(id: string): boolean {
+  return id === "typebox" || id.startsWith("typebox/");
+}
+
+function shouldExternalizeGatewayClientDependency(id: string): boolean {
+  return (
+    id === "ws" ||
+    id.startsWith("ws/") ||
+    id === "@openclaw/gateway-protocol" ||
+    id.startsWith("@openclaw/gateway-protocol/")
   );
 }
 
@@ -389,6 +432,24 @@ export default defineConfig([
     outDir: "packages/agent-core/dist",
     deps: {
       neverBundle: shouldExternalizeAgentCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildGatewayProtocolDistEntries(),
+    outDir: "packages/gateway-protocol/dist",
+    deps: {
+      neverBundle: shouldExternalizeGatewayProtocolDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildGatewayClientDistEntries(),
+    outDir: "packages/gateway-client/dist",
+    deps: {
+      neverBundle: shouldExternalizeGatewayClientDependency,
     },
   }),
   nodeBuildConfig({
