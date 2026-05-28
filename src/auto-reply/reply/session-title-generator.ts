@@ -164,9 +164,13 @@ async function readUserMessagesFromTranscriptHead(
       try {
         const parsed = JSON.parse(line);
         const msg = parsed?.message;
-        if (!msg || msg.role !== "user") continue;
+        if (!msg || msg.role !== "user") {
+          continue;
+        }
         const sample = extractTextFromContent(msg.content);
-        if (sample && /^\[OpenClaw heartbeat/i.test(sample.trim())) continue;
+        if (sample && /^\[OpenClaw heartbeat/i.test(sample.trim())) {
+          continue;
+        }
         count++;
         if (messages.length < maxMessages) {
           const text = extractTextFromContent(msg.content);
