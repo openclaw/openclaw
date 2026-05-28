@@ -5471,6 +5471,37 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("clones into an existing empty OPENCLAW_GIT_DIR using dot as the destination", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-empty-git-dir-"));
+    pathExists.mockResolvedValue(true);
+    vi.mocked(runCommandWithTimeout).mockResolvedValue({
+      stdout: "cloned",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    try {
+      await ensureGitCheckout({
+        dir: tempDir,
+        timeoutMs: 5_000,
+        env: process.env,
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["git", "clone", "https://github.com/openclaw/openclaw.git", "."],
+      expect.objectContaining({
+        cwd: tempDir,
+        timeoutMs: 5_000,
+      }),
+    );
+  });
+
   it("keeps the requested channel when plugin sync writes config after update", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);

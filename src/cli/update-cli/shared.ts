@@ -265,7 +265,7 @@ export async function ensureGitCheckout(params: {
 
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", OPENCLAW_REPO_URL, "."],
       cwd: params.dir,
       env: gitEnv,
       timeoutMs: params.timeoutMs,
