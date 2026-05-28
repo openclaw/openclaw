@@ -262,7 +262,6 @@ import {
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
-  markTranscriptPromptText,
 } from "../tool-result-context-guard.js";
 import {
   resolveLiveToolResultMaxChars,
@@ -312,6 +311,7 @@ import {
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
+  installModelPromptTransform,
   installRuntimeContextMessageForPrompt,
   normalizeMessagesForCurrentPromptBoundary,
   normalizeMessagesForLlmBoundary,

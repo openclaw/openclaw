@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  installModelPromptTransform,
   insertRuntimeContextMessageForPrompt,
   normalizeMessagesForLlmBoundary,
 } from "./attempt.llm-boundary.js";
@@ -329,5 +330,73 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(JSON.stringify(output)).not.toContain("secret prompt");
     expect(JSON.stringify(output)).not.toContain("matched secret prompt");
     expect(input[0]).toHaveProperty("__openclaw");
+  });
+
+  it("replaces only the armed prompt with model prompt context", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "visible transcript prompt" }],
+        timestamp: 1,
+      },
+    ] as Parameters<typeof normalizeMessagesForLlmBoundary>[0];
+    const captured: (typeof messages)[] = [];
+    const session = {
+      agent: {
+        transformContext: async (nextMessages: typeof messages) => {
+          captured.push(nextMessages);
+          return nextMessages;
+        },
+      },
+    };
+    let armed = false;
+    const cleanup = installModelPromptTransform({
+      session,
+      transcriptPrompt: "visible transcript prompt",
+      modelPrompt: "private model prompt",
+      prependContext: "before",
+      appendContext: "after",
+      shouldCapturePrompt: () => armed,
+    });
+
+    const unarmed = await session.agent.transformContext(messages);
+    armed = true;
+    const armedResult = await session.agent.transformContext(messages);
+    cleanup();
+    const unarmedRecords = unarmed as Array<{ content?: unknown }>;
+    const armedRecords = armedResult as Array<{ content?: unknown }>;
+
+    expect(unarmedRecords[0]?.content).toEqual([
+      { type: "text", text: "visible transcript prompt" },
+    ]);
+    expect(armedRecords[0]?.content).toEqual([{ type: "text", text: "private model prompt" }]);
+    expect(armedResult[0]).toHaveProperty(
+      "__openclawTranscriptPromptText",
+      "visible transcript prompt",
+    );
+    expect(captured).toHaveLength(2);
+    expect(session.agent.transformContext).not.toBeUndefined();
+  });
+
+  it("restores the original model prompt transform on cleanup", async () => {
+    const originalTransform = async (
+      messages: Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) => messages;
+    const session = {
+      agent: {
+        transformContext: originalTransform,
+      },
+    };
+    const cleanup = installModelPromptTransform({
+      session,
+      transcriptPrompt: "visible transcript prompt",
+      prependContext: "before",
+      shouldCapturePrompt: () => true,
+    });
+
+    expect(session.agent.transformContext).not.toBe(originalTransform);
+    cleanup();
+
+    expect(session.agent.transformContext).toBe(originalTransform);
   });
 });

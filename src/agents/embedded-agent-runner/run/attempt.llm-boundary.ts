@@ -3,6 +3,7 @@ import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runt
 import type { AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
+import { markTranscriptPromptText } from "../tool-result-context-guard.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
@@ -101,6 +102,141 @@ export function insertRuntimeContextMessageForPrompt(params: {
     params.message,
     ...params.messages.slice(activeUserMessageIndex),
   ];
+}
+
+function replaceLastUserTextPrompt(params: {
+  messages: AgentMessage[];
+  shouldCapture?: (message: AgentMessage) => boolean;
+  transcriptText?: string;
+  replace: (text: string) => string | undefined;
+}): AgentMessage[] {
+  const userIndex = params.messages.findLastIndex((message) => message.role === "user");
+  if (userIndex === -1) {
+    return params.messages;
+  }
+  const message = params.messages[userIndex];
+  if (!message || message.role !== "user") {
+    return params.messages;
+  }
+  if (params.shouldCapture && !params.shouldCapture(message)) {
+    return params.messages;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    const replacement = params.replace(content);
+    if (replacement === undefined) {
+      return params.messages;
+    }
+    const next = params.messages.slice();
+    next[userIndex] = { ...message, content: replacement } as AgentMessage;
+    if (params.transcriptText !== undefined) {
+      markTranscriptPromptText(next[userIndex], params.transcriptText);
+    }
+    return next;
+  }
+  if (!Array.isArray(content)) {
+    return params.messages;
+  }
+  let replaced = false;
+  const nextContent = content.map((block) => {
+    if (replaced || !block || typeof block !== "object") {
+      return block;
+    }
+    const textBlock = block as { type?: unknown; text?: unknown };
+    if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
+      return block;
+    }
+    const replacement = params.replace(textBlock.text);
+    if (replacement === undefined) {
+      return block;
+    }
+    replaced = true;
+    return Object.assign({}, block, { text: replacement });
+  });
+  if (!replaced) {
+    return params.messages;
+  }
+  const next = params.messages.slice();
+  next[userIndex] = { ...message, content: nextContent } as AgentMessage;
+  if (params.transcriptText !== undefined) {
+    markTranscriptPromptText(next[userIndex], params.transcriptText);
+  }
+  return next;
+}
+
+function composeModelPromptContext(params: {
+  prompt: string;
+  prependContext?: string;
+  appendContext?: string;
+}): string {
+  return [params.prependContext, params.prompt, params.appendContext]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join("\n\n");
+}
+
+export function installModelPromptTransform(params: {
+  session: {
+    agent: {
+      transformContext?: (
+        messages: AgentMessage[],
+        signal?: AbortSignal,
+      ) => Promise<AgentMessage[]>;
+    };
+  };
+  transcriptPrompt: string;
+  modelPrompt?: string;
+  prependContext?: string;
+  appendContext?: string;
+  shouldCapturePrompt: () => boolean;
+}): () => void {
+  const modelPrompt = params.modelPrompt;
+  const hasPromptContext =
+    Boolean(params.prependContext?.trim()) || Boolean(params.appendContext?.trim());
+  if ((!modelPrompt?.trim() || modelPrompt === params.transcriptPrompt) && !hasPromptContext) {
+    return () => undefined;
+  }
+  const agent = params.session.agent;
+  const originalTransformContext = agent.transformContext;
+  let targetPromptTimestamp: number | undefined;
+  agent.transformContext = async (messages, signal) => {
+    const promptMessages = replaceLastUserTextPrompt({
+      messages,
+      transcriptText: params.transcriptPrompt,
+      shouldCapture: (message) => {
+        const timestamp = (message as { timestamp?: unknown }).timestamp;
+        if (targetPromptTimestamp !== undefined) {
+          return timestamp === targetPromptTimestamp;
+        }
+        if (!params.shouldCapturePrompt()) {
+          return false;
+        }
+        if (typeof timestamp === "number") {
+          targetPromptTimestamp = timestamp;
+        }
+        return true;
+      },
+      replace: (text) => {
+        if (modelPrompt?.trim() && text === params.transcriptPrompt) {
+          return modelPrompt;
+        }
+        if (!hasPromptContext) {
+          return undefined;
+        }
+        const replacement = composeModelPromptContext({
+          prompt: text,
+          prependContext: params.prependContext,
+          appendContext: params.appendContext,
+        });
+        return replacement === text ? undefined : replacement;
+      },
+    });
+    return originalTransformContext
+      ? await originalTransformContext.call(agent, promptMessages, signal)
+      : promptMessages;
+  };
+  return () => {
+    agent.transformContext = originalTransformContext;
+  };
 }
 
 function stripHistoricalInboundMetadataFromUserMessages(messages: AgentMessage[]): AgentMessage[] {
