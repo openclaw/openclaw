@@ -182,7 +182,9 @@ describe("streamProxy", () => {
     }
 
     const replacement = events.find((event) => event.type === "text_delta" && event.replace);
-    expect(replacement?.partial.content).toEqual([{ type: "text", text: "Corrected" }]);
+    expect(replacement).toMatchObject({
+      partial: { content: [{ type: "text", text: "Corrected" }] },
+    });
     await expect(stream.result()).resolves.toMatchObject({
       content: [{ type: "text", text: "Corrected" }],
     });
