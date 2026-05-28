@@ -629,8 +629,9 @@ describe("sendMessageIMessage receipts", () => {
       runCliJson,
       resolveSentMessageGuidImpl,
     });
+    const rejection = expect(send).rejects.toThrow("imsg rpc timeout (send)");
     await vi.advanceTimersByTimeAsync(5_250);
-    await expect(send).rejects.toThrow("imsg rpc timeout (send)");
+    await rejection;
 
     expect(runCliJson).not.toHaveBeenCalled();
     expect(resolveSentMessageGuidImpl).toHaveBeenCalledWith({
@@ -660,8 +661,9 @@ describe("sendMessageIMessage receipts", () => {
         runCliJson,
         resolveSentMessageGuidImpl,
       });
+      const rejection = expect(send).rejects.toThrow("imsg rpc timeout (send)");
       await vi.advanceTimersByTimeAsync(5_250);
-      await expect(send).rejects.toThrow("imsg rpc timeout (send)");
+      await rejection;
     } finally {
       fs.rmSync(wrapperDir, { recursive: true, force: true });
     }
@@ -708,8 +710,9 @@ describe("sendMessageIMessage receipts", () => {
       dbPath: "/Users/me/Library/Messages/chat.db",
       resolveSentMessageGuidImpl,
     });
+    const rejection = expect(send).rejects.toThrow("imsg rpc timeout (send)");
     await vi.advanceTimersByTimeAsync(5_250);
-    await expect(send).rejects.toThrow("imsg rpc timeout (send)");
+    await rejection;
 
     expect(runCliJson).not.toHaveBeenCalled();
     expect(resolveSentMessageGuidImpl).toHaveBeenCalled();
