@@ -104,6 +104,9 @@ describe("detectImageReferences", () => {
       `Prior turn wrote ${path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images", "stale.jpg")}`,
     );
     expectNoImageReferences(
+      `[media attached: ${path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images", "stale.jpg")} (image/jpeg)]`,
+    );
+    expectNoImageReferences(
       `Prior turn wrote ${path.join(os.tmpdir(), "openclaw", "openclaw-cli-images", "stale.jpg")}`,
     );
     expectNoImageReferences(
