@@ -321,6 +321,10 @@ export interface Context {
  * - `done` carrying the final successful AssistantMessage, or
  * - `error` carrying the final AssistantMessage with stopReason "error" or "aborted"
  *   and errorMessage.
+ *
+ * Delta fields are the source of truth for incremental text, thinking, and tool
+ * argument fragments. `partial` may be a lightweight compatibility snapshot on
+ * delta events; only boundary events and `done`/`error` guarantee full content.
  */
 export type AssistantMessageEvent =
   | { type: "start"; partial: AssistantMessage }

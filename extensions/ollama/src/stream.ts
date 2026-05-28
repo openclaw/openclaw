@@ -22,6 +22,7 @@ import {
   normalizeProviderId,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  createAssistantStreamAccumulator,
   createMoonshotThinkingWrapper,
   createPlainTextToolCallCompatWrapper,
   resolveMoonshotThinkingType,
@@ -1189,6 +1190,15 @@ function createRawOllamaStreamFn(
           let pendingFinalVisibleContent: string | undefined;
           const modelInfo = { api: model.api, provider: model.provider, id: model.id };
           const visibleContentSanitizer = createOllamaVisibleContentSanitizer(model.id);
+          const streamAccumulator = createAssistantStreamAccumulator({
+            model: {
+              api: modelInfo.api,
+              provider: modelInfo.provider,
+              model: modelInfo.id,
+            },
+            usage: buildUsageWithNoCost({}),
+            deltaPartialMode: "empty",
+          });
           let streamStarted = false;
           let thinkingStarted = false;
           let thinkingEnded = false;
@@ -1196,37 +1206,12 @@ function createRawOllamaStreamFn(
           let textBlockClosed = false;
           const textContentIndex = () => (thinkingStarted ? 1 : 0);
 
-          const buildCurrentContent = (): (TextContent | ThinkingContent | ToolCall)[] => {
-            const parts: (TextContent | ThinkingContent | ToolCall)[] = [];
-            if (accumulatedThinking) {
-              parts.push({
-                type: "thinking",
-                thinking: accumulatedThinking,
-              });
-            }
-            if (accumulatedVisibleContent) {
-              parts.push({ type: "text", text: accumulatedVisibleContent });
-            }
-            return parts;
-          };
-
           const closeThinkingBlock = () => {
             if (!thinkingStarted || thinkingEnded) {
               return;
             }
             thinkingEnded = true;
-            const partial = buildStreamAssistantMessage({
-              model: modelInfo,
-              content: buildCurrentContent(),
-              stopReason: "stop",
-              usage: buildUsageWithNoCost({}),
-            });
-            stream.push({
-              type: "thinking_end",
-              contentIndex: 0,
-              content: accumulatedThinking,
-              partial,
-            });
+            stream.push(streamAccumulator.endThinking(0));
           };
 
           const closeTextBlock = () => {
@@ -1234,18 +1219,7 @@ function createRawOllamaStreamFn(
               return;
             }
             textBlockClosed = true;
-            const partial = buildStreamAssistantMessage({
-              model: modelInfo,
-              content: buildCurrentContent(),
-              stopReason: "stop",
-              usage: buildUsageWithNoCost({}),
-            });
-            stream.push({
-              type: "text_end",
-              contentIndex: textContentIndex(),
-              content: accumulatedVisibleContent,
-              partial,
-            });
+            stream.push(streamAccumulator.endText(textContentIndex()));
           };
 
           const flushVisibleText = (nextVisibleContent: string | undefined) => {
@@ -1263,38 +1237,15 @@ function createRawOllamaStreamFn(
 
             if (!streamStarted) {
               streamStarted = true;
-              const emptyPartial = buildStreamAssistantMessage({
-                model: modelInfo,
-                content: [],
-                stopReason: "stop",
-                usage: buildUsageWithNoCost({}),
-              });
-              stream.push({ type: "start", partial: emptyPartial });
+              stream.push(streamAccumulator.start());
             }
             if (!textBlockStarted) {
               textBlockStarted = true;
-              const partial = buildStreamAssistantMessage({
-                model: modelInfo,
-                content: buildCurrentContent(),
-                stopReason: "stop",
-                usage: buildUsageWithNoCost({}),
-              });
-              stream.push({ type: "text_start", contentIndex: textContentIndex(), partial });
+              stream.push(streamAccumulator.startText(textContentIndex()));
             }
 
             accumulatedVisibleContent = nextVisibleContent;
-            const partial = buildStreamAssistantMessage({
-              model: modelInfo,
-              content: buildCurrentContent(),
-              stopReason: "stop",
-              usage: buildUsageWithNoCost({}),
-            });
-            stream.push({
-              type: "text_delta",
-              contentIndex: textContentIndex(),
-              delta,
-              partial,
-            });
+            stream.push(streamAccumulator.appendTextDelta(textContentIndex(), delta));
           };
 
           const resolveVisibleContent = (final: boolean): string | undefined => {
@@ -1313,37 +1264,14 @@ function createRawOllamaStreamFn(
             if (thinkingDelta) {
               if (!streamStarted) {
                 streamStarted = true;
-                const emptyPartial = buildStreamAssistantMessage({
-                  model: modelInfo,
-                  content: [],
-                  stopReason: "stop",
-                  usage: buildUsageWithNoCost({}),
-                });
-                stream.push({ type: "start", partial: emptyPartial });
+                stream.push(streamAccumulator.start());
               }
               if (!thinkingStarted) {
                 thinkingStarted = true;
-                const partial = buildStreamAssistantMessage({
-                  model: modelInfo,
-                  content: buildCurrentContent(),
-                  stopReason: "stop",
-                  usage: buildUsageWithNoCost({}),
-                });
-                stream.push({ type: "thinking_start", contentIndex: 0, partial });
+                stream.push(streamAccumulator.startThinking(0));
               }
               accumulatedThinking += thinkingDelta;
-              const partial = buildStreamAssistantMessage({
-                model: modelInfo,
-                content: buildCurrentContent(),
-                stopReason: "stop",
-                usage: buildUsageWithNoCost({}),
-              });
-              stream.push({
-                type: "thinking_delta",
-                contentIndex: 0,
-                delta: thinkingDelta,
-                partial,
-              });
+              stream.push(streamAccumulator.appendThinkingDelta(0, thinkingDelta));
             }
 
             if (chunk.message?.content) {

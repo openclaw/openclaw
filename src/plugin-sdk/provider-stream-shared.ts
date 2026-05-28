@@ -7,6 +7,13 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 import { parseStandalonePlainTextToolCallBlocks } from "./tool-payload.js";
 
+export {
+  createAssistantStreamAccumulator,
+  type AssistantStreamAccumulatorModel,
+  type AssistantStreamAccumulatorOptions,
+  type AssistantStreamDeltaPartialMode,
+} from "../llm/assistant-stream-accumulator.js";
+
 export type ProviderStreamWrapperFactory =
   | ((streamFn: StreamFn | undefined) => StreamFn | undefined)
   | null

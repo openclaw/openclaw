@@ -166,6 +166,9 @@ export interface Tool<TParameters extends TSchema = TSchema> {
   parameters: TParameters;
 }
 
+// Delta fields are the source of truth for incremental text, thinking, and tool
+// argument fragments. `partial` may be lightweight on delta events; boundary
+// events and `done`/`error` carry full assistant-message content.
 export type AssistantMessageEvent =
   | { type: "start"; partial: AssistantMessage }
   | { type: "text_start"; contentIndex: number; partial: AssistantMessage }

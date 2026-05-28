@@ -440,6 +440,39 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("coalesces dense assistant agent deltas without per-chunk broadcasts", () => {
+    let now = 11_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-agent-dense", {
+      sessionKey: "session-agent-dense",
+      clientRunId: "client-agent-dense",
+    });
+
+    let text = "";
+    for (let i = 0; i < 100; i += 1) {
+      text += "x";
+      now = 11_000 + i;
+      handler({
+        runId: "run-agent-dense",
+        seq: i + 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text, delta: "x" },
+      });
+    }
+
+    const agentCalls = agentBroadcastCalls(broadcast);
+    expect(agentCalls).toHaveLength(1);
+    expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(1);
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect((agentCalls[0]?.[1] as { data?: { delta?: string; text?: string } }).data).toMatchObject(
+      { delta: "x", text: "x" },
+    );
+    nowSpy.mockRestore();
+  });
+
   it("flushes coalesced assistant agent text before lifecycle end", () => {
     let now = 20_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
