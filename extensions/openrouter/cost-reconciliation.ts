@@ -106,7 +106,7 @@ async function fetchOpenRouterGenerationTotalCost(params: {
       );
       return null;
     }
-    const payload = (await response.json()) as { data?: unknown } | unknown;
+    const payload = (await response.json()) as unknown;
     return extractTotalCost(payload);
   } catch (error) {
     log.warn(`openrouter cost reconciliation skipped: ${String(error)}`);
