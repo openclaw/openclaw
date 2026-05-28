@@ -734,6 +734,9 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
     }
     await delay(pollDelayMs);
   }
+  if (hasChildExited(child)) {
+    throw new Error(`gateway exited before ready\n${tailFile(logPath)}`);
+  }
   throw new Error(`gateway did not become ready: ${lastError}\n${tailFile(logPath)}`);
 }
 

@@ -62,7 +62,7 @@ function hashFile(filePath: string): string {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
-function createCandidate(rootDir: string): PluginCandidate {
+function createCandidate(rootDir: string, pluginId = "demo"): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
     "throw new Error('runtime entry should not load while reading plugin registry');\n",
@@ -71,46 +71,46 @@ function createCandidate(rootDir: string): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "openclaw.plugin.json"),
     JSON.stringify({
-      id: "demo",
-      name: "Demo",
+      id: pluginId,
+      name: pluginId,
       configSchema: { type: "object" },
-      providers: ["demo"],
-      channels: ["demo-chat"],
-      cliBackends: ["demo-cli"],
+      providers: [pluginId],
+      channels: [`${pluginId}-chat`],
+      cliBackends: [`${pluginId}-cli`],
       setup: {
-        providers: [{ id: "demo-setup", envVars: ["DEMO_API_KEY"] }],
-        cliBackends: ["demo-setup-cli"],
+        providers: [{ id: `${pluginId}-setup`, envVars: ["DEMO_API_KEY"] }],
+        cliBackends: [`${pluginId}-setup-cli`],
       },
       channelConfigs: {
-        "demo-chat": {
+        [`${pluginId}-chat`]: {
           schema: { type: "object" },
         },
       },
       modelCatalog: {
         aliases: {
-          "demo-alias": {
-            provider: "demo",
+          [`${pluginId}-alias`]: {
+            provider: pluginId,
           },
         },
         providers: {
-          demo: {
-            models: [{ id: "demo-model" }],
+          [pluginId]: {
+            models: [{ id: `${pluginId}-model` }],
           },
         },
       },
-      commandAliases: [{ name: "demo-command" }],
+      commandAliases: [{ name: `${pluginId}-command` }],
       contracts: {
-        tools: ["demo-tool"],
-        webSearchProviders: ["demo-search"],
+        tools: [`${pluginId}-tool`],
+        webSearchProviders: [`${pluginId}-search`],
       },
       configContracts: {
-        compatibilityRuntimePaths: ["tools.web.search.demo-search.apiKey"],
+        compatibilityRuntimePaths: [`tools.web.search.${pluginId}-search.apiKey`],
       },
     }),
     "utf8",
   );
   return {
-    idHint: "demo",
+    idHint: pluginId,
     source: path.join(rootDir, "index.ts"),
     rootDir,
     origin: "global",
@@ -746,6 +746,30 @@ describe("plugin registry facade", () => {
     expect(second.source).toBe("derived");
     expect(manifestReadsAfterFirst).toBeGreaterThan(0);
     expect(manifestReadsAfterSecond).toBe(manifestReadsAfterFirst);
+  });
+
+  it("does not reuse the process registry memo after profile extensions change", () => {
+    const stateDir = makeTempDir();
+    const configDir = makeTempDir();
+    const extensionsDir = path.join(configDir, "extensions");
+    const firstRoot = path.join(extensionsDir, "first");
+    fs.mkdirSync(firstRoot, { recursive: true });
+    createCandidate(firstRoot, "first");
+    const env = hermeticEnv({
+      OPENCLAW_CONFIG_PATH: path.join(configDir, "openclaw.json"),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    });
+
+    const first = loadPluginRegistrySnapshotWithMetadata({ stateDir, env });
+    const secondRoot = path.join(extensionsDir, "second");
+    fs.mkdirSync(secondRoot, { recursive: true });
+    createCandidate(secondRoot, "second");
+    const second = loadPluginRegistrySnapshotWithMetadata({ stateDir, env });
+
+    expect(first.source).toBe("derived");
+    expect(second.source).toBe("derived");
+    expectSnapshotPluginIds(first.snapshot, ["first"]);
+    expectSnapshotPluginIds(second.snapshot, ["first", "second"]);
   });
 
   it("keys the process registry memo by resolved host contract version", () => {
