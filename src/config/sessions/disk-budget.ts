@@ -250,7 +250,11 @@ async function readSessionPromptBlobFiles(sessionsDir: string): Promise<Sessions
       .readdir(prefixDir, { withFileTypes: true })
       .catch(() => []);
     for (const blobEntry of blobEntries) {
-      if (!blobEntry.isFile() || !/^[a-f0-9]{64}\.txt$/u.test(blobEntry.name)) {
+      if (
+        !blobEntry.isFile() ||
+        (!/^[a-f0-9]{64}\.txt$/u.test(blobEntry.name) &&
+          !isSessionPromptBlobTempArtifactName(blobEntry.name))
+      ) {
         continue;
       }
       const filePath = path.join(prefixDir, blobEntry.name);
@@ -272,6 +276,12 @@ async function readSessionPromptBlobFiles(sessionsDir: string): Promise<Sessions
 
 function resolvePromptBlobFileHash(file: Pick<SessionsDirFileStat, "name">): string | undefined {
   return /^[a-f0-9]{64}\.txt$/u.test(file.name) ? file.name.slice(0, -4) : undefined;
+}
+
+function isSessionPromptBlobTempArtifactName(name: string): boolean {
+  return /^[a-f0-9]{64}\.txt\.(?:\d+\.)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/u.test(
+    name,
+  );
 }
 
 function isUnreferencedSessionArtifactFile(
@@ -390,7 +400,13 @@ export async function pruneUnreferencedSessionArtifacts(params: {
     return file.mtimeMs <= cutoffMs && isUnreferencedSessionArtifactFile(file, referencedPaths);
   });
   const removablePromptBlobFiles = promptBlobFiles.filter((file) => {
-    if (params.excludeCanonicalPaths?.has(file.canonicalPath) || file.mtimeMs > cutoffMs) {
+    if (params.excludeCanonicalPaths?.has(file.canonicalPath)) {
+      return false;
+    }
+    if (isSessionPromptBlobTempArtifactName(file.name)) {
+      return file.mtimeMs <= tempCutoffMs;
+    }
+    if (file.mtimeMs > cutoffMs) {
       return false;
     }
     const hash = resolvePromptBlobFileHash(file);
@@ -528,6 +544,9 @@ export async function enforceSessionDiskBudget(params: {
   const storeBasename = path.basename(params.storePath);
   const unreferencedPromptBlobQueue = promptBlobFiles
     .filter((file) => {
+      if (isSessionPromptBlobTempArtifactName(file.name)) {
+        return file.mtimeMs <= tempStaleCutoffMs;
+      }
       const hash = resolvePromptBlobFileHash(file);
       return hash ? !projectedPromptBlobRefCounts.has(hash) : false;
     })

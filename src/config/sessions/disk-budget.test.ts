@@ -293,6 +293,41 @@ describe("enforceSessionDiskBudget", () => {
     });
   });
 
+  it("reclaims stale skills prompt blob temps under pressure", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-prompt-temp-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const store: Record<string, SessionEntry> = {
+        "agent:main:main": { sessionId: "keep", updatedAt: Date.now() },
+      };
+      const hash = "a".repeat(64);
+      const tempDir = path.join(dir, "skills-prompts", "sha256", hash.slice(0, 2));
+      const tempPath = path.join(
+        tempDir,
+        `${hash}.txt.123.11111111-1111-4111-8111-111111111111.tmp`,
+      );
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.mkdir(tempDir, { recursive: true });
+      await fs.writeFile(tempPath, "t".repeat(2000), "utf-8");
+      const old = new Date(Date.now() - 30 * 60 * 1000);
+      await fs.utimes(tempPath, old, old);
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: {
+          maxDiskBytes: 1000,
+          highWaterBytes: 500,
+        },
+        warnOnly: false,
+      });
+
+      await expectPathMissing(tempPath);
+      expectBudgetResult(result);
+      expect(result.removedFiles).toBe(1);
+      expect(result.removedEntries).toBe(0);
+    });
+  });
+
   it("removes unreferenced compaction checkpoint artifacts under pressure", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
@@ -545,6 +580,41 @@ describe("pruneUnreferencedSessionArtifacts", () => {
 
       await expectPathMissing(oldBlob);
       await expectPathExists(keepBlob);
+      expect(result.removedFiles).toBe(1);
+    });
+  });
+
+  it("reclaims stale skills prompt blob temps during normal artifact cleanup", async () => {
+    await withTempDir({ prefix: "openclaw-prune-prompt-temp-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const store: Record<string, SessionEntry> = {
+        "agent:main:main": { sessionId: "keep", updatedAt: Date.now() },
+      };
+      const hash = "b".repeat(64);
+      const tempDir = path.join(dir, "skills-prompts", "sha256", hash.slice(0, 2));
+      const staleTemp = path.join(
+        tempDir,
+        `${hash}.txt.123.22222222-2222-4222-8222-222222222222.tmp`,
+      );
+      const freshTemp = path.join(
+        tempDir,
+        `${hash}.txt.456.33333333-3333-4333-8333-333333333333.tmp`,
+      );
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.mkdir(tempDir, { recursive: true });
+      await fs.writeFile(staleTemp, "s".repeat(64), "utf-8");
+      await fs.writeFile(freshTemp, "f".repeat(64), "utf-8");
+      const old = new Date(Date.now() - 30 * 60 * 1000);
+      await fs.utimes(staleTemp, old, old);
+
+      const result = await pruneUnreferencedSessionArtifacts({
+        store,
+        storePath,
+        olderThanMs: 30 * 24 * 60 * 60 * 1000,
+      });
+
+      await expectPathMissing(staleTemp);
+      await expectPathExists(freshTemp);
       expect(result.removedFiles).toBe(1);
     });
   });
