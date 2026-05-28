@@ -6,7 +6,7 @@ import OSLog
 final class MacNodeModeCoordinator {
     static let shared = MacNodeModeCoordinator()
 
-    private static let systemRunRequestPolicyCapability = "system.run.request-policy.v1"
+    nonisolated private static let systemRunRequestPolicyCapability = "system.run.request-policy.v1"
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "mac-node")
     private var task: Task<Void, Never>?
