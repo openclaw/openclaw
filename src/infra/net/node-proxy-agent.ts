@@ -1,5 +1,5 @@
 import type { Agent as HttpAgent } from "node:http";
-import { createAmbientNodeProxyAgent } from "@openclaw/proxyline";
+import { createRequire } from "node:module";
 import { matchesNoProxy, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
 import { resolveActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 
@@ -7,9 +7,13 @@ export const UNSUPPORTED_PROXY_PROTOCOL_MESSAGE =
   "Unsupported proxy protocol. SOCKS and PAC proxy URLs are not supported; use an HTTP or HTTPS proxy URL.";
 
 type NodeProxyProtocol = "http" | "https";
-type ProxylineAgentOptions = NonNullable<Parameters<typeof createAmbientNodeProxyAgent>[0]>;
+type ProxylineCreateAmbientNodeProxyAgent =
+  typeof import("@openclaw/proxyline").createAmbientNodeProxyAgent;
+type ProxylineAgentOptions = NonNullable<Parameters<ProxylineCreateAmbientNodeProxyAgent>[0]>;
 type ProxylineEnvSnapshot = NonNullable<ProxylineAgentOptions["env"]>;
 type ProxylineTlsOptions = ProxylineAgentOptions["proxyTls"];
+
+const require = createRequire(import.meta.url);
 
 export type CreateNodeProxyAgentOptions =
   | {
@@ -92,6 +96,11 @@ function fixedProxyEnv(proxyUrl: URL): ProxylineEnvSnapshot {
   };
 }
 
+function loadCreateAmbientNodeProxyAgent(): ProxylineCreateAmbientNodeProxyAgent {
+  return (require("@openclaw/proxyline") as typeof import("@openclaw/proxyline"))
+    .createAmbientNodeProxyAgent;
+}
+
 export function resolveEnvNodeProxyUrlForTarget(
   targetUrl: string | URL,
   env: NodeJS.ProcessEnv = process.env,
@@ -123,7 +132,7 @@ function createFixedNodeProxyAgent(
     proxyUrl instanceof URL
       ? proxyUrl
       : proxyUrlWithDefaultScheme(proxyUrl, options.protocol ?? "https");
-  const agent = createAmbientNodeProxyAgent({
+  const agent = loadCreateAmbientNodeProxyAgent()({
     env: fixedProxyEnv(parsedProxyUrl),
     protocol: options.protocol ?? "https",
     ...(options.proxyTls !== undefined ? { proxyTls: options.proxyTls } : {}),

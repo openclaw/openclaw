@@ -676,13 +676,13 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation(((
       directoryPath: fs.PathLike,
       options?: Parameters<typeof fs.readdirSync>[1],
-    ) => {
+    ): unknown => {
       const entries = originalReaddirSync(directoryPath, options as never);
       if (directoryPath === projectsDir && reverseProjectEntries && Array.isArray(entries)) {
-        return [...entries].reverse() as never;
+        return entries.toReversed();
       }
-      return entries as never;
-    }) as typeof fs.readdirSync);
+      return entries;
+    }) as unknown as typeof fs.readdirSync);
 
     try {
       loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
