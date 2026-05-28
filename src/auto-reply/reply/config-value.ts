@@ -11,6 +11,9 @@ export function parseConfigValue(raw: string): {
     try {
       return { value: JSON.parse(trimmed) };
     } catch (err) {
+      if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+        return { value: trimmed };
+      }
       return { error: `Invalid JSON: ${String(err)}` };
     }
   }

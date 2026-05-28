@@ -1,4 +1,5 @@
 import {
+  findCommandByNativeName,
   type ChatCommandDefinition,
   type CommandArgDefinition,
   type CommandArgValues,
@@ -32,14 +33,18 @@ export function readDiscordCommandArgs(
 }
 
 export function createNativeCommandDefinition(command: NativeCommandSpec): ChatCommandDefinition {
+  const sharedCommand = findCommandByNativeName(command.name);
   return {
-    key: command.name,
-    nativeName: command.name,
-    description: command.description,
+    key: sharedCommand?.key ?? command.name,
+    nativeName: sharedCommand?.nativeName ?? command.name,
+    description: sharedCommand?.description ?? command.description,
+    descriptionLocalizations:
+      sharedCommand?.descriptionLocalizations ?? command.descriptionLocalizations,
     textAliases: [],
     acceptsArgs: command.acceptsArgs,
-    args: command.args,
-    argsParsing: "none",
+    args: sharedCommand?.args ?? command.args,
+    argsParsing: sharedCommand?.argsParsing ?? "none",
+    formatArgs: sharedCommand?.formatArgs,
     scope: "native",
   };
 }
