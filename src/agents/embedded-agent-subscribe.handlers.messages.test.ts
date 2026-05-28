@@ -29,6 +29,7 @@ function createMessageUpdateContext(
     debug?: ReturnType<typeof vi.fn>;
     shouldEmitPartialReplies?: boolean;
     consumePartialReplyDirectives?: ReturnType<typeof vi.fn>;
+    stripBlockTags?: ReturnType<typeof vi.fn>;
     state?: Record<string, unknown>;
   } = {},
 ) {
@@ -64,7 +65,7 @@ function createMessageUpdateContext(
     },
     log: { debug: params.debug ?? vi.fn() },
     noteLastAssistant: vi.fn(),
-    stripBlockTags: (text: string) => text,
+    stripBlockTags: params.stripBlockTags ?? ((text: string) => text),
     consumePartialReplyDirectives: params.consumePartialReplyDirectives ?? vi.fn(() => null),
     emitReasoningStream: vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
@@ -289,6 +290,50 @@ describe("pending assistant reply directives", () => {
 });
 
 describe("handleMessageUpdate text signatures", () => {
+  it("keeps unphased text deltas independent from large partial snapshots", () => {
+    const onAgentEvent = vi.fn();
+    const stripBlockTags = vi.fn((text: string) => text);
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      stripBlockTags,
+      consumePartialReplyDirectives: vi.fn((text: string) => ({ text })),
+      state: { deltaBuffer: "x".repeat(20_000) },
+    });
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "a",
+        partial: {
+          role: "assistant",
+          content: [{ type: "text", text: "x".repeat(20_000) }],
+          stopReason: "stop",
+          api: "ollama",
+          provider: "ollama",
+          model: "qwen3:32b",
+          usage: {},
+          timestamp: 0,
+        },
+      },
+    } as never);
+
+    expect(context.state.deltaBuffer).toBe(`${"x".repeat(20_000)}a`);
+    expect(stripBlockTags.mock.calls.map(([text]) => text.length)).toEqual([1]);
+    expect(firstMockArg(onAgentEvent, "agent event")).toEqual({
+      stream: "assistant",
+      data: {
+        text: "a",
+        delta: "a",
+        replace: undefined,
+        mediaUrls: undefined,
+        phase: undefined,
+      },
+    });
+  });
+
   it("treats phased textSignature item changes as assistant-message boundaries", () => {
     const flushBlockReplyBuffer = vi.fn();
     const resetAssistantMessageState = vi.fn();

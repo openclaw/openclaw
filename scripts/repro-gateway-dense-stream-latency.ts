@@ -7,11 +7,14 @@ import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/te
 import { createOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 
 type Options = {
+  assertResponsive: boolean;
   assertStall: boolean;
   chunkSize: number;
   chunks: number;
   healthTimeoutMs: number;
   pingIntervalMs: number;
+  responsiveThresholdMs: number;
+  serverBatchSize: number;
   stallThresholdMs: number;
 };
 
@@ -48,11 +51,14 @@ type EventLike = {
 };
 
 const DEFAULT_OPTIONS: Options = {
+  assertResponsive: false,
   assertStall: false,
   chunks: 10_000,
   chunkSize: 64,
   pingIntervalMs: 20,
   healthTimeoutMs: 10_000,
+  responsiveThresholdMs: 1_000,
+  serverBatchSize: 100,
   stallThresholdMs: 1_000,
 };
 
@@ -90,6 +96,9 @@ function parseOptions(argv: string[]): Options {
     };
 
     switch (arg) {
+      case "--assert-responsive":
+        options.assertResponsive = true;
+        break;
       case "--assert-stall":
         options.assertStall = true;
         break;
@@ -105,6 +114,12 @@ function parseOptions(argv: string[]): Options {
       case "--ping-interval-ms":
         options.pingIntervalMs = readNumber("--ping-interval-ms");
         break;
+      case "--responsive-threshold-ms":
+        options.responsiveThresholdMs = readNumber("--responsive-threshold-ms");
+        break;
+      case "--server-batch-size":
+        options.serverBatchSize = readNumber("--server-batch-size");
+        break;
       case "--stall-threshold-ms":
         options.stallThresholdMs = readNumber("--stall-threshold-ms");
         break;
@@ -114,6 +129,9 @@ function parseOptions(argv: string[]): Options {
       default:
         throw new Error(`unknown argument: ${arg}`);
     }
+  }
+  if (options.assertResponsive && options.assertStall) {
+    throw new Error("--assert-responsive and --assert-stall cannot be used together");
   }
 
   return options;
@@ -131,8 +149,11 @@ Options:
   --chunk-size <n>          Text bytes per chunk (default: 64)
   --ping-interval-ms <n>    Health ping cadence during the run (default: 20)
   --health-timeout-ms <n>   Per-health RPC timeout (default: 10000)
+  --server-batch-size <n>   Provider chunks to write before yielding (default: 100)
   --assert-stall            Exit nonzero unless max health latency exceeds threshold
   --stall-threshold-ms <n>  Assertion threshold for --assert-stall (default: 1000)
+  --assert-responsive       Exit nonzero unless p99 health latency stays below threshold
+  --responsive-threshold-ms <n> Assertion threshold for --assert-responsive (default: 1000)
 `);
 }
 
@@ -164,6 +185,38 @@ async function closeServer(server: Server): Promise<void> {
 function writeJson(res: ServerResponse, value: unknown): void {
   res.setHeader("content-type", "application/json");
   res.end(`${JSON.stringify(value)}\n`);
+}
+
+async function writeDenseChatResponse(
+  res: ServerResponse,
+  options: Options,
+  chunkText: string,
+): Promise<void> {
+  for (let index = 0; index < options.chunks; index += 1) {
+    const canContinue = res.write(
+      `${JSON.stringify({
+        model: "qwen2.5:0.5b",
+        created_at: new Date().toISOString(),
+        message: { role: "assistant", content: chunkText },
+        done: false,
+      })}\n`,
+    );
+    if (!canContinue) {
+      await new Promise<void>((resolve) => res.once("drain", resolve));
+    }
+    if ((index + 1) % options.serverBatchSize === 0) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+  res.end(
+    `${JSON.stringify({
+      model: "qwen2.5:0.5b",
+      created_at: new Date().toISOString(),
+      message: { role: "assistant", content: "" },
+      done: true,
+      done_reason: "stop",
+    })}\n`,
+  );
 }
 
 async function createDenseStreamServer(options: Options): Promise<DenseStreamServer> {
@@ -199,25 +252,9 @@ async function createDenseStreamServer(options: Options): Promise<DenseStreamSer
       chatRequests += 1;
       req.resume();
       res.writeHead(200, { "content-type": "application/x-ndjson" });
-      for (let index = 0; index < options.chunks; index += 1) {
-        res.write(
-          `${JSON.stringify({
-            model: "qwen2.5:0.5b",
-            created_at: new Date().toISOString(),
-            message: { role: "assistant", content: chunkText },
-            done: false,
-          })}\n`,
-        );
-      }
-      res.end(
-        `${JSON.stringify({
-          model: "qwen2.5:0.5b",
-          created_at: new Date().toISOString(),
-          message: { role: "assistant", content: "" },
-          done: true,
-          done_reason: "stop",
-        })}\n`,
-      );
+      void writeDenseChatResponse(res, options, chunkText).catch((error: unknown) => {
+        res.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
       return;
     }
 
@@ -499,6 +536,7 @@ async function main(): Promise<void> {
         realProviderDaemon: false,
         chunks: options.chunks,
         chunkBytes: options.chunkSize,
+        serverBatchSize: options.serverBatchSize,
         finalExpectedChars: options.chunks * options.chunkSize,
         chatRequests: denseStreamServer.chatRequests(),
         sendStatus:
@@ -522,6 +560,13 @@ async function main(): Promise<void> {
         throw new Error(
           `expected max health latency >= ${String(options.stallThresholdMs)}ms, observed ${String(
             during.max,
+          )}ms`,
+        );
+      }
+      if (options.assertResponsive && during.p99 >= options.responsiveThresholdMs) {
+        throw new Error(
+          `expected p99 health latency < ${String(options.responsiveThresholdMs)}ms, observed ${String(
+            during.p99,
           )}ms`,
         );
       }
