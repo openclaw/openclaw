@@ -383,6 +383,21 @@ function normalizeTransportBaseUrl(baseUrl: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+/**
+ * Map well-known provider names to their native API transport type.
+ * This ensures that manually-configured models under a provider like
+ * "google-vertex" use the correct transport without requiring an explicit
+ * "api" field in the provider or model config.
+ */
+function resolveProviderNameDefaultApi(provider: string): Api | undefined {
+  switch (provider) {
+    case "google-vertex":
+      return "google-vertex";
+    default:
+      return undefined;
+  }
+}
+
 function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
   return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });
 }
@@ -802,6 +817,7 @@ function applyConfiguredProviderOverrides(params: {
       normalizeResolvedTransportApi(configuredStaticCatalogModel?.api) ??
       normalizeResolvedTransportApi(discoveredModel.api) ??
       providerDefaultApi ??
+      resolveProviderNameDefaultApi(params.provider) ??
       "openai-responses",
     baseUrl:
       resolvedTransport.baseUrl ?? configuredStaticCatalogModel?.baseUrl ?? discoveredModel.baseUrl,
@@ -1295,6 +1311,7 @@ function resolveConfiguredFallbackModel(params: {
         workspaceDir,
         runtimeHooks,
       }) ??
+      resolveProviderNameDefaultApi(provider) ??
       "openai-responses",
     baseUrl: configuredModelBaseUrl ?? providerConfiguredBaseUrl ?? staticCatalogBaseUrl,
     cfg,
