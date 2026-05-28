@@ -43,6 +43,32 @@ function coerceArgs(value: unknown): unknown {
   }
 }
 
+function buildBase64ImageUrl(data: string, mediaType?: string): string {
+  if (data.startsWith("data:")) return data;
+  return `data:${mediaType ?? "image/png"};base64,${data}`;
+}
+
+function extractToolImages(item: Record<string, unknown>): string[] {
+  const content = normalizeContent(item.content);
+  const urls: string[] = [];
+  for (const block of content) {
+    if (block.type !== "image") continue;
+    if (typeof block.url === "string" && block.url.trim()) {
+      urls.push(block.url);
+    } else if (typeof block.data === "string") {
+      const mimeType = typeof block.mimeType === "string" ? block.mimeType : undefined;
+      urls.push(buildBase64ImageUrl(block.data, mimeType));
+    } else if (block.source && typeof block.source === "object") {
+      const s = block.source as Record<string, unknown>;
+      if (s.type === "base64" && typeof s.data === "string") {
+        const mt = typeof s.media_type === "string" ? s.media_type : undefined;
+        urls.push(buildBase64ImageUrl(s.data, mt));
+      }
+    }
+  }
+  return urls;
+}
+
 function extractToolText(item: Record<string, unknown>): string | undefined {
   if (typeof item.text === "string") {
     return item.text;
@@ -265,11 +291,15 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       const text = extractToolText(item);
       const preview = extractToolPreview(text, name);
       const isError = readToolErrorFlag(item) ?? messageIsError;
+      const images = extractToolImages(item);
       if (existing) {
         existing.outputText = text;
         existing.preview = preview;
         if (isError !== undefined) {
           existing.isError = isError;
+        }
+        if (images.length > 0) {
+          existing.images = images;
         }
         continue;
       }
@@ -278,6 +308,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
         name,
         outputText: text,
         ...(isError !== undefined ? { isError } : {}),
+        ...(images.length > 0 ? { images } : {}),
         preview,
       });
     }
@@ -297,13 +328,23 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
     const text = extractTextCached(message) ?? undefined;
+    const images = extractToolImages({ content: m.content } as Record<string, unknown>);
     cards.push({
       id: resolveToolCardId({}, m, 0, prefix),
       name,
       outputText: text,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
+      ...(images.length > 0 ? { images } : {}),
       preview: extractToolPreview(text, name),
     });
+  } else if (cards.length > 0) {
+    const msgImages = extractToolImages({ content: m.content } as Record<string, unknown>);
+    if (msgImages.length > 0) {
+      const last = cards[cards.length - 1];
+      if (last) {
+        last.images = [...(last.images ?? []), ...msgImages];
+      }
+    }
   }
 
   return cards;
@@ -656,6 +697,14 @@ export function renderExpandedToolCardContent(
               expanded: true,
             })
         : nothing}
+      ${card.images?.length
+        ? html`<div class="chat-tool-card__images">
+            ${card.images.map(
+              (url) =>
+                html`<img class="chat-tool-card__image" src=${url} alt="${card.name} output" />`,
+            )}
+          </div>`
+        : nothing}
     </div>
   `;
 }
@@ -746,6 +795,14 @@ export function renderToolCardSidebar(
         : nothing}
       ${showInline
         ? html`<div class="chat-tool-card__inline mono">${card.outputText}</div>`
+        : nothing}
+      ${card.images?.length
+        ? html`<div class="chat-tool-card__images">
+            ${card.images.map(
+              (url) =>
+                html`<img class="chat-tool-card__image" src=${url} alt="${card.name} output" />`,
+            )}
+          </div>`
         : nothing}
     </div>
   `;

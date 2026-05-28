@@ -406,6 +406,16 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           },
         ];
       }
+      if (item.type === "image") {
+        return [
+          {
+            type: "image" as const,
+            url: typeof item.url === "string" ? item.url : undefined,
+            data: typeof item.data === "string" ? item.data : undefined,
+            mimeType: typeof item.mimeType === "string" ? item.mimeType : undefined,
+          },
+        ];
+      }
       if (item.type === "text" && typeof item.text === "string" && isAssistantMessage) {
         const expanded = expandTextContent(item.text);
         audioAsVoice = audioAsVoice || expanded.audioAsVoice;

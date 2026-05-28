@@ -30,10 +30,13 @@ export type MessageGroup = {
 /** Content item types in a normalized message */
 export type MessageContentItem =
   | {
-      type: "text" | "tool_call" | "tool_result";
+      type: "text" | "tool_call" | "tool_result" | "image";
       text?: string;
       name?: string;
       args?: unknown;
+      url?: string;
+      data?: string;
+      mimeType?: string;
     }
   | {
       type: "attachment";
@@ -78,6 +81,8 @@ export type ToolCard = {
   inputText?: string;
   outputText?: string;
   isError?: boolean;
+  /** Image data-URLs extracted from tool result image blocks. */
+  images?: string[];
   preview?: {
     kind: "canvas";
     surface: "assistant_message";
