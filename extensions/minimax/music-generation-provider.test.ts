@@ -213,6 +213,60 @@ describe("minimax music generation provider", () => {
     );
   });
 
+  it("applies explicit caller timeouts while reading streaming response bodies", async () => {
+    vi.useFakeTimers();
+    try {
+      let cancelled = false;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          setTimeout(() => {
+            if (cancelled) {
+              return;
+            }
+            controller.enqueue(
+              new TextEncoder().encode(
+                `data: ${JSON.stringify({
+                  data: { status: 2, audio: Buffer.from("late-mp3").toString("hex") },
+                  base_resp: { status_code: 0 },
+                })}`,
+              ),
+            );
+            controller.close();
+          }, 200);
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      postJsonRequestMock.mockResolvedValue({
+        response: new Response(stream, {
+          headers: { "content-type": "text/event-stream" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+      const provider = buildMinimaxMusicGenerationProvider();
+      const generation = provider.generateMusic({
+        provider: "minimax",
+        model: "music-2.6",
+        prompt: "upbeat dance-pop with female vocals",
+        cfg: {},
+        timeoutMs: 50,
+      });
+      const expectation = expect(generation).rejects.toThrow(
+        "MiniMax music generation timed out after 50ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
+
+      await expectation;
+      expect(cancelled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects instrumental requests that also include lyrics", async () => {
     const provider = buildMinimaxMusicGenerationProvider();
 

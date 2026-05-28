@@ -12,6 +12,7 @@ import {
   postJsonRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -116,18 +117,89 @@ async function downloadTrackFromUrl(params: {
   };
 }
 
-async function readStreamingTrack(response: Response): Promise<GeneratedMusicAsset> {
+function createMinimaxMusicTimeoutError(deadline: ProviderOperationDeadline): Error {
+  const timeoutLabel =
+    typeof deadline.timeoutMs === "number" ? ` after ${deadline.timeoutMs}ms` : "";
+  return new Error(`${deadline.label} timed out${timeoutLabel}`);
+}
+
+function resolveBodyReadTimeoutMs(deadline: ProviderOperationDeadline): number {
+  return resolveProviderOperationTimeoutMs({
+    deadline,
+    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
+  });
+}
+
+async function readResponseBufferWithDeadline(
+  response: Response,
+  deadline: ProviderOperationDeadline,
+): Promise<Buffer> {
+  const body = response.body;
+  if (!body) {
+    return Buffer.alloc(0);
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const timeoutMs = resolveBodyReadTimeoutMs(deadline);
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => reject(createMinimaxMusicTimeoutError(deadline)), timeoutMs);
+        });
+        const result = await Promise.race([reader.read(), timeoutPromise]);
+        if (result.done) {
+          break;
+        }
+        if (!result.value || result.value.length === 0) {
+          continue;
+        }
+        chunks.push(result.value);
+        totalBytes += result.value.byteLength;
+      } catch (error) {
+        try {
+          await reader.cancel(error);
+        } catch {
+          // Preserve the timeout or stream read failure that caused cancellation.
+        }
+        throw error;
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const buffer = Buffer.allocUnsafe(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return buffer;
+}
+
+async function readStreamingTrack(
+  response: Response,
+  deadline: ProviderOperationDeadline,
+): Promise<GeneratedMusicAsset> {
   const contentType = normalizeOptionalString(response.headers.get("content-type")) ?? "";
   if (contentType.toLowerCase().startsWith("audio/")) {
     const ext = extensionForMime(contentType)?.replace(/^\./u, "") || "mp3";
     return {
-      buffer: Buffer.from(await response.arrayBuffer()),
+      buffer: await readResponseBufferWithDeadline(response, deadline),
       mimeType: contentType,
       fileName: `track-1.${ext}`,
     };
   }
   const chunks: Buffer[] = [];
-  const text = await response.text();
+  const text = new TextDecoder().decode(await readResponseBufferWithDeadline(response, deadline));
   for (const rawLine of text.split(/\r?\n/u)) {
     const line = rawLine.trim();
     if (!line.startsWith("data:")) {
@@ -297,7 +369,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
                 mimeType: "audio/mpeg",
                 fileName: "track-1.mp3",
               }
-            : await readStreamingTrack(res);
+            : await readStreamingTrack(res, deadline);
         if (!track) {
           throw new Error("MiniMax music generation response missing audio output");
         }
