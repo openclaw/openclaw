@@ -515,6 +515,49 @@ describe("doctor command", () => {
     });
   });
 
+  it("skips gateway health probes for ambiguous exec SecretRefs", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            token: {
+              source: "exec",
+              provider: "default",
+              id: "gateway/token",
+            },
+            password: {
+              source: "exec",
+              provider: "default",
+              id: "gateway/password",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: {
+              source: "exec",
+              command: process.execPath,
+            },
+          },
+        },
+      },
+    });
+
+    callGateway.mockClear();
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    requireTerminalNote({
+      title: "Gateway",
+      messageIncludes:
+        "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+    });
+  });
+
   it("keeps gateway health probes for non-token auth with exec SecretRefs", async () => {
     mockDoctorConfigSnapshot({
       config: {

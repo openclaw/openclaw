@@ -727,9 +727,12 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   const { readGatewaySecretInputValue } = await import("../gateway/secret-input-paths.js");
   const { note } = await import("../terminal/note.js");
   const credentialPlan = createGatewayCredentialPlan({ config: ctx.cfg, env: process.env });
+  const ambiguousLocalAuthRefs = credentialPlan.authMode === undefined;
   const activeSecretRefPaths = [
-    credentialPlan.localTokenSurfaceActive ? credentialPlan.localToken.refPath : undefined,
-    credentialPlan.localPasswordCanWin && !credentialPlan.envPassword
+    credentialPlan.localTokenSurfaceActive || ambiguousLocalAuthRefs
+      ? credentialPlan.localToken.refPath
+      : undefined,
+    (credentialPlan.localPasswordCanWin && !credentialPlan.envPassword) || ambiguousLocalAuthRefs
       ? credentialPlan.localPassword.refPath
       : undefined,
     credentialPlan.remoteTokenActive && !credentialPlan.envToken
