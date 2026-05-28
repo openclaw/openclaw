@@ -43,6 +43,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.stuckSessionWarnMs": "Session Liveness Threshold (ms)",
   "diagnostics.stuckSessionAbortMs": "Session Abort Threshold (ms)",
   "diagnostics.memoryPressureSnapshot": "Memory Pressure Snapshot Enabled",
+  "diagnostics.memoryPressureThresholds": "Memory Pressure Thresholds",
   "diagnostics.memoryPressureThresholds.rssWarningBytes": "Memory Pressure RSS Warning (bytes)",
   "diagnostics.memoryPressureThresholds.rssCriticalBytes": "Memory Pressure RSS Critical (bytes)",
   "diagnostics.memoryPressureThresholds.heapUsedWarningBytes":

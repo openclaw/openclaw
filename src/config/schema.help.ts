@@ -31,7 +31,15 @@ export const FIELD_HELP: Record<string, string> = {
   "diagnostics.memoryPressureSnapshot":
     "Whether critical memory pressure automatically captures a redacted stability snapshot. Default: false. Enable only when this host can tolerate the extra file-system scan and snapshot write during critical memory pressure.",
   "diagnostics.memoryPressureThresholds":
-    "Memory pressure threshold overrides for gateway health diagnostics: rssWarningBytes (default 1.5GB), rssCriticalBytes (default 3GB), heapUsedWarningBytes (default 1GB), heapUsedCriticalBytes (default 2GB). Use these to tune pressure alerts to your host's actual memory capacity.",
+    "Memory pressure threshold overrides for gateway health diagnostics. Use these to tune pressure alerts to your host's actual memory capacity.",
+  "diagnostics.memoryPressureThresholds.rssWarningBytes":
+    "RSS warning threshold in bytes (default 1610612736 = 1.5 GB). A warning-level pressure event is emitted when the process RSS exceeds this value.",
+  "diagnostics.memoryPressureThresholds.rssCriticalBytes":
+    "RSS critical threshold in bytes (default 3221225472 = 3 GB). A critical-level pressure event and optional stability snapshot are triggered when the process RSS exceeds this value.",
+  "diagnostics.memoryPressureThresholds.heapUsedWarningBytes":
+    "Heap-used warning threshold in bytes (default 1073741824 = 1 GB). A warning-level pressure event is emitted when the V8 heap used exceeds this value.",
+  "diagnostics.memoryPressureThresholds.heapUsedCriticalBytes":
+    "Heap-used critical threshold in bytes (default 2147483648 = 2 GB). A critical-level pressure event and optional stability snapshot are triggered when the V8 heap used exceeds this value.",
   "diagnostics.otel":
     "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",
   "diagnostics.cacheTrace":
