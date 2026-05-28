@@ -916,7 +916,6 @@ describe("loadSessions", () => {
     await loadSessions(state, {
       activeMinutes: 0,
       limit: 0,
-      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
       agentId: "ops",
@@ -956,7 +955,6 @@ describe("loadSessions", () => {
       limit: 1,
       offset: 2,
       search: "telegram",
-      includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
     });
