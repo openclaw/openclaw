@@ -42,6 +42,11 @@ export function maybeGenerateSessionTitle(params: {
     return;
   }
 
+  // Respect the session's selected model so background summarization
+  // uses the same provider the user chose for this session.
+  const sessionModelProvider = sessionEntry.modelProvider ?? sessionEntry.providerOverride;
+  const sessionModelId = sessionEntry.modelOverride;
+
   // Fire and forget — do not block the reply.
   generateAndPersistTitle({
     cfg,
@@ -51,6 +56,8 @@ export function maybeGenerateSessionTitle(params: {
     storePath,
     agentId,
     agentDir,
+    sessionModelProvider,
+    sessionModelId,
   }).catch((err) => {
     logVerbose(`session-title-generator: failed to generate title for ${sessionKey}: ${err}`);
   });
@@ -64,8 +71,20 @@ async function generateAndPersistTitle(params: {
   storePath: string;
   agentId?: string;
   agentDir?: string;
+  sessionModelProvider?: string;
+  sessionModelId?: string;
 }): Promise<void> {
-  const { cfg, sessionKey, sessionId, sessionEntry, storePath, agentId, agentDir } = params;
+  const {
+    cfg,
+    sessionKey,
+    sessionId,
+    sessionEntry,
+    storePath,
+    agentId,
+    agentDir,
+    sessionModelProvider,
+    sessionModelId,
+  } = params;
   const titleCfg = cfg.sessionTitle;
   const turnsBeforeTitle = titleCfg?.turnsBeforeTitle ?? 3;
 
@@ -104,6 +123,8 @@ async function generateAndPersistTitle(params: {
     agentId,
     agentDir,
     maxLength: maxChars,
+    modelProvider: sessionModelProvider,
+    modelId: sessionModelId,
   });
 
   if (!title) {

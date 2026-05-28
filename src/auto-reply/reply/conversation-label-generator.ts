@@ -20,6 +20,10 @@ export type ConversationLabelParams = {
   agentId?: string;
   agentDir?: string;
   maxLength?: number;
+  /** Session-scoped model provider override (e.g. from /model). */
+  modelProvider?: string;
+  /** Session-scoped model ID override (e.g. from /model). */
+  modelId?: string;
 };
 
 function isTextContentBlock(block: { type: string }): block is TextContent {
@@ -44,18 +48,19 @@ function extractSimpleCompletionError(result: {
 export async function generateConversationLabel(
   params: ConversationLabelParams,
 ): Promise<string | null> {
-  const { userMessage, prompt, cfg, agentId, agentDir } = params;
+  const { userMessage, prompt, cfg, agentId, agentDir, modelProvider, modelId } = params;
   const maxLength =
     typeof params.maxLength === "number" &&
     Number.isFinite(params.maxLength) &&
     params.maxLength > 0
       ? Math.floor(params.maxLength)
       : DEFAULT_MAX_LABEL_LENGTH;
-  const modelRef = resolveDefaultModelForAgent({ cfg, agentId });
-  const resolved = await resolveModelAsync(modelRef.provider, modelRef.model, agentDir, cfg);
+  const resolvedProvider = modelProvider ?? resolveDefaultModelForAgent({ cfg, agentId }).provider;
+  const resolvedModel = modelId ?? resolveDefaultModelForAgent({ cfg, agentId }).model;
+  const resolved = await resolveModelAsync(resolvedProvider, resolvedModel, agentDir, cfg);
   if (!resolved.model) {
     logVerbose(
-      `conversation-label-generator: failed to resolve model ${modelRef.provider}/${modelRef.model}`,
+      `conversation-label-generator: failed to resolve model ${resolvedProvider}/${resolvedModel}`,
     );
     return null;
   }
@@ -67,7 +72,7 @@ export async function generateConversationLabel(
       cfg,
       workspaceDir: agentDir,
     }),
-    modelRef.provider,
+    resolvedProvider,
   );
 
   const controller = new AbortController();
