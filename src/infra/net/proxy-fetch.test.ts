@@ -534,9 +534,11 @@ describe("makeProxyFetch — Request object normalization", () => {
     undiciFetch.mockResolvedValue({ ok: true });
     const proxyFetch = makeProxyFetch("http://proxy.test:8080");
 
-    await proxyFetch(
-      { url: "https://api.example.com/plain", method: "PUT", headers: { "x-key": "val" } } as unknown as RequestInfo,
-    );
+    await proxyFetch({
+      url: "https://api.example.com/plain",
+      method: "PUT",
+      headers: { "x-key": "val" },
+    } as unknown as RequestInfo);
 
     const [input] = requireUndiciFetchCall();
     expect(input).toBe("https://api.example.com/plain");
@@ -546,12 +548,46 @@ describe("makeProxyFetch — Request object normalization", () => {
     undiciFetch.mockResolvedValue({ ok: true });
     const proxyFetch = makeProxyFetch("http://proxy.test:8080");
 
-    await proxyFetch({ url: "https://api.example.com/strip", headers: { "transfer-encoding": "chunked", connection: "keep-alive", "x-safe": "keep-me" } } as unknown as RequestInfo);
+    await proxyFetch({
+      url: "https://api.example.com/strip",
+      headers: { "transfer-encoding": "chunked", connection: "keep-alive", "x-safe": "keep-me" },
+    } as unknown as RequestInfo);
 
     const init = requireUndiciFetchInit();
     expect((init.headers as Headers).get("transfer-encoding")).toBeNull();
     expect((init.headers as Headers).get("connection")).toBeNull();
     expect((init.headers as Headers).get("x-safe")).toBe("keep-me");
+  });
+
+  it("init.headers replaces (not merges) Request headers per Fetch spec", async () => {
+    // Regression: stale authorization from an original Request must not leak
+    // through when the caller supplies an explicit init.headers override.
+    undiciFetch.mockResolvedValue({ ok: true });
+    const proxyFetch = makeProxyFetch("http://proxy.test:8080");
+
+    const req = new Request("https://api.example.com/auth", {
+      headers: { authorization: "Bearer old-token", "x-stale": "stale" },
+    });
+    await proxyFetch(req, { headers: { "x-new": "fresh" } });
+
+    const init = requireUndiciFetchInit();
+    // init.headers entirely replaces req.headers — stale values must be absent
+    expect((init.headers as Headers).get("authorization")).toBeNull();
+    expect((init.headers as Headers).get("x-stale")).toBeNull();
+    expect((init.headers as Headers).get("x-new")).toBe("fresh");
+  });
+
+  it("falls back to Request headers when init provides no headers", async () => {
+    undiciFetch.mockResolvedValue({ ok: true });
+    const proxyFetch = makeProxyFetch("http://proxy.test:8080");
+
+    const req = new Request("https://api.example.com/fallback", {
+      headers: { "x-original": "preserved" },
+    });
+    await proxyFetch(req);
+
+    const init = requireUndiciFetchInit();
+    expect((init.headers as Headers).get("x-original")).toBe("preserved");
   });
 });
 

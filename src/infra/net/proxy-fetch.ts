@@ -82,7 +82,13 @@ const STRIP_HEADERS = new Set([
 
 function isRequestLike(
   input: unknown,
-): input is { url: string; method?: string; headers?: HeadersInit; body?: BodyInit | null; signal?: AbortSignal | null } {
+): input is {
+  url: string;
+  method?: string;
+  headers?: HeadersInit;
+  body?: BodyInit | null;
+  signal?: AbortSignal | null;
+} {
   return (
     typeof input === "object" &&
     input !== null &&
@@ -92,29 +98,36 @@ function isRequestLike(
   );
 }
 
-function mergeRequestHeaders(a: HeadersInit | undefined, b: HeadersInit | undefined): Headers | undefined {
-  if (a === undefined && b === undefined) return undefined;
-  const merged = new Headers(a);
-  if (b !== undefined) {
-    new Headers(b).forEach((value, key) => merged.set(key, value));
-  }
-  for (const key of Array.from(merged.keys())) {
+function stripRequestHeaders(src: HeadersInit | undefined): Headers | undefined {
+  if (src === undefined) return undefined;
+  const h = new Headers(src);
+  for (const key of Array.from(h.keys())) {
     if (STRIP_HEADERS.has(key.toLowerCase())) {
-      merged.delete(key);
+      h.delete(key);
     }
   }
-  return merged;
+  return h;
 }
 
 function toRequestLikeInit(
-  input: { url: string; method?: string; headers?: HeadersInit; body?: BodyInit | null; signal?: AbortSignal | null },
+  input: {
+    url: string;
+    method?: string;
+    headers?: HeadersInit;
+    body?: BodyInit | null;
+    signal?: AbortSignal | null;
+  },
   init?: RequestInit,
 ): RequestInit | undefined {
   const merged: Record<string, unknown> = { ...init };
   if (merged.body === undefined && input.body !== undefined) merged.body = input.body;
   const signal = init?.signal ?? input.signal;
   if (signal !== undefined) merged.signal = signal;
-  const headers = mergeRequestHeaders(input.headers, init?.headers);
+  // Per the Fetch spec, when init.headers is supplied it entirely replaces the
+  // Request's own headers (matching `new Request(req, { headers })` behaviour
+  // in Node/undici which discards req.headers when init.headers is present).
+  // Only fall back to input.headers when init provides no headers at all.
+  const headers = stripRequestHeaders(init?.headers !== undefined ? init.headers : input.headers);
   if (headers) merged.headers = headers;
   const method = typeof init?.method === "string" ? init.method : input.method;
   if (typeof method === "string" && method) merged.method = method;
@@ -132,7 +145,16 @@ function normalizeProxyFetchInput(
   if (typeof Request !== "undefined" && input instanceof Request) {
     return {
       input: input.url,
-      init: toRequestLikeInit(input as unknown as { url: string; headers: HeadersInit; body: BodyInit | null; signal: AbortSignal | null; method: string }, init),
+      init: toRequestLikeInit(
+        input as unknown as {
+          url: string;
+          headers: HeadersInit;
+          body: BodyInit | null;
+          signal: AbortSignal | null;
+          method: string;
+        },
+        init,
+      ),
     };
   }
   if (isRequestLike(input)) {
