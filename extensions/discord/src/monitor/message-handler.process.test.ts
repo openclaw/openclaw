@@ -235,6 +235,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
         info: { kind: "block" | "final" },
       ) => Promise<ReplyPayload | null> | ReplyPayload | null;
       deliver: (payload: unknown, info: { kind: "block" | "final" }) => Promise<void> | void;
+      onError?: (err: unknown, info: { kind: "block" | "final" }) => void;
       transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
       onSettled?: () => Promise<unknown> | unknown;
     };
@@ -258,7 +259,9 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
       await params.dispatcherOptions.deliver(deliverPayload, info);
     };
     const queueDelivery = (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
-      const delivery = Promise.resolve(deliver(payload, info)).catch(() => undefined);
+      const delivery = Promise.resolve(deliver(payload, info)).catch((err: unknown) => {
+        params.dispatcherOptions.onError?.(err, info);
+      });
       pendingDeliveries.push(delivery);
       return true;
     };
@@ -2316,6 +2319,39 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [
+        {
+          text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+          isError: true,
+        },
+      ],
+    });
+  });
+
+  it("delivers tool warning finals when the recovered reply fails to send", async () => {
+    deliverDiscordReply.mockRejectedValueOnce(new Error("send failed"));
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "delivery failed" });
+      await params?.dispatcher.waitForIdle();
+      await params?.dispatcher.sendFinalReply(createNonTerminalToolWarningPayload());
+      return {
+        queuedFinal: true,
+        counts: { final: 2, tool: 0, block: 0 },
+        failedCounts: { final: 1 },
+      };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "off" },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(2);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [{ text: "delivery failed" }],
+    });
+    expect(deliverDiscordReply.mock.calls[1]?.[0]).toMatchObject({
       replies: [
         {
           text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",

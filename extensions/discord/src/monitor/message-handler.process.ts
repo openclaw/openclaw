@@ -546,11 +546,13 @@ export async function processDiscordMessage(
     observer?.onFinalReplyStart?.();
   };
   let userFacingFinalDelivered = false;
+  let userFacingFinalDeliveryFailed = false;
   let pendingToolWarningFinal:
     | { payload: ReplyPayload; info: { kind: ReplyDispatchKind } }
     | undefined;
   const markUserFacingFinalDelivered = () => {
     userFacingFinalDelivered = true;
+    userFacingFinalDeliveryFailed = false;
     pendingToolWarningFinal = undefined;
     draftPreview.markFinalReplyDelivered();
     observer?.onFinalReplyDelivered?.();
@@ -630,7 +632,10 @@ export async function processDiscordMessage(
       !options?.allowFallbackOnlyToolWarning &&
       isFallbackOnlyToolWarningFinal(payload)
     ) {
-      if (!userFacingFinalDelivered && !finalReplyStartNotified) {
+      if (
+        !userFacingFinalDelivered &&
+        (!finalReplyStartNotified || userFacingFinalDeliveryFailed)
+      ) {
         pendingToolWarningFinal = { payload, info };
       }
       return { visibleReplySent: false };
@@ -839,6 +844,9 @@ export async function processDiscordMessage(
     return { visibleReplySent: true };
   };
   const onDiscordDeliveryError = (err: unknown, info: { kind: string }) => {
+    if (info.kind === "final" && finalReplyStartNotified && !userFacingFinalDelivered) {
+      userFacingFinalDeliveryFailed = true;
+    }
     runtime.error(
       danger(
         formatDiscordReplyDeliveryFailure({
