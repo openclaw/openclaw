@@ -235,7 +235,7 @@ export function buildGroupChatContext(params: {
     );
   } else {
     lines.push(
-      "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
+      "Your replies are automatically sent to this group chat. Do not use the message tool to send plain text to this same group — reply normally. Exception: when a live decision needs channel-native interactive controls such as inline buttons, use the message tool with action=send and presentation.blocks buttons, then make the final assistant turn silent to avoid a duplicate.",
     );
   }
   lines.push(
