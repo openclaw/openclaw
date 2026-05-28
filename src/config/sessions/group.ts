@@ -83,9 +83,12 @@ export function buildGroupDisplayName(params: {
   const groupChannel = normalizeOptionalString(params.groupChannel);
   const space = normalizeOptionalString(params.space);
   const subject = normalizeOptionalString(params.subject);
+  const spaceIsNumericId = space ? /^\d+$/.test(space) : false;
   const detail =
     (groupChannel && space
-      ? `${space}${groupChannel.startsWith("#") ? "" : "#"}${groupChannel}`
+      ? spaceIsNumericId
+        ? groupChannel
+        : `${space}${groupChannel.startsWith("#") ? "" : "#"}${groupChannel}`
       : groupChannel || subject || space || "") || "";
   const fallbackId = normalizeOptionalString(params.id) ?? params.key;
   const rawLabel = detail || fallbackId;

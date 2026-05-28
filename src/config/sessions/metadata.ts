@@ -173,6 +173,9 @@ export function deriveGroupSessionPatch(params: {
   });
   if (displayName) {
     patch.displayName = displayName;
+    if (!params.existing?.label) {
+      patch.label = displayName;
+    }
   }
 
   return patch;
