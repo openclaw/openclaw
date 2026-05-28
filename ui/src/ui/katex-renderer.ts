@@ -314,6 +314,7 @@ export function restoreMathBlocksSync(
         throwOnError: false,
         trust: false,
         strict: false,
+        maxSize: 100,
       });
     } catch {
       rendered = `<code class="katex-fallback">${escapeHtml(tex)}</code>`;
