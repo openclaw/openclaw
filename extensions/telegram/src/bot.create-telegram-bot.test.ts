@@ -1,5 +1,12 @@
 // Telegram tests cover bot.create telegram bot plugin behavior.
-import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  escapeRegExp,
+  formatEnvelopeTimestamp,
+  stripAnsi,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
@@ -22,6 +29,7 @@ const {
   editMessageReplyMarkupSpy,
   editMessageTextSpy,
   enqueueSystemEventSpy,
+  generateSpeakeasyVoiceNoteSpy,
   getLoadWebMediaMock,
   getChatSpy,
   getLoadConfigMock,
@@ -38,6 +46,7 @@ const {
   sendAnimationSpy,
   sendChatActionSpy,
   sendMessageSpy,
+  sendVoiceSpy,
   sendPhotoSpy,
   sequentializeSpy,
   setSessionStoreEntriesForTest,
@@ -51,6 +60,7 @@ const {
 type BuildModelsProviderDataMock = ReturnType<
   typeof vi.fn<NonNullable<typeof telegramBotDepsForTest.buildModelsProviderData>>
 >;
+const { SPEAKEASY_VOICE_CALLBACK_PREFIX } = await import("./speakeasy-voice.js");
 const { resolveTelegramFetch } = await import("./fetch.js");
 const {
   createTelegramBotCore: createTelegramBotBase,
@@ -1218,6 +1228,78 @@ describe("createTelegramBot", () => {
     expect(payload.CommandBody).toBe("/fast status");
     expect(payload.CommandSource).toBe("native");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-native-1");
+  });
+  it("handles Speakeasy voice callbacks without routing synthetic messages", async () => {
+    const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-speakeasy-test-"));
+    const previousWorkspace = process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR;
+    process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = workspaceDir;
+    await mkdir(path.join(workspaceDir, "config"), { recursive: true });
+    await mkdir(path.join(workspaceDir, "state"), { recursive: true });
+    await writeFile(
+      path.join(workspaceDir, "config", "speakeasy-chats.json"),
+      JSON.stringify({ enabled: ["telegram:1234"] }),
+    );
+    await writeFile(
+      path.join(workspaceDir, "state", "speakeasy-cache.json"),
+      JSON.stringify({
+        version: 1,
+        entries: {
+          voiceid: {
+            chatId: "1234",
+            text: "This is the exact source bubble text to render as a voice note.",
+            createdAt: Date.now(),
+          },
+        },
+        generations: {},
+      }),
+    );
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    try {
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-speakeasy-1",
+          data: `${SPEAKEASY_VOICE_CALLBACK_PREFIX}voiceid`,
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 10,
+            message_thread_id: 42,
+            text: "This is the exact source bubble text to render as a voice note.",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(generateSpeakeasyVoiceNoteSpy).toHaveBeenCalledWith({
+        cfg: expect.any(Object),
+        text: "This is the exact source bubble text to render as a voice note.",
+      });
+      expect(sendVoiceSpy).toHaveBeenCalledTimes(1);
+      expect(sendVoiceSpy.mock.calls[0]?.[0]).toBe(1234);
+      expect(sendVoiceSpy.mock.calls[0]?.[2]).toMatchObject({
+        message_thread_id: 42,
+        reply_parameters: {
+          message_id: 10,
+          allow_sending_without_reply: true,
+        },
+      });
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-speakeasy-1");
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-speakeasy-1", {
+        text: "Generating voice note…",
+        show_alert: false,
+      });
+    } finally {
+      process.env.OPENCLAW_SPEAKEASY_WORKSPACE_DIR = previousWorkspace;
+      await rm(workspaceDir, { recursive: true, force: true });
+    }
   });
   it("reloads callback model routing bindings without recreating the bot", async () => {
     const buildModelsProviderDataMock =

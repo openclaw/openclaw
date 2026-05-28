@@ -40,6 +40,7 @@ import {
 } from "../format.js";
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
+import { withSpeakeasyVoiceButton } from "../speakeasy-voice.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
@@ -846,6 +847,13 @@ export async function deliverReplies(params: {
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
+      reply = withSpeakeasyVoiceButton({
+        reply,
+        cfg: params.cfg,
+        chatId: params.chatId,
+        isGroup: params.mirrorIsGroup,
+        hasMedia,
+      });
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
       const replyMarkup = buildInlineKeyboard(
         resolveTelegramInlineButtons({

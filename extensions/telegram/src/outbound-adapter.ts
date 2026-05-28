@@ -23,6 +23,7 @@ import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks, splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
+import { withSpeakeasyVoiceButton } from "./speakeasy-voice.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
@@ -134,8 +135,17 @@ export async function sendTelegramPayloadMessages(params: {
       presentation,
     }) ?? "";
   const mediaUrls = resolvePayloadMediaUrls(params.payload);
+  const enrichedPayload = withSpeakeasyVoiceButton({
+    reply: params.payload,
+    cfg: params.baseOpts.cfg,
+    chatId: params.to,
+    hasMedia: mediaUrls.length > 0,
+  });
+  const enrichedTelegramData = enrichedPayload.channelData?.telegram as
+    | { buttons?: TelegramInlineButtons; quoteText?: string }
+    | undefined;
   const buttons = resolveTelegramInlineButtons({
-    buttons: telegramData?.buttons,
+    buttons: enrichedTelegramData?.buttons,
     presentation,
     interactive: params.payload.interactive,
   });

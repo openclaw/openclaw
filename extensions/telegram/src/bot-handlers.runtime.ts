@@ -1,4 +1,5 @@
 // Telegram plugin module implements bot handlers behavior.
+import { InputFile } from "grammy";
 import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -145,6 +146,15 @@ import {
 } from "./model-buttons.js";
 import { parseTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import { buildInlineKeyboard } from "./send.js";
+import {
+  generateSpeakeasyVoiceNote,
+  isSpeakeasyVoiceCallbackData,
+  loadSpeakeasyCache,
+  markSpeakeasyVoiceGenerated,
+  resolveSpeakeasyCachedText,
+  shouldAllowSpeakeasyVoiceGeneration,
+  writeSpeakeasyCache,
+} from "./speakeasy-voice.js";
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -2200,6 +2210,75 @@ export const registerTelegramHandlers = ({
         },
       });
       if (pluginCallback.handled) {
+        return;
+      }
+
+      if (isSpeakeasyVoiceCallbackData(data)) {
+        const cache = loadSpeakeasyCache(runtimeCfg);
+        const resolved = resolveSpeakeasyCachedText({
+          cfg: runtimeCfg,
+          cache,
+          data,
+          chatId: String(chatId),
+        });
+        writeSpeakeasyCache(runtimeCfg, cache);
+        if (!resolved.ok) {
+          await bot.api
+            .answerCallbackQuery(callback.id, {
+              text:
+                resolved.reason === "disabled"
+                  ? "Voice note is not enabled here."
+                  : "Voice note expired. Ask Nox to resend it.",
+              show_alert: false,
+            })
+            .catch(() => {});
+          return;
+        }
+        if (!shouldAllowSpeakeasyVoiceGeneration({ cache, chatId: String(chatId) })) {
+          await bot.api
+            .answerCallbackQuery(callback.id, {
+              text: "Daily voice-note tap limit reached.",
+              show_alert: false,
+            })
+            .catch(() => {});
+          return;
+        }
+        let audioPath: string;
+        try {
+          await bot.api
+            .answerCallbackQuery(callback.id, {
+              text: "Generating voice note…",
+              show_alert: false,
+            })
+            .catch(() => {});
+          audioPath = await (telegramDeps.generateSpeakeasyVoiceNote ?? generateSpeakeasyVoiceNote)(
+            {
+              cfg: runtimeCfg,
+              text: resolved.text,
+            },
+          );
+        } catch (err) {
+          logVerbose(`telegram speakeasy TTS failed: ${String(err)}`);
+          throw new TelegramRetryableCallbackError(err);
+        }
+        try {
+          await withTelegramApiErrorLogging({
+            operation: "sendVoice",
+            runtime,
+            fn: () =>
+              bot.api.sendVoice(callbackMessage.chat.id, new InputFile(audioPath), {
+                ...(messageThreadId != null ? { message_thread_id: messageThreadId } : {}),
+                reply_parameters: {
+                  message_id: callbackMessage.message_id,
+                  allow_sending_without_reply: true,
+                },
+              }),
+          });
+        } catch (err) {
+          throw new TelegramRetryableCallbackError(err);
+        }
+        markSpeakeasyVoiceGenerated({ cache, chatId: String(chatId) });
+        writeSpeakeasyCache(runtimeCfg, cache);
         return;
       }
 
