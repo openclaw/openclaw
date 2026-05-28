@@ -67,6 +67,8 @@ function loadRootAliasWithStubs(options?: {
   env?: Record<string, string | undefined>;
   monolithicExports?: Record<string | symbol, unknown>;
   aliasPath?: string;
+  cwd?: string;
+  defaultTmpDir?: string;
   packageExports?: Record<string, unknown>;
   platform?: string;
   existingPaths?: string[];
@@ -84,6 +86,7 @@ function loadRootAliasWithStubs(options?: {
     process: {
       env: options?.env ?? {},
       platform: options?.platform ?? "darwin",
+      cwd: () => options?.cwd ?? "/workdir",
     },
   };
   const wrapper = vm.runInNewContext(
@@ -141,7 +144,10 @@ function loadRootAliasWithStubs(options?: {
     }
     if (id === "node:os") {
       return {
-        tmpdir: () => "/tmp/openclaw-root-alias-test",
+        tmpdir: () =>
+          context.process.env.TMPDIR ??
+          options?.defaultTmpDir ??
+          "/tmp/openclaw-root-alias-test",
       };
     }
     if (id === "jiti") {
@@ -359,6 +365,30 @@ describe("plugin-sdk root alias", () => {
     expect((lazyRootSdk.slowHelper as () => string)()).toBe("loaded");
     expect(Object.keys(lazyRootSdk)).toContain("slowHelper");
     expectEnumerableConfigurableDescriptor(lazyRootSdk, "slowHelper");
+  });
+
+  it("preserves jiti's tmpdir guard when root-alias TMPDIR resolves to cwd", () => {
+    const lazyModule = loadRootAliasWithStubs({
+      cwd: "/tmp/openclaw-root-alias-cwd",
+      defaultTmpDir: "/tmp/openclaw-root-alias-fallback",
+      env: { TMPDIR: "/tmp/openclaw-root-alias-cwd" },
+      packageVersion: "3.4.5",
+    });
+
+    expect("slowHelper" in lazyModule.moduleExports).toBe(true);
+    expect(lazyModule.createJitiOptions.at(-1)?.fsCache).toBe(
+      path.join("/tmp/openclaw-root-alias-fallback", "jiti", "openclaw", "3.4.5", "12345-678"),
+    );
+  });
+
+  it("preserves jiti's fs cache environment opt-out for root alias", () => {
+    const lazyModule = loadRootAliasWithStubs({
+      env: { JITI_FS_CACHE: "false" },
+      packageVersion: "3.4.5",
+    });
+
+    expect("slowHelper" in lazyModule.moduleExports).toBe(true);
+    expect(lazyModule.createJitiOptions.at(-1)?.fsCache).toBe(false);
   });
 
   it.each([

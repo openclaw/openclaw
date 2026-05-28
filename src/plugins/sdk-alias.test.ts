@@ -17,6 +17,7 @@ import {
   listPluginSdkExportedSubpaths,
   normalizeJitiAliasTargetPath,
   resolvePluginLoaderJitiFsCacheDir,
+  resolvePluginLoaderJitiFsCacheOption,
   resolvePluginLoaderModuleConfig,
   resolvePluginLoaderTryNative,
   resolveExtensionApiAlias,
@@ -2127,6 +2128,33 @@ describe("buildPluginLoaderJitiOptions", () => {
     expect(path.basename(fsCache)).toMatch(/^\d+-\d+$/u);
   });
 
+  it("preserves jiti's tmpdir guard when TMPDIR resolves to cwd", () => {
+    const root = createTrustedOpenClawPackageFixture("1.2.3-beta.4");
+
+    const guardedFsCache = withEnv({ TMPDIR: root, JITI_RESPECT_TMPDIR_ENV: undefined }, () =>
+      withCwd(root, () =>
+        resolvePluginLoaderJitiFsCacheDir({
+          modulePath: path.join(root, "dist", "plugins", "loader.js"),
+        }),
+      ),
+    );
+    const respectedFsCache = withEnv({ TMPDIR: root, JITI_RESPECT_TMPDIR_ENV: "1" }, () =>
+      withCwd(root, () =>
+        resolvePluginLoaderJitiFsCacheDir({
+          modulePath: path.join(root, "dist", "plugins", "loader.js"),
+        }),
+      ),
+    );
+
+    expect(guardedFsCache).toContain(
+      path.join("jiti", "openclaw", "1.2.3-beta.4") + path.sep,
+    );
+    expect(guardedFsCache.startsWith(path.join(root, "jiti") + path.sep)).toBe(false);
+    expect(respectedFsCache).toContain(
+      path.join(root, "jiti", "openclaw", "1.2.3-beta.4") + path.sep,
+    );
+  });
+
   it("adds the versioned fs cache directory to plugin loader jiti options", () => {
     const root = createTrustedOpenClawPackageFixture("2.0.0");
     const tmpDir = path.join(root, "tmp");
@@ -2139,6 +2167,25 @@ describe("buildPluginLoaderJitiOptions", () => {
     );
 
     expect(options.fsCache).toContain(path.join(tmpDir, "jiti", "openclaw", "2.0.0"));
+  });
+
+  it("preserves jiti's fs cache environment opt-out", () => {
+    const root = createTrustedOpenClawPackageFixture("2.0.0");
+
+    const explicitOptOut = withEnv({ JITI_FS_CACHE: "false" }, () =>
+      resolvePluginLoaderJitiFsCacheOption({
+        modulePath: path.join(root, "dist", "plugins", "loader.js"),
+      }),
+    );
+    const legacyOptOut = withEnv({ JITI_CACHE: "false", JITI_FS_CACHE: undefined }, () =>
+      buildPluginLoaderJitiOptions(
+        { "openclaw/plugin-sdk": path.join(root, "dist", "plugin-sdk", "root-alias.cjs") },
+        { modulePath: path.join(root, "dist", "plugins", "loader.js") },
+      ),
+    );
+
+    expect(explicitOptOut).toBe(false);
+    expect(legacyOptOut.fsCache).toBe(false);
   });
 
   it("pre-normalizes and marks alias maps for source transforms", () => {

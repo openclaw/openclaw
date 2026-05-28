@@ -40,6 +40,39 @@ function sanitizeJitiCachePathSegment(value: string): string {
   return normalized.length > 0 ? normalized : "unknown";
 }
 
+function resolveJitiFsCacheTmpDir(): string {
+  let tmpDir = os.tmpdir();
+  if (
+    process.env.TMPDIR &&
+    tmpDir === process.cwd() &&
+    !process.env.JITI_RESPECT_TMPDIR_ENV
+  ) {
+    const originalTmpDir = process.env.TMPDIR;
+    delete process.env.TMPDIR;
+    try {
+      tmpDir = os.tmpdir();
+    } finally {
+      process.env.TMPDIR = originalTmpDir;
+    }
+  }
+  return tmpDir;
+}
+
+function readJitiBooleanEnv(name: string, defaultValue: boolean): boolean {
+  if (!(name in process.env)) {
+    return defaultValue;
+  }
+  try {
+    return Boolean(JSON.parse(process.env[name] ?? ""));
+  } catch {
+    return defaultValue;
+  }
+}
+
+function shouldUseJitiFsCache(): boolean {
+  return readJitiBooleanEnv("JITI_FS_CACHE", readJitiBooleanEnv("JITI_CACHE", true));
+}
+
 export function normalizeJitiAliasTargetPath(targetPath: string): string {
   return process.platform === "win32" ? targetPath.replace(/\\/g, "/") : targetPath;
 }
@@ -89,12 +122,18 @@ export function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolvePar
     // Package installs should have package.json; keep cache setup best-effort.
   }
   return path.join(
-    os.tmpdir(),
+    resolveJitiFsCacheTmpDir(),
     "jiti",
     "openclaw",
     version,
     sanitizeJitiCachePathSegment(installMarker),
   );
+}
+
+export function resolvePluginLoaderJitiFsCacheOption(
+  params: LoaderModuleResolveParams = {},
+): false | string {
+  return shouldUseJitiFsCache() ? resolvePluginLoaderJitiFsCacheDir(params) : false;
 }
 
 function isSafePluginSdkSubpathSegment(subpath: string): boolean {
@@ -1213,7 +1252,7 @@ export function buildPluginLoaderJitiOptions(
   const jitiAliasMap = hasAliases ? normalizePluginLoaderAliasMapForJiti(aliasMap) : aliasMap;
   return {
     interopDefault: true,
-    fsCache: resolvePluginLoaderJitiFsCacheDir(params),
+    fsCache: resolvePluginLoaderJitiFsCacheOption(params),
     // Prefer Node's native sync ESM loader for built dist/*.js modules so
     // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
     tryNative: true,

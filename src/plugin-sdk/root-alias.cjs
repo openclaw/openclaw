@@ -333,6 +333,39 @@ function sanitizeJitiCachePathSegment(value) {
   return normalized.length > 0 ? normalized : "unknown";
 }
 
+function resolveJitiFsCacheTmpDir() {
+  let tmpDir = os.tmpdir();
+  if (
+    process.env.TMPDIR &&
+    tmpDir === process.cwd() &&
+    !process.env.JITI_RESPECT_TMPDIR_ENV
+  ) {
+    const originalTmpDir = process.env.TMPDIR;
+    delete process.env.TMPDIR;
+    try {
+      tmpDir = os.tmpdir();
+    } finally {
+      process.env.TMPDIR = originalTmpDir;
+    }
+  }
+  return tmpDir;
+}
+
+function readJitiBooleanEnv(name, defaultValue) {
+  if (!(name in process.env)) {
+    return defaultValue;
+  }
+  try {
+    return Boolean(JSON.parse(process.env[name] ?? ""));
+  } catch {
+    return defaultValue;
+  }
+}
+
+function shouldUseJitiFsCache() {
+  return readJitiBooleanEnv("JITI_FS_CACHE", readJitiBooleanEnv("JITI_CACHE", true));
+}
+
 function resolvePluginSdkJitiFsCacheDir() {
   const packageRoot = getPackageRoot();
   const packageJsonPath = path.join(packageRoot, "package.json");
@@ -353,12 +386,16 @@ function resolvePluginSdkJitiFsCacheDir() {
     // Package installs should have package.json, but source/test graphs may stub it.
   }
   return path.join(
-    os.tmpdir(),
+    resolveJitiFsCacheTmpDir(),
     "jiti",
     "openclaw",
     sanitizeJitiCachePathSegment(version),
     sanitizeJitiCachePathSegment(installMarker),
   );
+}
+
+function resolvePluginSdkJitiFsCacheOption() {
+  return shouldUseJitiFsCache() ? resolvePluginSdkJitiFsCacheDir() : false;
 }
 
 function getModuleLoader(tryNative) {
@@ -370,7 +407,7 @@ function getModuleLoader(tryNative) {
   const moduleLoader = createJiti(__filename, {
     alias: buildPluginSdkAliasMap(tryNative),
     interopDefault: true,
-    fsCache: resolvePluginSdkJitiFsCacheDir(),
+    fsCache: resolvePluginSdkJitiFsCacheOption(),
     // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
     // so local plugins do not create a second transpiled OpenClaw core graph.
     tryNative,
