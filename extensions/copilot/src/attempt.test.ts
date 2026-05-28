@@ -1837,6 +1837,37 @@ describe("runCopilotAttempt", () => {
       expect(createToolBridge).not.toHaveBeenCalled();
       expect(sdk.createSession).not.toHaveBeenCalled();
     });
+
+    it("fails closed when creating the sandbox copy workspace fails", async () => {
+      const sdk = makeFakeSdk({
+        onCreateSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const blockingFile = path.join(tmpdir(), `copilot-sandbox-block-${Date.now()}`);
+      await fsp.writeFile(blockingFile, "not a directory");
+      const sandbox = makeSandboxStub({
+        workspaceAccess: "ro",
+        workspaceDir: path.join(blockingFile, "copy"),
+      });
+
+      try {
+        const result = await runCopilotAttempt(makeParams(), {
+          createToolBridge,
+          pool,
+          resolveSandboxContextOverride: async () => sandbox,
+        });
+
+        expect(getPromptErrorCode(result)).toBe("sandbox_resolution_failure");
+        expect((result.promptError as Error | undefined)?.message).toContain("ENOTDIR");
+        expect(createToolBridge).not.toHaveBeenCalled();
+        expect(sdk.createSession).not.toHaveBeenCalled();
+      } finally {
+        await fsp.rm(blockingFile, { force: true });
+      }
+    });
   });
 
   // ClawSweeper PR #86155 [P1] round-8: the SDK SessionConfig accepts

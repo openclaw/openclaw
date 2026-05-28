@@ -194,6 +194,23 @@ export async function runCopilotAttempt(
         sessionKey: sandboxSessionKey,
         workspaceDir: resolvedWorkspaceForSandbox,
       });
+      effectiveWorkspaceDir = sandbox?.enabled
+        ? sandbox.workspaceAccess === "rw"
+          ? resolvedWorkspaceForSandbox
+          : sandbox.workspaceDir
+        : resolvedWorkspaceForSandbox;
+      // Only ensure the workspace exists when sandbox redirected us to a
+      // newly-resolved path. The original workspace is owned by the
+      // orchestrator (PI's runner pre-creates it before entering the
+      // attempt); duplicating the mkdir here would also break long-standing
+      // tests that pass placeholder workspaceDir values.
+      if (
+        sandbox?.enabled &&
+        effectiveWorkspaceDir &&
+        effectiveWorkspaceDir !== resolvedWorkspaceForSandbox
+      ) {
+        await fsp.mkdir(effectiveWorkspaceDir, { recursive: true });
+      }
     } catch (error: unknown) {
       settled = true;
       params.abortSignal?.removeEventListener("abort", onAbort);
@@ -219,23 +236,6 @@ export async function runCopilotAttempt(
         sdkSessionId: undefined,
         sessionIdUsed: input.sessionId,
       });
-    }
-    effectiveWorkspaceDir = sandbox?.enabled
-      ? sandbox.workspaceAccess === "rw"
-        ? resolvedWorkspaceForSandbox
-        : sandbox.workspaceDir
-      : resolvedWorkspaceForSandbox;
-    // Only ensure the workspace exists when sandbox redirected us to a
-    // newly-resolved path. The original workspace is owned by the
-    // orchestrator (PI's runner pre-creates it before entering the
-    // attempt); duplicating the mkdir here would also break long-standing
-    // tests that pass placeholder workspaceDir values.
-    if (
-      sandbox?.enabled &&
-      effectiveWorkspaceDir &&
-      effectiveWorkspaceDir !== resolvedWorkspaceForSandbox
-    ) {
-      await fsp.mkdir(effectiveWorkspaceDir, { recursive: true });
     }
   }
   const sandboxAwareSpawnWorkspaceDir = resolvedWorkspaceForSandbox
