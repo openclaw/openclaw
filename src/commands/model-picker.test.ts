@@ -796,6 +796,42 @@ describe("promptDefaultModel", () => {
     expect(select.mock.calls[1]?.[0]?.searchable).toBe(true);
   });
 
+  it("uses static manifest rows for a preferred provider without on-demand browsing", async () => {
+    loadStaticManifestCatalogRowsForList.mockReturnValue([
+      {
+        provider: "github-copilot",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        ref: "github-copilot/gpt-5.4",
+        mergeKey: "github-copilot:gpt-5.4",
+        source: "manifest",
+        input: ["text"],
+        reasoning: true,
+        status: "available",
+      },
+    ]);
+    const select = vi.fn(async (params) => params.options[0]?.value as never);
+    const prompter = makePrompter({ select });
+    const config = { agents: { defaults: {} } } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+      preferredProvider: "github-copilot",
+    });
+
+    expect(result.model).toBe("github-copilot/gpt-5.4");
+    expect(loadStaticManifestCatalogRowsForList).toHaveBeenCalledWith({
+      cfg: config,
+      providerFilter: "github-copilot",
+    });
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(loadPreferredProviderPickerCatalog).not.toHaveBeenCalled();
+  });
+
   it("scopes on-demand preferred-provider loads before the first model prompt", async () => {
     loadPreferredProviderPickerCatalog.mockResolvedValue([
       {

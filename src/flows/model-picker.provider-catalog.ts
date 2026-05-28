@@ -58,7 +58,7 @@ function resolveProviderEnvApiKey(
     const value = env[normalized]?.trim();
     if (normalized && value) {
       return {
-        apiKey: normalized,
+        apiKey: value,
         discoveryApiKey: value,
       };
     }
@@ -172,24 +172,32 @@ export async function loadPreferredProviderPickerCatalog(params: {
       }
 
       const normalized = normalizePluginDiscoveryResult({ provider, result });
-      for (const [providerIdRaw, providerConfig] of Object.entries(normalized)) {
-        const providerId = normalizeProviderId(providerIdRaw);
-        if (providerId !== providerFilter || !Array.isArray(providerConfig.models)) {
+      const canonicalProviderId = normalizeProviderId(provider.id);
+      const acceptedProviderIds = new Set(providerAuthIds(provider));
+      const canonicalProviderConfig = canonicalProviderId
+        ? normalized[canonicalProviderId]
+        : undefined;
+      const providerConfig = Array.isArray(canonicalProviderConfig?.models)
+        ? canonicalProviderConfig
+        : [...acceptedProviderIds]
+            .map((providerId) => normalized[providerId])
+            .find((candidate) => Array.isArray(candidate?.models));
+      const outputProviderId = canonicalProviderId || providerFilter;
+      if (!providerConfig || !Array.isArray(providerConfig.models)) {
+        continue;
+      }
+      for (const model of providerConfig.models) {
+        const entry = modelFromProviderCatalog({
+          provider: outputProviderId,
+          providerConfig,
+          model,
+        });
+        const key = `${entry.provider}/${entry.id}`;
+        if (seen.has(key)) {
           continue;
         }
-        for (const model of providerConfig.models) {
-          const entry = modelFromProviderCatalog({
-            provider: providerId,
-            providerConfig,
-            model,
-          });
-          const key = `${entry.provider}/${entry.id}`;
-          if (seen.has(key)) {
-            continue;
-          }
-          seen.add(key);
-          rows.push(entry);
-        }
+        seen.add(key);
+        rows.push(entry);
       }
     }
   }

@@ -759,7 +759,7 @@ export async function promptDefaultModel(
   try {
     const providerScopedCatalog = browseCatalogOnDemand && preferredProvider;
     catalog = await loadPickerModelCatalog(cfg, {
-      preferredProvider: providerScopedCatalog ? preferredProvider : undefined,
+      preferredProvider,
       preferLiveProviderCatalog: Boolean(providerScopedCatalog),
       providerScoped: Boolean(providerScopedCatalog),
       agentDir: pickerAgentDir,
