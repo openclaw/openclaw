@@ -1780,28 +1780,72 @@ describe("image tool implicit imageModel config", () => {
   });
 
   it("allows image paths from the current iMessage account attachment roots", async () => {
-    const attachmentRoot = path.join(os.tmpdir(), "openclaw-imessage-root-test");
-    const imagePath = path.join(attachmentRoot, "photo.png");
-    const cfg: OpenClawConfig = {
-      channels: {
-        imessage: {
-          accounts: {
-            work: {
-              attachmentRoots: [attachmentRoot],
+    await withTempAgentDir(async (agentDir) => {
+      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: "ok",
+        model: params.model,
+      }));
+      installFastLocalImageProviderStubs({
+        id: "ollama",
+        capabilities: ["image"],
+        describeImage,
+      });
+      const attachmentRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-root-"));
+      const imagePath = path.join(attachmentRoot, "photo.png");
+      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      try {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              imageModel: { primary: "ollama/moondream" },
             },
           },
-        },
-      },
-    };
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://localhost:11434",
+                models: [makeModelDefinition("moondream", ["text", "image"])],
+              },
+            },
+          },
+          channels: {
+            imessage: {
+              accounts: {
+                work: {
+                  attachmentRoots: [attachmentRoot],
+                },
+              },
+            },
+          },
+        };
 
-    expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
-    const roots = resolveMediaToolInboundRoots({
-      cfg,
-      channelId: "imessage",
-      accountId: "work",
+        expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
+        const roots = resolveMediaToolInboundRoots({
+          cfg,
+          channelId: "imessage",
+          accountId: "work",
+        });
+        expect(roots).toContain(attachmentRoot);
+        expect(isInboundPathAllowed({ filePath: imagePath, roots })).toBe(true);
+
+        const withoutChannel = createRequiredImageTool({ config: cfg, agentDir });
+        await expect(
+          withoutChannel.execute("t1", { prompt: "Describe.", image: imagePath }),
+        ).rejects.toThrow(/not under an allowed directory/i);
+
+        const withImessage = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          agentChannel: "imessage",
+          agentAccountId: "work",
+        });
+
+        await expectImageToolExecOk(withImessage, imagePath);
+        expect(describeImage).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(attachmentRoot, { recursive: true, force: true });
+      }
     });
-    expect(roots).toContain(attachmentRoot);
-    expect(isInboundPathAllowed({ filePath: imagePath, roots })).toBe(true);
   });
 
   it("allows image paths from current iMessage wildcard attachment roots", async () => {

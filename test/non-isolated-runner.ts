@@ -81,8 +81,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     await super.onBeforeRunTask(test);
   }
 
-  async onAfterRetryTask() {
+  override onBeforeTryTask(test: RunnerTask) {
     restoreRealTimers();
+    super.onBeforeTryTask(test);
   }
 
   override async onAfterRunSuite(suite: RunnerTestSuite) {
