@@ -263,6 +263,58 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     }
   });
 
+  it("counts text deltas without repeatedly serializing growing partial snapshots", async () => {
+    const hugeFirstPartial = "a".repeat(200_000);
+    const hugeSecondPartial = `${hugeFirstPartial}${"b".repeat(200_000)}`;
+    async function* stream() {
+      yield {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "a",
+        partial: {
+          role: "assistant",
+          content: [{ type: "text", text: hugeFirstPartial }],
+        },
+      };
+      yield {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "b",
+        partial: {
+          role: "assistant",
+          content: [{ type: "text", text: hugeSecondPartial }],
+        },
+      };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "vllm",
+        model: "qwen/qwen3.5-9b",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-delta-bytes",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
+
+    const completedEvent = getEvent(events, 1);
+    expect(completedEvent.type).toBe("model.call.completed");
+    expect(completedEvent.responseStreamBytes).toBe(
+      Buffer.byteLength(
+        JSON.stringify({ type: "text_delta", contentIndex: 0, delta: "a" }),
+        "utf8",
+      ) +
+        Buffer.byteLength(
+          JSON.stringify({ type: "text_delta", contentIndex: 0, delta: "b" }),
+          "utf8",
+        ),
+    );
+  });
+
   it("does not retain stream progress activity when diagnostics are disabled", async () => {
     setDiagnosticsEnabledForProcess(false);
     const runProgressEvents: DiagnosticEventPayload[] = [];
