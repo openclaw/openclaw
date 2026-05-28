@@ -29,6 +29,7 @@ function createExecGatewayTokenConfig(markerPath: string): OpenClawConfig {
         execmain: {
           source: "exec",
           command: process.execPath,
+          allowInsecurePath: true,
           args: [
             "-e",
             [
