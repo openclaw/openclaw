@@ -723,25 +723,32 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
   const { resolveSecretInputRef } = await import("../config/types.secrets.js");
+  const { createGatewayCredentialPlan } = await import("../gateway/credential-planner.js");
+  const { readGatewaySecretInputValue } = await import("../gateway/secret-input-paths.js");
   const { note } = await import("../terminal/note.js");
-  const gatewayTokenRef = resolveSecretInputRef({
-    value: ctx.cfg.gateway?.auth?.token,
-    defaults: ctx.cfg.secrets?.defaults,
-  }).ref;
-  const { resolveGatewayAuth } = await import("../gateway/auth.js");
-  const auth = resolveGatewayAuth({
-    authConfig: ctx.cfg.gateway?.auth,
-    tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
+  const credentialPlan = createGatewayCredentialPlan({ config: ctx.cfg, env: process.env });
+  const activeSecretRefPaths = [
+    credentialPlan.localTokenSurfaceActive ? credentialPlan.localToken.refPath : undefined,
+    credentialPlan.localPasswordCanWin && !credentialPlan.envPassword
+      ? credentialPlan.localPassword.refPath
+      : undefined,
+    credentialPlan.remoteTokenActive && !credentialPlan.envToken
+      ? credentialPlan.remoteToken.refPath
+      : undefined,
+    credentialPlan.remotePasswordActive && !credentialPlan.envPassword
+      ? credentialPlan.remotePassword.refPath
+      : undefined,
+  ].filter((path): path is NonNullable<typeof path> => Boolean(path));
+  const hasActiveExecCredential = activeSecretRefPaths.some((path) => {
+    const ref = resolveSecretInputRef({
+      value: readGatewaySecretInputValue(ctx.cfg, path),
+      defaults: ctx.cfg.secrets?.defaults,
+    }).ref;
+    return ref?.source === "exec";
   });
-  const gatewayHealthNeedsToken =
-    auth.mode !== "password" && auth.mode !== "none" && auth.mode !== "trusted-proxy";
-  if (
-    gatewayHealthNeedsToken &&
-    gatewayTokenRef?.source === "exec" &&
-    ctx.options.allowExec !== true
-  ) {
+  if (hasActiveExecCredential && ctx.options.allowExec !== true) {
     note(
-      "Gateway health probes skipped because gateway.auth.token uses an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs.",
+      "Gateway health probes skipped because gateway credentials use an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs.",
       "Gateway",
     );
     ctx.gatewayHealthSkipped = true;

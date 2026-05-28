@@ -472,7 +472,46 @@ describe("doctor command", () => {
     requireTerminalNote({
       title: "Gateway",
       messageIncludes:
-        "Gateway health probes skipped because gateway.auth.token uses an exec SecretRef.",
+        "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
+    });
+  });
+
+  it("skips gateway health probes for active exec password SecretRefs", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "password",
+            password: {
+              source: "exec",
+              provider: "default",
+              id: "gateway/password",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: {
+              source: "exec",
+              command: process.execPath,
+            },
+          },
+        },
+      },
+    });
+
+    callGateway.mockClear();
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    requireTerminalNote({
+      title: "Gateway",
+      messageIncludes:
+        "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
     });
   });
 
@@ -511,7 +550,7 @@ describe("doctor command", () => {
       return (
         title === "Gateway" &&
         String(message).includes(
-          "Gateway health probes skipped because gateway.auth.token uses an exec SecretRef.",
+          "Gateway health probes skipped because gateway credentials use an exec SecretRef.",
         )
       );
     });
