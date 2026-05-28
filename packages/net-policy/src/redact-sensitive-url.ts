@@ -41,7 +41,7 @@ export function isSensitiveUrlConfigPath(path: string): boolean {
   if (path.endsWith(".request.proxy.url")) {
     return true;
   }
-  return /^mcp\.servers\.(?:\*|[^.]+)\.url$/.test(path);
+  return /^mcp\.servers\.(?:\*|[^.]+)\.(?:url|oauth_resource)$/.test(path);
 }
 
 export function hasSensitiveUrlHintTag(hint: ConfigUiHintTags | undefined): boolean {

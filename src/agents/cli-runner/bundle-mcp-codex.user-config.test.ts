@@ -64,6 +64,60 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
     });
   });
 
+  it("projects OAuth settings for Codex user MCP servers", () => {
+    const patch = buildCodexUserMcpServersThreadConfigPatch({
+      mcp: {
+        servers: {
+          composio: {
+            transport: "streamable-http",
+            url: "https://connect.composio.dev/mcp",
+            oauth_resource: "https://connect.composio.dev/mcp",
+            oauth: {
+              client_id: "test-client-id",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+    expect(patch).toStrictEqual({
+      mcp_servers: {
+        composio: {
+          url: "https://connect.composio.dev/mcp",
+          oauth_resource: "https://connect.composio.dev/mcp",
+          oauth: {
+            client_id: "test-client-id",
+          },
+        },
+      },
+    });
+  });
+
+  it("omits OAuth settings for stdio user MCP servers", () => {
+    const patch = buildCodexUserMcpServersThreadConfigPatch({
+      mcp: {
+        servers: {
+          local: {
+            transport: "stdio",
+            command: "node",
+            args: ["local-mcp.js"],
+            oauth_resource: "https://mcp.example.com/mcp",
+            oauth: {
+              client_id: "test-client-id",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+    expect(patch).toStrictEqual({
+      mcp_servers: {
+        local: {
+          command: "node",
+          args: ["local-mcp.js"],
+        },
+      },
+    });
+  });
+
   it("projects Codex-specific default tool approval mode", () => {
     const patch = buildCodexUserMcpServersThreadConfigPatch({
       mcp: {

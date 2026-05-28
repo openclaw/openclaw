@@ -136,6 +136,50 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
   });
 
+  it("projects OAuth settings into the thread/start MCP config patch", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, {
+        mcp: {
+          servers: {
+            composio: {
+              transport: "streamable-http",
+              url: "https://connect.composio.dev/mcp",
+              oauth_resource: "https://connect.composio.dev/mcp",
+              oauth: {
+                client_id: "test-client-id",
+              },
+            },
+          },
+        },
+      } as unknown as EmbeddedRunAttemptParams["config"]),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    const startCall = request.mock.calls.find(([method]) => method === "thread/start");
+    const startParams = startCall?.[1] as { config?: { mcp_servers?: Record<string, unknown> } };
+    expect(startParams?.config?.mcp_servers).toMatchObject({
+      composio: {
+        url: "https://connect.composio.dev/mcp",
+        oauth_resource: "https://connect.composio.dev/mcp",
+        oauth: {
+          client_id: "test-client-id",
+        },
+      },
+    });
+  });
+
   it("projects only Codex user MCP servers scoped to the current agent", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -437,6 +481,67 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     expect(resumeCall).toBeDefined();
     expect(resumeParams?.config?.mcp_servers).toMatchObject({
       notes: { command: "node", args: ["/opt/notes-mcp/dist/index.js"] },
+    });
+  });
+
+  it("resends OAuth user MCP config when resuming a thread with the matching fingerprint", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const config = {
+      mcp: {
+        servers: {
+          composio: {
+            transport: "streamable-http",
+            url: "https://connect.composio.dev/mcp",
+            oauth_resource: "https://connect.composio.dev/mcp",
+            oauth: {
+              client_id: "test-client-id",
+            },
+          },
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams["config"];
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-with-oauth-user-mcp");
+      }
+      if (method === "thread/resume") {
+        return threadResumeResult("thread-with-oauth-user-mcp");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, config),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    request.mockClear();
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, config),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    const resumeCall = request.mock.calls.find(([method]) => method === "thread/resume");
+    const resumeParams = resumeCall?.[1] as {
+      config?: { mcp_servers?: Record<string, unknown> };
+    };
+    expect(resumeCall).toBeDefined();
+    expect(resumeParams?.config?.mcp_servers).toMatchObject({
+      composio: {
+        url: "https://connect.composio.dev/mcp",
+        oauth_resource: "https://connect.composio.dev/mcp",
+        oauth: {
+          client_id: "test-client-id",
+        },
+      },
     });
   });
 });

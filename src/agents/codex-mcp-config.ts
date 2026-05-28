@@ -51,6 +51,14 @@ function normalizeCodexToolApprovalMode(value: unknown): CodexMcpToolApprovalMod
     : undefined;
 }
 
+function normalizeNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function resolveCodexDefaultToolsApprovalMode(
   server: BundleMcpServerConfig,
 ): CodexMcpToolApprovalMode | undefined {
@@ -72,6 +80,17 @@ export function normalizeCodexMcpServerConfig(
     next.default_tools_approval_mode = defaultToolsApprovalMode;
   } else if (isOpenClawLoopbackMcpServer(name, server)) {
     next.default_tools_approval_mode = "approve";
+  }
+  if (typeof server.url === "string") {
+    const oauthResource = normalizeNonEmptyString(server.oauth_resource);
+    if (oauthResource) {
+      next.oauth_resource = oauthResource;
+    }
+    const oauth = isRecord(server.oauth) ? server.oauth : undefined;
+    const oauthClientId = normalizeNonEmptyString(oauth?.client_id);
+    if (oauthClientId) {
+      next.oauth = { client_id: oauthClientId };
+    }
   }
   const httpHeaders = normalizeStringRecord(server.headers);
   if (httpHeaders) {
