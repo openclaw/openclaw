@@ -31,23 +31,22 @@ describe("dependency change awareness workflow", () => {
     const parsed = readWorkflow();
 
     expect(workflow).toContain("pull_request_target:");
-    expect(workflow).toContain("metadata-only workflow; no checkout or untrusted code execution");
+    expect(workflow).toContain("checks trusted base script only; never checks out PR head");
     expect(parsed.permissions).toEqual({
+      contents: "read",
       "pull-requests": "write",
       issues: "write",
     });
   });
 
-  it("does not checkout or execute PR-controlled code", () => {
+  it("checks out only trusted base scripts and does not execute PR-controlled code", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const forbiddenSnippets = [
-      "actions/checkout",
       "github.event.pull_request.head",
       "pullRequest.head",
       "pnpm install",
       "npm install",
       "pnpm dlx",
-      "contents: write",
       "actions: write",
       "id-token: write",
       "secrets.",
@@ -59,44 +58,53 @@ describe("dependency change awareness workflow", () => {
     }
 
     const steps = readWorkflow().jobs?.["dependency-change-awareness"]?.steps ?? [];
-    expect(steps).toHaveLength(1);
-    expect(steps[0].run).toBeUndefined();
+    expect(steps).toHaveLength(2);
+    expect(steps[0].uses).toBe("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd");
+    expect(steps[0].with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
+    expect(steps[0].with?.["persist-credentials"]).toBe(false);
+    expect(steps[1].run).toBe("node scripts/github/dependency-change-awareness.mjs");
   });
 
-  it("uses a pinned GitHub Script action and bounded sticky comments", () => {
+  it("uses a dedicated checked-in script and bounded sticky comments", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const steps = readWorkflow().jobs?.["dependency-change-awareness"]?.steps ?? [];
-    const step = steps[0];
+    const runStep = steps[1];
+    const script = readFileSync("scripts/github/dependency-change-awareness.mjs", "utf8");
 
-    expect(step.uses).toBe("actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3");
-    expect(step.with?.script).toContain("<!-- openclaw:dependency-change-awareness -->");
-    expect(step.with?.script).toContain("const maxListedFiles = 25;");
-    expect(step.with?.script).toContain("const sanitizeDisplayValue = (value)");
-    expect(step.with?.script).toContain('.replace(/[\\u0000-\\u001f\\u007f]/gu, "?")');
-    expect(step.with?.script).toContain(".slice(0, 240)");
-    expect(step.with?.script).toContain('comment.user?.login === "github-actions[bot]"');
-    expect(step.with?.script).toContain("github.rest.pulls.listFiles");
-    expect(step.with?.script).toContain("github.rest.issues.createComment");
-    expect(step.with?.script).toContain("github.rest.issues.updateComment");
-    expect(step.with?.script).toContain("github.rest.issues.deleteComment");
-    expect(step.with?.script).toContain("ignoreUnavailableWritePermission");
-    expect(step.with?.script).toContain("error?.status === 403");
-    expect(workflow).toContain('"dependencies-changed"');
+    expect(runStep.env?.OPENCLAW_SECURITY_TEAM_SLUG).toBe("openclaw-secops");
+    expect(runStep.env?.OPENCLAW_SECURITY_APPROVERS).toBe("vincentkoc,steipete,joshavant");
+    expect(workflow).toContain("scripts/github/dependency-change-awareness.mjs");
+    expect(script).toContain('"dependencies-changed"');
+    expect(script).not.toContain('"blocked: dependencies"');
   });
 
   it("detects the intended dependency-related file surfaces", () => {
-    const script = readWorkflow().jobs?.["dependency-change-awareness"]?.steps?.[0].with?.script;
-    expect(script).toContain('filename === "package.json"');
-    expect(script).toContain('filename === "package-lock.json"');
-    expect(script).toContain('filename === "npm-shrinkwrap.json"');
-    expect(script).toContain('filename === "pnpm-lock.yaml"');
+    const script = readFileSync("scripts/github/dependency-change-awareness.mjs", "utf8");
+    expect(script).toContain('filename.endsWith("package.json")');
+    expect(script).toContain('filename.endsWith("package-lock.json")');
+    expect(script).toContain('filename.endsWith("npm-shrinkwrap.json")');
+    expect(script).toContain('filename.endsWith("pnpm-lock.yaml")');
     expect(script).toContain('filename === "pnpm-workspace.yaml"');
-    expect(script).toContain('filename === "ui/package.json"');
     expect(script).toContain('filename.startsWith("patches/")');
-    expect(script).toContain("^packages\\/[^/]+\\/package\\.json$");
-    expect(script).toContain("^extensions\\/[^/]+\\/package-lock\\.json$");
-    expect(script).toContain("^extensions\\/[^/]+\\/npm-shrinkwrap\\.json$");
-    expect(script).toContain("^extensions\\/[^/]+\\/package\\.json$");
+    expect(script).toContain("dependencyGraphFiles");
+  });
+
+  it("blocks package lockfile and manifest graph changes unless secops approves the current head sha", () => {
+    const script = readFileSync("scripts/github/dependency-change-awareness.mjs", "utf8");
+    expect(script).toContain('filename.endsWith("pnpm-lock.yaml")');
+    expect(script).toContain('filename.endsWith("package-lock.json")');
+    expect(script).toContain('filename.endsWith("npm-shrinkwrap.json")');
+    expect(script).toContain('"optionalDependencies"');
+    expect(script).toContain('"peerDependencies"');
+    expect(script).toContain('"overrides"');
+    expect(script).toContain('"packageManager"');
+    expect(script).toContain("/allow-dependencies-change");
+    expect(script).toContain("openclaw-secops");
+    expect(script).toContain("securityApproverSet");
+    expect(script).toContain("/memberships/");
+    expect(script).toContain("isCommentNewerThan");
+    expect(script).toContain("A later push requires a fresh approval.");
+    expect(script).toContain("process.exitCode = 1");
   });
 
   it("requires secops review for future workflow or guard changes", () => {
@@ -106,6 +114,9 @@ describe("dependency change awareness workflow", () => {
     );
     expect(codeowners).toContain(
       "/test/scripts/dependency-change-awareness-workflow.test.ts @openclaw/openclaw-secops",
+    );
+    expect(codeowners).toContain(
+      "/scripts/github/dependency-change-awareness.mjs @openclaw/openclaw-secops",
     );
     expect(codeowners).toContain("/package-lock.json @openclaw/openclaw-secops");
     expect(codeowners).toContain("/npm-shrinkwrap.json @openclaw/openclaw-secops");
