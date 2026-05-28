@@ -22,6 +22,10 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 - Windows: [Windows](/platforms/windows)
 - Linux: [Linux](/platforms/linux)
 
+## Hardware
+
+- ClawBox (Jetson appliance): [ClawBox](/platforms/clawbox)
+
 ## VPS and hosting
 
 - VPS hub: [VPS hosting](/vps)
