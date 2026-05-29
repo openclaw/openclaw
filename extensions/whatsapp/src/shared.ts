@@ -169,7 +169,7 @@ export function createWhatsAppPluginBase(params: {
         },
       },
     },
-    reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
+    reload: { configPrefixes: ["web", "channels.whatsapp"] },
     gatewayMethodDescriptors: [{ name: "web.login.start" }, { name: "web.login.wait" }],
     configSchema: WhatsAppChannelConfigSchema,
     config: {

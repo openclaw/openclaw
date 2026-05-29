@@ -158,7 +158,7 @@ describe("buildGatewayReloadPlan", () => {
       listAccountIds: () => [],
       resolveAccount: () => ({}),
     },
-    reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
+    reload: { configPrefixes: ["web", "channels.whatsapp"] },
   };
   const registry = createTestRegistry([
     { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
@@ -217,6 +217,13 @@ describe("buildGatewayReloadPlan", () => {
     );
     expect(expected.size).toBeGreaterThan(0);
     expect(plan.restartChannels).toEqual(expected);
+  });
+
+  it("restarts whatsapp channel on accounts.enabled change (regression #87951)", () => {
+    const plan = buildGatewayReloadPlan(["channels.whatsapp.accounts.default.enabled"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
+    expect(plan.noopPaths).toEqual([]);
   });
 
   it("refreshes channel reload rules when only the tracked channel registry changes", () => {
