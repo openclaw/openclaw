@@ -47,6 +47,7 @@ type PluginStateStatements = {
   deleteEntry: StatementSync;
   clearNamespace: StatementSync;
   pruneExpiredNamespace: StatementSync;
+  expireImmortalNamespaceEntries: StatementSync;
   countLiveNamespace: StatementSync;
   countLivePlugin: StatementSync;
   deleteOldestNamespace: StatementSync;
@@ -248,6 +249,13 @@ function createStatements(db: DatabaseSync): PluginStateStatements {
         AND namespace = ?
         AND expires_at IS NOT NULL
         AND expires_at <= ?
+    `),
+    expireImmortalNamespaceEntries: db.prepare(`
+      UPDATE plugin_state_entries
+      SET expires_at = ?
+      WHERE plugin_id = ?
+        AND namespace = ?
+        AND expires_at IS NULL
     `),
     countLiveNamespace: db.prepare(`
       SELECT COUNT(*) AS count
@@ -470,6 +478,13 @@ export function pluginStateRegister(params: {
         created_at: now,
         expires_at: expiresAt,
       });
+      if (expiresAt != null) {
+        store.statements.expireImmortalNamespaceEntries.run(
+          expiresAt,
+          params.pluginId,
+          params.namespace,
+        );
+      }
       enforcePostRegisterLimits({
         store,
         pluginId: params.pluginId,
@@ -510,6 +525,13 @@ export function pluginStateRegisterIfAbsent(params: {
         created_at: now,
         expires_at: expiresAt,
       });
+      if (expiresAt != null) {
+        store.statements.expireImmortalNamespaceEntries.run(
+          expiresAt,
+          params.pluginId,
+          params.namespace,
+        );
+      }
       if (result.changes === 0) {
         return false;
       }

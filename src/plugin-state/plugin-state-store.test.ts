@@ -290,6 +290,65 @@ describe("plugin state keyed store", () => {
     });
   });
 
+  it("normalizes existing no-expiry namespace rows when default TTL is introduced", async () => {
+    await withPluginStateTestState(async () => {
+      vi.useFakeTimers();
+      seedPluginStateEntriesForTests([
+        {
+          pluginId: "telegram",
+          namespace: "telegram.message-cache",
+          key: "old-message",
+          value: { kind: "message", old: true },
+          createdAt: 100,
+          expiresAt: null,
+        },
+        {
+          pluginId: "telegram",
+          namespace: "telegram.topic-name-cache",
+          key: "old-topic",
+          value: { kind: "topic", old: true },
+          createdAt: 100,
+          expiresAt: null,
+        },
+      ]);
+
+      vi.setSystemTime(1000);
+      const messageStore = createPluginStateKeyedStore("telegram", {
+        namespace: "telegram.message-cache",
+        maxEntries: 10,
+        defaultTtlMs: 7_000,
+      });
+      const topicStore = createPluginStateKeyedStore("telegram", {
+        namespace: "telegram.topic-name-cache",
+        maxEntries: 10,
+      });
+
+      await messageStore.register("new-message", { kind: "message", old: false });
+
+      await expect(messageStore.entries()).resolves.toEqual([
+        {
+          key: "old-message",
+          value: { kind: "message", old: true },
+          createdAt: 100,
+          expiresAt: 8_000,
+        },
+        {
+          key: "new-message",
+          value: { kind: "message", old: false },
+          createdAt: 1_000,
+          expiresAt: 8_000,
+        },
+      ]);
+      await expect(topicStore.entries()).resolves.toEqual([
+        {
+          key: "old-topic",
+          value: { kind: "topic", old: true },
+          createdAt: 100,
+        },
+      ]);
+    });
+  });
+
   it("evicts oldest live entries over maxEntries", async () => {
     await withPluginStateTestState(async () => {
       vi.useFakeTimers();

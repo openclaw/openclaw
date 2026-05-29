@@ -1,6 +1,7 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import type { Message } from "grammy/types";
-import { describe, expect, it } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
@@ -8,8 +9,12 @@ import {
   resetTelegramMessageCacheBucketsForTest,
   resolveTelegramMessageCachePath,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
+  TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
+  TELEGRAM_MESSAGE_CACHE_PERSISTENT_TTL_MS,
   type TelegramMessageCachePersistentStore,
 } from "./message-cache.js";
+import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 
 type PersistedCacheEntry = {
   key: string;
@@ -73,6 +78,51 @@ function unscopedPersistentKeys(entries: Map<string, PersistedCacheValue>): stri
 }
 
 describe("telegram message cache", () => {
+  afterEach(() => {
+    clearTelegramRuntime();
+  });
+
+  it("opens the default plugin-state store with bounded entries and ttl", async () => {
+    let openedOptions:
+      | {
+          namespace: string;
+          maxEntries: number;
+          defaultTtlMs?: number;
+        }
+      | undefined;
+    const { store } = createMemoryPersistentStore();
+    const runtime = createPluginRuntimeMock({
+      state: {
+        openKeyedStore: ((options) => {
+          openedOptions = options;
+          return store;
+        }) as TelegramRuntime["state"]["openKeyedStore"],
+      },
+    }) as unknown as TelegramRuntime;
+    setTelegramRuntime(runtime);
+
+    const cache = createTelegramMessageCache({
+      bucketKey: `plugin-state-defaults:${process.pid}:${Date.now()}`,
+    });
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat: { id: 7, type: "group", title: "Ops" },
+        message_id: 9200,
+        date: 1736389200,
+        text: "ttl-backed",
+        from: { id: 9200, is_bot: false, first_name: "TTL" },
+      } as Message,
+    });
+
+    expect(openedOptions).toMatchObject({
+      namespace: TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
+      maxEntries: TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
+      defaultTtlMs: TELEGRAM_MESSAGE_CACHE_PERSISTENT_TTL_MS,
+    });
+  });
+
   it("hydrates reply chains from persisted cached messages", async () => {
     const storePath = `/tmp/openclaw-telegram-message-cache-${process.pid}-${Date.now()}.json`;
     const persistedPath = resolveTelegramMessageCachePath(storePath);
