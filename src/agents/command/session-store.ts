@@ -282,6 +282,17 @@ export async function updateSessionStoreAfterAgentRun(params: {
     ? {
         updatedAt: next.updatedAt,
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
+        // A physical transcript rotation must still reach sessions.json on a
+        // preserved-state (heartbeat) turn: it is filesystem identity, not
+        // user-facing model state. Skipping it would leave the stale pointer
+        // so the next turn reopens the rotated-away file and deadlocks (#88040).
+        ...(sessionRotated && rotatedSessionFile
+          ? {
+              sessionId: effectiveSessionId,
+              sessionFile: rotatedSessionFile,
+              sessionStartedAt: next.sessionStartedAt,
+            }
+          : {}),
       }
     : removeLifecycleStateFromMetadataPatch(next);
   const persisted = await updateSessionStore(

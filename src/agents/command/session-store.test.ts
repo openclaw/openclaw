@@ -309,6 +309,67 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("persists a transcript rotation even on a preserved-state heartbeat run", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-rotation-preserve";
+      const sessionId = "pre-rotation-heartbeat";
+      const rotatedSessionId = "post-rotation-heartbeat";
+      const rotatedSessionFile = "/tmp/post-rotation-heartbeat.jsonl";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          sessionFile: "/tmp/pre-rotation-heartbeat.jsonl",
+          updatedAt: 1,
+          sessionStartedAt: 1,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          contextTokens: 400_000,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            // A heartbeat turn can still hit a compaction rotation; the embedded
+            // runner reports the post-rotation openclaw identity here.
+            sessionId: rotatedSessionId,
+            sessionFile: rotatedSessionFile,
+            provider: "ollama",
+            model: "llama3.2:1b",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        contextTokensOverride: 200_000,
+        sessionStore,
+        defaultProvider: "ollama",
+        defaultModel: "llama3.2:1b",
+        result,
+        preserveUserFacingSessionModelState: true,
+      });
+
+      const persisted = loadSessionStore(storePath);
+      // The physical transcript rotation must reach disk even in preserve mode,
+      // or the next turn reopens the rotated-away file and deadlocks (#88040).
+      expect(persisted[sessionKey]?.sessionId).toBe(rotatedSessionId);
+      expect(persisted[sessionKey]?.sessionFile).toBe(rotatedSessionFile);
+      // A rotated identity is a new session, so the start timestamp resets.
+      expect(persisted[sessionKey]?.sessionStartedAt).not.toBe(1);
+      // Preserve mode still keeps the prior user-facing runtime model rather than
+      // adopting the heartbeat model — only the transcript identity is updated.
+      expect(persisted[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(persisted[sessionKey]?.modelProvider).toBe("anthropic");
+    });
+  });
+
   it("uses the runtime context budget from agent metadata instead of cold fallback", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
