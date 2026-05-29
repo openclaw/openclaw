@@ -734,11 +734,29 @@ export async function runPreflightCompactionIfNeeded(params: {
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
-  const reserveTokensFloor =
+  const resolveToken = (
+    threshold: number | string | undefined,
+    pct: number,
+    fallback: number,
+  ): number => {
+    if (typeof threshold === "number" && Number.isFinite(threshold)) return threshold;
+    if (typeof threshold === "string") {
+      const match = threshold.match(/^(\d+)%$/);
+      if (match) return Math.floor((contextWindowTokens * parseInt(match[1], 10)) / 100);
+    }
+    return pct > 0 ? Math.floor((contextWindowTokens * pct) / 100) : fallback;
+  };
+  const reserveTokensFloor = resolveToken(
     memoryFlushPlan?.reserveTokensFloor ??
-    params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
-    20_000;
-  const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
+      params.cfg.agents?.defaults?.compaction?.reserveTokensFloor,
+    3,
+    20_000,
+  );
+  const softThresholdTokens = resolveToken(
+    memoryFlushPlan?.softThresholdTokens,
+    40,
+    4_000,
+  );
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const persistedTotalTokens = entry.totalTokens;
   const hasPersistedTotalTokens =
@@ -1020,8 +1038,10 @@ export async function runMemoryFlushIfNeeded(params: {
   const hasFreshPersistedPromptTokens =
     typeof persistedPromptTokens === "number" && entry?.totalTokensFresh === true;
 
+  const flushReserveTokensFloor = resolveToken(memoryFlushPlan.reserveTokensFloor, 3, 20_000);
+  const flushSoftThresholdTokens = resolveToken(memoryFlushPlan.softThresholdTokens, 40, 4_000);
   const flushThreshold =
-    contextWindowTokens - memoryFlushPlan.reserveTokensFloor - memoryFlushPlan.softThresholdTokens;
+    contextWindowTokens - flushReserveTokensFloor - flushSoftThresholdTokens;
 
   // When totals are stale/unknown, derive prompt + last output from transcript so memory
   // flush can still be evaluated against projected next-input size.
@@ -1148,8 +1168,8 @@ export async function runMemoryFlushIfNeeded(params: {
         entry,
         tokenCount: tokenCountForFlush,
         contextWindowTokens,
-        reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
-        softThresholdTokens: memoryFlushPlan.softThresholdTokens,
+        reserveTokensFloor: flushReserveTokensFloor,
+        softThresholdTokens: flushSoftThresholdTokens,
       })) ||
     (shouldForceFlushByTranscriptSize &&
       entry != null &&

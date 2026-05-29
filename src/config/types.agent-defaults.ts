@@ -486,12 +486,12 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
-  /** Embedded OpenClaw reserve tokens target before floor enforcement. */
-  reserveTokens?: number;
-  /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
-  keepRecentTokens?: number;
-  /** Minimum reserve tokens enforced for embedded OpenClaw compaction (0 disables the floor). */
-  reserveTokensFloor?: number;
+  /** Embedded OpenClaw reserve tokens target before floor enforcement. Accepts absolute tokens or percentage string (e.g. "4%"). */
+  reserveTokens?: number | string;
+  /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. Accepts absolute tokens or percentage string (e.g. "2%"). */
+  keepRecentTokens?: number | string;
+  /** Minimum reserve tokens enforced for embedded OpenClaw compaction (0 disables the floor). Accepts absolute tokens or percentage string (e.g. "3%"). */
+  reserveTokensFloor?: number | string;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
   maxHistoryShare?: number;
   /** Additional compaction-summary instructions that can preserve language or persona continuity. */
@@ -556,7 +556,7 @@ export type AgentCompactionMemoryFlushConfig = {
   /** Optional provider/model override used only for pre-compaction memory flush turns. */
   model?: string;
   /** Run the memory flush when context is within this many tokens of the compaction threshold. */
-  softThresholdTokens?: number;
+  softThresholdTokens?: number | string;
   /**
    * Force a memory flush when transcript size reaches this threshold
    * (bytes, or byte-size string like "2mb"). Set to 0 to disable.

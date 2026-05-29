@@ -1450,11 +1450,11 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.provider":
     "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
   "agents.defaults.compaction.reserveTokens":
-    "Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more.",
+    "Token headroom reserved for reply generation and tool output after compaction runs. Accepts absolute tokens (e.g. 40000) or percentage of context window (e.g. \"4%\"). Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more.",
   "agents.defaults.compaction.keepRecentTokens":
-    "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
+    "Minimum token budget preserved from the most recent conversation window during compaction. Accepts absolute tokens (e.g. 20000) or percentage of context window (e.g. \"2%\"). Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
   "agents.defaults.compaction.reserveTokensFloor":
-    "Minimum floor enforced for reserveTokens in embedded OpenClaw compaction paths (0 disables the floor guard). Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates.",
+    "Minimum floor enforced for reserveTokens in embedded OpenClaw compaction paths (0 disables the floor guard). Accepts absolute tokens (e.g. 30000) or percentage of context window (e.g. \"3%\"). Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates.",
   "agents.defaults.compaction.maxHistoryShare":
     "Maximum fraction of total context budget allowed for retained history after compaction (range 0.1-0.9). Use lower shares for more generation headroom or higher shares for deeper historical continuity.",
   "agents.defaults.compaction.identifierPolicy":
@@ -1494,7 +1494,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.memoryFlush.model":
     "Optional provider/model override used only for pre-compaction memory flush turns. Set this to a local model such as ollama/qwen3:8b when durable memory extraction should avoid the active session's paid model. The override is exact and does not inherit the active model fallback chain.",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
-    "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
+    "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Accepts absolute tokens (e.g. 400000) or percentage of context window (e.g. \"40%\"). Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
     'Forces pre-compaction memory flush when transcript file size reaches this threshold (bytes or strings like "2mb"). Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
   "agents.defaults.compaction.memoryFlush.prompt":
