@@ -393,6 +393,24 @@ function buildSpeechCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildLlmCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/llm-core/src/index.ts",
+    types: "packages/llm-core/src/types.ts",
+    "utils/diagnostics": "packages/llm-core/src/utils/diagnostics.ts",
+    "utils/event-stream": "packages/llm-core/src/utils/event-stream.ts",
+    validation: "packages/llm-core/src/validation.ts",
+  };
+}
+
+function buildLlmRuntimeDistEntries(): Record<string, string> {
+  return {
+    index: "packages/llm-runtime/src/index.ts",
+    "api-registry": "packages/llm-runtime/src/api-registry.ts",
+    stream: "packages/llm-runtime/src/stream.ts",
+  };
+}
+
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
     id === "ignore" ||
@@ -424,6 +442,14 @@ function shouldExternalizeNetPolicyDependency(id: string): boolean {
 
 function shouldExternalizeSpeechCoreDependency(id: string): boolean {
   return id === "openclaw" || id.startsWith("openclaw/");
+}
+
+function shouldExternalizeLlmCoreDependency(id: string): boolean {
+  return id === "typebox" || id.startsWith("typebox/");
+}
+
+function shouldExternalizeLlmRuntimeDependency(id: string): boolean {
+  return id === "@openclaw/llm-core" || id.startsWith("@openclaw/llm-core/");
 }
 
 const coreDistEntries = buildCoreDistEntries();
@@ -502,6 +528,24 @@ export default defineConfig([
     outDir: "packages/speech-core/dist",
     deps: {
       neverBundle: shouldExternalizeSpeechCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildLlmCoreDistEntries(),
+    outDir: "packages/llm-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeLlmCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildLlmRuntimeDistEntries(),
+    outDir: "packages/llm-runtime/dist",
+    deps: {
+      neverBundle: shouldExternalizeLlmRuntimeDependency,
     },
   }),
   nodeBuildConfig({

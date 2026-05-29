@@ -1,0 +1,36 @@
+{
+  "name": "@openclaw/llm-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
+    },
+    "./diagnostics": {
+      "types": "./dist/utils/diagnostics.d.ts",
+      "default": "./dist/utils/diagnostics.js"
+    },
+    "./event-stream": {
+      "types": "./dist/utils/event-stream.d.ts",
+      "default": "./dist/utils/event-stream.js"
+    },
+    "./validation": {
+      "types": "./dist/validation.d.ts",
+      "default": "./dist/validation.js"
+    }
+  },
+  "dependencies": {
+    "typebox": "1.1.38"
+  }
+}

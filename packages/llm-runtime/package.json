@@ -1,0 +1,28 @@
+{
+  "name": "@openclaw/llm-runtime",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./api-registry": {
+      "types": "./dist/api-registry.d.ts",
+      "default": "./dist/api-registry.js"
+    },
+    "./stream": {
+      "types": "./dist/stream.d.ts",
+      "default": "./dist/stream.js"
+    }
+  },
+  "dependencies": {
+    "@openclaw/llm-core": "workspace:*"
+  }
+}
