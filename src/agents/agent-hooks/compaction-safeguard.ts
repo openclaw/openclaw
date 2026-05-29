@@ -44,6 +44,9 @@ import {
   auditSummaryQuality,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
+  computeLostIdentifiers,
+  extractIdentifiersFromMessages,
+  extractMessageTextForIdentifiers,
   extractOpaqueIdentifiers,
   wrapUntrustedInstructionBlock,
 } from "./compaction-safeguard-quality.js";
@@ -1146,12 +1149,18 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSectionLocal = formatPreservedTurnsSection(preservedRecentMessages);
       const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
-      const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
+      // Collect identifiers from ALL messages before pruning so identifiers
+      // in dropped messages are still validated against the summary.
+      const identifierSeedText = [...baseMessagesToSummarize, ...turnPrefixMessages]
         .slice(-10)
         .map((message) => extractMessageText(message))
         .filter(Boolean)
         .join("\n");
       const identifiers = extractOpaqueIdentifiers(identifierSeedText);
+      const transcriptIdentifiers = extractIdentifiersFromMessages([
+        ...baseMessagesToSummarize,
+        ...turnPrefixMessages,
+      ]);
 
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
       // the summarization prompt, system prompt, previous summary, and reasoning budget
@@ -1257,8 +1266,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           latestAsk: latestUserAsk,
           identifierPolicy,
         });
+        const lostIdentifiers =
+          identifierPolicy === "strict"
+            ? computeLostIdentifiers(transcriptIdentifiers, summaryWithPreservedTurns)
+            : [];
+        const identifierSurvivalFailed =
+          identifierPolicy === "strict" ? lostIdentifiers.length > 0 : lostIdentifiers.length > 2;
         summary = summaryWithPreservedTurns;
-        if (quality.ok || attempt >= totalAttempts - 1) {
+        if ((quality.ok && !identifierSurvivalFailed) || attempt >= totalAttempts - 1) {
+          if (lostIdentifiers.length > 0) {
+            log.info(
+              `Compaction safeguard: ${lostIdentifiers.length} identifier(s) lost from transcript.`,
+            );
+          }
           break;
         }
         const reasons = quality.reasons.join(", ");
@@ -1266,9 +1286,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           identifierPolicy === "strict"
             ? "Fix all issues and include every required section with exact identifiers preserved."
             : "Fix all issues and include every required section while following the configured identifier policy.";
+        let feedbackText = !quality.ok
+          ? `Previous summary failed quality checks (${reasons}).`
+          : "";
+        if (identifierSurvivalFailed) {
+          const lostList = lostIdentifiers.slice(0, 5).join(", ");
+          const hint = `These identifiers from the original transcript were lost and must be preserved in ## Exact identifiers: ${lostList}`;
+          feedbackText = feedbackText ? `${feedbackText}\n${hint}` : hint;
+        }
         const qualityFeedbackReasons = wrapUntrustedInstructionBlock(
           "Quality check feedback",
-          `Previous summary failed quality checks (${reasons}).`,
+          feedbackText,
         );
         currentInstructions = qualityFeedbackReasons
           ? `${structuredInstructions}\n\n${qualityFeedbackInstruction}\n\n${qualityFeedbackReasons}`
@@ -1290,6 +1318,28 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       });
       const bodyToCap = lastHistorySummary || summary;
       summary = capCompactionSummaryPreservingSuffix(bodyToCap, suffix);
+
+      // Validate identifiers survived final capping. The quality guard loop
+      // checks the uncapped summary; capping can remove identifiers at the
+      // truncation boundary. In strict mode, re-append lost identifiers only
+      // when the recovered summary stays within the cap budget.
+      if (identifierPolicy === "strict" && transcriptIdentifiers.length > 0) {
+        const postCapLost = computeLostIdentifiers(transcriptIdentifiers, summary);
+        if (postCapLost.length > 0) {
+          const recoveryBlock = postCapLost.map((id) => `- ${id}`).join("\n");
+          const recovered = `${summary}\n\n## Exact identifiers (recovered)\n${recoveryBlock}`;
+          if (recovered.length <= MAX_COMPACTION_SUMMARY_CHARS) {
+            log.warn(
+              `Compaction safeguard: final capping removed ${postCapLost.length} identifier(s); re-appending.`,
+            );
+            summary = recovered;
+          } else {
+            log.warn(
+              `Compaction safeguard: final capping removed ${postCapLost.length} identifier(s); recovery would exceed cap, skipping.`,
+            );
+          }
+        }
+      }
 
       return {
         compaction: {
@@ -1329,6 +1379,9 @@ export const testing = {
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
+  extractMessageTextForIdentifiers,
+  extractIdentifiersFromMessages,
+  computeLostIdentifiers,
   auditSummaryQuality,
   capCompactionSummary,
   capCompactionSummaryPreservingSuffix,
