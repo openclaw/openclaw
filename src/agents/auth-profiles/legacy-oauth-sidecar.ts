@@ -1,10 +1,12 @@
 import * as childProcess from "node:child_process";
-import { createCipheriv, createDecipheriv, createHash } from "node:crypto";
+import { createCipheriv, createDecipheriv, hash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
 import { loadJsonFile } from "../../infra/json-file.js";
+import { isRecord } from "../../shared/record-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { log } from "./constants.js";
 
 const LEGACY_OAUTH_REF_SOURCE = "openclaw-credentials";
@@ -35,10 +37,6 @@ type LegacyOAuthEncryptedPayload = {
   tag: string;
   ciphertext: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
@@ -120,8 +118,7 @@ function buildLegacyOAuthSecretAad(params: {
 function buildLegacyOAuthSecretKey(seed: string): Buffer {
   // Legacy #79006 compatibility: existing sidecars were encrypted with this
   // SHA-256 key derivation, so changing it would strand affected users.
-  // codeql[js/insufficient-password-hash]
-  return createHash("sha256").update(`openclaw:auth-profile-oauth:${seed}`).digest();
+  return hash("sha256", `openclaw:auth-profile-oauth:${seed}`, "buffer");
 }
 
 function encryptLegacyOAuthMaterialForTest(params: {
@@ -164,7 +161,7 @@ function isPathInsideOrEqual(parentDir: string, candidatePath: string): boolean 
 }
 
 function uniquePaths(paths: Array<string | undefined>): string[] {
-  return Array.from(new Set(paths.filter((entry): entry is string => Boolean(entry))));
+  return uniqueStrings(paths.filter((entry): entry is string => Boolean(entry)));
 }
 
 function resolveLegacyOAuthSecretKeyFileCandidates(env: NodeJS.ProcessEnv): string[] {

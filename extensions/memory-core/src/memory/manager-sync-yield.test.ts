@@ -13,14 +13,18 @@ const { buildSessionEntryMock } = vi.hoisted(() => ({
   buildSessionEntryMock: vi.fn(),
 }));
 
-vi.mock("undici", () => ({
-  Agent: vi.fn(),
-  EnvHttpProxyAgent: vi.fn(),
-  ProxyAgent: vi.fn(),
-  fetch: vi.fn(),
-  getGlobalDispatcher: vi.fn(),
-  setGlobalDispatcher: vi.fn(),
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    Agent: vi.fn(),
+    EnvHttpProxyAgent: vi.fn(),
+    ProxyAgent: vi.fn(),
+    fetch: vi.fn(),
+    getGlobalDispatcher: vi.fn(),
+    setGlobalDispatcher: vi.fn(),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
   const basename = (filePath: string) => filePath.split(/[\\/]/).pop() ?? filePath;

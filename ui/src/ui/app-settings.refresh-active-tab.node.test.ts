@@ -250,7 +250,7 @@ describe("refreshActiveTab", () => {
     expectCommonAgentsTabRefresh(host);
     expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
     expect(mocks.loadCronStatusMock).toHaveBeenCalledOnce();
-    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledOnce();
+    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledWith(host, { tableFilters: false });
     expect(mocks.loadCronRunsMock).toHaveBeenCalledWith(host, "job-123");
     expect(mocks.loadAgentFilesMock).not.toHaveBeenCalled();
     expect(mocks.loadAgentSkillsMock).not.toHaveBeenCalled();
@@ -328,6 +328,23 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadChannelsMock).toHaveBeenCalled();
     expect(mocks.loadSessionsMock).toHaveBeenCalled();
     expect(mocks.loadUsageMock).toHaveBeenCalled();
+  });
+
+  it("skips overview usage refresh if the user leaves while primary loaders run", async () => {
+    const host = createHost();
+    host.tab = "overview";
+    const channels = createDeferred();
+    mocks.loadChannelsMock.mockReturnValueOnce(channels.promise);
+
+    const refresh = refreshActiveTab(host as never);
+    await Promise.resolve();
+    host.tab = "sessions";
+    channels.resolve();
+
+    await refresh;
+
+    expect(mocks.loadUsageMock).not.toHaveBeenCalled();
+    expect(mocks.loadSkillsMock).toHaveBeenCalledOnce();
   });
 
   it("does not wait for config schema before resolving config tab refresh", async () => {
@@ -434,7 +451,7 @@ describe("refreshActiveTab", () => {
     expect(outcome).toBe("resolved");
     expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
     expect(mocks.loadCronStatusMock).toHaveBeenCalledOnce();
-    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledOnce();
+    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledWith(host, { tableFilters: true });
     expect(mocks.loadCronRunsMock).toHaveBeenCalledOnce();
   });
 

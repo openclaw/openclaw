@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  parseNonNegativeInt,
+  parsePositiveInt,
+  parsePositiveNumber,
+} from "./lib/numeric-options.mjs";
 import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
@@ -15,7 +20,6 @@ import {
   discoverBundledPluginManifests,
   selectPluginEntries,
 } from "./lib/plugin-gateway-gauntlet.mjs";
-import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
 const DEFAULT_QA_SCENARIOS = [
   "channel-chat-baseline",
@@ -26,6 +30,7 @@ const DEFAULT_CPU_CORE_WARN = 0.9;
 const DEFAULT_HOT_WALL_WARN_MS = 30_000;
 const DEFAULT_MAX_RSS_WARN_MB = 1536;
 const DEFAULT_QA_PLUGIN_CHUNK_SIZE = 12;
+const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
 function parseArgs(argv) {
@@ -58,6 +63,7 @@ function parseArgs(argv) {
     commandTimeoutMs: 120_000,
     buildTimeoutMs: 600_000,
     qaTimeoutMs: 900_000,
+    allowEmpty: false,
     keepRunRoot: process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_KEEP_RUN_ROOT === "1",
   };
   const envIds = normalizeCsv(process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS);
@@ -156,6 +162,9 @@ function parseArgs(argv) {
       case "--keep-run-root":
         options.keepRunRoot = true;
         break;
+      case "--allow-empty":
+        options.allowEmpty = true;
+        break;
       case "--help":
         printHelp();
         process.exit(0);
@@ -191,6 +200,7 @@ Options:
   --skip-lifecycle              Skip plugin install/inspect/disable/enable/doctor/uninstall
   --skip-qa                     Skip QA Lab RPC conversation runs
   --skip-slash-help             Skip CLI help probes for plugin-declared command aliases
+  --allow-empty                 Allow zero-command runs when every active phase is skipped
   --keep-run-root               Preserve isolated HOME/state/log temp root after success
 `);
 }
@@ -214,37 +224,11 @@ function readOptionalNonNegativeIntEnv(name) {
   return raw ? parseNonNegativeInt(raw, name) : undefined;
 }
 
-function parsePositiveInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 1) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return value;
-}
-
-function parseNonNegativeInt(raw, label) {
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function parsePositiveNumber(raw, label) {
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${label} must be a positive number`);
-  }
-  return value;
-}
-
-function pnpmCommand(args, { cwd, env }) {
-  return createPnpmRunnerSpawnSpec({
-    cwd,
-    env,
-    pnpmArgs: args,
-    stdio: "pipe",
-  });
+export function createGauntletPrebuildCommand(repoRoot) {
+  return {
+    command: process.execPath,
+    args: [path.join(repoRoot, "scripts", "build-all.mjs"), "cliStartup"],
+  };
 }
 
 function openclawCommand(repoRoot, args) {
@@ -399,7 +383,7 @@ export function runMeasuredCommand(params) {
     env: params.env,
     encoding: "utf8",
     timeout: params.timeoutMs,
-    maxBuffer: 16 * 1024 * 1024,
+    maxBuffer: params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES,
     ...(mode === "none" ? (params.spawnOptions ?? {}) : {}),
   });
   const wallMs = performance.now() - started;
@@ -437,6 +421,223 @@ export function runMeasuredCommand(params) {
     logPath,
     ...parseTimedMetrics(stderr, wallMs, mode),
   };
+}
+
+export function runMeasuredCommandLive(params) {
+  const { command, args, mode } =
+    params.timeMode === "none"
+      ? { command: params.command, args: params.args, mode: "none" }
+      : timeWrapperArgs(params.command, params.args);
+  const started = performance.now();
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let stdoutRelayBytes = 0;
+    let stderrRelayBytes = 0;
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+    let stdoutRelayTruncated = false;
+    let stderrRelayTruncated = false;
+    let spawnError = null;
+    let timedOut = false;
+    let settled = false;
+    let forceKillTimeout = null;
+    const maxBufferBytes = params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES;
+    const maxRelayBytes = params.consoleOutputMaxBytes ?? maxBufferBytes;
+    const timeoutKillGraceMs = params.timeoutKillGraceMs ?? 5_000;
+    const spawnOptions = mode === "none" ? (params.spawnOptions ?? {}) : {};
+    const useProcessGroup =
+      process.platform !== "win32" &&
+      params.killProcessGroup !== false &&
+      spawnOptions.detached !== false;
+    const child = spawn(command, args, {
+      cwd: params.cwd,
+      env: params.env,
+      ...spawnOptions,
+      ...(useProcessGroup ? { detached: true } : {}),
+    });
+    const killMeasuredProcess = (signal = "SIGTERM") => {
+      if (useProcessGroup && child.pid) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {}
+      }
+      child.kill(signal);
+    };
+    const parentSignalHandlers = new Map();
+    const removeParentSignalHandlers = () => {
+      for (const [signal, handler] of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.clear();
+    };
+    const parentSignals =
+      process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+    for (const signal of parentSignals) {
+      const handler = () => {
+        killMeasuredProcess(signal);
+        removeParentSignalHandlers();
+        process.kill(process.pid, signal);
+      };
+      parentSignalHandlers.set(signal, handler);
+      process.once(signal, handler);
+    }
+    const appendCapturedOutput = (streamName, chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const currentBytes = streamName === "stdout" ? stdoutBytes : stderrBytes;
+      const alreadyTruncated = streamName === "stdout" ? stdoutTruncated : stderrTruncated;
+      if (alreadyTruncated) {
+        return;
+      }
+      const remainingBytes = maxBufferBytes - currentBytes;
+      const appendTruncation = () => {
+        const message = `\n[${streamName} truncated after ${maxBufferBytes} bytes]\n`;
+        if (streamName === "stdout") {
+          stdout += message;
+          stdoutTruncated = true;
+        } else {
+          stderr += message;
+          stderrTruncated = true;
+        }
+      };
+      if (remainingBytes <= 0) {
+        appendTruncation();
+        return;
+      }
+      const capturedBuffer =
+        buffer.length > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer;
+      if (streamName === "stdout") {
+        stdout += capturedBuffer.toString("utf8");
+        stdoutBytes += capturedBuffer.length;
+      } else {
+        stderr += capturedBuffer.toString("utf8");
+        stderrBytes += capturedBuffer.length;
+      }
+      if (buffer.length > remainingBytes) {
+        appendTruncation();
+      }
+    };
+    const relayOutput = (streamName, chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const currentBytes = streamName === "stdout" ? stdoutRelayBytes : stderrRelayBytes;
+      const alreadyTruncated =
+        streamName === "stdout" ? stdoutRelayTruncated : stderrRelayTruncated;
+      if (alreadyTruncated) {
+        return;
+      }
+      const write =
+        streamName === "stdout"
+          ? process.stdout.write.bind(process.stdout)
+          : process.stderr.write.bind(process.stderr);
+      const markTruncated = () => {
+        write(`\n[${streamName} relay truncated after ${maxRelayBytes} bytes]\n`);
+        if (streamName === "stdout") {
+          stdoutRelayTruncated = true;
+        } else {
+          stderrRelayTruncated = true;
+        }
+      };
+      const remainingBytes = maxRelayBytes - currentBytes;
+      if (remainingBytes <= 0) {
+        markTruncated();
+        return;
+      }
+      const relayedBuffer =
+        buffer.length > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer;
+      if (relayedBuffer.length > 0) {
+        write(relayedBuffer.toString("utf8"));
+      }
+      if (streamName === "stdout") {
+        stdoutRelayBytes += relayedBuffer.length;
+      } else {
+        stderrRelayBytes += relayedBuffer.length;
+      }
+      if (buffer.length > remainingBytes) {
+        markTruncated();
+      }
+    };
+    const appendOutput = (streamName, chunk) => {
+      relayOutput(streamName, chunk);
+      appendCapturedOutput(streamName, chunk);
+    };
+    child.stdout?.on("data", (chunk) => appendOutput("stdout", chunk));
+    child.stderr?.on("data", (chunk) => appendOutput("stderr", chunk));
+    const timeout =
+      params.timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            spawnError = {
+              code: "ETIMEDOUT",
+              message: `Command timed out after ${params.timeoutMs}ms`,
+            };
+            killMeasuredProcess();
+            forceKillTimeout = setTimeout(() => {
+              killMeasuredProcess("SIGKILL");
+            }, timeoutKillGraceMs);
+            forceKillTimeout.unref?.();
+          }, params.timeoutMs)
+        : null;
+    timeout?.unref?.();
+    const finish = (status, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (timedOut) {
+        killMeasuredProcess("SIGKILL");
+      }
+      if (forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+      }
+      removeParentSignalHandlers();
+      const wallMs = performance.now() - started;
+      const finalStatus = status ?? (signal || spawnError ? 1 : 0);
+      const finalStderr = [
+        stderr,
+        spawnError ? `[spawn error] ${spawnError.code ?? "unknown"} ${spawnError.message}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const diagnosticFailure = detectCommandDiagnosticFailure(stdout, finalStderr);
+      const logPath = writeCommandLog({
+        logDir: params.logDir,
+        label: params.label,
+        command: [params.command, ...params.args],
+        stdout,
+        stderr: finalStderr,
+      });
+      resolve({
+        label: params.label,
+        phase: params.phase,
+        pluginId: params.pluginId ?? null,
+        status: finalStatus,
+        diagnosticFailure,
+        signal: signal ?? null,
+        timedOut,
+        spawnError,
+        logPath,
+        ...parseTimedMetrics(finalStderr, wallMs, mode),
+      });
+    };
+    child.on("error", (error) => {
+      spawnError = {
+        code: typeof error.code === "string" ? error.code : null,
+        message: error.message,
+      };
+      finish(null, null);
+    });
+    child.on("close", (status, signal) => finish(status, signal));
+  });
+}
+
+export function hasGauntletWorkRows(rows) {
+  return rows.some((row) => row.phase !== "prebuild");
 }
 
 function runPluginLifecycle(params) {
@@ -562,18 +763,21 @@ async function main() {
       limit: options.limit,
     });
     const rows = [];
+    const commandEnv = buildGauntletPrebuildEnv(env, {
+      includePrivateQa: !options.skipQa,
+      buildIds: selectedPlugins.map((plugin) => plugin.buildId),
+      skipDeclarationBuild: true,
+    });
     if (!options.skipPrebuild && (selectedPlugins.length > 0 || !options.skipQa)) {
       process.stderr.write("[plugin-gauntlet] prebuild\n");
-      const prebuildEnv = buildGauntletPrebuildEnv(env, { includePrivateQa: !options.skipQa });
-      const prebuildCommand = pnpmCommand(["build"], { cwd: repoRoot, env: prebuildEnv });
+      const prebuildCommand = createGauntletPrebuildCommand(repoRoot);
       rows.push(
-        runMeasuredCommand({
+        await runMeasuredCommandLive({
           cwd: repoRoot,
-          env: prebuildEnv,
+          env: commandEnv,
           logDir: path.join(options.outputDir, "logs", "prebuild"),
           command: prebuildCommand.command,
           args: prebuildCommand.args,
-          spawnOptions: prebuildCommand.options,
           label: "prebuild",
           phase: "prebuild",
           timeoutMs: options.buildTimeoutMs,
@@ -587,7 +791,7 @@ async function main() {
       runPluginLifecycle({
         repoRoot,
         outputDir: options.outputDir,
-        env,
+        env: commandEnv,
         plugins: selectedPlugins,
         rows,
         commandTimeoutMs: options.commandTimeoutMs,
@@ -597,7 +801,7 @@ async function main() {
       runSlashHelpProbes({
         repoRoot,
         outputDir: options.outputDir,
-        env,
+        env: commandEnv,
         plugins: selectedPlugins,
         rows,
         commandTimeoutMs: options.commandTimeoutMs,
@@ -609,7 +813,7 @@ async function main() {
         : runQaChunks({
             repoRoot,
             outputDir: options.outputDir,
-            env,
+            env: commandEnv,
             plugins: selectedPlugins,
             qaBaseline: options.qaBaseline,
             rows,
@@ -639,7 +843,18 @@ async function main() {
     const failures = rows.filter(
       (row) => row.status !== 0 || row.timedOut || row.diagnosticFailure,
     );
-    preserveRunRoot = preserveRunRoot || failures.length > 0;
+    const guardFailures =
+      !hasGauntletWorkRows(rows) && !options.allowEmpty
+        ? [
+            {
+              kind: "empty-run",
+              message:
+                "No lifecycle, slash-help, or QA gauntlet commands ran; remove a skip flag or pass --allow-empty for intentional dry runs.",
+            },
+          ]
+        : [];
+    const hasFailures = failures.length > 0 || guardFailures.length > 0;
+    preserveRunRoot = preserveRunRoot || hasFailures;
     let cleanupError = null;
     if (!preserveRunRoot) {
       try {
@@ -666,6 +881,7 @@ async function main() {
         qaScenarios: options.qaScenarios,
         qaPluginChunkSize: options.qaPluginChunkSize,
         qaBaseline: options.qaBaseline,
+        allowEmpty: options.allowEmpty,
         keepRunRoot: options.keepRunRoot,
         skipLifecycle: options.skipLifecycle,
         skipQa: options.skipQa,
@@ -686,6 +902,7 @@ async function main() {
       rows,
       observations: [...metricObservations, ...qaBaselineObservations, ...gatewayObservations],
       failures,
+      guardFailures,
     };
     const summaryPath = path.join(options.outputDir, "plugin-gateway-gauntlet-summary.json");
     fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
@@ -701,10 +918,13 @@ async function main() {
         `[plugin-gauntlet] failure phase=${failure.phase} plugin=${failure.pluginId ?? "<none>"} status=${failure.status} timedOut=${failure.timedOut} diagnostic=${failure.diagnosticFailure ?? ""} wallMs=${Math.round(failure.wallMs)} log=${failure.logPath}\n`,
       );
     }
+    for (const failure of guardFailures) {
+      process.stdout.write(`[plugin-gauntlet] failure ${failure.kind}: ${failure.message}\n`);
+    }
     for (const observation of summary.observations.slice(0, 20)) {
       process.stdout.write(`[plugin-gauntlet] observation ${JSON.stringify(observation)}\n`);
     }
-    if (failures.length > 0) {
+    if (hasFailures) {
       process.exitCode = 1;
     }
   } catch (error) {

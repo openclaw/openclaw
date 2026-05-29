@@ -16,6 +16,12 @@ export type ChatAbortControllerEntry = {
   authProviderId?: string;
   abortStopReason?: string;
   /**
+   * Controls only the sessions.list active-run projection. Terminal lifecycle
+   * clears this before chat.send settles, while the entry stays as the retry
+   * idempotency guard until normal cleanup removes it.
+   */
+  projectSessionActive?: boolean;
+  /**
    * Which RPC owns this registration. Absent (undefined) is treated as
    * `"chat-send"` so pre-existing callers that constructed entries without
    * a kind keep their behavior. Consumers that need "chat.send specifically
@@ -33,6 +39,15 @@ type RegisteredChatAbortController = {
 
 export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
+}
+
+function createChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
+  if (stopReason !== "timeout") {
+    return undefined;
+  }
+  const reason = new Error("chat run timed out");
+  reason.name = "TimeoutError";
+  return reason;
 }
 
 function resolveChatRunExpiresAtMs(params: {
@@ -109,6 +124,7 @@ export function registerChatAbortController(params: {
     ownerDeviceId: params.ownerDeviceId,
     providerId: normalizeProviderIdForActiveRun(params.providerId),
     authProviderId: normalizeProviderIdForActiveRun(params.authProviderId),
+    projectSessionActive: true,
     kind: params.kind,
   };
   params.chatAbortControllers.set(params.runId, entry);
@@ -190,7 +206,7 @@ export function abortChatRunById(
   if (stopReason) {
     active.abortStopReason = stopReason;
   }
-  active.controller.abort();
+  active.controller.abort(createChatAbortSignalReason(stopReason));
   ops.chatAbortControllers.delete(runId);
   ops.chatRunBuffers.delete(runId);
   ops.chatDeltaSentAt.delete(runId);

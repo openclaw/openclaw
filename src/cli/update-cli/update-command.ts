@@ -48,6 +48,7 @@ import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
@@ -96,6 +97,7 @@ import {
 } from "../../plugins/update.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
@@ -233,10 +235,6 @@ function isTrackedPackageInstallRecord(record: PluginInstallRecord): boolean {
     record.source === "git" ||
     record.source === "marketplace"
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizePluginInstallRecordMap(value: unknown): Record<string, PluginInstallRecord> {
@@ -784,8 +782,7 @@ function parsePositivePid(value: unknown): number | null {
   if (!/^\d+$/u.test(trimmed)) {
     return null;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return parseStrictPositiveInteger(trimmed) ?? null;
 }
 
 function isInheritedGatewayRuntimePid(
@@ -1271,7 +1268,7 @@ async function tryInstallShellCompletion(opts: {
     defaultRuntime.log(theme.muted("Upgrading shell completion to cached version..."));
     const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
     if (cacheGenerated) {
-      await installCompletion(status.shell, true, CLI_NAME);
+      await installShellCompletionForUpdate(status.shell, true);
     }
     return;
   }
@@ -1308,7 +1305,16 @@ async function tryInstallShellCompletion(opts: {
       return;
     }
 
-    await installCompletion(status.shell, opts.skipPrompt, CLI_NAME);
+    await installShellCompletionForUpdate(status.shell, opts.skipPrompt);
+  }
+}
+
+async function installShellCompletionForUpdate(shell: string, yes: boolean): Promise<void> {
+  try {
+    await installCompletion(shell, yes, CLI_NAME);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    defaultRuntime.log(theme.warn(`Shell completion refresh failed: ${message}`));
   }
 }
 
@@ -2592,8 +2598,8 @@ async function readProcessStartTimeMs(pid: number): Promise<number | undefined> 
 async function resolvePostCoreUpdateStartedAtMs(
   env: NodeJS.ProcessEnv,
 ): Promise<number | undefined> {
-  const fromEnv = Number.parseInt(env[POST_CORE_UPDATE_STARTED_AT_ENV] ?? "", 10);
-  if (Number.isFinite(fromEnv) && fromEnv > 0) {
+  const fromEnv = parseStrictPositiveInteger(env[POST_CORE_UPDATE_STARTED_AT_ENV] ?? "");
+  if (fromEnv !== undefined) {
     return fromEnv;
   }
   return await readProcessStartTimeMs(process.ppid);

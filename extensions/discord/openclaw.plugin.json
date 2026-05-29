@@ -1,11 +1,13 @@
 {
   "id": "discord",
+  "name": "Discord",
+  "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
   "activation": {
     "onStartup": false
   },
   "channels": ["discord"],
   "contracts": {
-    "meetingNotesSourceProviders": ["discord-voice"]
+    "transcriptSourceProviders": ["discord-voice"]
   },
   "channelEnvVars": {
     "discord": ["DISCORD_BOT_TOKEN"]

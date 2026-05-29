@@ -6,10 +6,8 @@ import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import {
-  appendAgentBootstrapSystemPromptSupplement,
   buildAgentBootstrapSystemContext,
   buildAgentBootstrapSystemPromptSections,
-  buildAgentBootstrapSystemPromptSupplement,
   buildAgentSystemPrompt,
   buildRuntimeLine,
 } from "./system-prompt.js";
@@ -18,8 +16,8 @@ describe("buildAgentSystemPrompt", () => {
   it("resolves helper session keys to scoped prompt surfaces", () => {
     expect(resolveAgentPromptSurfaceForSessionKey("agent:main:subagent:child")).toBe("subagent");
     expect(resolveAgentPromptSurfaceForSessionKey("agent:codex:acp:child")).toBe("acp_backend");
-    expect(resolveAgentPromptSurfaceForSessionKey("agent:main")).toBe("pi_main");
-    expect(resolveAgentPromptSurfaceForSessionKey(undefined)).toBe("pi_main");
+    expect(resolveAgentPromptSurfaceForSessionKey("agent:main")).toBe("openclaw_main");
+    expect(resolveAgentPromptSurfaceForSessionKey(undefined)).toBe("openclaw_main");
   });
 
   it("formats owner section for plain, hash, and missing owner lists", () => {
@@ -375,13 +373,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Brave API");
   });
 
-  it("keeps the PI empty-tool fallback on the main prompt surface", () => {
+  it("keeps the OpenClaw empty-tool fallback on the main prompt surface", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: [],
     });
 
-    expect(prompt).toContain("Pi lists the standard tools above");
+    expect(prompt).toContain("OpenClaw lists the standard tools above");
     expect(prompt).toContain("- sessions_spawn: spawn an isolated sub-agent session");
   });
 
@@ -1229,13 +1227,12 @@ describe("buildAgentBootstrapSystemContext", () => {
   });
 });
 
-describe("buildAgentBootstrapSystemPromptSupplement", () => {
+describe("buildAgentBootstrapSystemPromptSections", () => {
   it("can render bootstrap guidance without duplicating Project Context", () => {
     const sections = buildAgentBootstrapSystemPromptSections({
       bootstrapMode: "full",
       bootstrapTruncationNotice: "Bootstrap context was truncated.",
       contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
-      includeProjectContext: false,
     }).join("\n");
 
     expect(sections).toContain("## Bootstrap Pending");
@@ -1244,34 +1241,6 @@ describe("buildAgentBootstrapSystemPromptSupplement", () => {
     expect(sections).toContain("Bootstrap context was truncated.");
     expect(sections).not.toContain("## /tmp/openclaw/BOOTSTRAP.md");
     expect(sections).not.toContain("Ask who I am.");
-  });
-
-  it("adds pending bootstrap guidance and BOOTSTRAP.md contents for override prompts", () => {
-    const supplement = buildAgentBootstrapSystemPromptSupplement({
-      bootstrapMode: "full",
-      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
-    });
-
-    expect(supplement).toContain("## Bootstrap Pending");
-    expect(supplement).toContain("BOOTSTRAP.md is included below in Project Context");
-    expect(supplement).toContain("## /tmp/openclaw/BOOTSTRAP.md");
-    expect(supplement).toContain("Ask who I am.");
-  });
-
-  it("appends bootstrap supplement to configured system prompt overrides", () => {
-    const prompt = appendAgentBootstrapSystemPromptSupplement({
-      systemPrompt: "Custom override prompt.",
-      bootstrapMode: "full",
-      bootstrapTruncationNotice:
-        "[Bootstrap truncation warning]\nSome workspace bootstrap files were truncated before Project Context injection.\nTreat Project Context as partial and read the relevant files directly if details seem missing.",
-      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
-    });
-
-    expect(prompt).toContain("Custom override prompt.");
-    expect(prompt).toContain("## Bootstrap Pending");
-    expect(prompt).toContain("Ask who I am.");
-    expect(prompt).toContain("## Bootstrap Context Notice");
-    expect(prompt).toContain("[Bootstrap truncation warning]");
   });
 });
 
@@ -1314,7 +1283,9 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("Avoid polling loops");
     expect(prompt).toContain("spawned by the main agent");
     expect(prompt).toContain("reported to the main agent");
-    expect(prompt).toContain("[... N more characters truncated]");
+    expect(prompt).toContain(
+      "[... N more characters truncated; rerun with narrower args if needed]",
+    );
     expect(prompt).toContain("offset/limit");
     expect(prompt).toContain("instead of full-file `cat`");
   });

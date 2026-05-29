@@ -1,16 +1,18 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   HEARTBEAT_RESPONSE_TOOL_NAME,
+  embeddedAgentLog,
   type EmbeddedRunAttemptParams,
   isToolWrappedWithBeforeToolCallHook,
   isMessagingTool,
   isMessagingToolSendAction,
   normalizeHeartbeatToolResponse,
+  projectRuntimeToolInputSchema,
   runAgentHarnessAfterToolCallHook,
   setBeforeToolCallDiagnosticsEnabled,
   type AnyAgentTool,
@@ -19,7 +21,12 @@ import {
   type MessagingToolSourceReplyPayload,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  asOptionalRecord as readRecord,
+  isRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
@@ -42,6 +49,16 @@ type CodexDynamicToolHookContext = {
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
 
+type ProjectedCodexDynamicTool = {
+  tool: AnyAgentTool;
+  inputSchema: JsonValue;
+};
+
+type CodexDynamicToolSchemaQuarantine = {
+  tool: string;
+  violations: readonly string[];
+};
+
 export type CodexDynamicToolBridge = {
   availableSpecs: CodexDynamicToolSpec[];
   specs: CodexDynamicToolSpec[];
@@ -59,6 +76,7 @@ export type CodexDynamicToolBridge = {
     toolMediaUrls: string[];
     toolAudioAsVoice: boolean;
     successfulCronAdds?: number;
+    quarantinedTools: CodexDynamicToolSchemaQuarantine[];
   };
 };
 
@@ -79,16 +97,29 @@ export function createCodexDynamicToolBridge(params: {
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
   const toolResultMaxChars = resolveCodexDynamicToolResultMaxChars(params.hookContext);
-  const tools = params.tools.map((tool) => {
+  const availableProjection = projectCodexDynamicTools(params.tools);
+  const registeredProjection = params.registeredTools
+    ? projectCodexDynamicTools(params.registeredTools)
+    : availableProjection;
+  const availableTools = availableProjection.tools.map(({ tool, inputSchema }) => {
     if (isToolWrappedWithBeforeToolCallHook(tool)) {
       setBeforeToolCallDiagnosticsEnabled(tool, false);
-      return tool;
+      return { tool, inputSchema };
     }
-    return wrapToolWithBeforeToolCallHook(tool, params.hookContext, { emitDiagnostics: false });
+    return {
+      tool: wrapToolWithBeforeToolCallHook(tool, params.hookContext, { emitDiagnostics: false }),
+      inputSchema,
+    };
   });
-  const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
-  const registeredTools = params.registeredTools ?? tools;
+  const toolMap = new Map(availableTools.map(({ tool }) => [tool.name, tool]));
+  const registeredTools = registeredProjection.tools.map(({ tool }) => tool);
   const registeredToolNames = new Set(registeredTools.map((tool) => tool.name));
+  const quarantinedTools = dedupeQuarantinedDynamicTools([
+    ...availableProjection.quarantinedTools,
+    ...registeredProjection.quarantinedTools,
+  ]);
+  warnQuarantinedDynamicTools(quarantinedTools);
+  emitQuarantinedDynamicToolDiagnostics(quarantinedTools, params.hookContext);
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],
@@ -97,6 +128,7 @@ export function createCodexDynamicToolBridge(params: {
     messagingToolSourceReplyPayloads: [],
     toolMediaUrls: [],
     toolAudioAsVoice: false,
+    quarantinedTools,
   };
   const middlewareRunner = createAgentToolResultMiddlewareRunner({
     runtime: "codex",
@@ -110,16 +142,18 @@ export function createCodexDynamicToolBridge(params: {
   ]);
 
   return {
-    availableSpecs: tools.map((tool) =>
+    availableSpecs: availableTools.map(({ tool, inputSchema }) =>
       createCodexDynamicToolSpec({
         tool,
+        inputSchema,
         loading: params.loading ?? "searchable",
         directToolNames,
       }),
     ),
-    specs: registeredTools.map((tool) =>
+    specs: registeredProjection.tools.map(({ tool, inputSchema }) =>
       createCodexDynamicToolSpec({
         tool,
+        inputSchema,
         loading: params.loading ?? "searchable",
         directToolNames,
       }),
@@ -253,13 +287,14 @@ export function createCodexDynamicToolBridge(params: {
 
 function createCodexDynamicToolSpec(params: {
   tool: AnyAgentTool;
+  inputSchema: JsonValue;
   loading: CodexDynamicToolsLoading;
   directToolNames: ReadonlySet<string>;
 }): CodexDynamicToolSpec {
   const base = {
     name: params.tool.name,
     description: params.tool.description,
-    inputSchema: toJsonValue(params.tool.parameters),
+    inputSchema: params.inputSchema,
   };
   if (params.loading === "direct" || params.directToolNames.has(params.tool.name)) {
     return base;
@@ -269,6 +304,72 @@ function createCodexDynamicToolSpec(params: {
     namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
     deferLoading: true,
   };
+}
+
+function projectCodexDynamicTools(tools: readonly AnyAgentTool[]): {
+  tools: ProjectedCodexDynamicTool[];
+  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
+} {
+  const projectedTools: ProjectedCodexDynamicTool[] = [];
+  const quarantinedTools: CodexDynamicToolSchemaQuarantine[] = [];
+  for (const tool of tools) {
+    const projection = projectRuntimeToolInputSchema(tool.parameters, `${tool.name}.inputSchema`);
+    if (projection.violations.length > 0) {
+      quarantinedTools.push({ tool: tool.name, violations: projection.violations });
+      continue;
+    }
+    projectedTools.push({ tool, inputSchema: projection.schema as JsonValue });
+  }
+  return { tools: projectedTools, quarantinedTools };
+}
+
+function warnQuarantinedDynamicTools(tools: readonly CodexDynamicToolSchemaQuarantine[]): void {
+  if (tools.length === 0) {
+    return;
+  }
+  const unique = new Map<string, readonly string[]>();
+  for (const tool of tools) {
+    unique.set(tool.tool, tool.violations);
+  }
+  embeddedAgentLog.warn(
+    `codex app-server quarantined ${unique.size} dynamic ${unique.size === 1 ? "tool" : "tools"} with unsupported input schemas: ${[...unique.keys()].join(", ")}`,
+    {
+      tools: [...unique.entries()].map(([tool, violations]) => ({ tool, violations })),
+    },
+  );
+}
+
+function emitQuarantinedDynamicToolDiagnostics(
+  tools: readonly CodexDynamicToolSchemaQuarantine[],
+  ctx: CodexDynamicToolHookContext | undefined,
+): void {
+  for (const tool of tools) {
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.blocked",
+      runId: ctx?.runId,
+      sessionId: ctx?.sessionId,
+      sessionKey: ctx?.sessionKey,
+      toolName: tool.tool,
+      deniedReason: "unsupported_tool_schema",
+      reason: tool.violations.join(", "),
+    });
+  }
+}
+
+function dedupeQuarantinedDynamicTools(
+  tools: readonly CodexDynamicToolSchemaQuarantine[],
+): CodexDynamicToolSchemaQuarantine[] {
+  return [
+    ...new Map(
+      tools.map((tool) => [
+        tool.tool,
+        {
+          tool: tool.tool,
+          violations: tool.violations,
+        },
+      ]),
+    ).values(),
+  ];
 }
 function toToolResultHookContext(
   ctx: CodexDynamicToolHookContext | undefined,
@@ -433,14 +534,6 @@ function extractInternalSourceReplyPayload(
   return text || mediaUrls.length > 0 || payload.presentation || payload.interactive
     ? payload
     : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? value : undefined;
 }
 
 function readPositiveInteger(value: unknown): number | undefined {
@@ -636,18 +729,6 @@ function convertToolContent(
       imageUrl,
     },
   ];
-}
-
-function toJsonValue(value: unknown): JsonValue {
-  try {
-    const text = JSON.stringify(value);
-    if (!text) {
-      return {};
-    }
-    return JSON.parse(text) as JsonValue;
-  } catch {
-    return {};
-  }
 }
 
 function jsonObjectToRecord(value: JsonValue | undefined): Record<string, unknown> {

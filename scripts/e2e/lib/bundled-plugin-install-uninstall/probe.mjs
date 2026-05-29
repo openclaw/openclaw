@@ -9,6 +9,33 @@ const bundledRuntimeFragments = (pluginDir) => [
   `/dist/extensions/${pluginDir}`,
   `/dist-runtime/extensions/${pluginDir}`,
 ];
+const bundledRuntimeRootFragments = ["/dist/extensions/", "/dist-runtime/extensions/"];
+const DEFAULT_PLUGIN_LIST_TIMEOUT_MS = 30_000;
+const DEFAULT_PLUGIN_LIST_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+
+function readIntegerEnv(name, fallback, minimum) {
+  const raw = process.env[name];
+  if (raw == null || raw === "") {
+    return fallback;
+  }
+  const text = raw.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}
+
+function readPositiveIntEnv(name, fallback) {
+  return readIntegerEnv(name, fallback, 1);
+}
+
+function readNonNegativeIntEnv(name, fallback) {
+  return readIntegerEnv(name, fallback, 0);
+}
 
 function resolveStateDir() {
   if (process.env.OPENCLAW_STATE_DIR) {
@@ -20,6 +47,11 @@ function resolveStateDir() {
 function pathReferencesBundledRuntime(value, pluginDir) {
   const normalized = normalizePathForProbe(value);
   return bundledRuntimeFragments(pluginDir).some((fragment) => normalized.includes(fragment));
+}
+
+function pathReferencesPackagedBundledRoot(value) {
+  const normalized = normalizePathForProbe(value);
+  return bundledRuntimeRootFragments.some((fragment) => normalized.includes(fragment));
 }
 
 function resolveOpenClawEntry() {
@@ -36,11 +68,29 @@ function resolveOpenClawEntry() {
 
 function readPluginsList() {
   const entry = resolveOpenClawEntry();
+  const timeoutMs = readPositiveIntEnv(
+    "OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS",
+    DEFAULT_PLUGIN_LIST_TIMEOUT_MS,
+  );
   const result = spawnSync(process.execPath, [entry, "plugins", "list", "--json"], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: process.env,
+    maxBuffer: readPositiveIntEnv(
+      "OPENCLAW_BUNDLED_PLUGIN_LIST_MAX_BUFFER_BYTES",
+      DEFAULT_PLUGIN_LIST_MAX_BUFFER_BYTES,
+    ),
+    killSignal: "SIGKILL",
+    timeout: timeoutMs,
   });
+  if (result.error) {
+    const timedOut = result.error.code === "ETIMEDOUT";
+    throw new Error(
+      timedOut
+        ? `Timed out listing packaged bundled plugins after ${timeoutMs}ms`
+        : `Unable to list packaged bundled plugins: ${result.error.message}`,
+    );
+  }
   if (result.status !== 0) {
     throw new Error(
       `Unable to list packaged bundled plugins: ${result.stderr || result.stdout || `exit ${result.status}`}`,
@@ -68,7 +118,7 @@ async function loadPackagedBundledEntries() {
       const rootDir = typeof plugin.rootDir === "string" ? plugin.rootDir.trim() : "";
       const source = typeof plugin.source === "string" ? plugin.source.trim() : "";
       const pluginDir = rootDir || (source ? path.dirname(source) : "");
-      if (!id || !pluginDir) {
+      if (!id || !pluginDir || !pathReferencesPackagedBundledRoot(pluginDir)) {
         return null;
       }
       return {
@@ -106,14 +156,9 @@ async function loadManifestEntries() {
 
 async function selectedManifestEntries() {
   const allEntries = await loadManifestEntries();
-  const total = Number.parseInt(process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL || "1", 10);
-  const index = Number.parseInt(process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX || "0", 10);
-  if (!Number.isInteger(total) || total < 1) {
-    throw new Error(
-      `OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL must be >= 1, got ${process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL}`,
-    );
-  }
-  if (!Number.isInteger(index) || index < 0 || index >= total) {
+  const total = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL", 1);
+  const index = readNonNegativeIntEnv("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX", 0);
+  if (index >= total) {
     throw new Error(
       `OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX must be in [0, ${total - 1}], got ${process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX}`,
     );

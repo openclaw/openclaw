@@ -199,26 +199,6 @@ function makeManifestRegistry(pluginId = "demo"): PluginManifestRegistry {
   return { plugins: [plugin], diagnostics: [] };
 }
 
-function firstPlugin(
-  snapshot: ReturnType<typeof loadPluginMetadataSnapshot>,
-): PluginManifestRecord {
-  const plugin = snapshot.plugins[0];
-  if (!plugin) {
-    throw new Error("expected memo test fixture plugin");
-  }
-  return plugin;
-}
-
-function firstCommandAlias(
-  plugin: PluginManifestRecord,
-): NonNullable<PluginManifestRecord["commandAliases"]>[number] {
-  const commandAlias = plugin.commandAliases?.[0];
-  if (!commandAlias) {
-    throw new Error("expected memo test fixture command alias");
-  }
-  return commandAlias;
-}
-
 describe("loadPluginMetadataSnapshot process memo", () => {
   beforeEach(() => {
     clearLoadPluginMetadataSnapshotMemo();
@@ -245,17 +225,19 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     });
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
-    const firstRecord = firstPlugin(first);
-    firstRecord.providers.push("first-mutated");
-    firstCommandAlias(firstRecord).name = "first-command-mutated";
     const second = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
-    const secondRecord = firstPlugin(second);
-    secondRecord.providers.push("second-mutated");
-    firstCommandAlias(secondRecord).name = "second-command-mutated";
     const third = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    expect(() => third.plugins[0]?.providers.push("mutated")).toThrow();
+    expect(() => {
+      if (third.plugins[0]?.commandAliases?.[0]) {
+        third.plugins[0].commandAliases[0].name = "mutated";
+      }
+    }).toThrow();
     expect(third.plugins[0]?.providers).toEqual(["demo"]);
     expect(third.plugins[0]?.commandAliases?.[0]?.name).toBe("demo-command");
     expect(second.manifestRegistry.plugins[0]).toBe(second.plugins[0]);
@@ -402,6 +384,33 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
     expect(statSpy).not.toHaveBeenCalled();
     expect(readSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not freeze caller-owned provided index records", () => {
+    const stateDir = tempStateDir();
+    const index = makeIndex();
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "provided",
+      snapshot: index,
+      diagnostics: [],
+    });
+
+    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {}, index, stateDir });
+    const callerRecord = index.plugins[0];
+    const snapshotRecord = snapshot.index.plugins[0];
+    if (!callerRecord || !snapshotRecord) {
+      throw new Error("expected metadata records");
+    }
+
+    expect(() => {
+      callerRecord.pluginId = "caller-mutated";
+      callerRecord.startup.agentHarnesses = ["caller-mutated"];
+    }).not.toThrow();
+    expect(snapshot.index.plugins[0]?.pluginId).toBe("demo");
+    expect(snapshot.index.plugins[0]?.startup.agentHarnesses).toEqual([]);
+    expect(() => {
+      snapshotRecord.pluginId = "snapshot-mutated";
+    }).toThrow();
   });
 
   it("memoizes policy-stale derived snapshots within the process", () => {
@@ -646,6 +655,42 @@ describe("loadPluginMetadataSnapshot process memo", () => {
       writeRootManifest: false,
     });
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+  });
+
+  it("keeps npm project package fingerprints stable across directory order changes", () => {
+    const stateDir = tempStateDir();
+    const projectsDir = path.join(stateDir, "npm", "projects");
+    writeJson(path.join(projectsDir, "zeta", "package.json"), { name: "zeta", version: "1.0.0" });
+    writeJson(path.join(projectsDir, "alpha", "package.json"), { name: "alpha", version: "1.0.0" });
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
+    const originalReaddirSync = fs.readdirSync.bind(fs);
+    let reverseProjectEntries = false;
+    const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation(((
+      directoryPath: fs.PathLike,
+      options?: Parameters<typeof fs.readdirSync>[1],
+    ): unknown => {
+      const entries = originalReaddirSync(directoryPath, options as never);
+      if (directoryPath === projectsDir && reverseProjectEntries && Array.isArray(entries)) {
+        return entries.toReversed();
+      }
+      return entries;
+    }) as unknown as typeof fs.readdirSync);
+
+    try {
+      loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+      reverseProjectEntries = true;
+      loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    } finally {
+      readdirSpy.mockRestore();
+    }
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();

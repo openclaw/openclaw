@@ -1,20 +1,19 @@
 {
   "name": "@openclaw/whatsapp",
-  "version": "2026.5.24",
+  "version": "2026.5.28",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/whatsapp",
-      "version": "2026.5.24",
+      "version": "2026.5.28",
       "dependencies": {
         "audio-decode": "2.2.3",
         "baileys": "7.0.0-rc13",
-        "https-proxy-agent": "9.0.0",
         "typebox": "1.1.38"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.24"
+        "openclaw": ">=2026.5.28"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -118,9 +117,9 @@
       "license": "MIT"
     },
     "node_modules/@thi.ng/bitstream": {
-      "version": "2.4.51",
-      "resolved": "https://registry.npmjs.org/@thi.ng/bitstream/-/bitstream-2.4.51.tgz",
-      "integrity": "sha512-oFEsQLBq7FT7DF9GZaF5DFxkvWq1r0Hc/QFLOiiADvgDC0+sp58x5+fJEvvB9uRR1BBIF4imkWWRQlmblM8mrQ==",
+      "version": "2.4.52",
+      "resolved": "https://registry.npmjs.org/@thi.ng/bitstream/-/bitstream-2.4.52.tgz",
+      "integrity": "sha512-uOOJ4QxJ8lK7juR2gGZHbISPsPGLp4w7PLFG7pTPG+t+8Hkanl3Syu3LMPq0DGJbAX7U5l1TrKvLoNeNta3OsA==",
       "funding": [
         {
           "type": "github",
@@ -137,16 +136,16 @@
       ],
       "license": "Apache-2.0",
       "dependencies": {
-        "@thi.ng/errors": "^2.6.13"
+        "@thi.ng/errors": "^2.6.14"
       },
       "engines": {
         "node": ">=18"
       }
     },
     "node_modules/@thi.ng/errors": {
-      "version": "2.6.13",
-      "resolved": "https://registry.npmjs.org/@thi.ng/errors/-/errors-2.6.13.tgz",
-      "integrity": "sha512-npD5PC2w09SOVEUt/G/9e5fkwX7bLtSEFqY1Jhg7WrM+JK8Ytgdc8qKSmAMds5y6n2u73hSeWjZ4iIt+UsII6A==",
+      "version": "2.6.14",
+      "resolved": "https://registry.npmjs.org/@thi.ng/errors/-/errors-2.6.14.tgz",
+      "integrity": "sha512-dSqLPZh5wOe329Ks2pJqoDmtjSv2g4KpXEP5/IQ5J9qvrEyNrRBCuaKHUKYUltQ1OUHGd9L5hBqGJl65Hlnu+g==",
       "funding": [
         {
           "type": "github",
@@ -238,15 +237,6 @@
       "funding": {
         "type": "individual",
         "url": "https://github.com/sponsors/eshaz"
-      }
-    },
-    "node_modules/agent-base": {
-      "version": "9.0.0",
-      "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-9.0.0.tgz",
-      "integrity": "sha512-TQf59BsZnytt8GdJKLPfUZ54g/iaUL2OWDSFCCvMOhsHduDQxO8xC4PNeyIkVcA5KwL2phPSv0douC0fgWzmnA==",
-      "license": "MIT",
-      "engines": {
-        "node": ">= 20"
       }
     },
     "node_modules/async-mutex": {
@@ -433,19 +423,6 @@
       "resolved": "https://registry.npmjs.org/hookified/-/hookified-1.15.1.tgz",
       "integrity": "sha512-MvG/clsADq1GPM2KGo2nyfaWVyn9naPiXrqIe4jYjXNZQt238kWyOGrsyc/DmRAQ+Re6yeo6yX/yoNCG5KAEVg==",
       "license": "MIT"
-    },
-    "node_modules/https-proxy-agent": {
-      "version": "9.0.0",
-      "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-9.0.0.tgz",
-      "integrity": "sha512-/MVmHp58WkOypgFhCLk4fzpPcFQvTJ/e6LBI7irpIO2HfxUbpmYoHF+KzipzJpxxzJu7aJNWQ0xojJ/dzV2G5g==",
-      "license": "MIT",
-      "dependencies": {
-        "agent-base": "9.0.0",
-        "debug": "^4.3.4"
-      },
-      "engines": {
-        "node": ">= 20"
-      }
     },
     "node_modules/ieee754": {
       "version": "1.2.1",
@@ -860,9 +837,9 @@
       "license": "MIT"
     },
     "node_modules/ws": {
-      "version": "8.20.1",
-      "resolved": "https://registry.npmjs.org/ws/-/ws-8.20.1.tgz",
-      "integrity": "sha512-It4dO0K5v//JtTXuPkfEOaI3uUN87iYPnqo/ZzqCoG3g8uhA66QUMs/SrM0YK7/NAu+r4LMh/9dq2A7k+rHs+w==",
+      "version": "8.21.0",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
+      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
       "license": "MIT",
       "engines": {
         "node": ">=10.0.0"

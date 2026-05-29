@@ -2,6 +2,8 @@ import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-patte
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isRecord } from "../shared/record-coerce.js";
+import { normalizeUniqueStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
@@ -85,7 +87,7 @@ export function buildPluginToolMetadataKey(pluginId: string, toolName: string): 
 }
 
 function normalizeAllowlist(list?: string[]) {
-  return new Set((list ?? []).map(normalizeToolName).filter(Boolean));
+  return new Set(normalizeUniqueStringEntries((list ?? []).map(normalizeToolName)));
 }
 
 function normalizeDenylist(list?: string[]) {
@@ -191,10 +193,6 @@ function isOptionalToolEntryPotentiallyAllowed(params: {
     return true;
   }
   return params.names.some((name) => params.allowlist.has(normalizeToolName(name)));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function readPluginToolName(tool: unknown): string {
@@ -384,7 +382,7 @@ function listManifestToolNamesForAllowlist(params: {
   const defaultToolNames = params.toolNames.filter(
     (name) => !isManifestToolOptional(params.plugin, name),
   );
-  return [...new Set([...defaultToolNames, ...matchedToolNames])];
+  return uniqueStrings([...defaultToolNames, ...matchedToolNames]);
 }
 
 function listManifestToolNamesForAvailability(params: {

@@ -1,6 +1,5 @@
 #!/usr/bin/env -S node --import tsx
 
-import { execFileSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -25,6 +24,7 @@ import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
@@ -71,12 +71,12 @@ const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // lazy chunks from the plugin build even though dist/extensions/feishu is
   // externalized from the root package scan.
   "@larksuiteoapi/node-sdk",
+  // Discord remains an official external plugin. The root package can retain
+  // orphaned lazy chunks from the plugin build, but the plugin owns prism-media.
+  "prism-media",
   "@matrix-org/matrix-sdk-crypto-nodejs",
   "link-preview-js",
   "matrix-js-sdk",
-  // Discord voice decoder fallback. The root chunk catches missing decoders and the owning
-  // Discord plugin remains externalized from the root package.
-  "opusscript",
   // Public plugin SDK contract helpers are intentionally test-only entrypoints.
   // Consumers importing them run under their own Vitest dev dependency.
   "vitest",
@@ -616,12 +616,7 @@ function npmExec(args: string[], cwd: string): string {
     platform: process.platform,
   });
 
-  return execFileSync(invocation.command, invocation.args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  }).trim();
+  return runNpmVerifyCommand(invocation, cwd);
 }
 
 function resolveGlobalRoot(prefixDir: string, cwd: string): string {
@@ -638,12 +633,7 @@ function installSpec(prefixDir: string, spec: string, cwd: string): void {
 
 function readInstalledBinaryVersion(prefixDir: string, cwd: string): string {
   const invocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
-  return execFileSync(invocation.command, invocation.args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  }).trim();
+  return runNpmVerifyCommand(invocation, cwd);
 }
 
 function verifyScenario(version: string, scenario: PublishedInstallScenario): void {
