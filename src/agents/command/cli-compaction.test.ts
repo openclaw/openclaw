@@ -441,7 +441,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(recordCliCompactionInStore).not.toHaveBeenCalled();
   });
 
-  it("treats Codex automatic compaction ownership as a non-fatal CLI budget skip", async () => {
+  it("falls back to context-engine compaction when Codex owns automatic compaction", async () => {
     const sessionKey = "agent:main:codex-native-auto-compaction";
     const sessionId = "session-codex-native-auto-compaction";
     const sessionFile = path.join(tmpDir, "session-codex-native-auto-compaction.jsonl");
@@ -461,6 +461,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
 
     const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
     const compactAgentHarnessSession = vi.fn(async () => ({
       ok: true,
       compacted: false,
@@ -471,7 +472,10 @@ describe("runCliTurnCompactionLifecycle", () => {
         tokensBefore: 950,
       },
     }));
-    const recordCliCompactionInStore = vi.fn();
+    const recordCliCompactionInStore = vi.fn(async () => ({
+      ...sessionEntry,
+      compactionCount: 1,
+    }));
     setCliCompactionTestDeps({
       resolveContextEngine: async () => buildContextEngine({ compactCalls }),
       ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
@@ -491,6 +495,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         effectiveReserveTokens: 200,
       }),
       resolveLiveToolResultMaxChars: () => 20_000,
+      runContextEngineMaintenance: maintenance,
       recordCliCompactionInStore,
     });
 
@@ -508,10 +513,20 @@ describe("runCliTurnCompactionLifecycle", () => {
       model: "gpt-5.5",
     });
 
-    expect(result).toBe(sessionEntry);
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
-    expect(compactCalls).toHaveLength(0);
-    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
+    expect(compactCalls).toHaveLength(1);
+    expect(compactCalls[0]?.sessionId).toBe(sessionId);
+    expect(compactCalls[0]?.sessionKey).toBe(sessionKey);
+    expect(compactCalls[0]?.currentTokenCount).toBe(950);
+    expect(maintenance).toHaveBeenCalledTimes(1);
+    expect(recordCliCompactionInStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex",
+        sessionKey,
+        tokensAfter: undefined,
+      }),
+    );
+    expect(result?.compactionCount).toBe(1);
   });
 
   it("does not fall back when native harness compaction returns no result", async () => {
