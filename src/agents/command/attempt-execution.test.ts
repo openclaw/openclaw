@@ -806,6 +806,82 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
     ).toBe(true);
   });
 
+  it("returns true when a Claude server tool use is unanswered", async () => {
+    await writeJsonlSession("server-tool-orphan", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "server_tool_use", id: "srvtoolu_unanswered", name: "web_search", input: {} },
+          ],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "server-tool-orphan",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when Claude-specific tool uses have matching tool results", async () => {
+    await writeJsonlSession("claude-specific-answered", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: {} },
+            { type: "mcp_tool_use", id: "mcptoolu_1", name: "mcp__demo", input: {} },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            { type: "web_search_tool_result", tool_use_id: "srvtoolu_1", content: [] },
+            { type: "mcp_tool_result", tool_use_id: "mcptoolu_1", content: "ok" },
+          ],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "claude-specific-answered",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when Claude hosted tool results are in the assistant message", async () => {
+    await writeJsonlSession("assistant-hosted-tool-result", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "server_tool_use", id: "srvtoolu_inline", name: "web_search", input: {} },
+            { type: "web_search_tool_result", tool_use_id: "srvtoolu_inline", content: [] },
+            { type: "text", text: "found it" },
+          ],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "assistant-hosted-tool-result",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
   it("returns true when the last assistant has multiple tool_use and at least one is orphaned", async () => {
     await writeJsonlSession("partial", [
       {
