@@ -932,7 +932,7 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[0]).toEqual(["anthropic", "claude-sonnet-4-6"]);
   });
 
-  it("lets configured CLI runtimes reach the run callback", async () => {
+  it("skips auth cooldown gate for canonical providers resolved to CLI runtimes", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -945,12 +945,27 @@ describe("runWithModelFallback", () => {
         },
       },
     });
+    const tempDir = await makeAuthTempDir();
+    setAuthRuntimeStore(tempDir, {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "test-key" },
+      },
+      usageStats: {
+        "anthropic:default": {
+          cooldownUntil: Date.now() + 60_000,
+          cooldownReason: "billing",
+          failureCounts: { billing: 1 },
+        },
+      },
+    });
     const run = vi.fn().mockResolvedValueOnce("cli ok");
 
     const result = await runWithModelFallback({
       cfg,
       provider: "anthropic",
       model: "claude-sonnet-4-6",
+      agentDir: tempDir,
       run,
     });
 

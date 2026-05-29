@@ -386,19 +386,16 @@ function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | un
   return isCliRuntimeAlias(normalized) || isCliProvider(normalized, cfg);
 }
 
-async function assertModelFallbackCandidateHarnessAvailable(
+function resolveModelFallbackCandidateAgentRuntime(
   params: ModelFallbackRuntimeContext & ModelCandidate,
-): Promise<void> {
-  if (!params.cfg) {
-    return;
-  }
-  const agentHarnessRuntimeOverride = params.resolveAgentHarnessRuntimeOverride?.(
-    params.provider,
-    params.model,
+): {
+  agentHarnessRuntimeOverride?: string;
+  agentRuntime: string;
+  agentRuntimeSource?: "model" | "provider" | "implicit";
+} {
+  const agentHarnessRuntimeOverride = normalizeOptionalString(
+    params.resolveAgentHarnessRuntimeOverride?.(params.provider, params.model),
   );
-  if (isCliProvider(params.provider, params.cfg)) {
-    return;
-  }
   const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
   const harnessPolicy = resolveAgentHarnessPolicy({
     provider: params.provider,
@@ -415,6 +412,32 @@ async function assertModelFallbackCandidateHarnessAvailable(
     agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
       ? "model"
       : harnessPolicy.runtimeSource;
+  return { agentHarnessRuntimeOverride, agentRuntime, agentRuntimeSource };
+}
+
+function isModelFallbackCandidateCliOwned(
+  params: ModelFallbackRuntimeContext & ModelCandidate,
+): boolean {
+  if (isCliProvider(params.provider, params.cfg)) {
+    return true;
+  }
+  return isCliAgentRuntime(
+    resolveModelFallbackCandidateAgentRuntime(params).agentRuntime,
+    params.cfg,
+  );
+}
+
+async function assertModelFallbackCandidateHarnessAvailable(
+  params: ModelFallbackRuntimeContext & ModelCandidate,
+): Promise<void> {
+  if (!params.cfg) {
+    return;
+  }
+  if (isCliProvider(params.provider, params.cfg)) {
+    return;
+  }
+  const { agentHarnessRuntimeOverride, agentRuntime, agentRuntimeSource } =
+    resolveModelFallbackCandidateAgentRuntime(params);
   if (isCliAgentRuntime(agentRuntime, params.cfg)) {
     return;
   }
@@ -1206,7 +1229,17 @@ export async function runWithModelFallback<T>(
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
-    if (authRuntime && authStore && !isCliProvider(candidate.provider, params.cfg)) {
+    if (
+      authRuntime &&
+      authStore &&
+      !isModelFallbackCandidateCliOwned({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        resolveAgentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride,
+        ...candidate,
+      })
+    ) {
       const profileIds = authRuntime.resolveAuthProfileOrder({
         cfg: params.cfg,
         store: authStore,
