@@ -1,4 +1,5 @@
 import { expect } from "vitest";
+import { WHATSAPP_NEXT_STEPS_NOTE_TITLE } from "./setup-finalize.js";
 
 type WhatsAppSetupConfig = {
   channels?: {
@@ -11,10 +12,14 @@ type WhatsAppSetupConfig = {
   };
 };
 
+type MockFn = ((...args: unknown[]) => unknown) & {
+  mock: { calls: unknown[][] };
+};
+
 type WizardPromptHarness = {
-  text: (...args: unknown[]) => unknown;
-  select: (...args: unknown[]) => unknown;
-  note: (...args: unknown[]) => unknown;
+  text: MockFn;
+  select: MockFn;
+  note: MockFn;
 };
 
 type QueuedWizardPrompterFactory<T extends WizardPromptHarness> = (params: {
@@ -196,6 +201,22 @@ export function expectWhatsAppLoginFollowup(harness: WizardPromptHarness): void 
     expect.stringContaining("openclaw channels login"),
     WHATSAPP_LOGIN_NOTE_TITLE,
   );
+}
+
+export function expectWhatsAppNextStepsNote(harness: WizardPromptHarness): void {
+  expect(harness.note).toHaveBeenCalledWith(
+    expect.stringContaining("openclaw message send --channel whatsapp"),
+    WHATSAPP_NEXT_STEPS_NOTE_TITLE,
+  );
+}
+
+export function expectNoWhatsAppNextStepsNote(harness: WizardPromptHarness): void {
+  // Inspect mock.calls directly so a hypothetical note(null, TITLE) call is also
+  // caught (expect.any(String) and expect.anything() both miss null/undefined).
+  const calledWithTitle = harness.note.mock.calls.some(
+    (args) => args[1] === WHATSAPP_NEXT_STEPS_NOTE_TITLE,
+  );
+  expect(calledWithTitle).toBe(false);
 }
 
 export function expectWhatsAppWorkAccountAccessNote(harness: WizardPromptHarness): void {
