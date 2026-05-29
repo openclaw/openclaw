@@ -363,8 +363,6 @@ export type SessionsSpawnToolsConfig = {
   attachments?: {
     /** Enable inline attachments for sessions_spawn. */
     enabled?: boolean;
-    /** Allow runtime="acp" to forward image attachments inline to ACP runtimes. */
-    acpEnabled?: boolean;
     maxTotalBytes?: number;
     maxFiles?: number;
     maxFileBytes?: number;

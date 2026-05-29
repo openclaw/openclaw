@@ -42,7 +42,6 @@ type AcpInlineImageAttachment = {
 
 type AttachmentLimits = {
   enabled: boolean;
-  acpEnabled: boolean;
   maxTotalBytes: number;
   maxFiles: number;
   maxFileBytes: number;
@@ -82,7 +81,6 @@ function resolveAttachmentLimits(config: OpenClawConfig): AttachmentLimits {
   ).tools?.sessions_spawn?.attachments;
   return {
     enabled: attachmentsCfg?.enabled === true,
-    acpEnabled: attachmentsCfg?.acpEnabled === true,
     maxTotalBytes:
       typeof attachmentsCfg?.maxTotalBytes === "number" &&
       Number.isFinite(attachmentsCfg.maxTotalBytes)
@@ -120,13 +118,6 @@ export function resolveAcpSessionsSpawnImageAttachments(params: {
       status: "forbidden",
       error:
         "attachments are disabled for sessions_spawn (enable tools.sessions_spawn.attachments.enabled)",
-    };
-  }
-  if (!limits.acpEnabled) {
-    return {
-      status: "forbidden",
-      error:
-        "ACP attachments are disabled for sessions_spawn (enable tools.sessions_spawn.attachments.acpEnabled)",
     };
   }
   if (requestedAttachments.length > limits.maxFiles) {
