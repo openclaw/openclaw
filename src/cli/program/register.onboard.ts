@@ -12,6 +12,7 @@ import type {
   TailscaleMode,
 } from "../../commands/onboard-types.js";
 import { resolveManifestProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
+import { parseStrictPositiveInteger } from "../../shared/number-coercion.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -229,7 +230,9 @@ export function registerOnboardCommand(program: Command): void {
                 ? true
                 : undefined,
           customContextWindow:
-            opts.customContextWindow === undefined ? undefined : Number(opts.customContextWindow),
+            opts.customContextWindow === undefined
+              ? undefined
+              : (parseStrictPositiveInteger(opts.customContextWindow) ?? Number.NaN),
           gatewayPort: gatewayPort ?? undefined,
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,

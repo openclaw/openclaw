@@ -562,7 +562,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     throw new CustomApiError("invalid_model_id", "Custom provider model ID is required.");
   }
 
-  const explicitContextWindow = parseCustomApiContextWindow(params.contextWindow);
+  const explicitContextWindow = params.contextWindow;
 
   const isAzure = isAzureUrl(baseUrl);
   const isAzureOpenAi = isAzureOpenAiUrl(baseUrl);
