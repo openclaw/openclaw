@@ -936,6 +936,9 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlScrapeTimeoutSeconds(cfg)).toBe(42);
     expect(resolveFirecrawlScrapeTimeoutSeconds(cfg, 19.8)).toBe(19);
     expect(resolveFirecrawlSearchTimeoutSeconds(9.7)).toBe(9);
+    expect(resolveFirecrawlScrapeTimeoutSeconds(cfg, 0.5)).toBe(1);
+    expect(resolveFirecrawlScrapeTimeoutSeconds(cfg, 0)).toBe(42);
+    expect(resolveFirecrawlSearchTimeoutSeconds(0.5)).toBe(1);
   });
 
   it("normalizes mixed search payload shapes into search items", () => {

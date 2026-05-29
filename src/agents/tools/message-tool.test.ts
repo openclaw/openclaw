@@ -398,6 +398,28 @@ describe("message tool gateway timeout", () => {
     });
   });
 
+  it("advertises shared action numeric params with runtime integer bounds", () => {
+    const properties = getToolProperties(createMessageTool());
+
+    for (const name of ["limit", "pageSize", "autoArchiveMin"]) {
+      expect(properties[name]).toMatchObject({ type: "integer", minimum: 1 });
+    }
+    for (const name of ["durationMin", "position", "rateLimitPerUser"]) {
+      expect(properties[name]).toMatchObject({ type: "integer", minimum: 0 });
+    }
+    expect(properties.deleteDays).toMatchObject({
+      type: "integer",
+      minimum: 0,
+      maximum: 7,
+    });
+    expect(properties.channelType).toMatchObject({ type: "integer", minimum: 0 });
+    expect(properties.pollOptionIndex).toMatchObject({ type: "integer", minimum: 1 });
+    expect(properties.pollOptionIndexes).toMatchObject({
+      type: "array",
+      items: { type: "integer", minimum: 1 },
+    });
+  });
+
   it.each([-1, 1.5, "fast"])(
     "rejects invalid timeoutMs value %s before dispatch",
     async (timeoutMs) => {

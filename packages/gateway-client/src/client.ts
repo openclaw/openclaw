@@ -358,6 +358,7 @@ export type GatewayClientOptions = {
    */
   preauthHandshakeTimeoutMs?: number;
   tickWatchMinIntervalMs?: number;
+  tickWatchTimeoutMs?: number;
   requestTimeoutMs?: number;
   token?: string;
   bootstrapToken?: string;
@@ -1404,7 +1405,14 @@ export class GatewayClient {
         return;
       }
       const gap = Date.now() - this.lastTick;
-      if (gap > this.tickIntervalMs * 2) {
+      const rawTimeoutMs = this.opts.tickWatchTimeoutMs;
+      // Normal gateways use the server-advertised tick interval. Long-running
+      // harness clients can widen the threshold without mutating internals.
+      const timeoutMs =
+        typeof rawTimeoutMs === "number" && Number.isFinite(rawTimeoutMs)
+          ? Math.max(1, rawTimeoutMs)
+          : this.tickIntervalMs * 2;
+      if (gap > timeoutMs) {
         this.ws?.close(4000, "tick timeout");
       }
     }, interval);
