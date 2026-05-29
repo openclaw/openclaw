@@ -1065,7 +1065,7 @@ function renderSlashMenu(
 
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
-  const isBusy = props.sending || props.stream !== null;
+  const isBusy = props.sending || props.stream !== null || props.runStatus?.phase === "in-progress";
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
   const composerRunStatus = showAbortableUi ? { phase: "in-progress" as const } : props.runStatus;
