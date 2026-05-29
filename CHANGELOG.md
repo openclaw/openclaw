@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Providers: bound generated video downloads from OpenAI, Runway, xAI, MiniMax, BytePlus, and DashScope-compatible providers.
+- Providers: bound generated video downloads from OpenAI, Runway, xAI, MiniMax, BytePlus, DashScope-compatible, FAL, OpenRouter, and Google providers, and bound generated FAL image downloads.
 - Cron: retry recurring jobs after transient model rate limits before waiting for the next scheduled slot.
 
 ## 2026.5.28
