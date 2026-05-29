@@ -485,6 +485,49 @@ describe("speech-core native voice-note routing", () => {
     expect(request.timeoutMs).toBe(12_345);
   });
 
+  it("keeps explicit provider model aliases ahead of voiceModel defaults", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("openrouter", {
+        models: ["explicit-model", "default-model"],
+        resolveConfig: ({ rawConfig }) => {
+          const providers = requireRecord(rawConfig.providers, "raw provider configs");
+          return requireRecord(providers.openrouter, "raw openrouter provider config");
+        },
+      }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "Prefer explicit model alias.",
+      cfg: {
+        agents: {
+          defaults: {
+            voiceModel: { primary: "openrouter/default-model" },
+          },
+        },
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "openrouter",
+            prefsPath: "/tmp/openclaw-speech-core-explicit-model-alias-test.json",
+            providers: {
+              openrouter: {
+                modelId: "explicit-model",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    const request = requireFirstSynthesisRequest("explicit model alias synthesis request");
+    expect(request.providerConfig).toMatchObject({
+      modelId: "explicit-model",
+    });
+    expect(request.providerConfig.model).toBeUndefined();
+  });
+
   it("tries voiceModel fallbacks before auto-selected speech providers", async () => {
     installSpeechProviders([
       createMockSpeechProvider("mock", { autoSelectOrder: 1 }),

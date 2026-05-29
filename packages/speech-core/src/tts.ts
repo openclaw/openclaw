@@ -314,12 +314,16 @@ function applyVoiceModelToSpeechProviderConfig(params: {
   if (!voiceModel) {
     return params.providerConfig;
   }
+  const hasExplicitModel =
+    normalizeOptionalString(params.providerConfig.model) ||
+    normalizeOptionalString(params.providerConfig.modelId);
+  if (hasExplicitModel) {
+    return params.providerConfig;
+  }
   return {
     ...params.providerConfig,
-    ...(normalizeOptionalString(params.providerConfig.model) ? {} : { model: voiceModel.model }),
-    ...(normalizeOptionalString(params.providerConfig.modelId)
-      ? {}
-      : { modelId: voiceModel.model }),
+    model: voiceModel.model,
+    modelId: voiceModel.model,
   };
 }
 
