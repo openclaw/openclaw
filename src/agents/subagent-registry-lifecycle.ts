@@ -106,6 +106,10 @@ function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunR
   ) {
     return false;
   }
+  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry);
+  if (deadlineMs === undefined || params.entry.endedAt < deadlineMs) {
+    return false;
+  }
   if (
     typeof params.entry.cleanupCompletedAt === "number" ||
     typeof params.entry.endedHookEmittedAt === "number" ||
