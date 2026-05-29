@@ -545,4 +545,63 @@ describe("handleDiscordMessageAction", () => {
 
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
+
+  it("maps fetch with channelId+messageId to fetchMessage", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "fetch",
+      params: {
+        channelId: "111",
+        messageId: "999",
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "fetchMessage",
+        accountId: undefined,
+        channelId: "111",
+        messageId: "999",
+        guildId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
+  it("maps fetch with url to fetchMessage via messageLink", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "fetch",
+      params: {
+        url: "https://discord.com/channels/777/111/999",
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "fetchMessage",
+        accountId: undefined,
+        messageLink: "https://discord.com/channels/777/111/999",
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
+  it("rejects fetch when neither url nor messageId is provided", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "fetch",
+        params: {
+          channelId: "111",
+        },
+        cfg: discordConfig(),
+      }),
+    ).rejects.toThrow(/messageId/i);
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
 });

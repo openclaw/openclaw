@@ -150,6 +150,28 @@ describe("normalizeMessageActionInput", () => {
     },
     {
       input: {
+        action: "fetch",
+        args: {
+          channel: "discord",
+          url: "https://discord.com/channels/111/222/333",
+        },
+      },
+      expectedFields: {
+        channel: "discord",
+        url: "https://discord.com/channels/111/222/333",
+      },
+      absentFields: ["target", "to", "channelId"],
+    },
+    {
+      input: {
+        action: "fetch",
+        args: { channel: "discord", target: "channel:222", messageId: "333" },
+      },
+      expectedFields: { target: "channel:222", channelId: "channel:222", messageId: "333" },
+      absentFields: ["to"],
+    },
+    {
+      input: {
         action: "channel-info",
         args: {
           channelId: "C123",

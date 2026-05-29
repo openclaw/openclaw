@@ -180,8 +180,11 @@ describe("discordPlugin outbound", () => {
     expect(discordPlugin.outbound?.preferFinalAssistantVisibleText).toBe(true);
   });
 
-  it("routes read and search actions through the gateway", () => {
+  it("routes read, fetch, and search actions through the gateway", () => {
     expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "read" as never })).toBe(
+      "gateway",
+    );
+    expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "fetch" as never })).toBe(
       "gateway",
     );
     expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "search" as never })).toBe(
@@ -190,6 +193,7 @@ describe("discordPlugin outbound", () => {
     expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "send" as never })).toBe(
       "local",
     );
+    expect(discordPlugin.actions?.messageActionTargetAliases?.fetch?.aliases).toEqual(["url"]);
   });
 
   it("adds Discord mention formatting to agent prompt hints", () => {

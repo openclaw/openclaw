@@ -839,6 +839,44 @@ describe("handleDiscordMessagingAction", () => {
     },
   );
 
+  it("fetches a message by channelId+messageId without guildId", async () => {
+    fetchMessageDiscord.mockResolvedValueOnce({ id: "M1", timestamp: "2026-01-15T10:00:00.000Z" });
+    const result = await handleMessagingAction(
+      "fetchMessage",
+      { channelId: "C1", messageId: "M1" },
+      enableAllActions,
+    );
+    const payload = result.details as { ok?: boolean; guildId?: unknown; channelId?: string };
+    expect(payload.ok).toBe(true);
+    expect(payload.channelId).toBe("C1");
+    expect(payload.guildId).toBeUndefined();
+    expect(fetchMessageDiscord).toHaveBeenCalledWith("C1", "M1", expect.anything());
+  });
+
+  it("fetches a message by Discord message URL (messageLink)", async () => {
+    fetchMessageDiscord.mockResolvedValueOnce({
+      id: "1503919454814208141",
+      timestamp: "2026-01-15T10:00:00.000Z",
+    });
+    const result = await handleMessagingAction(
+      "fetchMessage",
+      {
+        messageLink:
+          "https://discord.com/channels/1285000000000000000/1503919293882957906/1503919454814208141",
+      },
+      enableAllActions,
+    );
+    const payload = result.details as { ok?: boolean; channelId?: string; messageId?: string };
+    expect(payload.ok).toBe(true);
+    expect(payload.channelId).toBe("1503919293882957906");
+    expect(payload.messageId).toBe("1503919454814208141");
+    expect(fetchMessageDiscord).toHaveBeenCalledWith(
+      "1503919293882957906",
+      "1503919454814208141",
+      expect.anything(),
+    );
+  });
+
   it("adds normalized timestamps to listPins payloads", async () => {
     listPinsDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T12:00:00.000Z" }]);
 

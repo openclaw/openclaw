@@ -6,6 +6,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "react",
   "reactions",
   "read",
+  "fetch",
   "edit",
   "unsend",
   "reply",

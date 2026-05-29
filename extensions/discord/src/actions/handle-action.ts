@@ -246,6 +246,33 @@ export async function handleDiscordMessageAction(
     );
   }
 
+  if (action === "fetch") {
+    const url = readStringParam(params, "url");
+    if (url) {
+      return await handleDiscordAction(
+        {
+          action: "fetchMessage",
+          accountId: accountId ?? undefined,
+          messageLink: url,
+        },
+        cfg,
+        actionOptions,
+      );
+    }
+    const messageId = readStringParam(params, "messageId", { required: true });
+    return await handleDiscordAction(
+      {
+        action: "fetchMessage",
+        accountId: accountId ?? undefined,
+        channelId: resolveChannelId(),
+        messageId,
+        guildId: readStringParam(params, "guildId"),
+      },
+      cfg,
+      actionOptions,
+    );
+  }
+
   if (action === "read") {
     const limit = readPositiveIntegerParam(params, "limit");
     return await handleDiscordAction(

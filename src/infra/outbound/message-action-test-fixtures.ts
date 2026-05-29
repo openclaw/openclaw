@@ -22,6 +22,15 @@ export function createPinboardMessageActionBootstrapRegistryMock() {
         },
       };
     }
+    if (channel === "discord") {
+      return {
+        actions: {
+          messageActionTargetAliases: {
+            fetch: { aliases: ["url"] },
+          },
+        },
+      };
+    }
     return undefined;
   };
 }

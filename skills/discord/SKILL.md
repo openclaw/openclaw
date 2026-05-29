@@ -63,6 +63,32 @@ Read:
 { "action": "read", "channel": "discord", "to": "channel:123", "limit": 20 }
 ```
 
+Fetch single message by ID:
+
+```json
+{
+  "action": "fetch",
+  "channel": "discord",
+  "channelId": "123",
+  "messageId": "456"
+}
+```
+
+Fetch single message by Discord URL:
+
+```json
+{
+  "action": "fetch",
+  "channel": "discord",
+  "url": "https://discord.com/channels/777/123/456"
+}
+```
+
+- `fetch` is gated by `channels.discord.actions.messages` (enabled by default).
+- Either `channelId` + `messageId`, or `url` is required.
+- Optional `guildId` when using `channelId` + `messageId` (not required for the API call).
+- Returns the same message shape as `read`.
+
 Edit/delete:
 
 ```json

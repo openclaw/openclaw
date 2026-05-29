@@ -105,6 +105,7 @@ function describeDiscordMessageTool({
   if (discovery.isEnabled("messages")) {
     actions.add("upload-file");
     actions.add("read");
+    actions.add("fetch");
     actions.add("edit");
     actions.add("delete");
   }
@@ -179,7 +180,10 @@ function describeDiscordMessageTool({
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
   resolveExecutionMode: ({ action }) =>
-    action === "read" || action === "search" ? "gateway" : "local",
+    action === "read" || action === "fetch" || action === "search" ? "gateway" : "local",
+  messageActionTargetAliases: {
+    fetch: { aliases: ["url"] },
+  },
   describeMessageTool: describeDiscordMessageTool,
   requiresTrustedRequesterSender: ({ action, toolContext }) =>
     normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() === "discord" &&
