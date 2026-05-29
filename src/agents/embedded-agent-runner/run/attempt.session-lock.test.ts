@@ -21,6 +21,7 @@ import {
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
   installPromptSubmissionLockRelease,
+  readSessionFileFingerprintSync,
   resetEmbeddedAttemptSessionFileOwnersForTest,
 } from "./attempt.session-lock.js";
 
@@ -1478,5 +1479,76 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(transcript).toContain("session-locked hook write");
     expect(transcript).toContain("prompt-stream write");
     expect(controller.hasSessionTakeover()).toBe(false);
+  });
+});
+
+describe("publishOwnedPostMessageWrite trust gate (#86572)", () => {
+  // Pre-append trust gate for same-lane session-manager writes (PR #86584).
+  // After releaseForPrompt() the fence is F0 (trusted); pi's own append to F1
+  // happens before the next hook-lock acquisition. The lane's write may only be
+  // recorded as owned when its pre-append fingerprint was trusted, otherwise the
+  // takeover fence must stay closed. The pure-external advance case is already
+  // covered by "rejects post-prompt writes when another owner advances the
+  // session file"; these cases exercise the publish path itself.
+
+  it("trips the fence on a same-lane write that skips publishOwnedPostMessageWrite", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal29 = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal29,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    // pi appends F0 -> F1 but never publishes the owned write: fail closed.
+    await fs.appendFile(sessionFile, '{"type":"message","id":"pi-stream-write"}\n', "utf8");
+
+    await expect(controller.withSessionWriteLock(() => "hook")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("accepts a same-lane write published with a trusted pre-append fingerprint", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal30 = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal30,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    // F0 was trusted at releaseForPrompt; capture it before pi's own append.
+    const beforeWrite = readSessionFileFingerprintSync(sessionFile);
+    await fs.appendFile(sessionFile, '{"type":"message","id":"pi-stream-write"}\n', "utf8");
+    controller.publishOwnedPostMessageWrite(beforeWrite);
+
+    await expect(controller.withSessionWriteLock(() => "hook")).resolves.toBe("hook");
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
+  it("still trips when an external write poisons the published baseline (mixed interleave)", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal31 = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal31,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    // External actor advances F0 -> F1 first, so the baseline pi captures (F1)
+    // was never trusted. publish must refuse to launder the combined F2 state.
+    await fs.appendFile(sessionFile, '{"type":"message","id":"external-first"}\n', "utf8");
+    const beforeWrite = readSessionFileFingerprintSync(sessionFile);
+    await fs.appendFile(sessionFile, '{"type":"message","id":"pi-after-external"}\n', "utf8");
+    controller.publishOwnedPostMessageWrite(beforeWrite);
+
+    await expect(controller.withSessionWriteLock(() => "hook")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
   });
 });

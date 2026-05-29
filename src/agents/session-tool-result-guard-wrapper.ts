@@ -43,7 +43,11 @@ export function guardSessionManager(
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void | Promise<void>;
-    onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
+    onMessagePersisted?: (
+      message: AgentMessage,
+      context: { beforeWriteSnapshot?: unknown },
+    ) => void | Promise<void>;
+    beforeMessagePersist?: () => unknown;
     onAssistantErrorMessagePersisted?: (
       message: Extract<AgentMessage, { role: "assistant" }>,
     ) => void | Promise<void>;
@@ -135,6 +139,7 @@ export function guardSessionManager(
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
     suppressAssistantErrorPersistence: opts?.suppressAssistantErrorPersistence,
     onMessagePersisted: opts?.onMessagePersisted,
+    beforeMessagePersist: opts?.beforeMessagePersist,
     onUserMessagePersisted: opts?.onUserMessagePersisted,
     onAssistantErrorMessagePersisted: opts?.onAssistantErrorMessagePersisted,
   });

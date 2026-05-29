@@ -373,6 +373,8 @@ import {
   type EmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
   installPromptSubmissionLockRelease,
+  readSessionFileFingerprintSync,
+  type SessionFileFingerprint,
 } from "./attempt.session-lock.js";
 import {
   createYieldAbortedResponse,
@@ -1977,8 +1979,20 @@ export async function runEmbeddedAttempt(
         suppressTranscriptOnlyAssistantPersistence:
           params.suppressTranscriptOnlyAssistantPersistence,
         suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
-        onMessagePersisted: () => {
-          sessionLockController.refreshAfterOwnedSessionWrite();
+        beforeMessagePersist: () => readSessionFileFingerprintSync(params.sessionFile),
+        onMessagePersisted: (_message, { beforeWriteSnapshot }) => {
+          // Publish pi's appendFileSync write to the controller's owned-write
+          // map so subsequent assertSessionFileFence calls accept the lane's
+          // own writes via the owned-write match path. The trust check inside
+          // publishOwnedPostMessageWrite runs on beforeWriteSnapshot (the
+          // fingerprint captured immediately BEFORE pi's appendFileSync), so
+          // if an external mutation slipped in between releaseForPrompt and
+          // this append, the publish is skipped and the combined post-write
+          // state stays unowned — preserving fail-closed takeover detection.
+          // See #86572.
+          sessionLockController.publishOwnedPostMessageWrite(
+            beforeWriteSnapshot as SessionFileFingerprint | undefined,
+          );
         },
         onUserMessagePersisted: (message) => {
           params.onUserMessagePersisted?.(message);
