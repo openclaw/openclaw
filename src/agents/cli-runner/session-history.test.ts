@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCliSessionHistoryPrompt,
@@ -9,8 +9,11 @@ import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
+  MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS,
   MAX_CLI_SESSION_HISTORY_FILE_BYTES,
   MAX_CLI_SESSION_HISTORY_MESSAGES,
+  MAX_CLI_SESSION_RESEED_HISTORY_CHARS,
+  resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 
 function createSessionTranscript(params: {
@@ -590,6 +593,17 @@ describe("buildCliSessionHistoryPrompt", () => {
     // Older 100-char prefix must be dropped by the tail slice; the
     // post-cap rendered tail is shorter than the dropped prefix.
     expect(prompt).not.toContain("x".repeat(80));
+  });
+
+  it("scales automatic reseed history caps from Claude context tiers", () => {
+    expect(resolveAutoCliSessionReseedHistoryChars(0)).toBe(MAX_CLI_SESSION_RESEED_HISTORY_CHARS);
+    expect(resolveAutoCliSessionReseedHistoryChars(32_000)).toBe(
+      MAX_CLI_SESSION_RESEED_HISTORY_CHARS,
+    );
+    expect(resolveAutoCliSessionReseedHistoryChars(200_000)).toBe(64_000);
+    expect(resolveAutoCliSessionReseedHistoryChars(1_048_576)).toBe(
+      MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS,
+    );
   });
 
   it("keeps the most recent turns when rendered history exceeds the cap", () => {

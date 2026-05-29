@@ -1,4 +1,4 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
@@ -14,15 +14,20 @@ vi.mock("../plugins/provider-runtime.js", () => {
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
+  DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isModernModelRef,
   isPrioritizedHighSignalLiveModelRef,
+  isPrioritizedSmallLiveModelRef,
+  isSmallLiveModelRef,
   listPrioritizedHighSignalLiveModelRefs,
+  listPrioritizedSmallLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
+  selectSmallLiveItems,
 } from "./live-model-filter.js";
 
-const baseModel = (): Model<Api> =>
+const baseModel = (): Model =>
   ({
     id: "glm-4.7",
     name: "GLM-4.7",
@@ -34,46 +39,46 @@ const baseModel = (): Model<Api> =>
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 8192,
     maxTokens: 1024,
-  }) as Model<Api>;
+  }) as Model;
 
-function supportsDeveloperRole(model: Model<Api>): boolean | undefined {
+function supportsDeveloperRole(model: Model): boolean | undefined {
   return (model.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole;
 }
 
-function supportsUsageInStreaming(model: Model<Api>): boolean | undefined {
+function supportsUsageInStreaming(model: Model): boolean | undefined {
   return (model.compat as { supportsUsageInStreaming?: boolean } | undefined)
     ?.supportsUsageInStreaming;
 }
 
-function supportsStrictMode(model: Model<Api>): boolean | undefined {
+function supportsStrictMode(model: Model): boolean | undefined {
   return (model.compat as { supportsStrictMode?: boolean } | undefined)?.supportsStrictMode;
 }
 
-function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): void {
+function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model<Api>);
+  const normalized = normalizeModelCompat(model as Model);
   expect(supportsDeveloperRole(normalized)).toBe(false);
 }
 
-function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>): void {
+function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model<Api>);
+  const normalized = normalizeModelCompat(model as Model);
   expect(supportsUsageInStreaming(normalized)).toBe(false);
 }
 
-function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): void {
+function expectSupportsStrictModeForcedOff(overrides?: Partial<Model>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model<Api>);
+  const normalized = normalizeModelCompat(model as Model);
   expect(supportsStrictMode(normalized)).toBe(false);
 }
 
-function expectNativeStreamingSupported(overrides: Partial<Model<Api>>): void {
+function expectNativeStreamingSupported(overrides: Partial<Model>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model<Api>);
+  const normalized = normalizeModelCompat(model as Model);
   expect(supportsDeveloperRole(normalized)).toBe(false);
   expect(supportsUsageInStreaming(normalized)).toBe(true);
   expect(supportsStrictMode(normalized)).toBe(false);
@@ -85,7 +90,7 @@ beforeEach(() => {
 });
 
 describe("normalizeModelCompat — Anthropic baseUrl", () => {
-  const anthropicBase = (): Model<Api> =>
+  const anthropicBase = (): Model =>
     ({
       id: "claude-opus-4-6",
       name: "claude-opus-4-6",
@@ -96,7 +101,7 @@ describe("normalizeModelCompat — Anthropic baseUrl", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200_000,
       maxTokens: 8_192,
-    }) as Model<Api>;
+    }) as Model;
 
   it("strips /v1 suffix from anthropic-messages baseUrl", () => {
     const model = { ...anthropicBase(), baseUrl: "https://api.anthropic.com/v1" };
@@ -253,7 +258,7 @@ describe("normalizeModelCompat", () => {
     };
     delete (model as { baseUrl?: unknown }).baseUrl;
     delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model as Model<Api>);
+    const normalized = normalizeModelCompat(model as Model);
     expect(normalized.compat).toBeUndefined();
   });
 
@@ -422,13 +427,13 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.7" })).toBe(true);
   });
 
-  it("matches plugin-advertised modern models across canonical provider aliases", () => {
+  it("matches plugin-advertised modern models only for exact provider ids", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
-      provider === "zai" && context.modelId === "glm-5" ? true : undefined,
+      provider === "z.ai" && context.modelId === "glm-5" ? true : undefined,
     );
 
     expect(isModernModelRef({ provider: "z.ai", id: "glm-5" })).toBe(true);
-    expect(isModernModelRef({ provider: "z-ai", id: "glm-5" })).toBe(true);
+    expect(isModernModelRef({ provider: "z-ai", id: "glm-5" })).toBe(false);
   });
 
   it("excludes provider-declined modern models", () => {
@@ -577,7 +582,7 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "zai", id: "glm-5.1" })).toBe(true);
     expect(
       isHighSignalLiveModelRef({ provider: "fireworks", id: "accounts/fireworks/models/glm-5" }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isHighSignalLiveModelRef({ provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" }),
     ).toBe(true);
@@ -656,11 +661,12 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
 
   it("lists priority refs as provider/id pairs", () => {
     expect(listPrioritizedHighSignalLiveModelRefs()).toStrictEqual([
-      { provider: "anthropic", id: "claude-opus-4-7" },
-      { provider: "anthropic", id: "claude-opus-4-6" },
+      { provider: "anthropic", id: "claude-opus-4-8" },
       { provider: "anthropic", id: "claude-sonnet-4-6" },
+      { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3-flash-preview" },
+      { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },
       { provider: "minimax", id: "minimax-m2.7" },
@@ -672,9 +678,35 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "openrouter", id: "ai21/jamba-large-1.7" },
       { provider: "xai", id: "grok-4.3" },
       { provider: "zai", id: "glm-5.1" },
-      { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
       { provider: "minimax-portal", id: "minimax-m2.7" },
+    ]);
+  });
+});
+
+describe("isSmallLiveModelRef", () => {
+  it("matches the small-model live matrix without requiring provider modern hooks", () => {
+    expect(isSmallLiveModelRef({ provider: "lmstudio", id: "Qwen/Qwen3.5-9B" })).toBe(true);
+    expect(isSmallLiveModelRef({ provider: "openrouter", id: "qwen/qwen3.5-9b" })).toBe(true);
+    expect(isSmallLiveModelRef({ provider: "openrouter", id: "z-ai/glm-5.1" })).toBe(true);
+    expect(isSmallLiveModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(false);
+    expect(providerRuntimeMocks.resolveProviderModernModelRef).not.toHaveBeenCalled();
+  });
+});
+
+describe("isPrioritizedSmallLiveModelRef", () => {
+  it("lists priority refs as provider/id pairs", () => {
+    expect(isPrioritizedSmallLiveModelRef({ provider: "lmstudio", id: "qwen/qwen3.5-9b" })).toBe(
+      true,
+    );
+    expect(listPrioritizedSmallLiveModelRefs()).toStrictEqual([
+      { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
+      { provider: "vllm", id: "qwen/qwen3-8b" },
+      { provider: "sglang", id: "qwen/qwen3-8b" },
+      { provider: "openrouter", id: "qwen/qwen3.5-9b" },
+      { provider: "openrouter", id: "z-ai/glm-5.1" },
+      { provider: "openrouter", id: "z-ai/glm-5" },
+      { provider: "zai", id: "glm-5.1" },
     ]);
   });
 });
@@ -682,6 +714,8 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
 describe("selectHighSignalLiveItems", () => {
   it("prefers curated Google replacements before fallback provider spread", () => {
     const items = [
+      { provider: "anthropic", id: "claude-opus-4-8" },
+      { provider: "anthropic", id: "claude-sonnet-4-6" },
       { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
@@ -699,10 +733,10 @@ describe("selectHighSignalLiveItems", () => {
         (item) => item.provider,
       ),
     ).toEqual([
+      { provider: "anthropic", id: "claude-opus-4-8" },
+      { provider: "anthropic", id: "claude-sonnet-4-6" },
       { provider: "anthropic", id: "claude-opus-4-7" },
-      { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
-      { provider: "google", id: "gemini-3-flash-preview" },
     ]);
   });
 
@@ -728,13 +762,14 @@ describe("selectHighSignalLiveItems", () => {
     ]);
   });
 
-  it("prioritizes Fireworks GLM 5 models over GLM 4.x fallback entries", () => {
+  it("prioritizes supported Fireworks GLM 5 models over GLM 4.x fallback entries", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
     const items = [
       { provider: "fireworks", id: "accounts/fireworks/models/glm-4p7" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
       { provider: "fireworks", id: "accounts/fireworks/models/gpt-oss-120b" },
-    ];
+    ].filter(isHighSignalLiveModelRef);
 
     expect(
       selectHighSignalLiveItems(
@@ -743,9 +778,31 @@ describe("selectHighSignalLiveItems", () => {
         (item) => item,
         (item) => item.provider,
       ),
+    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" }]);
+  });
+});
+
+describe("selectSmallLiveItems", () => {
+  it("prefers constrained local and hosted small-model routes before fallback spread", () => {
+    const items = [
+      { provider: "openrouter", id: "z-ai/glm-5" },
+      { provider: "openai", id: "gpt-5.5" },
+      { provider: "vllm", id: "qwen/qwen3-8b" },
+      { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
+      { provider: "openrouter", id: "qwen/qwen3.5-9b" },
+    ];
+
+    expect(
+      selectSmallLiveItems(
+        items,
+        3,
+        (item) => item,
+        (item) => item.provider,
+      ),
     ).toEqual([
-      { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
-      { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
+      { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
+      { provider: "vllm", id: "qwen/qwen3-8b" },
+      { provider: "openrouter", id: "qwen/qwen3.5-9b" },
     ]);
   });
 });
@@ -757,6 +814,15 @@ describe("resolveHighSignalLiveModelLimit", () => {
         useExplicitModels: false,
       }),
     ).toBe(DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT);
+  });
+
+  it("can default small live sweeps to the curated small-model cap", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        useExplicitModels: false,
+        defaultLimit: DEFAULT_SMALL_LIVE_MODEL_LIMIT,
+      }),
+    ).toBe(DEFAULT_SMALL_LIVE_MODEL_LIMIT);
   });
 
   it("leaves explicit model lists uncapped unless a cap is provided", () => {

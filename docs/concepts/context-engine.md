@@ -241,26 +241,40 @@ info: {
     "agent-run": {
       requiredCapabilities: ["assemble-before-prompt"],
       unsupportedMessage:
-        "Use the native Codex or Pi embedded runtime, or select the legacy context engine.",
+        "Use the native Codex or OpenClaw embedded runtime, or select the legacy context engine.",
     },
   },
 }
 ```
 
-Native Codex and Pi embedded agent runs satisfy `assemble-before-prompt`.
+Native Codex and OpenClaw embedded agent runs satisfy `assemble-before-prompt`.
 Generic CLI backends do not, so engines that require it are rejected before the
 CLI process starts.
 
+### Failure isolation
+
+OpenClaw isolates the selected plugin engine from the core reply path. If a
+non-legacy engine is missing, fails contract validation, throws during factory
+creation, or throws from a lifecycle method, OpenClaw quarantines that engine
+for the current Gateway process and downgrades context-engine work to the
+built-in `legacy` engine. The error is logged with the failed operation so the
+operator can repair, update, or disable the plugin without the agent going
+silent.
+
+Host requirement failures are different: when an engine declares that a runtime
+lacks a required capability, OpenClaw fails closed before starting the run. That
+protects engines that would corrupt state if they ran in an unsupported host.
+
 ### ownsCompaction
 
-`ownsCompaction` controls whether Pi's built-in in-attempt auto-compaction stays enabled for the run:
+`ownsCompaction` controls whether OpenClaw runtime's built-in in-attempt auto-compaction stays enabled for the run:
 
 <AccordionGroup>
   <Accordion title="ownsCompaction: true">
-    The engine owns compaction behavior. OpenClaw disables Pi's built-in auto-compaction for that run, and the engine's `compact()` implementation is responsible for `/compact`, overflow recovery compaction, and any proactive compaction it wants to do in `afterTurn()`. OpenClaw may still run the pre-prompt overflow safeguard; when it predicts the full transcript will overflow, the recovery path calls the active engine's `compact()` before submitting another prompt.
+    The engine owns compaction behavior. OpenClaw disables OpenClaw runtime's built-in auto-compaction for that run, and the engine's `compact()` implementation is responsible for `/compact`, overflow recovery compaction, and any proactive compaction it wants to do in `afterTurn()`. OpenClaw may still run the pre-prompt overflow safeguard; when it predicts the full transcript will overflow, the recovery path calls the active engine's `compact()` before submitting another prompt.
   </Accordion>
   <Accordion title="ownsCompaction: false or unset">
-    Pi's built-in auto-compaction may still run during prompt execution, but the active engine's `compact()` method is still called for `/compact` and overflow recovery.
+    OpenClaw runtime's built-in auto-compaction may still run during prompt execution, but the active engine's `compact()` method is still called for `/compact` and overflow recovery.
   </Accordion>
 </AccordionGroup>
 
@@ -321,7 +335,7 @@ The slot is exclusive at run time - only one registered context engine is resolv
 
 - Use `openclaw doctor` to verify your engine is loading correctly.
 - If switching engines, existing sessions continue with their current history. The new engine takes over for future runs.
-- Engine errors are logged and surfaced in diagnostics. If a plugin engine fails to register or the selected engine id cannot be resolved, OpenClaw does not fall back automatically; runs fail until you fix the plugin or switch `plugins.slots.contextEngine` back to `"legacy"`.
+- Engine errors are logged and the selected plugin engine is quarantined for the current Gateway process. OpenClaw falls back to `legacy` for user turns so replies can continue, but you should still repair, update, disable, or uninstall the broken plugin.
 - For development, use `openclaw plugins install -l ./my-engine` to link a local plugin directory without copying.
 
 ## Related

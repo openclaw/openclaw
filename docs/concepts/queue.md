@@ -16,7 +16,7 @@ We serialize inbound auto-reply runs (all channels) through a tiny in-process qu
 ## How it works
 
 - A lane-aware FIFO queue drains each lane with a configurable concurrency cap (default 1 for unconfigured lanes; main defaults to 4, subagent to 8).
-- `runEmbeddedPiAgent` enqueues by **session key** (lane `session:<key>`) to guarantee only one active run per session.
+- `runEmbeddedAgent` enqueues by **session key** (lane `session:<key>`) to guarantee only one active run per session.
 - Each session run is then queued into a **global lane** (`main` by default) so overall parallelism is capped by `agents.defaults.maxConcurrent`.
 - When verbose logging is enabled, queued runs emit a short notice if they waited more than ~2s before starting.
 - Typing indicators still fire immediately on enqueue (when supported by the channel) so user experience is unchanged while we wait our turn.
@@ -40,7 +40,7 @@ active run to finish before starting the prompt.
 `/queue` controls what normal inbound messages do while a session already has
 an active run:
 
-- `steer`: inject messages into the active runtime. Pi delivers all pending steering messages **after the current assistant turn finishes executing its tool calls**, before the next LLM call; Codex app-server receives one batched `turn/steer`. If the run is not actively streaming or steering is unavailable, OpenClaw waits until the active run ends before starting the prompt.
+- `steer`: inject messages into the active runtime. OpenClaw delivers all pending steering messages **after the current assistant turn finishes executing its tool calls**, before the next LLM call; Codex app-server receives one batched `turn/steer`. If the run is not actively streaming or steering is unavailable, OpenClaw waits until the active run ends before starting the prompt.
 - `followup`: do not steer. Enqueue each message for a later agent turn after the current run ends.
 - `collect`: do not steer. Coalesce queued messages into a **single** followup turn after the quiet window. If messages target different channels/threads, they drain individually to preserve routing.
 - `interrupt`: abort the active run for that session, then run the newest message.
@@ -126,7 +126,7 @@ keys.
 - If commands seem stuck, enable verbose logs and look for "queued for ...ms" lines to confirm the queue is draining.
 - If you need queue depth, enable verbose logs and watch for queue timing lines.
 - Codex app-server runs that accept a turn and then stop emitting progress are interrupted by the Codex adapter so the active session lane can release instead of waiting for the outer run timeout.
-- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` with no observed reply, tool, status, block, or ACP progress are classified by current activity. Active work logs as `session.long_running`; active work with no recent progress logs as `session.stalled`; `session.stuck` is reserved for stale session bookkeeping with no active work, and only that path can release the affected session lane so queued work drains. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
+- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` with no observed reply, tool, status, block, or ACP progress are classified by current activity. Active work logs as `session.long_running`; active work with no recent progress logs as `session.stalled`; `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity, and only that path can release the affected session lane so queued work drains. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
 
 ## Related
 

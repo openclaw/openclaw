@@ -53,9 +53,12 @@ function extractCompactInstructions(params: {
 
 function isCompactionSkipReason(reason?: string): boolean {
   const text = normalizeOptionalLowercaseString(reason) ?? "";
+  // Manual /compact mirrors preflight semantics: already-small sessions are a
+  // successful no-op, not a failed compaction.
   return (
     text.includes("nothing to compact") ||
     text.includes("below threshold") ||
+    text.includes("already under target") ||
     text.includes("already compacted") ||
     text.includes("no real conversation messages")
   );
@@ -73,6 +76,9 @@ function formatCompactionReason(reason?: string): string | undefined {
   }
   if (lower.includes("below threshold")) {
     return "context is below the compaction threshold";
+  }
+  if (lower.includes("already under target")) {
+    return "context is already under the compaction target";
   }
   if (lower.includes("already compacted")) {
     return "session was already compacted recently";
@@ -211,9 +217,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   const runtime = await loadCompactRuntime();
   const sessionId = targetSessionEntry.sessionId;
-  if (runtime.isEmbeddedPiRunActive(sessionId)) {
-    runtime.abortEmbeddedPiRun(sessionId);
-    await runtime.waitForEmbeddedPiRunEnd(sessionId, 15_000);
+  if (runtime.isEmbeddedAgentRunActive(sessionId)) {
+    runtime.abortEmbeddedAgentRun(sessionId);
+    await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
   }
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
@@ -239,7 +245,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
-  const result = await runtime.compactEmbeddedPiSession({
+  const result = await runtime.compactEmbeddedAgentSession({
     sessionId,
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,

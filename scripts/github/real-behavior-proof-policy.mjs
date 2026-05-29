@@ -4,6 +4,7 @@ export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
 export const NEEDS_REAL_BEHAVIOR_PROOF_LABEL = "triage: needs-real-behavior-proof";
 export const MOCK_ONLY_PROOF_LABEL = "triage: mock-only-proof";
 export const MAINTAINER_TEAM_SLUG = "maintainer";
+export const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
 
 export const CLAWSWEEPER_PROOF_VERDICT_STATUS = "clawsweeper_exact_head_pass";
 const CLAWSWEEPER_BOT_LOGINS = new Set(["clawsweeper[bot]", "openclaw-clawsweeper[bot]"]);
@@ -81,6 +82,34 @@ function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function createTimeoutError(label, timeoutMs) {
+  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
+  error.code = "ETIMEDOUT";
+  return error;
+}
+
+export async function withGitHubApiTimeout(label, timeoutMs, run) {
+  const boundedTimeoutMs = Math.max(1, timeoutMs);
+  const controller = new AbortController();
+  const timeoutError = createTimeoutError(label, boundedTimeoutMs);
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, boundedTimeoutMs);
+    timeout.unref?.();
+  });
+
+  try {
+    return await Promise.race([run(controller.signal), timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 function normalizeLineEndings(text = "") {
   return text.replace(/\r\n?/g, "\n");
 }
@@ -121,44 +150,67 @@ export async function isMaintainerTeamMember({
   login,
   teamSlug = MAINTAINER_TEAM_SLUG,
   fetch = globalThis.fetch,
+  timeoutMs = DEFAULT_GITHUB_API_TIMEOUT_MS,
 } = {}) {
   if (!token || !org || !login) {
     return false;
   }
   const url = `https://api.github.com/orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(teamSlug)}/memberships/${encodeURIComponent(login)}`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
+  const response = await withGitHubApiTimeout(
+    `maintainer membership lookup for ${login}`,
+    timeoutMs,
+    (signal) =>
+      fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        signal,
+      }),
+  );
   if (response.status === 404) {
     return false;
   }
   if (!response.ok) {
     throw new Error(`Team membership lookup failed: ${response.status}`);
   }
-  const body = await response.json();
+  const body = await withGitHubApiTimeout(
+    `maintainer membership response for ${login}`,
+    timeoutMs,
+    () => response.json(),
+  );
   return body?.state === "active";
 }
 
-function extractMarkdownSection(headingRegex, body = "") {
+function extractMarkdownSections(headingRegex, body = "") {
   // Normalize CRLF → LF so regexes and section slicing see GitHub web-editor PR
   // bodies the same way as locally-authored Markdown.
   const normalizedBody = normalizeLineEndings(body);
-  const match = headingRegex.exec(normalizedBody);
-  if (!match) {
-    return "";
+  const sections = [];
+  const matcher = new RegExp(
+    headingRegex.source,
+    headingRegex.flags.includes("g") ? headingRegex.flags : `${headingRegex.flags}g`,
+  );
+  for (const match of normalizedBody.matchAll(matcher)) {
+    const sectionStart = match.index + match[0].length;
+    const rest = normalizedBody.slice(sectionStart);
+    const nextHeading = rest.match(/\n#{1,6}\s+\S/);
+    sections.push((nextHeading ? rest.slice(0, nextHeading.index) : rest).trim());
   }
-  const sectionStart = match.index + match[0].length;
-  const rest = normalizedBody.slice(sectionStart);
-  const nextHeading = rest.match(/\n#{1,6}\s+\S/);
-  return (nextHeading ? rest.slice(0, nextHeading.index) : rest).trim();
+  return sections;
+}
+
+function extractMarkdownSection(headingRegex, body = "") {
+  return extractMarkdownSections(headingRegex, body)[0] ?? "";
+}
+
+export function extractRealBehaviorProofSections(body = "") {
+  return extractMarkdownSections(/^#{2,6}\s+real behavior proof\b[^\n]*$/im, body);
 }
 
 export function extractRealBehaviorProofSection(body = "") {
-  return extractMarkdownSection(/^#{2,6}\s+real behavior proof\b[^\n]*$/im, body);
+  return extractRealBehaviorProofSections(body)[0] ?? "";
 }
 
 function extractOutOfScopeFollowUpsSection(body = "") {
@@ -298,24 +350,7 @@ export function evaluateClawSweeperExactHeadProof({ pullRequest, comments = [] }
   return result("insufficient", "No exact-head ClawSweeper proof verdict was found.");
 }
 
-export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
-  const currentLabels = labels ?? pullRequest?.labels ?? [];
-  if (hasProofOverride(currentLabels)) {
-    return result("override", `Maintainer override label ${PROOF_OVERRIDE_LABEL} is present.`);
-  }
-  if (!isExternalPullRequest(pullRequest)) {
-    return result("skipped", "Maintainer, collaborator, or bot PRs do not require this gate.");
-  }
-
-  const body = pullRequest?.body ?? "";
-  const section = extractRealBehaviorProofSection(body);
-  if (!section) {
-    return result(
-      "missing",
-      "External PRs must include a Real behavior proof section with after-fix evidence from a real setup.",
-    );
-  }
-
+function evaluateRealBehaviorProofSection(section, body) {
   const fields = Object.fromEntries(
     requiredProofFields.map((field) => [field.key, extractFieldValue(section, field)]),
   );
@@ -376,6 +411,28 @@ export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
   }
 
   return result("passed", "External PR includes after-fix real behavior proof.", { fields });
+}
+
+export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
+  const currentLabels = labels ?? pullRequest?.labels ?? [];
+  if (hasProofOverride(currentLabels)) {
+    return result("override", `Maintainer override label ${PROOF_OVERRIDE_LABEL} is present.`);
+  }
+  if (!isExternalPullRequest(pullRequest)) {
+    return result("skipped", "Maintainer, collaborator, or bot PRs do not require this gate.");
+  }
+
+  const body = pullRequest?.body ?? "";
+  const sections = extractRealBehaviorProofSections(body);
+  if (sections.length === 0) {
+    return result(
+      "missing",
+      "External PRs must include a Real behavior proof section with after-fix evidence from a real setup.",
+    );
+  }
+
+  const latestSection = sections.at(-1) ?? "";
+  return evaluateRealBehaviorProofSection(latestSection, body);
 }
 
 export function labelsForRealBehaviorProof(evaluation) {

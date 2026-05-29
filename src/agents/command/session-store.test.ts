@@ -5,13 +5,17 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore } from "../../config/sessions.js";
-import type { EmbeddedPiRunResult } from "../pi-embedded.js";
+import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
   clearCliSessionInStore,
   recordCliCompactionInStore,
   updateSessionStoreAfterAgentRun,
 } from "./session-store.js";
 import { resolveSession } from "./session.js";
+
+const sessionStoreMocks = vi.hoisted(() => ({
+  updateSessionStore: vi.fn(),
+}));
 
 vi.mock("../model-selection.js", () => ({
   isCliProvider: (provider: string, cfg?: OpenClawConfig) =>
@@ -80,19 +84,8 @@ vi.mock("../../config/sessions.js", async () => {
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
   };
-  return {
-    mergeSessionEntry: (existing: SessionEntry | undefined, patch: Partial<SessionEntry>) => ({
-      ...existing,
-      ...patch,
-      sessionId: patch.sessionId ?? existing?.sessionId ?? "mock-session",
-      updatedAt: Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now()),
-    }),
-    setSessionRuntimeModel: (entry: SessionEntry, runtime: { provider: string; model: string }) => {
-      entry.modelProvider = runtime.provider;
-      entry.model = runtime.model;
-      return true;
-    },
-    updateSessionStore: async <T>(
+  sessionStoreMocks.updateSessionStore.mockImplementation(
+    async <T>(
       storePath: string,
       mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
     ) => {
@@ -115,6 +108,20 @@ vi.mock("../../config/sessions.js", async () => {
       await writeStore(storePath, store);
       return result;
     },
+  );
+  return {
+    mergeSessionEntry: (existing: SessionEntry | undefined, patch: Partial<SessionEntry>) => ({
+      ...existing,
+      ...patch,
+      sessionId: patch.sessionId ?? existing?.sessionId ?? "mock-session",
+      updatedAt: Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now()),
+    }),
+    setSessionRuntimeModel: (entry: SessionEntry, runtime: { provider: string; model: string }) => {
+      entry.modelProvider = runtime.provider;
+      entry.model = runtime.model;
+      return true;
+    },
+    updateSessionStore: sessionStoreMocks.updateSessionStore,
     loadSessionStore: (storePath: string) => {
       try {
         return JSON.parse(fsSync.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
@@ -157,6 +164,59 @@ async function withTempSessionStore<T>(
 }
 
 describe("updateSessionStoreAfterAgentRun", () => {
+  it("passes resolved maintenance config to the gateway turn store write", async () => {
+    sessionStoreMocks.updateSessionStore.mockClear();
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        session: {
+          maintenance: {
+            mode: "enforce",
+            maxEntries: 42,
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-maintenance-config";
+      const sessionId = "test-maintenance-config-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "openai",
+            model: "gpt-5.5",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result,
+      });
+
+      const updateOptions = sessionStoreMocks.updateSessionStore.mock.calls.at(-1)?.[2];
+      expect(updateOptions).toMatchObject({
+        takeCacheOwnership: true,
+        maintenanceConfig: {
+          mode: "enforce",
+          maxEntries: 42,
+        },
+      });
+    });
+  });
+
   it("persists the selected embedded harness id on the session", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
@@ -169,7 +229,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 1,
           agentMeta: {
@@ -210,7 +270,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 1,
           agentMeta: {
@@ -262,7 +322,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 1,
           executionTrace: { runner: "cli" },
@@ -313,7 +373,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 1,
           agentMeta: {
@@ -588,6 +648,47 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("reuses a completed run entry while the session is still fresh", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:terminal-cli-session";
+      const existingSessionId = "terminal-cli-session-old";
+      const now = Date.now();
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: existingSessionId,
+              updatedAt: now,
+              status: "done",
+              startedAt: now - 1_000,
+              endedAt: now - 100,
+              runtimeMs: 900,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const result = resolveSession({
+        cfg: {
+          session: {
+            store: storePath,
+            mainKey: "main",
+          },
+        } as OpenClawConfig,
+        sessionKey,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry?.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry?.status).toBe("done");
+      expect(result.sessionEntry?.endedAt).toBe(now - 100);
+    });
+  });
+
   it("preserves previous totalTokens when provider returns no usage data (#67667)", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
@@ -604,7 +705,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -650,7 +751,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -738,7 +839,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -901,7 +1002,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -935,6 +1036,123 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("prefers fresh CLI usage over zero compaction tokensAfter", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-zero-compaction-with-usage";
+      const sessionId = "test-zero-compaction-with-usage-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 1_794_391,
+          totalTokensFresh: true,
+          inputTokens: 20,
+          outputTokens: 10_855,
+          cacheRead: 1_761_324,
+          cacheWrite: 33_047,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-opus-4-7",
+        result: {
+          meta: {
+            durationMs: 500,
+            agentMeta: {
+              sessionId,
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+              usage: {
+                input: 20,
+                output: 10_855,
+                cacheRead: 1_761_324,
+                cacheWrite: 33_047,
+              },
+              lastCallUsage: {
+                input: 20,
+                output: 10_855,
+                cacheRead: 1_761_324,
+                cacheWrite: 33_047,
+              },
+              compactionCount: 1,
+              compactionTokensAfter: 0,
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(1_794_391);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(sessionStore[sessionKey]?.inputTokens).toBe(20);
+      expect(sessionStore[sessionKey]?.outputTokens).toBe(10_855);
+      expect(sessionStore[sessionKey]?.cacheRead).toBe(1_761_324);
+      expect(sessionStore[sessionKey]?.cacheWrite).toBe(33_047);
+    });
+  });
+
+  it("prefers fresh usage over positive compaction tokensAfter", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-positive-compaction-with-usage";
+      const sessionId = "test-positive-compaction-with-usage-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 180_000,
+          totalTokensFresh: true,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result: {
+          meta: {
+            durationMs: 500,
+            agentMeta: {
+              sessionId,
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: {
+                input: 100_000,
+                output: 3_000,
+                cacheRead: 20_000,
+              },
+              lastCallUsage: {
+                input: 91_000,
+                output: 1_000,
+                cacheRead: 4_000,
+              },
+              compactionCount: 1,
+              compactionTokensAfter: 80_000,
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(120_000);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(sessionStore[sessionKey]?.inputTokens).toBe(100_000);
+      expect(sessionStore[sessionKey]?.outputTokens).toBe(3_000);
+      expect(sessionStore[sessionKey]?.cacheRead).toBe(20_000);
+    });
+  });
+
   it("accepts zero compaction tokensAfter when provider usage is unavailable", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
@@ -946,6 +1164,29 @@ describe("updateSessionStoreAfterAgentRun", () => {
           updatedAt: 1,
           totalTokens: 12_000,
           totalTokensFresh: true,
+          inputTokens: 20,
+          outputTokens: 10_855,
+          cacheRead: 1_761_324,
+          cacheWrite: 33_047,
+          contextBudgetStatus: {
+            schemaVersion: 1,
+            source: "pre-prompt-estimate",
+            updatedAt: 1,
+            provider: "claude-cli",
+            model: "claude-opus-4-7",
+            route: "compact_only",
+            shouldCompact: true,
+            estimatedPromptTokens: 1_794_391,
+            contextTokenBudget: 1_048_576,
+            promptBudgetBeforeReserve: 1_044_480,
+            reserveTokens: 4_096,
+            effectiveReserveTokens: 4_096,
+            remainingPromptBudgetTokens: 0,
+            overflowTokens: 749_911,
+            toolResultReducibleChars: 0,
+            messageCount: 0,
+            unwindowedMessageCount: 0,
+          },
         },
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
@@ -969,12 +1210,17 @@ describe("updateSessionStoreAfterAgentRun", () => {
               compactionTokensAfter: 0,
             },
           },
-        } as EmbeddedPiRunResult,
+        } as EmbeddedAgentRunResult,
       });
 
       expect(sessionStore[sessionKey]?.totalTokens).toBe(0);
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
       expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
+      expect(sessionStore[sessionKey]?.inputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
+      expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
     });
   });
 
@@ -1054,7 +1300,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       // Simulate a run with 10k input + 5k output tokens
       // Cost = (10000 * 10 + 5000 * 30) / 1e6 = $0.25
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -1224,7 +1470,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
       // Heartbeat turn uses a different model
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -1342,7 +1588,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: freshVisibleEntry }, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           aborted: true,
@@ -1414,7 +1660,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
       // Heartbeat turn uses a different, smaller model
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -1459,7 +1705,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -1506,7 +1752,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
       // Heartbeat turn uses a different provider
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -1556,7 +1802,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {

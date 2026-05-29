@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { createSessionManagerRuntimeRegistry } from "./agent-hooks/session-manager-runtime-registry.js";
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
   applyConfiguredContextWindows,
   applyDiscoveredContextWindows,
   resolveContextTokensForModel,
 } from "./context.js";
-import { createSessionManagerRuntimeRegistry } from "./pi-hooks/session-manager-runtime-registry.js";
 
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 
@@ -68,11 +68,13 @@ describe("applyDiscoveredContextWindows", () => {
     applyDiscoveredContextWindows({
       cache,
       models: [
+        { id: "claude-cli/claude-opus-4.8-20260514", contextWindow: 200_000 },
         { id: "claude-cli/claude-opus-4.7-20260219", contextWindow: 200_000 },
         { id: "claude-cli/claude-sonnet-4-6", contextWindow: 200_000 },
       ],
     });
 
+    expect(cache.get("claude-cli/claude-opus-4.8-20260514")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
     expect(cache.get("claude-cli/claude-opus-4.7-20260219")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
     expect(cache.get("claude-cli/claude-sonnet-4-6")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });

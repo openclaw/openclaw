@@ -11,17 +11,17 @@ import {
   implicitMentionKindWhen,
   logInboundDrop,
   matchesMentionWithExplicit,
+  recordDroppedChannelInboundHistory,
   resolveEnvelopeFormatOptions,
   resolveUnmentionedGroupInboundPolicy,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-message";
+import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-outbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { recordDroppedChannelTurnHistory } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -72,6 +72,7 @@ import { resolveSlackDmHistoryContext, resolveSlackDmHistoryLimit } from "./prep
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import { isSlackSubteamMentionForBot, normalizeSlackId } from "./subteam-mentions.js";
+import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
@@ -969,9 +970,9 @@ export async function prepareSlackMessage(params: {
             client: ctx.app.client,
           })
         : null;
-    const timestamp = message.ts ? Math.round(Number(message.ts) * 1000) : undefined;
+    const timestamp = resolveSlackTimestampMs(message.ts);
     const senderName = pendingBody ? await resolveSenderName() : undefined;
-    await recordDroppedChannelTurnHistory({
+    await recordDroppedChannelInboundHistory({
       input: {
         id: message.ts ?? `${message.channel}:${Date.now()}`,
         timestamp,
@@ -1145,7 +1146,7 @@ export async function prepareSlackMessage(params: {
   const body = formatInboundEnvelope({
     channel: "Slack",
     from: envelopeFrom,
-    timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+    timestamp: resolveSlackTimestampMs(message.ts),
     body: textWithId,
     chatType,
     sender: { name: senderName, id: senderId },
@@ -1236,11 +1237,9 @@ export async function prepareSlackMessage(params: {
 
   const ctxPayload = buildChannelInboundEventContext({
     channel: "slack",
-    provider: "slack",
-    surface: "slack",
     accountId: route.accountId,
     messageId: message.ts,
-    timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+    timestamp: resolveSlackTimestampMs(message.ts),
     from: slackFrom,
     sender: {
       id: senderId,
@@ -1254,10 +1253,6 @@ export async function prepareSlackMessage(params: {
       spaceId: ctx.teamId || undefined,
       threadId: directThreadRoutedToDmSession ? undefined : effectiveMessageThreadId,
       nativeChannelId: message.channel,
-      routePeer: {
-        kind: chatType,
-        id: message.channel,
-      },
     },
     route: {
       agentId: route.agentId,
@@ -1267,7 +1262,6 @@ export async function prepareSlackMessage(params: {
     },
     reply: {
       to: slackTo,
-      originatingTo: slackTo,
       replyToId: threadContext.replyToId,
       messageThreadId: directThreadRoutedToDmSession ? undefined : effectiveMessageThreadId,
       nativeChannelId: message.channel,
@@ -1278,7 +1272,6 @@ export async function prepareSlackMessage(params: {
       bodyForAgent: rawBody,
       rawBody,
       commandBody,
-      envelopeFrom,
       inboundHistory,
     },
     access: {
@@ -1294,9 +1287,6 @@ export async function prepareSlackMessage(params: {
       },
       commands: {
         authorized: commandAuthorized,
-        allowTextCommands,
-        useAccessGroups: false,
-        authorizers: [],
       },
     },
     media: toInboundMediaFacts(effectiveMedia),
@@ -1346,7 +1336,7 @@ export async function prepareSlackMessage(params: {
       entry: {
         sender: senderName,
         body: rawBody,
-        timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+        timestamp: resolveSlackTimestampMs(message.ts),
         messageId: message.ts,
       },
     });

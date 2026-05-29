@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { collectString } from "./cli-options.js";
 import { listLiveTransportQaCliRegistrations } from "./live-transports/cli.js";
 import { registerMantisCli } from "./mantis/cli.js";
@@ -21,6 +22,22 @@ let qaLabCliRuntimePromise: Promise<QaLabCliRuntime> | null = null;
 async function loadQaLabCliRuntime(): Promise<QaLabCliRuntime> {
   qaLabCliRuntimePromise ??= import("./cli.runtime.js");
   return await qaLabCliRuntimePromise;
+}
+
+function invalidQaCliArgument(message: string): Error & { code: string; exitCode: number } {
+  const error = new Error(message) as Error & { code: string; exitCode: number };
+  error.name = "InvalidArgumentError";
+  error.code = "commander.invalidArgument";
+  error.exitCode = 1;
+  return error;
+}
+
+function parseQaCliPositiveIntegerOption(value: string, flag: string): number {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw invalidQaCliArgument(`${flag} must be a positive integer.`);
+  }
+  return parsed;
 }
 
 async function runQaSelfCheck(opts: { repoRoot?: string; output?: string }) {
@@ -302,7 +319,7 @@ export function registerQaLabCli(program: Command) {
       [],
     )
     .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
-      Number(value),
+      parseQaCliPositiveIntegerOption(value, "--concurrency"),
     )
     .option("--preflight", "Run a single-scenario bootstrap preflight and stop", false)
     .option(
@@ -316,10 +333,12 @@ export function registerQaLabCli(program: Command) {
       "Suite thinking default: off|minimal|low|medium|high|xhigh|adaptive|max",
     )
     .option("--image <alias>", "Multipass image alias")
-    .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
+    .option("--cpus <count>", "Multipass vCPU count", (value: string) =>
+      parseQaCliPositiveIntegerOption(value, "--cpus"),
+    )
     .option("--memory <size>", "Multipass memory size")
     .option("--disk <size>", "Multipass disk size")
-    .option("--runtime-pair <pair>", "Run each scenario under both runtimes, e.g. pi,codex")
+    .option("--runtime-pair <pair>", "Run each scenario under both runtimes, e.g. openclaw,codex")
     .option(
       "--runtime-parity-tier <tier>",
       "Add scenarios tagged with runtimeParityTier (standard, optional, live-only, soak; repeatable or comma-separated)",
@@ -486,7 +505,7 @@ export function registerQaLabCli(program: Command) {
       "Directory of curated JSONL transcripts",
       "qa/scenarios/jsonl-replay",
     )
-    .option("--runtime-pair <pair>", "Runtime pair label, e.g. pi,codex", "pi,codex")
+    .option("--runtime-pair <pair>", "Runtime pair label, e.g. openclaw,codex", "openclaw,codex")
     .option(
       "--provider-mode <mode>",
       `Provider mode (${formatQaProviderModeHelp()})`,
@@ -534,17 +553,17 @@ export function registerQaLabCli(program: Command) {
       [],
     )
     .option("--judge-timeout-ms <ms>", "Override judge wait timeout", (value: string) =>
-      Number(value),
+      parseQaCliPositiveIntegerOption(value, "--judge-timeout-ms"),
     )
     .option(
       "--blind-judge-models",
       "Hide candidate model refs from judge prompts; reports still map rankings back to real refs",
     )
     .option("--concurrency <count>", "Candidate model run concurrency", (value: string) =>
-      Number(value),
+      parseQaCliPositiveIntegerOption(value, "--concurrency"),
     )
     .option("--judge-concurrency <count>", "Judge model run concurrency", (value: string) =>
-      Number(value),
+      parseQaCliPositiveIntegerOption(value, "--judge-concurrency"),
     )
     .action(
       async (opts: {
@@ -574,7 +593,9 @@ export function registerQaLabCli(program: Command) {
     .option("--model <ref>", "Primary provider/model ref (defaults by provider mode)")
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--fast", "Enable provider fast mode where supported", false)
-    .option("--timeout-ms <ms>", "Override agent.wait timeout", (value: string) => Number(value))
+    .option("--timeout-ms <ms>", "Override agent.wait timeout", (value: string) =>
+      parseQaCliPositiveIntegerOption(value, "--timeout-ms"),
+    )
     .action(
       async (opts: {
         message: string;
@@ -672,7 +693,9 @@ export function registerQaLabCli(program: Command) {
     .description("List credential rows in the shared Convex pool")
     .option("--kind <kind>", "Filter by credential kind")
     .option("--status <status>", 'Filter by row status: "active", "disabled", or "all"', "all")
-    .option("--limit <count>", "Max rows to return", (value: string) => Number(value))
+    .option("--limit <count>", "Max rows to return", (value: string) =>
+      parseQaCliPositiveIntegerOption(value, "--limit"),
+    )
     .option("--show-secrets", "Include credential payload JSON in output", false)
     .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
     .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
@@ -697,10 +720,12 @@ export function registerQaLabCli(program: Command) {
     .description("Start the private QA debugger UI and local QA bus")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--host <host>", "Bind host", "127.0.0.1")
-    .option("--port <port>", "Bind port", (value: string) => Number(value))
+    .option("--port <port>", "Bind port", (value: string) =>
+      parseQaCliPositiveIntegerOption(value, "--port"),
+    )
     .option("--advertise-host <host>", "Optional public host to advertise in bootstrap payloads")
     .option("--advertise-port <port>", "Optional public port to advertise", (value: string) =>
-      Number(value),
+      parseQaCliPositiveIntegerOption(value, "--advertise-port"),
     )
     .option("--control-ui-url <url>", "Optional Control UI URL to embed beside the QA panel")
     .option(
@@ -737,8 +762,12 @@ export function registerQaLabCli(program: Command) {
     .description("Write a prebaked Docker scaffold for the QA dashboard + gateway lane")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .requiredOption("--output-dir <path>", "Output directory for docker-compose + state files")
-    .option("--gateway-port <port>", "Gateway host port", (value: string) => Number(value))
-    .option("--qa-lab-port <port>", "QA lab host port", (value: string) => Number(value))
+    .option("--gateway-port <port>", "Gateway host port", (value: string) =>
+      parseQaCliPositiveIntegerOption(value, "--gateway-port"),
+    )
+    .option("--qa-lab-port <port>", "QA lab host port", (value: string) =>
+      parseQaCliPositiveIntegerOption(value, "--qa-lab-port"),
+    )
     .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
     .option("--image <name>", "Prebaked image name", "openclaw:qa-local-prebaked")
     .option("--use-prebuilt-image", "Use image: instead of build: in docker-compose", false)
@@ -774,8 +803,12 @@ export function registerQaLabCli(program: Command) {
     .description("Build the QA site, start the Docker-backed QA stack, and print the QA Lab URL")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", "Output directory for docker-compose + state files")
-    .option("--gateway-port <port>", "Gateway host port", (value: string) => Number(value))
-    .option("--qa-lab-port <port>", "QA lab host port", (value: string) => Number(value))
+    .option("--gateway-port <port>", "Gateway host port", (value: string) =>
+      parseQaCliPositiveIntegerOption(value, "--gateway-port"),
+    )
+    .option("--qa-lab-port <port>", "QA lab host port", (value: string) =>
+      parseQaCliPositiveIntegerOption(value, "--qa-lab-port"),
+    )
     .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
     .option("--image <name>", "Image tag", "openclaw:qa-local-prebaked")
     .option("--use-prebuilt-image", "Use image: instead of build: in docker-compose", false)
@@ -805,7 +838,9 @@ export function registerQaLabCli(program: Command) {
     qa.command(providerCommand.name)
       .description(providerCommand.description)
       .option("--host <host>", "Bind host", "127.0.0.1")
-      .option("--port <port>", "Bind port", (value: string) => Number(value))
+      .option("--port <port>", "Bind port", (value: string) =>
+        parseQaCliPositiveIntegerOption(value, "--port"),
+      )
       .action(async (opts: { host?: string; port?: number }) => {
         await runQaProviderServer(providerCommand.providerMode, opts);
       });

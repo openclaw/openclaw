@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
   ImageDescriptionRequest,
@@ -12,13 +13,43 @@ import type {
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { createOpenClawCodingTools } from "../agent-tools.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
-import { createOpenClawCodingTools } from "../pi-tools.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
+import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
+
+const publicSurfaceLoaderMocks = vi.hoisted(() => ({
+  loadBundledPluginPublicArtifactModuleSync: vi.fn(
+    ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
+      if (dirName === "imessage" && artifactBasename === "media-contract-api.js") {
+        return {
+          resolveInboundAttachmentRoots: ({
+            accountId,
+            cfg,
+          }: {
+            accountId?: string | null;
+            cfg: OpenClawConfig;
+          }) => [
+            ...((accountId
+              ? cfg.channels?.imessage?.accounts?.[accountId]?.attachmentRoots
+              : undefined) ?? []),
+            ...(cfg.channels?.imessage?.attachmentRoots ?? []),
+            "/Users/*/Library/Messages/Attachments",
+          ],
+        };
+      }
+      throw new Error(
+        `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
+      );
+    },
+  ),
+}));
+
+vi.mock("../../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
 
 type CreateOpenClawCodingToolsArgs = Parameters<typeof createOpenClawCodingTools>[0];
 type MockOpenClawToolsOptions = {
@@ -28,10 +59,13 @@ type MockOpenClawToolsOptions = {
   sandboxRoot?: string;
   sandboxFsBridge?: SandboxFsBridge;
   fsPolicy?: NonNullable<Parameters<typeof createImageTool>[0]>["fsPolicy"];
+  agentChannel?: string | null;
+  agentAccountId?: string | null;
+  currentChannelId?: string | null;
   modelHasVision?: boolean;
 };
 
-const piToolsHarness = vi.hoisted(() => ({
+const agentToolsHarness = vi.hoisted(() => ({
   createStubTool(name: string) {
     return {
       name,
@@ -71,8 +105,8 @@ vi.mock("../bash-tools.js", async () => {
   const actual = await vi.importActual<typeof import("../bash-tools.js")>("../bash-tools.js");
   return {
     ...actual,
-    createExecTool: vi.fn(() => piToolsHarness.createStubTool("exec")),
-    createProcessTool: vi.fn(() => piToolsHarness.createStubTool("process")),
+    createExecTool: vi.fn(() => agentToolsHarness.createStubTool("exec")),
+    createProcessTool: vi.fn(() => agentToolsHarness.createStubTool("process")),
   };
 });
 
@@ -82,15 +116,39 @@ vi.mock("../channel-tools.js", () => ({
 }));
 
 vi.mock("../apply-patch.js", () => ({
-  createApplyPatchTool: vi.fn(() => piToolsHarness.createStubTool("apply_patch")),
+  createApplyPatchTool: vi.fn(() => agentToolsHarness.createStubTool("apply_patch")),
 }));
 
-vi.mock("../pi-tools.before-tool-call.js", () => ({
+vi.mock("../agent-tools.before-tool-call.js", () => ({
   wrapToolWithBeforeToolCallHook: vi.fn((tool) => tool),
 }));
 
-vi.mock("../pi-tools.abort.js", () => ({
+vi.mock("../agent-tools.abort.js", () => ({
   wrapToolWithAbortSignal: vi.fn((tool) => tool),
+}));
+
+// Keep image-tool tests focused on root propagation; media-tool-shared
+// and channel-inbound tests cover the real bundled contract loader.
+vi.mock("../../media/channel-inbound-roots.js", () => ({
+  resolveChannelInboundAttachmentRootsForChannel: (params: {
+    cfg?: OpenClawConfig;
+    channelId?: string | null;
+    accountId?: string | null;
+  }) => {
+    const channelId = params.channelId?.trim();
+    if (!channelId) {
+      return undefined;
+    }
+    const channelConfig = params.cfg?.channels?.[channelId];
+    const accountConfig = params.accountId
+      ? channelConfig?.accounts?.[params.accountId]
+      : undefined;
+    const roots = [
+      ...(accountConfig?.attachmentRoots ?? []),
+      ...(channelConfig?.attachmentRoots ?? []),
+    ];
+    return channelId === "imessage" ? [...roots, "/Users/*/Library/Messages/Attachments"] : roots;
+  },
 }));
 
 vi.mock("../auth-profiles.js", () => ({
@@ -167,6 +225,9 @@ vi.mock("../openclaw-tools.js", async () => {
               }
             : undefined,
         fsPolicy: options?.fsPolicy,
+        agentChannel: options?.agentChannel,
+        agentAccountId: options?.agentAccountId,
+        currentChannelId: options?.currentChannelId,
         modelHasVision: options?.modelHasVision,
       });
       return imageTool ? [imageTool] : [];
@@ -531,7 +592,26 @@ const moonshotProvider = {
   describeImages: describeMoonshotImages,
 } satisfies MediaUnderstandingProvider;
 
-function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
+function installImageUnderstandingProviderDeps(
+  providers: MediaUnderstandingProvider[],
+  options?: {
+    describeImageWithModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["describeImageWithModel"];
+    describeImagesWithModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["describeImagesWithModel"];
+    loadImageWebMediaRuntime?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["loadImageWebMediaRuntime"];
+    resolveImageCompressionPolicy?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["resolveImageCompressionPolicy"];
+    resolveModelAsync?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["resolveModelAsync"];
+  },
+) {
   imageProviderHarness.setProviders(providers);
   const defaultImageModels = new Map<string, string>([
     ["anthropic", "claude-opus-4-6"],
@@ -551,12 +631,74 @@ function installImageUnderstandingProviderStubs(...providers: MediaUnderstanding
       id: string,
       registry: Map<string, MediaUnderstandingProvider>,
     ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
-    describeImageWithModel: describeGenericImageWithModel,
-    describeImagesWithModel: describeGenericImagesWithModel,
+    describeImageWithModel: options?.describeImageWithModel ?? describeGenericImageWithModel,
+    describeImagesWithModel: options?.describeImagesWithModel ?? describeGenericImagesWithModel,
     resolveAutoMediaKeyProviders: ({ capability }) =>
       capability === "image" ? ["openai", "anthropic"] : [],
     resolveDefaultMediaModel: ({ providerId, capability }) =>
       capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+    ...(options?.resolveImageCompressionPolicy
+      ? { resolveImageCompressionPolicy: options.resolveImageCompressionPolicy }
+      : {}),
+    ...(options?.resolveModelAsync ? { resolveModelAsync: options.resolveModelAsync } : {}),
+    ...(options?.loadImageWebMediaRuntime
+      ? { loadImageWebMediaRuntime: options.loadImageWebMediaRuntime }
+      : {}),
+  });
+}
+
+function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
+  installImageUnderstandingProviderDeps(providers);
+}
+
+function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProvider[]) {
+  installImageUnderstandingProviderDeps(providers, {
+    describeImageWithModel: async () => {
+      throw new Error("Expected fast local image tests to use a registered image provider");
+    },
+    describeImagesWithModel: async () => {
+      throw new Error("Expected fast local image tests to use a registered image provider");
+    },
+    resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
+    resolveModelAsync: async (provider, model) => ({
+      model: {
+        id: model,
+        provider,
+        input: ["text", "image"],
+      } as never,
+      authStorage: {} as never,
+      modelRegistry: {} as never,
+    }),
+    loadImageWebMediaRuntime: async () => ({
+      loadWebMedia: async (mediaUrl, options) => {
+        const inboundRoots =
+          options && typeof options === "object" && "inboundRoots" in options
+            ? options.inboundRoots
+            : [];
+        if (
+          !isInboundPathAllowed({
+            filePath: mediaUrl,
+            roots: inboundRoots ?? [],
+          })
+        ) {
+          throw new Error(`Local media path is not under an allowed directory: ${mediaUrl}`);
+        }
+        return {
+          buffer: await fs.readFile(mediaUrl),
+          contentType: "image/png",
+          kind: "image",
+          fileName: path.basename(mediaUrl),
+        };
+      },
+      optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => {
+        return {
+          buffer,
+          contentType: contentType ?? "image/png",
+          kind: "image",
+          fileName,
+        };
+      },
+    }),
   });
 }
 
@@ -1165,7 +1307,7 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("pairs a provider when config uses an alias key", async () => {
+  it("does not pair provider aliases through core normalization", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeAuthProfiles(agentDir, {
         version: 1,
@@ -1191,10 +1333,7 @@ describe("image tool implicit imageModel config", () => {
           },
         },
       };
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "amazon-bedrock/vision-1",
-      });
-      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
     });
   });
 
@@ -1557,8 +1696,8 @@ describe("image tool implicit imageModel config", () => {
             items: { type: "string" },
           },
           model: { type: "string" },
-          maxBytesMb: { type: "number" },
-          maxImages: { type: "number" },
+          maxBytesMb: { type: "number", exclusiveMinimum: 0 },
+          maxImages: { type: "integer", minimum: 1 },
         },
       });
     });
@@ -1636,6 +1775,134 @@ describe("image tool implicit imageModel config", () => {
         expect(fetch).not.toHaveBeenCalled();
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("allows image paths from the current iMessage account attachment roots", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: "ok",
+        model: params.model,
+      }));
+      installFastLocalImageProviderStubs({
+        id: "ollama",
+        capabilities: ["image"],
+        describeImage,
+      });
+      const attachmentRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-root-"));
+      const imagePath = path.join(attachmentRoot, "photo.png");
+      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      try {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              imageModel: { primary: "ollama/moondream" },
+            },
+          },
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://localhost:11434",
+                models: [makeModelDefinition("moondream", ["text", "image"])],
+              },
+            },
+          },
+          channels: {
+            imessage: {
+              accounts: {
+                work: {
+                  attachmentRoots: [attachmentRoot],
+                },
+              },
+            },
+          },
+        };
+
+        expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
+        const roots = resolveMediaToolInboundRoots({
+          cfg,
+          channelId: "imessage",
+          accountId: "work",
+        });
+        expect(roots).toContain(attachmentRoot);
+        expect(isInboundPathAllowed({ filePath: imagePath, roots })).toBe(true);
+
+        const withoutChannel = createRequiredImageTool({ config: cfg, agentDir });
+        await expect(
+          withoutChannel.execute("t1", { prompt: "Describe.", image: imagePath }),
+        ).rejects.toThrow(/not under an allowed directory/i);
+
+        const withImessage = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          agentChannel: "imessage",
+          agentAccountId: "work",
+        });
+
+        await expectImageToolExecOk(withImessage, imagePath);
+        expect(describeImage).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(attachmentRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("allows image paths from current iMessage wildcard attachment roots", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: "ok",
+        model: params.model,
+      }));
+      installFastLocalImageProviderStubs({
+        id: "ollama",
+        capabilities: ["image"],
+        describeImage,
+      });
+      const attachmentRootParent = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-imessage-wildcard-root-"),
+      );
+      const attachmentRoot = path.join(attachmentRootParent, "work", "Attachments");
+      const imagePath = path.join(attachmentRoot, "photo.png");
+      await fs.mkdir(attachmentRoot, { recursive: true });
+      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      try {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              imageModel: { primary: "ollama/moondream" },
+            },
+          },
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://localhost:11434",
+                models: [makeModelDefinition("moondream", ["text", "image"])],
+              },
+            },
+          },
+          channels: {
+            imessage: {
+              accounts: {
+                work: {
+                  attachmentRoots: [path.join(attachmentRootParent, "*", "Attachments")],
+                },
+              },
+            },
+          },
+        };
+
+        const withImessage = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          agentChannel: "imessage",
+          agentAccountId: "work",
+        });
+
+        await expectImageToolExecOk(withImessage, imagePath);
+        expect(describeImage).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(attachmentRootParent, { recursive: true, force: true });
       }
     });
   });
@@ -2076,6 +2343,40 @@ describe("image tool MiniMax VLM routing", () => {
     expect(tooManyDetails?.max).toBe(1);
   });
 
+  it("rejects invalid image cap values before loading images", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    await expect(
+      tool.execute("t1", {
+        prompt: "Compare these images.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        maxImages: 1.5,
+      }),
+    ).rejects.toThrow("maxImages must be a positive integer");
+
+    await expect(
+      tool.execute("t2", {
+        prompt: "Compare these images.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        maxBytesMb: 0,
+      }),
+    ).rejects.toThrow("maxBytesMb must be greater than 0");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts string image caps through shared numeric readers", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    await tool.execute("t1", {
+      prompt: "Describe this image.",
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      maxImages: "1",
+      maxBytesMb: "1",
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {
     const { tool } = await createMinimaxVlmFixture({ status_code: 1004, status_msg: "bad key" });
 
@@ -2116,13 +2417,16 @@ describe("image tool managed inbound media", () => {
   }
 
   it("resolves media://inbound refs", async () => {
-    await withManagedInboundPng(async ({ mediaId }) => {
+    await withManagedInboundPng(async ({ stateDir, mediaId }) => {
       installImageUnderstandingProviderStubs();
       const fetch = stubMinimaxOkFetch();
+      const workspaceDir = path.join(stateDir, "workspace-agent");
+      await fs.mkdir(workspaceDir, { recursive: true });
       await withTempAgentDir(async (agentDir) => {
         const tool = createRequiredImageTool({
           config: createMinimaxImageConfig(),
           agentDir,
+          workspaceDir,
           fsPolicy: { workspaceOnly: true },
         });
 
@@ -2467,60 +2771,94 @@ describe("image compression policy", () => {
   });
 
   it("keeps runtime Anthropic media limits for dated model variants", async () => {
-    await expect(
-      testing.resolveImageCompressionPolicy({
-        cfg: {},
-        imageModelConfig: {
-          primary: "anthropic/claude-opus-4.7-20260219",
-          fallbacks: ["anthropic/claude-sonnet-4.6-20260219"],
-        },
-        imageCount: 1,
+    testing.setProviderDepsForTest({
+      resolveModelAsync: async (_provider, model) => ({
+        model: {
+          mediaInput: {
+            image: model.includes("opus")
+              ? { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" }
+              : { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+          },
+        } as never,
+        authStorage: {} as never,
+        modelRegistry: {} as never,
       }),
-    ).resolves.toEqual({
-      imageCount: 1,
-      models: [
-        { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-        { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
-      ],
     });
+    try {
+      await expect(
+        testing.resolveImageCompressionPolicy({
+          cfg: {},
+          imageModelConfig: {
+            primary: "anthropic/claude-opus-4.7-20260219",
+            fallbacks: ["anthropic/claude-sonnet-4.6-20260219"],
+          },
+          imageCount: 1,
+        }),
+      ).resolves.toEqual({
+        imageCount: 1,
+        models: [
+          { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+          { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+        ],
+      });
+    } finally {
+      testing.setProviderDepsForTest();
+    }
   });
 
   it("merges partial configured Anthropic media policy with runtime side limits", async () => {
-    await expect(
-      testing.resolveImageCompressionPolicy({
-        cfg: {
-          models: {
-            providers: {
-              anthropic: {
-                baseUrl: "https://api.anthropic.com",
-                api: "anthropic-messages",
-                models: [
-                  {
-                    id: "claude-opus-4.7-20260219",
-                    name: "Claude Opus 4.7 dated",
-                    reasoning: true,
-                    input: ["text", "image"],
-                    contextWindow: 200_000,
-                    maxTokens: 64_000,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    mediaInput: { image: { maxBytes: 1_000_000 } },
-                  },
-                ],
+    testing.setProviderDepsForTest({
+      resolveModelAsync: async (_provider, _model, _agentDir, _cfg, options) => ({
+        model: {
+          mediaInput: {
+            image: options?.skipProviderRuntimeHooks
+              ? { maxBytes: 1_000_000 }
+              : { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+          },
+        } as never,
+        authStorage: {} as never,
+        modelRegistry: {} as never,
+      }),
+    });
+    try {
+      await expect(
+        testing.resolveImageCompressionPolicy({
+          cfg: {
+            models: {
+              providers: {
+                anthropic: {
+                  baseUrl: "https://api.anthropic.com",
+                  api: "anthropic-messages",
+                  models: [
+                    {
+                      id: "claude-opus-4.7-20260219",
+                      name: "Claude Opus 4.7 dated",
+                      reasoning: true,
+                      input: ["text", "image"],
+                      contextWindow: 200_000,
+                      maxTokens: 64_000,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      mediaInput: { image: { maxBytes: 1_000_000 } },
+                    },
+                  ],
+                },
               },
             },
+          } satisfies OpenClawConfig,
+          imageModelConfig: {
+            primary: "anthropic/claude-opus-4.7-20260219",
           },
-        } satisfies OpenClawConfig,
-        imageModelConfig: {
-          primary: "anthropic/claude-opus-4.7-20260219",
-        },
+          imageCount: 1,
+        }),
+      ).resolves.toEqual({
         imageCount: 1,
-      }),
-    ).resolves.toEqual({
-      imageCount: 1,
-      models: [
-        { maxBytes: 1_000_000, maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-      ],
-    });
+        models: [
+          { maxBytes: 1_000_000, maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+        ],
+      });
+    } finally {
+      testing.setProviderDepsForTest();
+    }
   });
 
   it("uses a model override as the compression candidate", async () => {

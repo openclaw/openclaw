@@ -18,7 +18,6 @@ import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runti
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
-  TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
@@ -31,6 +30,7 @@ import {
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -41,7 +41,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
-import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
+import { resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   normalizeDmAllowFromWithStore,
@@ -89,6 +89,7 @@ import {
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
   loadTelegramPairingStoreIfNeeded,
+  resolveTelegramBotHasTopicsEnabled,
   TelegramPairingStoreReadError,
   shouldUseTelegramDmThreadSession,
   withResolvedTelegramForumFlag,
@@ -586,6 +587,7 @@ export const registerTelegramHandlers = ({
     isForum: boolean;
     messageThreadId?: number;
     resolvedThreadId?: number;
+    botHasTopicsEnabled?: boolean;
     senderId?: string | number;
     runtimeCfg?: OpenClawConfig;
   }): {
@@ -603,16 +605,7 @@ export const registerTelegramHandlers = ({
       });
     const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
     const topicThreadId = resolvedThreadId ?? dmThreadId;
-    const { groupConfig, topicConfig } = resolveTelegramGroupConfig(params.chatId, topicThreadId);
-    const directConfig = !params.isGroup
-      ? (groupConfig as TelegramDirectConfig | undefined)
-      : undefined;
-    let accountConfig = telegramCfg;
-    try {
-      accountConfig = resolveTelegramAccount({ cfg: runtimeCfg, accountId }).config;
-    } catch {
-      // Keep the startup snapshot when live config is temporarily unavailable.
-    }
+    const { topicConfig } = resolveTelegramGroupConfig(params.chatId, topicThreadId);
     const { route } = resolveTelegramConversationRoute({
       cfg: runtimeCfg,
       accountId,
@@ -631,8 +624,10 @@ export const registerTelegramHandlers = ({
       senderId: params.senderId,
     });
     const threadKeys =
-      shouldUseTelegramDmThreadSession({ dmThreadId, accountConfig, directConfig, topicConfig }) &&
-      dmThreadId != null
+      shouldUseTelegramDmThreadSession({
+        dmThreadId,
+        botHasTopicsEnabled: params.botHasTopicsEnabled,
+      }) && dmThreadId != null
         ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
         : null;
     const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
@@ -2350,8 +2345,8 @@ export const registerTelegramHandlers = ({
           return;
         }
 
-        const page = Number.parseInt(pageValue, 10);
-        if (Number.isNaN(page) || page < 1) {
+        const page = parseStrictPositiveInteger(pageValue);
+        if (page === undefined) {
           return;
         }
 
@@ -2417,6 +2412,7 @@ export const registerTelegramHandlers = ({
             isForum,
             messageThreadId,
             resolvedThreadId,
+            botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
             senderId,
           });
           modelData = await telegramDeps.buildModelsProviderData(runtimeCfg, sessionState.agentId);
@@ -2863,6 +2859,7 @@ export const registerTelegramHandlers = ({
           isForum: event.isForum,
           messageThreadId: event.messageThreadId,
           resolvedThreadId,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(event.ctx.me),
           senderId: event.senderId,
           runtimeCfg: cfg,
         }).sessionEntry?.sessionStartedAt,

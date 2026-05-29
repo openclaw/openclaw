@@ -16,24 +16,9 @@
       "class": "core-runtime",
       "risk": ["native", "terminal"]
     },
-    "@earendil-works/pi-agent-core": {
-      "owner": "capability:agent-runtime-pi",
-      "class": "default-runtime-initially",
-      "risk": ["large-transitive-cone", "agent-runtime"]
-    },
-    "@earendil-works/pi-ai": {
-      "owner": "capability:agent-runtime-pi",
-      "class": "default-runtime-initially",
-      "risk": ["large-transitive-cone", "provider-sdk-fanout"]
-    },
-    "@earendil-works/pi-coding-agent": {
-      "owner": "capability:agent-runtime-pi",
-      "class": "default-runtime-initially",
-      "risk": ["large-transitive-cone", "agent-runtime"]
-    },
     "@earendil-works/pi-tui": {
       "owner": "capability:tui-pi",
-      "class": "default-runtime-initially",
+      "class": "tui-runtime",
       "risk": ["tui-runtime"]
     },
     "@modelcontextprotocol/sdk": {
@@ -46,20 +31,6 @@
       "class": "plugin-runtime",
       "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
-    },
-    "@napi-rs/canvas": {
-      "owner": "plugin:document-extract",
-      "class": "optional-peer-runtime",
-      "activation": [
-        "input_file.application_pdf.image_fallback",
-        "plugins.entries.document-extract.enabled"
-      ],
-      "risk": ["native", "parser", "untrusted-files"]
-    },
-    "ajv": {
-      "owner": "core:json-schema-validation",
-      "class": "core-runtime",
-      "risk": ["schema-validation"]
     },
     "chalk": {
       "owner": "core:cli",
@@ -100,16 +71,6 @@
       "owner": "core:proxy",
       "class": "core-runtime",
       "risk": ["network", "proxy"]
-    },
-    "https-proxy-agent": {
-      "owner": "core:proxy",
-      "class": "core-runtime",
-      "risk": ["network", "proxy"]
-    },
-    "ipaddr.js": {
-      "owner": "core:ssrf-guard",
-      "class": "core-runtime",
-      "risk": ["network-policy"]
     },
     "jiti": {
       "owner": "core:plugin-loader",
@@ -152,27 +113,21 @@
       "class": "core-runtime",
       "risk": ["browser-automation", "cdp"]
     },
-    "pdfjs-dist": {
+    "clawpdf": {
       "owner": "plugin:document-extract",
       "class": "plugin-runtime",
       "activation": ["input_file.application_pdf", "plugins.entries.document-extract.enabled"],
-      "risk": ["parser", "untrusted-files"]
-    },
-    "proxy-agent": {
-      "owner": "core:proxy",
-      "class": "core-runtime",
-      "risk": ["network", "proxy"]
+      "risk": ["wasm", "parser", "untrusted-files"]
     },
     "qrcode": {
       "owner": "core:qr-setup",
       "class": "default-runtime-initially",
       "risk": ["terminal-rendering", "png-encoding"]
     },
-    "@silvia-odwyer/photon-node": {
-      "owner": "plugin:media-understanding-core",
-      "class": "plugin-runtime",
-      "activation": ["media-understanding-core.image-ops"],
-      "risk": ["wasm", "parser", "untrusted-files"]
+    "rastermill": {
+      "owner": "core:media",
+      "class": "core-runtime",
+      "risk": ["wasm", "parser", "untrusted-files", "native-tool-fallback"]
     },
     "sqlite-vec": {
       "owner": "capability:memory-sqlite-vec",

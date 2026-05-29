@@ -10,6 +10,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
+import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -78,6 +79,17 @@ type LocalGroupMetadataCacheEntry = WhatsAppGroupMetadataCacheEntry & {
   participants?: string[];
   mentionParticipants?: WhatsAppOutboundMentionParticipant[];
 };
+
+function parseWhatsAppTimestampSeconds(value: unknown): number | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return parseStrictFiniteNumber(value);
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
 
 function rememberGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(
   cache: Map<string, T>,
@@ -239,6 +251,7 @@ export async function attachWebInboxToSocket(
     debounceKey?: string;
     durableId?: string;
     readReceipt?: WhatsAppReadReceiptTarget;
+    receiveOrder?: number;
   };
   const durableInboundJournal = createWhatsAppDurableInboundReceiveJournal(options.accountId);
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
@@ -262,6 +275,14 @@ export async function attachWebInboxToSocket(
   };
   const shouldDebounceInboundMessage = (msg: WebInboundMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
+  const orderDebouncedInboundEntries = (entries: QueuedInboundMessage[]) =>
+    entries.toSorted((a, b) => {
+      const timestampDiff = (a.timestamp ?? 0) - (b.timestamp ?? 0);
+      if (timestampDiff !== 0) {
+        return timestampDiff;
+      }
+      return (a.receiveOrder ?? 0) - (b.receiveOrder ?? 0);
+    });
 
   const finalizeInboundDelivery = async (
     entries: QueuedInboundMessage[],
@@ -312,23 +333,24 @@ export async function attachWebInboxToSocket(
       });
       activeInboundFlushes.add(flushTask);
       try {
-        const last = entries.at(-1);
+        const orderedEntries = orderDebouncedInboundEntries(entries);
+        const last = orderedEntries.at(-1);
         if (!last) {
           return;
         }
         try {
-          if (entries.length === 1) {
+          if (orderedEntries.length === 1) {
             await options.onMessage(last);
-            await finalizeInboundDelivery(entries);
+            await finalizeInboundDelivery(orderedEntries);
             return;
           }
           const mentioned = new Set<string>();
-          for (const entry of entries) {
+          for (const entry of orderedEntries) {
             for (const jid of entry.mentions ?? entry.mentionedJids ?? []) {
               mentioned.add(jid);
             }
           }
-          const combinedBody = entries
+          const combinedBody = orderedEntries
             .map((entry) => entry.body)
             .filter(Boolean)
             .join("\n");
@@ -340,9 +362,9 @@ export async function attachWebInboxToSocket(
             isBatched: true,
           };
           await options.onMessage(combinedMessage);
-          await finalizeInboundDelivery(entries);
+          await finalizeInboundDelivery(orderedEntries);
         } catch (error) {
-          await finalizeInboundDelivery(entries, error);
+          await finalizeInboundDelivery(orderedEntries, error);
           throw error;
         }
       } finally {
@@ -604,9 +626,9 @@ export async function attachWebInboxToSocket(
       groupSubject = meta.subject;
       groupParticipants = meta.participants;
     }
-    const messageTimestampMs = msg.messageTimestamp
-      ? Number(msg.messageTimestamp) * 1000
-      : undefined;
+    const messageTimestampSeconds = parseWhatsAppTimestampSeconds(msg.messageTimestamp);
+    const messageTimestampMs =
+      messageTimestampSeconds !== undefined ? messageTimestampSeconds * 1000 : undefined;
 
     const accessCfg = options.loadConfig?.() ?? options.cfg;
     const access = await checkInboundAccessControl({
@@ -730,15 +752,15 @@ export async function attachWebInboxToSocket(
       return false;
     }
     const APPEND_RECENT_GRACE_MS = 60_000;
-    const msgTsRaw = msg.messageTimestamp;
-    const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : Number.NaN;
-    const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
+    const msgTsSeconds = parseWhatsAppTimestampSeconds(msg.messageTimestamp);
+    const msgTsMs = msgTsSeconds !== undefined ? msgTsSeconds * 1000 : 0;
     return msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS;
   };
 
   const processDurableInboundMessage = async (
     msg: WAMessage,
     upsertType: string | undefined,
+    receiveOrder: number | undefined,
     stored?: {
       id: string;
       payload: WhatsAppDurableInboundPayload;
@@ -827,6 +849,7 @@ export async function attachWebInboxToSocket(
     await enqueueInboundMessage(msg, inbound, enriched, {
       durableId,
       readReceipt: deliveryReadReceipt,
+      receiveOrder,
     });
   };
 
@@ -836,6 +859,7 @@ export async function attachWebInboxToSocket(
       await processDurableInboundMessage(
         deserializeWhatsAppDurableInboundMessage(record.payload.message),
         record.payload.upsertType,
+        record.payload.receivedAt,
         {
           id: record.id,
           payload: record.payload,
@@ -917,6 +941,7 @@ export async function attachWebInboxToSocket(
     durable: {
       durableId?: string;
       readReceipt?: WhatsAppReadReceiptTarget;
+      receiveOrder?: number;
     },
   ) => {
     const chatJid = inbound.remoteJid;
@@ -1023,6 +1048,7 @@ export async function attachWebInboxToSocket(
       dedupeKey: inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : undefined,
       durableId: durable.durableId,
       readReceipt: durable.readReceipt,
+      receiveOrder: durable.receiveOrder,
     };
     const debounceKey = buildInboundDebounceKey(inboundMessage);
     if (debounceKey) {
@@ -1053,11 +1079,13 @@ export async function attachWebInboxToSocket(
   };
 
   const pendingMessageHandlers = new Set<Promise<void>>();
+  let nextReceiveOrder = 0;
   const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
     if (upsert.type !== "notify" && upsert.type !== "append") {
       return;
     }
     for (const msg of upsert.messages ?? []) {
+      const receiveOrder = nextReceiveOrder++;
       if (
         await maybeResolveWhatsAppApprovalReaction({
           cfg: options.loadConfig?.() ?? options.cfg,
@@ -1072,7 +1100,7 @@ export async function attachWebInboxToSocket(
         continue;
       }
 
-      await processDurableInboundMessage(msg, upsert.type);
+      await processDurableInboundMessage(msg, upsert.type, receiveOrder);
     }
   };
   const handleMessagesUpsertEvent = (upsert: { type?: string; messages?: Array<WAMessage> }) => {

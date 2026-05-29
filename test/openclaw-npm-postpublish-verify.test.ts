@@ -352,18 +352,13 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         "utf8",
       );
       writeFileSync(
-        join(packageRoot, "dist", "discord-voice-runtime.js"),
+        join(packageRoot, "dist", "externalized-plugin-runtime.js"),
         [
-          'const { OpusDecoder } = require("opus-decoder");',
-          'const OpusScript = require("opusscript");',
-          "export { OpusDecoder, OpusScript };",
+          'import * as lark from "@larksuiteoapi/node-sdk";',
+          'import prism from "prism-media";',
+          "export { lark, prism };",
           "",
         ].join("\n"),
-        "utf8",
-      );
-      writeFileSync(
-        join(packageRoot, "dist", "externalized-plugin-runtime.js"),
-        'import * as lark from "@larksuiteoapi/node-sdk";\nexport { lark };\n',
         "utf8",
       );
       mkdirSync(join(packageRoot, "dist", "plugin-sdk"), { recursive: true });

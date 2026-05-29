@@ -203,7 +203,7 @@ vi.mock("../config/sessions.js", () => ({
   mergeSessionEntry: (a: unknown, b: unknown) => ({ ...(a as object), ...(b as object) }),
   updateSessionStore: vi.fn(
     async (_path: string, fn: (store: Record<string, unknown>) => unknown) => {
-      const store: Record<string, unknown> = {};
+      const store = (state.sessionStoreMock ?? {}) as Record<string, unknown>;
       return fn(store);
     },
   ),
@@ -232,10 +232,6 @@ vi.mock("../infra/agent-events.js", () => ({
 
 vi.mock("../infra/outbound/session-context.js", () => ({
   buildOutboundSessionContext: () => ({}),
-}));
-
-vi.mock("../infra/skills-remote.js", () => ({
-  getRemoteSkillEligibility: () => ({ eligible: false }),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -596,18 +592,52 @@ vi.mock("./provider-auth-aliases.js", () => ({
     provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
 }));
 
-vi.mock("./skills.js", () => ({
-  buildWorkspaceSkillSnapshot: (workspaceDir: string, opts: unknown) =>
-    state.buildWorkspaceSkillSnapshotMock(workspaceDir, opts),
+vi.mock("../skills/discovery/agent-filter.js", () => ({
+  resolveEffectiveAgentSkillFilter: (_cfg: unknown, agentId: string) =>
+    state.resolveAgentSkillsFilterMock(_cfg, agentId),
 }));
 
-vi.mock("./skills/filter.js", () => ({
-  matchesSkillFilter: () => true,
+vi.mock("../skills/runtime/remote.js", () => ({
+  getRemoteSkillEligibility: () => ({ eligible: false }),
 }));
 
-vi.mock("./skills/refresh-state.js", () => ({
-  getSkillsSnapshotVersion: () => 0,
-  shouldRefreshSnapshotForVersion: () => false,
+vi.mock("../skills/runtime/session-snapshot.js", () => ({
+  resolveReusableWorkspaceSkillSnapshot: (params: {
+    workspaceDir: string;
+    existingSnapshot?: { resolvedSkills?: unknown };
+    skillFilter?: string[];
+  }) => {
+    if (params.skillFilter !== undefined && params.skillFilter.length === 0) {
+      return {
+        snapshot: {
+          prompt: "",
+          skills: [],
+          resolvedSkills: [],
+          skillFilter: params.skillFilter,
+          version: 0,
+        },
+        shouldRefresh: !params.existingSnapshot,
+        snapshotVersion: 0,
+      };
+    }
+    if (params.existingSnapshot?.resolvedSkills !== undefined) {
+      return {
+        snapshot: params.existingSnapshot,
+        shouldRefresh: false,
+        snapshotVersion: 0,
+      };
+    }
+    const rebuilt = state.buildWorkspaceSkillSnapshotMock(params.workspaceDir, params) as {
+      resolvedSkills?: unknown;
+    };
+    return {
+      snapshot: params.existingSnapshot
+        ? { ...params.existingSnapshot, resolvedSkills: rebuilt?.resolvedSkills }
+        : rebuilt,
+      shouldRefresh: !params.existingSnapshot,
+      snapshotVersion: 0,
+    };
+  },
 }));
 
 vi.mock("./spawned-context.js", () => ({
@@ -739,6 +769,17 @@ async function runBasicAgentCommand() {
     message: "hello",
     to: "+1234567890",
   });
+}
+
+function setupSessionTouchStore(): void {
+  const sessionEntry: SessionEntry = {
+    sessionId: "session-1",
+    updatedAt: 1,
+    skillsSnapshot: { prompt: "", skills: [], version: 0 },
+  };
+  state.sessionEntryMock = sessionEntry;
+  state.sessionStoreMock = { "agent:main:main": sessionEntry };
+  state.storePathMock = "/tmp/openclaw-sessions.json";
 }
 
 function expectFallbackOverrideCalls(first: boolean, second: boolean) {
@@ -881,6 +922,56 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
+  it("keeps the initial session touch for local runs", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    setupSessionTouchStore();
+
+    await runBasicAgentCommand();
+
+    const touchWrites = state.persistSessionEntryMock.mock.calls.filter((call) => {
+      const entry = (call[0] as { entry?: Record<string, unknown> } | undefined)?.entry;
+      return entry?.lastInteractionAt !== undefined;
+    });
+    expect(touchWrites).toHaveLength(1);
+    expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the initial session touch after gateway ingress already persisted activity", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    setupSessionTouchStore();
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      skipInitialSessionTouch: true,
+    });
+
+    expect(state.persistSessionEntryMock).not.toHaveBeenCalled();
+    expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists explicit overrides even when ingress skips the initial touch", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    setupSessionTouchStore();
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      thinking: "medium",
+      skipInitialSessionTouch: true,
+    });
+
+    const touchWrite = mockCallArg(state.persistSessionEntryMock) as {
+      entry?: Record<string, unknown>;
+    };
+    expect(touchWrite.entry?.thinkingLevel).toBe("medium");
+    expect(touchWrite.entry?.lastInteractionAt).toBeDefined();
+    expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
+  });
+
   it("clears stale flag-only pending final delivery when there is no final payload", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
@@ -907,15 +998,22 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       deliver: true,
     });
 
-    const stored = (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"];
-    expect(stored?.pendingFinalDelivery).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryText).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryAttemptCount).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryLastError).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryContext).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryIntentId).toBeUndefined();
+    const clearedWrite = state.persistSessionEntryMock.mock.calls.find((call) => {
+      const entry = (call[0] as { entry?: SessionEntry } | undefined)?.entry;
+      return (
+        entry?.pendingFinalDelivery === undefined && entry?.pendingFinalDeliveryText === undefined
+      );
+    });
+    const clearedEntry = (clearedWrite?.[0] as { entry?: SessionEntry } | undefined)?.entry;
+    expect(clearedEntry).toBeDefined();
+    expect(clearedEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryText).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("keeps internal session-effect CLI runs out of visible session state", async () => {
@@ -952,10 +1050,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
     expect(attemptCalls).toHaveLength(1);
     expect(attemptCalls[0]?.sessionFile).toBe("/tmp/openclaw-internal-run.jsonl");
-    expect(attemptCalls[0]?.sessionEntry).toBe(visibleEntry);
+    expect(attemptCalls[0]?.sessionEntry).toStrictEqual(visibleEntry);
     expect(state.persistSessionEntryMock).not.toHaveBeenCalled();
     expect(state.updateSessionStoreAfterAgentRunMock).not.toHaveBeenCalled();
-    expect(sessionStore["agent:main:main"]).toBe(visibleEntry);
+    expect(sessionStore["agent:main:main"]).toEqual(visibleEntry);
   });
 
   it("does not duplicate finishing lifecycle when an attempt already emitted finishing", async () => {

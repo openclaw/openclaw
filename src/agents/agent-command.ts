@@ -19,6 +19,7 @@ import {
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import {
@@ -38,6 +39,9 @@ import {
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
+import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
+import type { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -51,10 +55,10 @@ import {
   markAutoFallbackPrimaryProbe,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentDir,
+  resolveAgentConfig,
   resolveDefaultAgentId,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
-  resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
@@ -71,6 +75,7 @@ import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
@@ -94,10 +99,7 @@ import {
   type ModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
-import type { SkillSnapshot } from "./skills/types.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -115,10 +117,10 @@ type CliCompactionRuntime = typeof import("./command/cli-compaction.js");
 type TranscriptResolveRuntime = typeof import("../config/sessions/transcript-resolve.runtime.js");
 type CliDepsRuntime = typeof import("../cli/deps.js");
 type ExecDefaultsRuntime = typeof import("./exec-defaults.js");
-type SkillsRuntime = typeof import("./skills.js");
-type SkillsFilterRuntime = typeof import("./skills/filter.js");
-type SkillsRefreshStateRuntime = typeof import("./skills/refresh-state.js");
-type SkillsRemoteRuntime = typeof import("../infra/skills-remote.js");
+type SkillsRuntime = {
+  getRemoteSkillEligibility: typeof getRemoteSkillEligibility;
+  resolveReusableWorkspaceSkillSnapshot: typeof resolveReusableWorkspaceSkillSnapshot;
+};
 
 const attemptExecutionRuntimeLoader = createLazyImportLoader<AttemptExecutionRuntime>(
   () => import("./command/attempt-execution.runtime.js"),
@@ -151,29 +153,16 @@ const cliDepsRuntimeLoader = createLazyImportLoader<CliDepsRuntime>(() => import
 const execDefaultsRuntimeLoader = createLazyImportLoader<ExecDefaultsRuntime>(
   () => import("./exec-defaults.js"),
 );
-const skillsRuntimeLoader = createLazyImportLoader<SkillsRuntime>(() => import("./skills.js"));
-const skillsFilterRuntimeLoader = createLazyImportLoader<SkillsFilterRuntime>(
-  () => import("./skills/filter.js"),
-);
-const skillsRefreshStateRuntimeLoader = createLazyImportLoader<SkillsRefreshStateRuntime>(
-  () => import("./skills/refresh-state.js"),
-);
-const skillsRemoteRuntimeLoader = createLazyImportLoader<SkillsRemoteRuntime>(
-  () => import("../infra/skills-remote.js"),
-);
-
-function createEmptySkillsSnapshot(params: {
-  skillFilter: string[];
-  version?: number;
-}): SkillSnapshot {
+const skillsRuntimeLoader = createLazyImportLoader<SkillsRuntime>(async () => {
+  const [remote, sessionSnapshot] = await Promise.all([
+    import("../skills/runtime/remote.js"),
+    import("../skills/runtime/session-snapshot.js"),
+  ]);
   return {
-    prompt: "",
-    skills: [],
-    resolvedSkills: [],
-    skillFilter: params.skillFilter,
-    version: params.version,
+    getRemoteSkillEligibility: remote.getRemoteSkillEligibility,
+    resolveReusableWorkspaceSkillSnapshot: sessionSnapshot.resolveReusableWorkspaceSkillSnapshot,
   };
-}
+});
 
 function loadAttemptExecutionRuntime(): Promise<AttemptExecutionRuntime> {
   return attemptExecutionRuntimeLoader.load();
@@ -221,18 +210,6 @@ function loadExecDefaultsRuntime(): Promise<ExecDefaultsRuntime> {
 
 function loadSkillsRuntime(): Promise<SkillsRuntime> {
   return skillsRuntimeLoader.load();
-}
-
-function loadSkillsFilterRuntime(): Promise<SkillsFilterRuntime> {
-  return skillsFilterRuntimeLoader.load();
-}
-
-function loadSkillsRefreshStateRuntime(): Promise<SkillsRefreshStateRuntime> {
-  return skillsRefreshStateRuntimeLoader.load();
-}
-
-function loadSkillsRemoteRuntime(): Promise<SkillsRemoteRuntime> {
-  return skillsRemoteRuntimeLoader.load();
 }
 
 async function resolveAgentCommandDeps(deps: CliDeps | undefined): Promise<CliDeps> {
@@ -335,6 +312,30 @@ function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model")
   return trimmed;
 }
 
+function createAgentCommandSessionWorkingCopy(params: {
+  sessionKey?: string;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+}): {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+} {
+  const result: {
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+  } = {};
+  if (params.sessionEntry) {
+    result.sessionEntry = { ...params.sessionEntry };
+  }
+  if (params.sessionStore || params.sessionKey) {
+    result.sessionStore = {};
+  }
+  if (params.sessionKey && result.sessionEntry && result.sessionStore) {
+    result.sessionStore[params.sessionKey] = result.sessionEntry;
+  }
+  return result;
+}
+
 async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
@@ -407,7 +408,11 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const subagentLane: string = AGENT_LANE_SUBAGENT;
   const isSubagentLane = laneRaw === subagentLane;
   const timeoutSecondsRaw =
-    opts.timeout !== undefined ? Number.parseInt(opts.timeout, 10) : isSubagentLane ? 0 : undefined;
+    opts.timeout !== undefined
+      ? (parseStrictNonNegativeInteger(opts.timeout) ?? Number.NaN)
+      : isSubagentLane
+        ? 0
+        : undefined;
   if (
     timeoutSecondsRaw !== undefined &&
     (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)
@@ -425,18 +430,16 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     sessionId: opts.sessionId,
     sessionKey: explicitSessionKey,
     agentId: agentIdOverride,
+    clone: false,
   });
 
-  const {
-    sessionId,
+  const { sessionId, sessionKey, storePath, isNewSession, persistedThinking, persistedVerbose } =
+    sessionResolution;
+  const { sessionEntry: sessionEntryRaw, sessionStore } = createAgentCommandSessionWorkingCopy({
     sessionKey,
-    sessionEntry: sessionEntryRaw,
-    sessionStore,
-    storePath,
-    isNewSession,
-    persistedThinking,
-    persistedVerbose,
-  } = sessionResolution;
+    sessionEntry: sessionResolution.sessionEntry,
+    sessionStore: sessionResolution.sessionStore,
+  });
   const sessionAgentId =
     agentIdOverride ??
     resolveSessionAgentId({
@@ -452,6 +455,8 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const workspaceDir = resolveUserPath(workspaceDirRaw);
+  const cwd =
+    normalizeOptionalString(opts.cwd) ?? normalizeOptionalString(sessionEntryRaw?.spawnedCwd);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
     config: cfg,
@@ -529,6 +534,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     sessionAgentId,
     outboundSession,
     workspaceDir,
+    cwd: cwd ? resolveUserPath(cwd) : undefined,
     agentDir,
     modelManifestContext,
     runId,
@@ -568,12 +574,14 @@ async function agentCommandInternal(
     sessionAgentId,
     outboundSession,
     workspaceDir,
+    cwd,
     agentDir,
     runId,
     acpManager,
     acpResolution,
     modelManifestContext,
   } = prepared;
+  const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
 
   try {
@@ -784,55 +792,33 @@ async function agentCommandInternal(
       });
     }
 
-    const [{ getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion }, { matchesSkillFilter }] =
-      await Promise.all([loadSkillsRefreshStateRuntime(), loadSkillsFilterRuntime()]);
-    const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
-    const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
+    const skillFilter = resolveEffectiveAgentSkillFilter(cfg, sessionAgentId);
     const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
-    const shouldRefreshSkillsSnapshot =
-      !currentSkillsSnapshot ||
-      shouldRefreshSnapshotForVersion(currentSkillsSnapshot.version, skillsSnapshotVersion) ||
-      !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
-    const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;
-    const emptySkillsFilter = skillFilter !== undefined && skillFilter.length === 0;
-    const buildSkillsSnapshot = async () => {
-      if (emptySkillsFilter) {
-        return createEmptySkillsSnapshot({
-          skillFilter,
-          version: skillsSnapshotVersion,
-        });
-      }
-      const [
-        { buildWorkspaceSkillSnapshot },
-        { getRemoteSkillEligibility },
-        { canExecRequestNode },
-      ] = await Promise.all([
-        loadSkillsRuntime(),
-        loadSkillsRemoteRuntime(),
-        loadExecDefaultsRuntime(),
-      ]);
-      return buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfg,
-        eligibility: {
-          remote: getRemoteSkillEligibility({
-            advertiseExecNode: canExecRequestNode({
-              cfg,
-              sessionEntry,
-              sessionKey,
-              agentId: sessionAgentId,
-            }),
+    const [
+      { getRemoteSkillEligibility, resolveReusableWorkspaceSkillSnapshot },
+      { canExecRequestNode },
+    ] = await Promise.all([loadSkillsRuntime(), loadExecDefaultsRuntime()]);
+    const skillSnapshotState = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir,
+      config: cfg,
+      agentId: sessionAgentId,
+      existingSnapshot: isNewSession ? undefined : currentSkillsSnapshot,
+      skillFilter,
+      eligibility: {
+        remote: getRemoteSkillEligibility({
+          advertiseExecNode: canExecRequestNode({
+            cfg,
+            sessionEntry,
+            sessionKey,
+            agentId: sessionAgentId,
           }),
-        },
-        snapshotVersion: skillsSnapshotVersion,
-        skillFilter,
-        agentId: sessionAgentId,
-      });
-    };
-    const skillsSnapshot = needsSkillsSnapshot
-      ? await buildSkillsSnapshot()
-      : !currentSkillsSnapshot
-        ? undefined
-        : await hydrateResolvedSkillsAsync(currentSkillsSnapshot, buildSkillsSnapshot);
+        }),
+      },
+      watch: false,
+    });
+    const needsSkillsSnapshot =
+      isNewSession || !currentSkillsSnapshot || skillSnapshotState.shouldRefresh;
+    const skillsSnapshot = skillSnapshotState.snapshot;
 
     if (
       skillsSnapshot &&
@@ -864,7 +850,15 @@ async function agentCommandInternal(
     }
 
     // Persist explicit /command overrides to the session store when we have a key.
-    if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
+    const hasInitialSessionOverrides = Boolean(thinkOverride || verboseOverride);
+    const shouldPersistInitialSessionTouch =
+      opts.skipInitialSessionTouch !== true || hasInitialSessionOverrides;
+    if (
+      sessionStore &&
+      sessionKey &&
+      !suppressVisibleSessionEffects &&
+      shouldPersistInitialSessionTouch
+    ) {
       const now = Date.now();
       const entry = sessionStore[sessionKey] ??
         sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
@@ -929,6 +923,8 @@ async function agentCommandInternal(
       catalog: [],
       defaultProvider,
       defaultModel,
+      allowManifestNormalization: true,
+      allowPluginNormalization: true,
       ...modelManifestContext,
     });
 
@@ -940,6 +936,8 @@ async function agentCommandInternal(
         defaultProvider,
         defaultModel,
         agentId: sessionAgentId,
+        allowManifestNormalization: true,
+        allowPluginNormalization: true,
         ...modelManifestContext,
       });
       allowedModelCatalog = visibilityPolicy.allowedCatalog;
@@ -1123,12 +1121,14 @@ async function agentCommandInternal(
           : configuredThinkingCatalog;
     const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
     if (!resolvedThinkLevel) {
-      resolvedThinkLevel = resolveThinkingDefault({
-        cfg,
-        provider,
-        model,
-        catalog: thinkingCatalog,
-      });
+      resolvedThinkLevel =
+        normalizeThinkLevel(resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault) ??
+        resolveThinkingDefault({
+          cfg,
+          provider,
+          model,
+          catalog: thinkingCatalog,
+        });
     }
     if (
       !isThinkingLevelSupported({
@@ -1335,11 +1335,12 @@ async function agentCommandInternal(
             fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
           },
           classifyResult: ({ provider, model, result }) =>
-            classifyEmbeddedPiRunResultForModelFallback({
+            classifyEmbeddedAgentRunResultForModelFallback({
               provider,
               model,
               result,
             }),
+          abortSignal: opts.abortSignal,
           run: async (providerOverride, modelOverride, runOptions) => {
             const isAutoFallbackPrimaryProbeCandidate =
               autoFallbackPrimaryProbe &&
@@ -1375,6 +1376,7 @@ async function agentCommandInternal(
               sessionAgentId,
               sessionFile: attemptSessionFile,
               workspaceDir,
+              cwd,
               body,
               isFallbackRetry,
               resolvedThinkLevel,
@@ -1629,7 +1631,7 @@ async function agentCommandInternal(
             storePath: suppressVisibleSessionEffects ? undefined : storePath,
             sessionAgentId,
             threadId: opts.threadId,
-            sessionCwd: workspaceDir,
+            sessionCwd: effectiveCwd,
             config: cfg,
             embeddedAssistantGapFill,
           });
@@ -1654,6 +1656,7 @@ async function agentCommandInternal(
             storePath,
             sessionAgentId,
             workspaceDir,
+            cwd: effectiveCwd,
             agentDir,
             provider: result.meta.agentMeta?.provider ?? provider,
             model: result.meta.agentMeta?.model ?? model,

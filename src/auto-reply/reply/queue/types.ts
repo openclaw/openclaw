@@ -1,13 +1,14 @@
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
-import type { CurrentInboundPromptContext } from "../../../agents/pi-embedded-runner/run/params.js";
-import type { SkillSnapshot } from "../../../agents/skills.js";
+import type { CurrentInboundPromptContext } from "../../../agents/embedded-agent-runner/run/params.js";
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import type { SkillSnapshot } from "../../../skills/types.js";
 import type {
   QueuedReplyDeliveryCorrelation,
   QueuedReplyLifecycle,
@@ -44,6 +45,8 @@ export type FollowupRun = {
   prompt: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
   transcriptPrompt?: string;
+  /** Shared lifecycle owner for the current user-turn transcript append. */
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   currentInboundEventKind?: InboundEventKind;
   /** Explicit current-turn context that should be visible for this run but not persisted as user text. */
   currentInboundContext?: CurrentInboundPromptContext;
@@ -93,6 +96,8 @@ export type FollowupRun = {
     traceAuthorized?: boolean;
     sessionFile: string;
     workspaceDir: string;
+    /** Task working directory for runtime execution. Defaults to workspaceDir. */
+    cwd?: string;
     config: OpenClawConfig;
     skillsSnapshot?: SkillSnapshot;
     provider: string;

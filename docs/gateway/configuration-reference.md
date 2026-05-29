@@ -89,7 +89,7 @@ The `models` root also owns global model-catalog behavior.
 ## MCP
 
 OpenClaw-managed MCP server definitions live under `mcp.servers` and are
-consumed by embedded Pi and other runtime adapters. The `openclaw mcp list`,
+consumed by embedded OpenClaw and other runtime adapters. The `openclaw mcp list`,
 `show`, `set`, and `unset` commands manage this block without connecting to the
 target server during config edits.
 
@@ -197,7 +197,6 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
   plugins: {
     enabled: true,
     allow: ["voice-call"],
-    bundledDiscovery: "allowlist",
     deny: [],
     load: {
       paths: ["~/Projects/oss/voice-call-plugin"],
@@ -219,10 +218,6 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
 - **Config changes require a gateway restart.**
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
-- `bundledDiscovery`: defaults to `"allowlist"` for new configs, so a non-empty
-  `plugins.allow` also gates bundled provider plugins, including web-search
-  runtime providers. Doctor writes `"compat"` for migrated legacy allowlist
-  configs to preserve existing bundled provider behavior until you opt in.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
 - `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks `before_prompt_build` and ignores prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride`. Applies to native plugin hooks and supported bundle-provided hook directories.
@@ -243,7 +238,7 @@ The bundled `codex` plugin owns native Codex app-server harness settings under
 surface and [Codex harness](/plugins/codex-harness) for the runtime model.
 
 `codexPlugins` applies only to sessions that select the native Codex harness.
-It does not enable Codex plugins for Pi, normal OpenAI provider runs, ACP
+It does not enable Codex plugins for OpenClaw provider runs, ACP
 conversation bindings, or any non-Codex harness.
 
 ```json5
@@ -319,7 +314,7 @@ restart after changing native plugin config.
   - `memory.citations`
   - `memory.qmd.*`
   - `plugins.entries.memory-core.config.dreaming`
-- Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
+- Enabled Claude bundle plugins can also contribute embedded OpenClaw defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.
 
@@ -709,8 +704,8 @@ Validation and safety notes:
 - `transform` can point to a JS/TS module returning a hook action.
   - `transform.module` must be a relative path and stays within `hooks.transformsDir` (absolute paths and traversal are rejected).
   - Keep `hooks.transformsDir` under `~/.openclaw/hooks/transforms`; workspace skill directories are rejected. If `openclaw doctor` reports this path as invalid, move the transform module into the hooks transforms directory or remove `hooks.transformsDir`.
-- `agentId` routes to a specific agent; unknown IDs fall back to default.
-- `allowedAgentIds`: restricts explicit routing (`*` or omitted = allow all, `[]` = deny all).
+- `agentId` routes to a specific agent; unknown IDs fall back to the default agent.
+- `allowedAgentIds`: restricts effective agent routing, including the default-agent path when `agentId` is omitted (`*` or omitted = allow all, `[]` = deny all).
 - `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
 - `allowRequestSessionKey`: allow `/hooks/agent` callers and template-driven mapping session keys to set `sessionKey` (default: `false`).
 - `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`. It becomes required when any mapping or preset uses a templated `sessionKey`.
@@ -1273,11 +1268,11 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
-- `maxAttempts`: maximum retries for one-shot jobs on transient errors (default: `3`; range: `0`-`10`).
+- `maxAttempts`: maximum retries for cron jobs on transient errors (default: `3`; range: `0`-`10`).
 - `backoffMs`: array of backoff delays in ms for each retry attempt (default: `[30000, 60000, 300000]`; 1-10 entries).
 - `retryOn`: error types that trigger retries - `"rate_limit"`, `"overloaded"`, `"network"`, `"timeout"`, `"server_error"`. Omit to retry all transient types.
 
-Applies only to one-shot cron jobs. Recurring jobs use separate failure handling.
+One-shot jobs stay enabled until retry attempts are exhausted, then disable while keeping the final error state. Recurring jobs use the same transient retry policy to run again after backoff before their next scheduled slot; permanent errors or exhausted transient retries fall back to the normal recurring schedule with error backoff.
 
 ### `cron.failureAlert`
 

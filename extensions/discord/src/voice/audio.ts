@@ -1,31 +1,47 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
-import type { Readable } from "node:stream";
+import { Transform, type Readable, type TransformCallback } from "node:stream";
+import {
+  Application,
+  createDecoder as createLibopusDecoder,
+  createEncoder as createLibopusEncoder,
+  type OpusDecoderHandle as LibopusDecoder,
+  type OpusEncoderHandle as LibopusEncoder,
+} from "libopus-wasm";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import { resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
-const require = createRequire(import.meta.url);
-
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const BIT_DEPTH = 16;
+const FFMPEG_ERROR_OUTPUT_BYTES = 8_192;
+const DISCORD_OPUS_FRAME_SIZE = 960;
+const DISCORD_OPUS_FRAME_BYTES = DISCORD_OPUS_FRAME_SIZE * CHANNELS * (BIT_DEPTH / 8);
+const FFMPEG_PCM_ARGUMENTS = [
+  "-analyzeduration",
+  "0",
+  "-loglevel",
+  "error",
+  "-vn",
+  "-sn",
+  "-dn",
+  "-f",
+  "s16le",
+  "-ar",
+  String(SAMPLE_RATE),
+  "-ac",
+  String(CHANNELS),
+];
 
 type OpusDecoder = {
   decode: (buffer: Buffer) => Buffer | Promise<Buffer>;
   free?: () => Promise<void> | void;
 };
 
-type OpusDecoderFactory = {
-  load: () => OpusDecoder | Promise<OpusDecoder>;
-  name: string;
-};
-
-type OpusDecoderPreference = "native" | "opusscript" | "wasm";
-
 let warnedOpusMissing = false;
-let cachedOpusDecoderFactory: OpusDecoderFactory | null | "unresolved" = "unresolved";
 
 function buildWavBuffer(pcm: Buffer): Buffer {
   const blockAlign = (CHANNELS * BIT_DEPTH) / 8;
@@ -47,144 +63,183 @@ function buildWavBuffer(pcm: Buffer): Buffer {
   return Buffer.concat([header, pcm]);
 }
 
-function resolveOpusDecoderFactories(): OpusDecoderFactory[] {
-  const wasmFactory: OpusDecoderFactory = {
-    name: "opus-decoder",
-    load: async () => {
-      const { OpusDecoder } = require("opus-decoder") as {
-        OpusDecoder: new (options: {
-          channels: number;
-          forceStereo: boolean;
-          sampleRate: number;
-        }) => {
-          decodeFrame: (buffer: Buffer) => {
-            channelData: readonly Float32Array[];
-            errors?: readonly { message?: string }[];
-            samplesDecoded: number;
-          };
-          free: () => Promise<void> | void;
-          ready: Promise<void>;
-        };
-      };
-      const decoder = new OpusDecoder({
-        channels: CHANNELS,
-        forceStereo: true,
-        sampleRate: SAMPLE_RATE,
-      });
-      await decoder.ready;
-      return {
-        decode: (buffer) => {
-          const decoded = decoder.decodeFrame(buffer);
-          if (decoded.errors?.length) {
-            throw new Error(
-              decoded.errors.map((error) => error.message ?? "opus decode failed").join("; "),
-            );
-          }
-          return convertFloat32StereoToPcm(decoded.channelData, decoded.samplesDecoded);
-        },
-        free: () => decoder.free(),
-      };
-    },
-  };
-  const nativeFactory: OpusDecoderFactory = {
-    name: "@discordjs/opus",
-    load: () => {
-      const DiscordOpus = require("@discordjs/opus") as {
-        OpusEncoder: new (
-          sampleRate: number,
-          channels: number,
-        ) => {
-          decode: (buffer: Buffer) => Buffer;
-        };
-      };
-      return new DiscordOpus.OpusEncoder(SAMPLE_RATE, CHANNELS);
-    },
-  };
-  const opusscriptFactory: OpusDecoderFactory = {
-    name: "opusscript",
-    load: () => {
-      const OpusScript = require("opusscript") as {
-        new (sampleRate: number, channels: number, application: number): OpusDecoder;
-        Application: { AUDIO: number };
-      };
-      return new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
-    },
-  };
-  const preference = resolveOpusDecoderPreference();
-  if (preference === "native") {
-    return [nativeFactory];
-  }
-  if (preference === "opusscript") {
-    return [opusscriptFactory];
-  }
-  return [wasmFactory, nativeFactory];
-}
-
-export function resolveOpusDecoderPreference(
-  value = process.env.OPENCLAW_DISCORD_OPUS_DECODER,
-): OpusDecoderPreference {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "native" || normalized === "@discordjs/opus") {
-    return "native";
-  }
-  if (normalized === "opusscript") {
-    return "opusscript";
-  }
-  return "wasm";
-}
-
 async function createOpusDecoder(params: {
   onWarn: (message: string) => void;
 }): Promise<{ decoder: OpusDecoder; name: string } | null> {
-  if (cachedOpusDecoderFactory === null) {
+  let decoder: LibopusDecoder;
+  try {
+    decoder = await createLibopusDecoder({
+      channels: CHANNELS,
+      sampleRate: SAMPLE_RATE,
+    });
+  } catch (err) {
+    const failure = formatErrorMessage(err);
+    if (!warnedOpusMissing) {
+      warnedOpusMissing = true;
+      params.onWarn(
+        `discord voice: no usable opus decoder available (libopus-wasm: ${failure}); cannot decode voice audio`,
+      );
+    }
     return null;
   }
-  const factories =
-    cachedOpusDecoderFactory === "unresolved"
-      ? resolveOpusDecoderFactories()
-      : [cachedOpusDecoderFactory];
-  const failures: string[] = [];
+  return {
+    name: "libopus-wasm",
+    decoder: {
+      decode: (buffer) =>
+        pcmInt16ToBuffer(
+          decoder.decode(buffer, {
+            maxFrameSize: DISCORD_OPUS_FRAME_SIZE,
+          }),
+        ),
+      free: () => decoder.free(),
+    },
+  };
+}
 
-  for (const factory of factories) {
+export function createDiscordOpusEncodeStream(): Transform {
+  return new DiscordOpusEncodeStream();
+}
+
+export function createDiscordOpusPlaybackStream(input: Readable | string): Readable {
+  const inputSource = typeof input === "string" ? input : "pipe:0";
+  const ffmpeg = spawn(resolveFfmpegBin(), ["-i", inputSource, ...FFMPEG_PCM_ARGUMENTS, "pipe:1"], {
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  const opusStream = createDiscordOpusEncodeStream();
+  let stderr = "";
+  let ffmpegClosed = false;
+
+  ffmpeg.stderr.setEncoding("utf8");
+  ffmpeg.stderr.on("data", (chunk: string) => {
+    if (stderr.length < FFMPEG_ERROR_OUTPUT_BYTES) {
+      stderr = `${stderr}${chunk}`.slice(0, FFMPEG_ERROR_OUTPUT_BYTES);
+    }
+  });
+
+  ffmpeg.once("error", (err) => {
+    opusStream.destroy(err);
+  });
+  ffmpeg.once("close", (code, signal) => {
+    ffmpegClosed = true;
+    if (code && code !== 0) {
+      const suffix = stderr.trim() ? `: ${stderr.trim()}` : "";
+      opusStream.destroy(new Error(`ffmpeg exited with code ${code}${suffix}`));
+      return;
+    }
+    if (signal) {
+      opusStream.destroy(new Error(`ffmpeg exited with signal ${signal}`));
+    }
+  });
+
+  ffmpeg.stdout.on("error", (err) => opusStream.destroy(err));
+  ffmpeg.stdin.on("error", (err) => {
+    if ((err as NodeJS.ErrnoException).code !== "EPIPE") {
+      opusStream.destroy(err);
+    }
+  });
+  ffmpeg.stdout.pipe(opusStream);
+  opusStream.once("close", () => {
+    if (!ffmpegClosed && !opusStream.readableEnded) {
+      ffmpeg.kill();
+    }
+  });
+  if (typeof input !== "string") {
+    input.on("error", (err) => {
+      ffmpeg.stdin.destroy(err);
+      opusStream.destroy(err);
+    });
+    input.pipe(ffmpeg.stdin);
+  } else {
+    ffmpeg.stdin.end();
+  }
+  return opusStream;
+}
+
+class DiscordOpusEncodeStream extends Transform {
+  #buffer = Buffer.alloc(0);
+  #encoder: LibopusEncoder | null = null;
+  #encoderPromise: Promise<LibopusEncoder> | null = null;
+
+  constructor() {
+    super({ readableObjectMode: true });
+  }
+
+  async #getEncoder(): Promise<LibopusEncoder> {
+    if (!this.#encoderPromise) {
+      this.#encoderPromise = createLibopusEncoder({
+        application: Application.Audio,
+        channels: CHANNELS,
+        sampleRate: SAMPLE_RATE,
+      });
+    }
+    if (!this.#encoder) {
+      this.#encoder = await this.#encoderPromise;
+    }
+    return this.#encoder;
+  }
+
+  override async _transform(
+    chunk: Buffer,
+    _encoding: BufferEncoding,
+    done: TransformCallback,
+  ): Promise<void> {
     try {
-      const decoder = await factory.load();
-      cachedOpusDecoderFactory = factory;
-      return { decoder, name: factory.name };
+      const encoder = await this.#getEncoder();
+      this.#buffer =
+        this.#buffer.length > 0 ? Buffer.concat([this.#buffer, chunk]) : Buffer.from(chunk);
+      while (this.#buffer.length >= DISCORD_OPUS_FRAME_BYTES) {
+        const frame = this.#buffer.subarray(0, DISCORD_OPUS_FRAME_BYTES);
+        this.#buffer = this.#buffer.subarray(DISCORD_OPUS_FRAME_BYTES);
+        this.push(
+          Buffer.from(
+            encoder.encode(frame, {
+              frameSize: DISCORD_OPUS_FRAME_SIZE,
+            }),
+          ),
+        );
+      }
+      done();
     } catch (err) {
-      failures.push(`${factory.name}: ${formatErrorMessage(err)}`);
+      done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
     }
   }
 
-  cachedOpusDecoderFactory = null;
-  if (!warnedOpusMissing) {
-    warnedOpusMissing = true;
-    params.onWarn(
-      `discord voice: no usable opus decoder available (${failures.join("; ")}); cannot decode voice audio`,
-    );
+  override async _final(done: TransformCallback): Promise<void> {
+    try {
+      if (this.#buffer.length > 0) {
+        const encoder = await this.#getEncoder();
+        const frame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
+        this.#buffer.copy(frame);
+        this.#buffer = Buffer.alloc(0);
+        this.push(
+          Buffer.from(
+            encoder.encode(frame, {
+              frameSize: DISCORD_OPUS_FRAME_SIZE,
+            }),
+          ),
+        );
+      }
+      this.#freeEncoder();
+      done();
+    } catch (err) {
+      done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
+    }
   }
-  return null;
+
+  override _destroy(err: Error | null, done: (error?: Error | null) => void): void {
+    this.#freeEncoder();
+    done(err);
+  }
+
+  #freeEncoder(): void {
+    this.#encoder?.free();
+    this.#encoder = null;
+  }
 }
 
-function convertFloat32StereoToPcm(
-  channels: readonly Float32Array[],
-  samplesDecoded: number,
-): Buffer {
-  const left = channels[0];
-  if (!left || samplesDecoded <= 0) {
-    return Buffer.alloc(0);
-  }
-  const right = channels[1] ?? left;
-  const pcm = Buffer.alloc(samplesDecoded * CHANNELS * 2);
-  for (let index = 0; index < samplesDecoded; index += 1) {
-    const frameOffset = index * CHANNELS * 2;
-    pcm.writeInt16LE(floatToInt16(left[index] ?? 0), frameOffset);
-    pcm.writeInt16LE(floatToInt16(right[index] ?? left[index] ?? 0), frameOffset + 2);
-  }
-  return pcm;
-}
-
-function floatToInt16(value: number): number {
-  return Math.max(-32768, Math.min(32767, Math.round(value * 32767)));
+function pcmInt16ToBuffer(pcm: Int16Array): Buffer {
+  return Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
 }
 
 export async function decodeOpusStream(

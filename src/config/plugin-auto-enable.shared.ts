@@ -69,8 +69,11 @@ function extractProviderFromModelRef(value: string): string | null {
   return normalizeProviderId(trimmed.slice(0, slash));
 }
 
-function hasConfiguredEmbeddedHarnessRuntime(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return collectConfiguredAgentHarnessRuntimes(cfg, env, { includeEnvRuntime: false }).length > 0;
+function hasConfiguredEmbeddedHarnessRuntime(
+  cfg: OpenClawConfig,
+  _env: NodeJS.ProcessEnv,
+): boolean {
+  return collectConfiguredAgentHarnessRuntimes(cfg).length > 0;
 }
 
 function resolveAgentHarnessOwnerPluginIds(
@@ -651,9 +654,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     }
   }
 
-  for (const runtime of collectConfiguredAgentHarnessRuntimes(params.config, params.env, {
-    includeEnvRuntime: false,
-  })) {
+  for (const runtime of collectConfiguredAgentHarnessRuntimes(params.config)) {
     const pluginIds = resolveAgentHarnessOwnerPluginIds(params.registry, runtime);
     for (const pluginId of pluginIds) {
       changes.push({
@@ -1040,7 +1041,8 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     }
 
     const allow = next.plugins?.allow;
-    const allowMissing = Array.isArray(allow) && !allow.includes(entry.pluginId);
+    const hasRestrictiveAllowlist = Array.isArray(allow) && allow.length > 0;
+    const allowMissing = hasRestrictiveAllowlist && !allow.includes(entry.pluginId);
     const alreadyEnabled =
       builtInChannelId != null
         ? isBuiltInChannelAlreadyEnabled(next, builtInChannelId)
@@ -1050,7 +1052,9 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     }
 
     next = registerPluginEntry(next, entry, params.manifestRegistry);
-    next = ensurePluginAllowlisted(next, entry.pluginId);
+    if (hasRestrictiveAllowlist) {
+      next = ensurePluginAllowlisted(next, entry.pluginId);
+    }
     const reason = resolvePluginAutoEnableCandidateReason(entry);
     autoEnabledReasons.set(entry.pluginId, [
       ...(autoEnabledReasons.get(entry.pluginId) ?? []),

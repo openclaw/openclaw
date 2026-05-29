@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   applyPackageExtensionPeerMetadata,
+  collectCurrentShrinkwrapOverrides,
   collectOverrideViolations,
   collectPnpmLockViolations,
   createNpmShrinkwrapCommand,
@@ -9,8 +10,11 @@ import {
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
+  packageDependencyInputsChanged,
+  pnpmLockOverrideVersionForVersions,
   parsePnpmPackageKey,
   parseLockPackagePath,
+  restoreCurrentPnpmLockedPackages,
   shouldUseLegacyPeerDepsForShrinkwrap,
   shrinkwrapPackageDirsForChangedPaths,
 } from "../../scripts/generate-npm-shrinkwrap.mjs";
@@ -46,19 +50,23 @@ describe("generate-npm-shrinkwrap", () => {
     expect(exactVersionFromOverrideSpec("^8.4.0")).toBeNull();
   });
 
+  it("pins same-line pnpm lock versions to the newest locked patch", () => {
+    expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.38", "3.972.39"]))).toBe("3.972.39");
+    expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "3.973.0"]))).toBeNull();
+    expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "4.0.0"]))).toBeNull();
+  });
+
   it("parses nested scoped package paths", () => {
     expect(
-      parseLockPackagePath(
-        "node_modules/@earendil-works/pi-coding-agent/node_modules/@anthropic-ai/sdk",
-      ),
+      parseLockPackagePath("node_modules/@openclaw/codex/node_modules/@anthropic-ai/sdk"),
     ).toEqual([
       {
-        name: "@earendil-works/pi-coding-agent",
-        path: "node_modules/@earendil-works/pi-coding-agent",
+        name: "@openclaw/codex",
+        path: "node_modules/@openclaw/codex",
       },
       {
         name: "@anthropic-ai/sdk",
-        path: "node_modules/@earendil-works/pi-coding-agent/node_modules/@anthropic-ai/sdk",
+        path: "node_modules/@openclaw/codex/node_modules/@anthropic-ai/sdk",
       },
     ]);
   });
@@ -78,21 +86,24 @@ describe("generate-npm-shrinkwrap", () => {
   it("disables embedded shrinkwraps that hide workspace overrides", () => {
     const lockfile = {
       packages: {
-        "": {},
-        "node_modules/@earendil-works/pi-coding-agent": {
+        "": {
+          dependencies: {
+            "lru-cache": "^11.5.0",
+          },
+        },
+        "node_modules/@openclaw/codex": {
           version: "0.75.4",
           hasShrinkwrap: true,
         },
-        "node_modules/@earendil-works/pi-coding-agent/node_modules/protobufjs": {
+        "node_modules/@openclaw/codex/node_modules/protobufjs": {
           version: "7.5.9",
         },
-        "node_modules/@earendil-works/pi-coding-agent/node_modules/fetch-blob": {
+        "node_modules/@openclaw/codex/node_modules/fetch-blob": {
           version: "4.0.0",
         },
-        "node_modules/@earendil-works/pi-coding-agent/node_modules/fetch-blob/node_modules/node-domexception":
-          {
-            version: "1.0.0",
-          },
+        "node_modules/@openclaw/codex/node_modules/fetch-blob/node_modules/node-domexception": {
+          version: "1.0.0",
+        },
       },
     };
     const overrideRules = exactOverrideRulesFromOverrides({
@@ -102,13 +113,11 @@ describe("generate-npm-shrinkwrap", () => {
 
     expect(collectOverrideViolations(lockfile, overrideRules)).toHaveLength(2);
     expect(disableShrinkwrappedOverrideConflictSources(lockfile, overrideRules)).toEqual([
-      "node_modules/@earendil-works/pi-coding-agent",
+      "node_modules/@openclaw/codex",
     ]);
-    expect(lockfile.packages["node_modules/@earendil-works/pi-coding-agent"]).not.toHaveProperty(
-      "hasShrinkwrap",
-    );
+    expect(lockfile.packages["node_modules/@openclaw/codex"]).not.toHaveProperty("hasShrinkwrap");
     expect(
-      lockfile.packages["node_modules/@earendil-works/pi-coding-agent/node_modules/protobufjs"],
+      lockfile.packages["node_modules/@openclaw/codex/node_modules/protobufjs"],
     ).toBeUndefined();
   });
 
@@ -132,6 +141,147 @@ describe("generate-npm-shrinkwrap", () => {
         path: "node_modules/react",
       },
     ]);
+  });
+
+  it("restores current shrinkwrap entries when npm floats past pnpm's lock", () => {
+    const generated = {
+      packages: {
+        "": {
+          dependencies: {
+            "lru-cache": "^11.5.0",
+          },
+        },
+        "node_modules/lru-cache": {
+          version: "11.5.1",
+          resolved: "https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.1.tgz",
+          integrity: "sha512-new",
+        },
+        "node_modules/lru-memoizer/node_modules/lru-cache": {
+          version: "6.0.0",
+          resolved: "https://registry.npmjs.org/lru-cache/-/lru-cache-6.0.0.tgz",
+          integrity: "sha512-old-major",
+        },
+      },
+    };
+    const current = {
+      packages: {
+        "": {},
+        "node_modules/lru-cache": {
+          version: "11.5.0",
+          resolved: "https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.0.tgz",
+          integrity: "sha512-current",
+        },
+        "node_modules/lru-memoizer/node_modules/lru-cache": {
+          version: "6.0.0",
+          resolved: "https://registry.npmjs.org/lru-cache/-/lru-cache-6.0.0.tgz",
+          integrity: "sha512-old-major",
+        },
+      },
+    };
+    const pnpmPackages = new Set(["lru-cache@11.5.0", "lru-cache@6.0.0"]);
+
+    expect(restoreCurrentPnpmLockedPackages(generated, current, pnpmPackages)).toEqual({
+      packages: {
+        "": {
+          dependencies: {
+            "lru-cache": "^11.5.0",
+          },
+        },
+        "node_modules/lru-cache": current.packages["node_modules/lru-cache"],
+        "node_modules/lru-memoizer/node_modules/lru-cache":
+          current.packages["node_modules/lru-memoizer/node_modules/lru-cache"],
+      },
+    });
+  });
+
+  it("does not restore versions that no longer satisfy the dependency edge", () => {
+    const generated = {
+      packages: {
+        "": {
+          dependencies: {
+            "lru-cache": "^11.5.1",
+          },
+        },
+        "node_modules/lru-cache": {
+          version: "11.5.1",
+        },
+      },
+    };
+    const current = {
+      packages: {
+        "": {},
+        "node_modules/lru-cache": {
+          version: "11.5.0",
+        },
+      },
+    };
+
+    expect(
+      restoreCurrentPnpmLockedPackages(generated, current, new Set(["lru-cache@11.5.0"])),
+    ).toEqual(generated);
+  });
+
+  it("does not restore incompatible generated shrinkwrap versions", () => {
+    const generated = {
+      packages: {
+        "": {},
+        "node_modules/lru-cache": {
+          version: "12.0.0",
+        },
+      },
+    };
+    const current = {
+      packages: {
+        "": {},
+        "node_modules/lru-cache": {
+          version: "11.5.0",
+        },
+      },
+    };
+
+    expect(
+      restoreCurrentPnpmLockedPackages(generated, current, new Set(["lru-cache@11.5.0"])),
+    ).toEqual(generated);
+  });
+
+  it("pins current shrinkwrap versions that are still in the pnpm lock", () => {
+    const lockfile = {
+      packages: {
+        "": {},
+        "node_modules/@aws-sdk/core": {
+          version: "3.974.13",
+        },
+        "node_modules/@aws-sdk/core/node_modules/fast-xml-parser": {
+          version: "5.2.5",
+        },
+        "node_modules/react": {
+          version: "19.2.4",
+        },
+        "node_modules/react-dom": {
+          version: "19.2.4",
+        },
+        "node_modules/react-dom/node_modules/react": {
+          version: "19.2.5",
+        },
+        "node_modules/zod": {
+          version: "4.4.4",
+        },
+      },
+    };
+    const pnpmPackages = new Set([
+      "@aws-sdk/core@3.974.13",
+      "fast-xml-parser@5.2.5",
+      "react@19.2.4",
+      "react@19.2.5",
+      "react-dom@19.2.4",
+    ]);
+
+    expect(
+      collectCurrentShrinkwrapOverrides(lockfile, new Set(["@aws-sdk/core"]), pnpmPackages),
+    ).toEqual({
+      "fast-xml-parser": "5.2.5",
+      "react-dom": "19.2.4",
+    });
   });
 
   it("normalizes npm patch-version metadata drift", () => {
@@ -252,5 +402,23 @@ describe("generate-npm-shrinkwrap", () => {
     expect(packageDirs).toContain("");
     expect(packageDirs).toContain("extensions/acpx");
     expect(packageDirs.length).toBeGreaterThan(1);
+  });
+
+  it("detects package dependency inputs that make current shrinkwrap pins unsafe", () => {
+    expect(
+      packageDependencyInputsChanged(process.cwd(), ["scripts/generate-npm-shrinkwrap.mjs"]),
+    ).toBe(true);
+    expect(packageDependencyInputsChanged(process.cwd(), ["pnpm-lock.yaml"])).toBe(true);
+    expect(packageDependencyInputsChanged(process.cwd(), ["package.json"])).toBe(true);
+    expect(
+      packageDependencyInputsChanged(path.join(process.cwd(), "extensions/acpx"), [
+        "extensions/acpx/npm-shrinkwrap.json",
+      ]),
+    ).toBe(true);
+    expect(
+      packageDependencyInputsChanged(path.join(process.cwd(), "extensions/acpx"), [
+        "extensions/brave/package.json",
+      ]),
+    ).toBe(false);
   });
 });

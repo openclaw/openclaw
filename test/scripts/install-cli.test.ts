@@ -104,6 +104,18 @@ function writeNpmBeforePolicyFixture(path: string, argsLog: string) {
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("rejects installer options with missing values", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      parse_args --prefix --no-onboard
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout + result.stderr).toContain("Missing value for --prefix");
+    expect(result.stdout + result.stderr).not.toContain("unbound variable");
+  });
+
   it("keeps HOME for default prefix while OPENCLAW_HOME controls git checkout paths", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-home-"));
     const osHome = join(tmp, "os-home");
@@ -538,6 +550,173 @@ describe("install-cli.sh", () => {
       expect(readFileSync(apkLog, "utf8")).toContain("add --no-cache nodejs npm");
       expect(result.stdout).toContain(
         "Alpine Node package must provide Node >= 22.22.0 with node:sqlite",
+      );
+      expect(result.stdout).toContain("found v22.18.0");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("replaces cached generic Node runtimes below the runtime floor", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-generic-stale-node-"));
+    const prefix = join(tmp, "prefix");
+    const nodePrefixBin = join(prefix, "tools", "node-v22.22.0", "bin");
+    const staleNode = join(nodePrefixBin, "node");
+    const staleNpm = join(nodePrefixBin, "npm");
+    const newNode = join(tmp, "new-node");
+    const newNpm = join(tmp, "new-npm");
+
+    mkdirSync(nodePrefixBin, { recursive: true });
+    writeFileSync(
+      staleNode,
+      [
+        "#!/bin/bash",
+        'if [[ "${1:-}" == "-v" ]]; then',
+        "  printf 'v22.18.0\\n'",
+        "  exit 0",
+        "fi",
+        'if [[ "${1:-}" == "-e" ]]; then',
+        "  exit 0",
+        "fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(staleNpm, ["#!/bin/bash", "exit 0", ""].join("\n"));
+    writeFileSync(
+      newNode,
+      [
+        "#!/bin/bash",
+        'if [[ "${1:-}" == "-v" ]]; then',
+        "  printf 'v22.22.0\\n'",
+        "  exit 0",
+        "fi",
+        'if [[ "${1:-}" == "-e" ]]; then',
+        "  exit 0",
+        "fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(newNpm, ["#!/bin/bash", "exit 0", ""].join("\n"));
+    chmodSync(staleNode, 0o755);
+    chmodSync(staleNpm, 0o755);
+    chmodSync(newNode, 0o755);
+    chmodSync(newNpm, 0o755);
+
+    try {
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "os_detect() { printf 'linux\\n'; }",
+          "arch_detect() { printf 'x64\\n'; }",
+          "is_musl_linux() { return 1; }",
+          "detect_downloader() { :; }",
+          "require_bin() { :; }",
+          "download_file() {",
+          '  case "$1" in',
+          "    */SHASUMS256.txt) printf 'fixture-sha  node-v22.22.0-linux-x64.tar.gz\\n' > \"$2\" ;;",
+          "    *) printf 'node tarball fixture\\n' > \"$2\" ;;",
+          "  esac",
+          "}",
+          "sha256_file() { printf 'fixture-sha\\n'; }",
+          "tar() {",
+          "  local dest=''",
+          "  while [[ $# -gt 0 ]]; do",
+          '    if [[ "$1" == \'-C\' ]]; then dest="$2"; shift 2; else shift; fi',
+          "  done",
+          '  mkdir -p "$dest/bin"',
+          '  cp "$NEW_NODE" "$dest/bin/node"',
+          '  cp "$NEW_NPM" "$dest/bin/npm"',
+          "}",
+          `PREFIX=${JSON.stringify(prefix)}`,
+          "NODE_VERSION=22.22.0",
+          "NODE_VERSION_REQUESTED=1",
+          "install_node",
+        ].join("\n"),
+        {
+          NEW_NODE: newNode,
+          NEW_NPM: newNpm,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("Installing Node 22.22.0 (user-space)");
+      expect(result.stdout).not.toContain('"status":"skip"');
+      expect(readFileSync(staleNode, "utf8")).toContain("v22.22.0");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects downloaded generic Node runtimes below the runtime floor", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-generic-old-node-"));
+    const prefix = join(tmp, "prefix");
+    const newNode = join(tmp, "new-node");
+    const newNpm = join(tmp, "new-npm");
+
+    writeFileSync(
+      newNode,
+      [
+        "#!/bin/bash",
+        'if [[ "${1:-}" == "-v" ]]; then',
+        "  printf 'v22.18.0\\n'",
+        "  exit 0",
+        "fi",
+        'if [[ "${1:-}" == "-e" ]]; then',
+        "  exit 0",
+        "fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(newNpm, ["#!/bin/bash", "exit 0", ""].join("\n"));
+    chmodSync(newNode, 0o755);
+    chmodSync(newNpm, 0o755);
+
+    try {
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "os_detect() { printf 'linux\\n'; }",
+          "arch_detect() { printf 'x64\\n'; }",
+          "is_musl_linux() { return 1; }",
+          "detect_downloader() { :; }",
+          "require_bin() { :; }",
+          "download_file() {",
+          '  case "$1" in',
+          "    */SHASUMS256.txt) printf 'fixture-sha  node-v22.18.0-linux-x64.tar.gz\\n' > \"$2\" ;;",
+          "    *) printf 'node tarball fixture\\n' > \"$2\" ;;",
+          "  esac",
+          "}",
+          "sha256_file() { printf 'fixture-sha\\n'; }",
+          "tar() {",
+          "  local dest=''",
+          "  while [[ $# -gt 0 ]]; do",
+          '    if [[ "$1" == \'-C\' ]]; then dest="$2"; shift 2; else shift; fi',
+          "  done",
+          '  mkdir -p "$dest/bin"',
+          '  cp "$NEW_NODE" "$dest/bin/node"',
+          '  cp "$NEW_NPM" "$dest/bin/npm"',
+          "}",
+          `PREFIX=${JSON.stringify(prefix)}`,
+          "NODE_VERSION=22.18.0",
+          "NODE_VERSION_REQUESTED=1",
+          "install_node",
+        ].join("\n"),
+        {
+          NEW_NODE: newNode,
+          NEW_NPM: newNpm,
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(
+        "Installed Node 22.18.0 must provide Node >= 22.19.0 with node:sqlite",
       );
       expect(result.stdout).toContain("found v22.18.0");
     } finally {

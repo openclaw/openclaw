@@ -1,24 +1,22 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.5.26",
+  "version": "2026.5.28",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/discord",
-      "version": "2026.5.26",
+      "version": "2026.5.28",
       "dependencies": {
         "@discordjs/voice": "0.19.2",
         "discord-api-types": "0.38.48",
-        "https-proxy-agent": "9.0.0",
-        "opus-decoder": "0.7.11",
-        "opusscript": "0.1.1",
+        "libopus-wasm": "0.1.0",
         "typebox": "1.1.38",
         "undici": "8.3.0",
         "ws": "8.21.0"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.26"
+        "openclaw": ">=2026.5.28"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -76,12 +74,6 @@
       "dependencies": {
         "tslib": "^2.4.0"
       }
-    },
-    "node_modules/@eshaz/web-worker": {
-      "version": "1.2.2",
-      "resolved": "https://registry.npmjs.org/@eshaz/web-worker/-/web-worker-1.2.2.tgz",
-      "integrity": "sha512-WxXiHFmD9u/owrzempiDlBB1ZYqiLnm9s6aPc8AlFQalq2tKmqdmMr9GXOupDgzXtqnBipj8Un0gkIm7Sjf8mw==",
-      "license": "Apache-2.0"
     },
     "node_modules/@napi-rs/wasm-runtime": {
       "version": "1.1.4",
@@ -381,42 +373,6 @@
         "@types/node": "*"
       }
     },
-    "node_modules/@wasm-audio-decoders/common": {
-      "version": "9.0.7",
-      "resolved": "https://registry.npmjs.org/@wasm-audio-decoders/common/-/common-9.0.7.tgz",
-      "integrity": "sha512-WRaUuWSKV7pkttBygml/a6dIEpatq2nnZGFIoPTc5yPLkxL6Wk4YaslPM98OPQvWacvNZ+Py9xROGDtrFBDzag==",
-      "license": "MIT",
-      "dependencies": {
-        "@eshaz/web-worker": "1.2.2",
-        "simple-yenc": "^1.0.4"
-      }
-    },
-    "node_modules/agent-base": {
-      "version": "9.0.0",
-      "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-9.0.0.tgz",
-      "integrity": "sha512-TQf59BsZnytt8GdJKLPfUZ54g/iaUL2OWDSFCCvMOhsHduDQxO8xC4PNeyIkVcA5KwL2phPSv0douC0fgWzmnA==",
-      "license": "MIT",
-      "engines": {
-        "node": ">= 20"
-      }
-    },
-    "node_modules/debug": {
-      "version": "4.4.3",
-      "resolved": "https://registry.npmjs.org/debug/-/debug-4.4.3.tgz",
-      "integrity": "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==",
-      "license": "MIT",
-      "dependencies": {
-        "ms": "^2.1.3"
-      },
-      "engines": {
-        "node": ">=6.0"
-      },
-      "peerDependenciesMeta": {
-        "supports-color": {
-          "optional": true
-        }
-      }
-    },
     "node_modules/discord-api-types": {
       "version": "0.38.48",
       "resolved": "https://registry.npmjs.org/discord-api-types/-/discord-api-types-0.38.48.tgz",
@@ -426,43 +382,14 @@
         "scripts/actions/documentation"
       ]
     },
-    "node_modules/https-proxy-agent": {
-      "version": "9.0.0",
-      "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-9.0.0.tgz",
-      "integrity": "sha512-/MVmHp58WkOypgFhCLk4fzpPcFQvTJ/e6LBI7irpIO2HfxUbpmYoHF+KzipzJpxxzJu7aJNWQ0xojJ/dzV2G5g==",
+    "node_modules/libopus-wasm": {
+      "version": "0.1.0",
+      "resolved": "https://registry.npmjs.org/libopus-wasm/-/libopus-wasm-0.1.0.tgz",
+      "integrity": "sha512-/aurGcAVgy0GcBEUzFaX9pm9qv7zYcy8W5hBXFiK+cyqOXAX4lOS6rlFogkY9CcSIajhjnuXyixsbmziSHCDMQ==",
       "license": "MIT",
-      "dependencies": {
-        "agent-base": "9.0.0",
-        "debug": "^4.3.4"
-      },
       "engines": {
-        "node": ">= 20"
+        "node": ">=20"
       }
-    },
-    "node_modules/ms": {
-      "version": "2.1.3",
-      "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
-      "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
-      "license": "MIT"
-    },
-    "node_modules/opus-decoder": {
-      "version": "0.7.11",
-      "resolved": "https://registry.npmjs.org/opus-decoder/-/opus-decoder-0.7.11.tgz",
-      "integrity": "sha512-+e+Jz3vGQLxRTBHs8YJQPRPc1Tr+/aC6coV/DlZylriA29BdHQAYXhvNRKtjftof17OFng0+P4wsFIqQu3a48A==",
-      "license": "MIT",
-      "dependencies": {
-        "@wasm-audio-decoders/common": "9.0.7"
-      },
-      "funding": {
-        "type": "individual",
-        "url": "https://github.com/sponsors/eshaz"
-      }
-    },
-    "node_modules/opusscript": {
-      "version": "0.1.1",
-      "resolved": "https://registry.npmjs.org/opusscript/-/opusscript-0.1.1.tgz",
-      "integrity": "sha512-mL0fZZOUnXdZ78woRXp18lApwpp0lF5tozJOD1Wut0dgrA9WuQTgSels/CSmFleaAZrJi/nci5KOVtbuxeWoQA==",
-      "license": "MIT"
     },
     "node_modules/prism-media": {
       "version": "1.3.5",
@@ -488,16 +415,6 @@
         "opusscript": {
           "optional": true
         }
-      }
-    },
-    "node_modules/simple-yenc": {
-      "version": "1.0.4",
-      "resolved": "https://registry.npmjs.org/simple-yenc/-/simple-yenc-1.0.4.tgz",
-      "integrity": "sha512-5gvxpSd79e9a3V4QDYUqnqxeD4HGlhCakVpb6gMnDD7lexJggSBJRBO5h52y/iJrdXRilX9UCuDaIJhSWm5OWw==",
-      "license": "MIT",
-      "funding": {
-        "type": "individual",
-        "url": "https://github.com/sponsors/eshaz"
       }
     },
     "node_modules/tslib": {
