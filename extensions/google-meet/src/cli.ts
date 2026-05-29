@@ -1450,7 +1450,7 @@ export function registerGoogleMeetCli(params: {
       const code = await waitForGoogleMeetAuthCode({
         state,
         manual: Boolean(options.manual),
-        timeoutMs: (parseOptionalNumber(options.timeoutSec) ?? 300) * 1000,
+        timeoutMs: (parsePositiveNumber(options.timeoutSec, "timeout-sec") ?? 300) * 1000,
         authUrl,
         promptInput,
         writeLine: (message) => writeStdoutLine("%s", message),
