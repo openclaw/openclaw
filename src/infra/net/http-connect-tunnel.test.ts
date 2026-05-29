@@ -363,14 +363,15 @@ describe("openHttpConnectTunnel", () => {
       targetPort: 443,
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
+    const rejected = expect(tunnel).rejects.toThrow(
+      `Proxy CONNECT failed via http://proxy.example:8080: Proxy CONNECT timed out after ${MAX_TIMER_TIMEOUT_MS}ms`,
+    );
 
     await vi.advanceTimersByTimeAsync(1);
     expect(proxySocket.destroyed).toBe(false);
 
     await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS - 1);
-    await expect(tunnel).rejects.toThrow(
-      `Proxy CONNECT failed via http://proxy.example:8080: Proxy CONNECT timed out after ${MAX_TIMER_TIMEOUT_MS}ms`,
-    );
+    await rejected;
     expect(proxySocket.destroyed).toBe(true);
   });
 });
