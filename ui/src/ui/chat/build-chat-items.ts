@@ -83,6 +83,162 @@ function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
   }
 }
 
+function readToolCallId(value: unknown): string | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const id =
+    record.id ?? record.toolCallId ?? record.tool_call_id ?? record.toolUseId ?? record.tool_use_id;
+  return typeof id === "string" && id.trim() ? id.trim() : null;
+}
+
+function readToolName(value: unknown): string | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const name = record.name ?? record.toolName ?? record.tool_name;
+  return typeof name === "string" && name.trim() ? name.trim() : null;
+}
+
+function readTextContent(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  for (const key of ["text", "content"] as const) {
+    const text = record[key];
+    if (typeof text === "string") {
+      return text;
+    }
+  }
+  return null;
+}
+
+function parseObjectText(text: string): Record<string, unknown> | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+  try {
+    return asRecord(JSON.parse(trimmed));
+  } catch {
+    return null;
+  }
+}
+
+function hasSuccessfulMessageToolResult(message: unknown): boolean {
+  const record = asRecord(message);
+  if (!record || readToolName(record) !== "message" || record.isError === true) {
+    return false;
+  }
+  const content = Array.isArray(record.content) ? record.content : [record.content];
+  for (const item of content) {
+    const text = readTextContent(item);
+    if (!text) {
+      continue;
+    }
+    const parsed = parseObjectText(text);
+    if (!parsed) {
+      continue;
+    }
+    if (
+      parsed.ok === true ||
+      parsed.status === "ok" ||
+      parsed.deliveryStatus === "sent" ||
+      typeof parsed.messageId === "string"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectSuccessfulMessageToolCallIds(messages: unknown[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (!hasSuccessfulMessageToolResult(message)) {
+      continue;
+    }
+    const id = readToolCallId(message);
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+function hasAssistantTextContent(message: unknown): boolean {
+  const content = asRecord(message)?.content;
+  if (typeof content === "string") {
+    return content.trim().length > 0;
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    const record = asRecord(block);
+    return (
+      record?.type === "text" && typeof record.text === "string" && record.text.trim().length > 0
+    );
+  });
+}
+
+function extractMessageToolVisibleReply(
+  message: unknown,
+  successfulToolCallIds: Set<string>,
+): string | null {
+  const record = asRecord(message);
+  const rawRole = typeof record?.role === "string" ? record.role.toLowerCase() : "";
+  if (!record || rawRole !== "assistant") {
+    return null;
+  }
+  if (hasAssistantTextContent(message)) {
+    return null;
+  }
+  const content = Array.isArray(record.content) ? record.content : [];
+  for (const block of content) {
+    const blockRecord = asRecord(block);
+    if (!blockRecord) {
+      continue;
+    }
+    const type = typeof blockRecord.type === "string" ? blockRecord.type.toLowerCase() : "";
+    if (type !== "toolcall" && type !== "tool_call" && type !== "tooluse" && type !== "tool_use") {
+      continue;
+    }
+    if (readToolName(blockRecord) !== "message") {
+      continue;
+    }
+    const id = readToolCallId(blockRecord);
+    if (!id || !successfulToolCallIds.has(id)) {
+      continue;
+    }
+    const params =
+      asRecord(blockRecord.arguments) ?? asRecord(blockRecord.args) ?? asRecord(blockRecord.input);
+    if (!params || params.action !== "send") {
+      continue;
+    }
+    const visibleText = params.message;
+    if (typeof visibleText === "string" && visibleText.trim()) {
+      return visibleText;
+    }
+  }
+  return null;
+}
+
+function projectedMessageToolReply(message: unknown, text: string): Record<string, unknown> {
+  const record = asRecord(message) ?? {};
+  return {
+    ...record,
+    role: "assistant",
+    content: [{ type: "text", text }],
+  };
+}
+
 function extractChatMessagePreview(toolMessage: unknown): {
   preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
   text: string | null;
@@ -416,30 +572,45 @@ function estimateMessageRenderChars(message: unknown, limit: number): number {
   return Math.max(chars, 1);
 }
 
-function isHiddenToolMessage(message: unknown, showToolCalls: boolean): boolean {
+function isHiddenToolMessage(
+  message: unknown,
+  showToolCalls: boolean,
+  successfulMessageToolCallIds: Set<string>,
+): boolean {
   if (showToolCalls) {
+    return false;
+  }
+  if (extractMessageToolVisibleReply(message, successfulMessageToolCallIds)) {
     return false;
   }
   return safeNormalizeMessage(message)?.role.toLowerCase() === "toolresult";
 }
 
-function countVisibleHistoryMessages(messages: unknown[], showToolCalls: boolean): number {
+function countVisibleHistoryMessages(
+  messages: unknown[],
+  showToolCalls: boolean,
+  successfulMessageToolCallIds: Set<string>,
+): number {
   let count = 0;
   for (const message of messages) {
-    if (!isHiddenToolMessage(message, showToolCalls)) {
+    if (!isHiddenToolMessage(message, showToolCalls, successfulMessageToolCallIds)) {
       count += 1;
     }
   }
   return count;
 }
 
-function resolveHistoryStartIndex(messages: unknown[], showToolCalls: boolean): number {
+function resolveHistoryStartIndex(
+  messages: unknown[],
+  showToolCalls: boolean,
+  successfulMessageToolCallIds: Set<string>,
+): number {
   let visibleCount = 0;
   let renderChars = 0;
   let startIndex = messages.length;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (isHiddenToolMessage(message, showToolCalls)) {
+    if (isHiddenToolMessage(message, showToolCalls, successfulMessageToolCallIds)) {
       continue;
     }
     if (visibleCount >= CHAT_HISTORY_RENDER_LIMIT) {
@@ -462,6 +633,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
+  const successfulMessageToolCallIds = collectSuccessfulMessageToolCallIds(history);
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
   const liftedCanvasSources = tools
     .map((tool) => extractChatMessagePreview(tool))
@@ -470,14 +642,20 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     text: string | null;
     timestamp: number | null;
   }>;
-  const historyStart = resolveHistoryStartIndex(history, props.showToolCalls);
+  const historyStart = resolveHistoryStartIndex(
+    history,
+    props.showToolCalls,
+    successfulMessageToolCallIds,
+  );
   const hiddenHistoryCount = countVisibleHistoryMessages(
     history.slice(0, historyStart),
     props.showToolCalls,
+    successfulMessageToolCallIds,
   );
   const visibleHistoryCount = countVisibleHistoryMessages(
     history.slice(historyStart),
     props.showToolCalls,
+    successfulMessageToolCallIds,
   );
   if (hiddenHistoryCount > 0) {
     items.push({
@@ -517,12 +695,22 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
 
-    if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
-      continue;
-    }
-
     const searchQuery = props.searchQuery ?? "";
     if (props.searchOpen && searchQuery.trim() && !messageMatchesSearchQuery(msg, searchQuery)) {
+      continue;
+    }
+    const visibleMessageToolReply = extractMessageToolVisibleReply(
+      msg,
+      successfulMessageToolCallIds,
+    );
+    if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
+      if (visibleMessageToolReply) {
+        items.push({
+          kind: "message",
+          key: `${messageKey(msg, i)}:message-tool-visible-reply`,
+          message: projectedMessageToolReply(msg, visibleMessageToolReply),
+        });
+      }
       continue;
     }
     if (!hasRenderableNormalizedMessage(msg) && normalized.role.toLowerCase() !== "assistant") {
@@ -534,6 +722,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       key: messageKey(msg, i),
       message: msg,
     });
+    if (visibleMessageToolReply) {
+      items.push({
+        kind: "message",
+        key: `${messageKey(msg, i)}:message-tool-visible-reply`,
+        message: projectedMessageToolReply(msg, visibleMessageToolReply),
+      });
+    }
   }
   for (const liftedCanvasSource of liftedCanvasSources) {
     const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);

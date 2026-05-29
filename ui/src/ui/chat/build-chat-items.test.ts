@@ -410,6 +410,129 @@ describe("buildChatItems", () => {
     expect(messageRecord(requireGroup(items[1])).content).toBe("Missing timestamp.");
   });
 
+  it("projects successful message-tool sends as assistant bubbles", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message-send",
+              name: "message",
+              arguments: {
+                action: "send",
+                message: "Visible reply sent through the message tool.",
+              },
+            },
+          ],
+          timestamp: 1_000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-message-send",
+          toolName: "message",
+          isError: false,
+          content: [
+            {
+              type: "toolResult",
+              name: "message",
+              text: JSON.stringify({
+                ok: true,
+                messageId: "42",
+                chatId: "chat-1",
+              }),
+            },
+          ],
+          timestamp: 1_001,
+        },
+      ],
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["tool", "assistant", "tool"]);
+    expect(messageRecord(groups[1]).content).toStrictEqual([
+      { type: "text", text: "Visible reply sent through the message tool." },
+    ]);
+  });
+
+  it("projects successful message-tool sends when tool calls are hidden", () => {
+    const groups = messageGroups({
+      showToolCalls: false,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message-send-hidden-tools",
+              name: "message",
+              arguments: {
+                action: "send",
+                message: "Readable reply without tool plumbing.",
+              },
+            },
+          ],
+          timestamp: 1_000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-message-send-hidden-tools",
+          toolName: "message",
+          isError: false,
+          content: [
+            {
+              type: "toolResult",
+              name: "message",
+              text: JSON.stringify({
+                ok: true,
+                messageId: "43",
+                chatId: "chat-1",
+              }),
+            },
+          ],
+          timestamp: 1_001,
+        },
+      ],
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["assistant"]);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "Readable reply without tool plumbing." },
+    ]);
+  });
+
+  it("does not project failed message-tool sends as assistant bubbles", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-message-send-failed",
+              name: "message",
+              arguments: {
+                action: "send",
+                message: "This should not be projected.",
+              },
+            },
+          ],
+          timestamp: 1_000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-message-send-failed",
+          toolName: "message",
+          isError: true,
+          content: "send failed",
+          timestamp: 1_001,
+        },
+      ],
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["tool"]);
+  });
+
   it("attaches lifted canvas previews to the nearest assistant turn", () => {
     const groups = messageGroups({
       messages: [
