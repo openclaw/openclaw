@@ -196,7 +196,7 @@ describe("overflow compaction in run loop", () => {
     mockedMarkAuthProfileSuccess.mockReturnValueOnce(successPromise);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
 
-    const result = await runEmbeddedPiAgent(baseParams);
+    const result = await runEmbeddedAgent(baseParams);
 
     expect(result.meta.error).toBeUndefined();
     expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledTimes(1);
