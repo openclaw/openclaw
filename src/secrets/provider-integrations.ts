@@ -33,6 +33,7 @@ export type SecretProviderIntegrationResolution =
     };
 
 const NODE_COMMAND_PLACEHOLDER = "${node}";
+const PLUGIN_INTEGRATION_PROVIDER_ID_MAX_LENGTH = 128;
 
 function isPathInsideOrEqual(rootDir: string, candidate: string): boolean {
   const relative = path.relative(path.resolve(rootDir), path.resolve(candidate));
@@ -287,6 +288,10 @@ function createPluginIntegrationProviderConfig(params: {
   };
 }
 
+function isValidPluginIntegrationProviderId(value: string): boolean {
+  return value.length > 0 && value.length <= PLUGIN_INTEGRATION_PROVIDER_ID_MAX_LENGTH;
+}
+
 export function isPluginIntegrationSecretProviderConfig(
   value: unknown,
 ): value is PluginIntegrationSecretProviderConfig {
@@ -374,7 +379,11 @@ export function listSecretProviderIntegrationPresets(params: {
       record.secretProviderIntegrations ?? {},
     )) {
       const providerAlias = normalizeOptionalString(integration.providerAlias) ?? integrationId;
-      if (!isValidSecretProviderAlias(providerAlias)) {
+      if (
+        !isValidSecretProviderAlias(providerAlias) ||
+        !isValidPluginIntegrationProviderId(record.id) ||
+        !isValidPluginIntegrationProviderId(integrationId)
+      ) {
         continue;
       }
       const providerConfig = materializeExecProviderConfig(integration, record, env);

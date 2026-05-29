@@ -220,6 +220,70 @@ describe("secret provider integration presets", () => {
     expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
   });
 
+  it("skips presets whose persisted plugin integration IDs would violate config schema limits", () => {
+    const rootDir = makeTempDir();
+    const longPluginRootDir = makeTempDir();
+    const longPluginId = `plugin-${"x".repeat(129)}`;
+    const longIntegrationId = `integration-${"x".repeat(129)}`;
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+    fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n", "utf8");
+    fs.writeFileSync(path.join(longPluginRootDir, "index.ts"), "export default {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(longPluginRootDir, "resolve.mjs"),
+      "process.stdin.resume();\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "long-integration-secrets",
+        secretProviderIntegrations: {
+          [longIntegrationId]: {
+            providerAlias: "short-alias",
+            source: "exec",
+            command: "${node}",
+            args: ["./resolve.mjs"],
+          },
+        },
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(longPluginRootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: longPluginId,
+        secretProviderIntegrations: {
+          vault: {
+            providerAlias: "short-plugin-alias",
+            source: "exec",
+            command: "${node}",
+            args: ["./resolve.mjs"],
+          },
+        },
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      }),
+      "utf8",
+    );
+
+    const registry = loadPluginManifestRegistry({
+      candidates: [
+        createCandidate(rootDir, "long-integration-secrets"),
+        createCandidate(longPluginRootDir, longPluginId),
+      ],
+    });
+
+    expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
+  });
+
   it.each<PluginOrigin>(["bundled", "global"])(
     "skips non-node manifest preset commands for %s plugin roots",
     (origin) => {
