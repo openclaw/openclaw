@@ -2098,7 +2098,7 @@ describe("scripts/test-projects full-suite sharding", () => {
   it("runs explicit leaf project config targets as whole configs", () => {
     const args = [
       "test/vitest/vitest.agents-core.config.ts",
-      "test/vitest/vitest.agents-pi-embedded.config.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
       "test/vitest/vitest.agents-support.config.ts",
       "test/vitest/vitest.agents-tools.config.ts",
     ];
