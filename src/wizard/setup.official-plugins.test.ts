@@ -28,6 +28,7 @@ describe("resolveOfficialPluginOnboardingInstallEntries", () => {
     expect(pluginIds).toContain("diagnostics-otel");
     expect(pluginIds).toContain("diagnostics-prometheus");
     expect(pluginIds).toContain("acpx");
+    expect(pluginIds).toContain("tokenjuice");
     expect(pluginIds).not.toContain("brave");
     expect(pluginIds).not.toContain("codex");
     expect(pluginIds).not.toContain("discord");
