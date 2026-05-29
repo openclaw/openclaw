@@ -116,6 +116,7 @@ function makeAnthropicTransportModel(
     baseUrl?: string;
     reasoning?: boolean;
     maxTokens?: number;
+    thinkingLevelMap?: AnthropicMessagesModel["thinkingLevelMap"];
     headers?: Record<string, string>;
     requestTransport?: RequestTransportConfig;
   } = {},
@@ -132,6 +133,7 @@ function makeAnthropicTransportModel(
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: params.maxTokens ?? 8192,
+      ...(params.thinkingLevelMap ? { thinkingLevelMap: params.thinkingLevelMap } : {}),
       ...(params.headers ? { headers: params.headers } : {}),
     } satisfies AnthropicMessagesModel,
     params.requestTransport ?? {
