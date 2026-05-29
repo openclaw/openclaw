@@ -242,6 +242,38 @@ describe("Telegram ingress spool", () => {
     });
   });
 
+  it("handles ENOENT race when processing file is removed before recovery rename", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 45, message: { text: "vanishes" } },
+      });
+      const update = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!update) {
+        throw new Error("Expected a spooled update");
+      }
+      const claimed = await claimTelegramSpooledUpdate(update);
+      if (!claimed) {
+        throw new Error("Expected a claimed update");
+      }
+      const now = Date.now();
+      const oldClaimTime = new Date(now - TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS - 1);
+      await fs.utimes(claimed.path, oldClaimTime, oldClaimTime);
+
+      // Simulate TOCTOU race: remove the .processing file after readdir but
+      // before the recovery function tries to rename it.
+      await fs.unlink(claimed.path);
+
+      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
+        spoolDir,
+        now,
+      });
+
+      expect(recovered).toBe(0);
+      expect(await fs.readdir(spoolDir)).toEqual([]);
+    });
+  });
+
   it("does not treat stale claims with reused pids as live-owned", () => {
     const now = Date.now();
     expect(
