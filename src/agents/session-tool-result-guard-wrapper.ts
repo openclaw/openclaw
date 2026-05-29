@@ -37,6 +37,11 @@ export function guardSessionManager(
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void | Promise<void>;
+    onMessagePersisted?: (
+      message: AgentMessage,
+      context: { beforeWriteSnapshot?: unknown },
+    ) => void | Promise<void>;
+    beforeMessagePersist?: () => unknown;
   },
 ): GuardedSessionManager {
   if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
@@ -113,6 +118,8 @@ export function guardSessionManager(
         : undefined,
     suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
+    onMessagePersisted: opts?.onMessagePersisted,
+    beforeMessagePersist: opts?.beforeMessagePersist,
     onUserMessagePersisted: opts?.onUserMessagePersisted,
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;

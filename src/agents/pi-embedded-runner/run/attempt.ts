@@ -8,13 +8,17 @@ import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../../../config/config.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
   loadSessionStore,
   runQuotaSuspensionMaintenance,
   updateSessionStoreEntry,
 } from "../../../config/sessions/store.js";
+import {
+  bindOwnedSessionTranscriptWrites,
+  withOwnedSessionTranscriptWrites,
+} from "../../../config/sessions/transcript-write-context.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
@@ -323,10 +327,13 @@ import {
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 import {
+  EmbeddedAttemptSessionTakeoverError,
   createEmbeddedAttemptSessionLockController,
   installPromptSubmissionLockRelease,
   installSessionExternalHookWriteLock,
   installSessionEventWriteLock,
+  readSessionFileFingerprintSync,
+  type SessionFileFingerprint,
 } from "./attempt.session-lock.js";
 import {
   createYieldAbortedResponse,
@@ -361,7 +368,6 @@ import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
   resolveRunTimeoutDuringCompaction,
-  resolveRunTimeoutWithCompactionGraceMs,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
@@ -774,8 +780,32 @@ async function cancelQueuedSteeringMessage(
 
 export const __testing = {
   cancelQueuedSteeringMessage,
+  resolveEmbeddedAttemptSessionWriteLockOptions,
+  resolveAttemptStreamAuthProfileId,
   steerAndWaitForTranscriptCommit,
 };
+
+function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
+  config?: OpenClawConfig;
+  compactionTimeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+}): { timeoutMs: number; staleMs: number; maxHoldMs: number } {
+  // Bound embedded-attempt lock holds to the compaction window, not the full run timeout.
+  // With defaults this permits roughly 900s compaction time plus the shared 120s
+  // timeout grace before the watchdog releases a stuck live-process lock.
+  return resolveSessionWriteLockOptions(params.config, {
+    env: params.env,
+    maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
+      timeoutMs: params.compactionTimeoutMs,
+    }),
+  });
+}
+
+function resolveAttemptStreamAuthProfileId(
+  params: Pick<EmbeddedRunAttemptParams, "authProfileId" | "runtimePlan">,
+): string | undefined {
+  return params.runtimePlan?.auth.forwardedAuthProfileId;
+}
 
 async function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedPiActiveSessionSteerTarget,
@@ -986,6 +1016,28 @@ function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionM
 
 export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
   return params.promptErrorSource !== "hook:before_agent_run";
+}
+
+function shouldPreservePromptErrorAfterCleanupError(params: {
+  promptError: unknown;
+  cleanupError: unknown;
+}): boolean {
+  return (
+    Boolean(params.promptError) &&
+    params.cleanupError instanceof EmbeddedAttemptSessionTakeoverError
+  );
+}
+
+class EmbeddedAttemptPromptErrorWithCleanupTakeoverError extends Error {
+  readonly promptError: unknown;
+  readonly cleanupError: EmbeddedAttemptSessionTakeoverError;
+
+  constructor(params: { promptError: unknown; cleanupError: EmbeddedAttemptSessionTakeoverError }) {
+    super(formatErrorMessage(params.promptError), { cause: params.cleanupError });
+    this.name = "EmbeddedAttemptSessionTakeoverError";
+    this.promptError = params.promptError;
+    this.cleanupError = params.cleanupError;
+  }
 }
 
 function hasVisiblePendingToolMediaReply(
@@ -1231,6 +1283,8 @@ export async function runEmbeddedAttempt(
     | undefined;
   let beforeAgentRunBlocked = false;
   let beforeAgentRunBlockedBy: string | undefined;
+  // Releases the eager session lock if post-prompt code exits before cleanup.
+  let releaseRetainedSessionLock: (() => Promise<void>) | undefined;
   try {
     const skillsSnapshotForRun =
       sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? undefined : params.skillsSnapshot;
@@ -2019,13 +2073,10 @@ export async function runEmbeddedAttempt(
     let systemPromptText = systemPromptOverride();
     prepStages.mark("system-prompt");
 
-    const sessionWriteLockOptions = resolveSessionWriteLockOptions(params.config, {
-      maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
-          runTimeoutMs: params.timeoutMs,
-          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
-        }),
-      }),
+    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
+    const sessionWriteLockOptions = resolveEmbeddedAttemptSessionWriteLockOptions({
+      config: params.config,
+      compactionTimeoutMs,
     });
     const sessionLockController = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock,
@@ -2034,6 +2085,7 @@ export async function runEmbeddedAttempt(
         ...sessionWriteLockOptions,
       },
     });
+    releaseRetainedSessionLock = () => sessionLockController.dispose();
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
@@ -2079,6 +2131,21 @@ export async function runEmbeddedAttempt(
         suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
         suppressTranscriptOnlyAssistantPersistence:
           params.suppressTranscriptOnlyAssistantPersistence,
+        beforeMessagePersist: () => readSessionFileFingerprintSync(params.sessionFile),
+        onMessagePersisted: (_message, { beforeWriteSnapshot }) => {
+          // Publish pi's appendFileSync write to the controller's owned-write
+          // map so subsequent assertSessionFileFence calls accept the lane's
+          // own writes via the owned-write match path. The trust check inside
+          // publishOwnedPostMessageWrite runs on beforeWriteSnapshot (the
+          // fingerprint captured immediately BEFORE pi's appendFileSync), so
+          // if an external mutation slipped in between releaseForPrompt and
+          // this append, the publish is skipped and the combined post-write
+          // state stays unowned — preserving fail-closed takeover detection.
+          // See #86572.
+          sessionLockController.publishOwnedPostMessageWrite(
+            beforeWriteSnapshot as SessionFileFingerprint | undefined,
+          );
+        },
         onUserMessagePersisted: (message) => {
           params.onUserMessagePersisted?.(message);
         },
@@ -3123,11 +3190,27 @@ export async function runEmbeddedAttempt(
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> =>
         abortableWithSignal(runAbortController.signal, promise);
+      const ownedTranscriptWriteContext = {
+        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey,
+        withSessionWriteLock: <T>(
+          operation: () => Promise<T> | T,
+          options?: { publishOwnedWrite?: boolean },
+        ) => sessionLockController.withSessionWriteLock(operation, options),
+      };
       const promptActiveSession = (
         prompt: string,
         options?: Parameters<typeof activeSession.prompt>[1],
       ): Promise<void> =>
-        abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options)));
+        withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
+          abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options))),
+        );
+      const onBlockReply = params.onBlockReply
+        ? bindOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, params.onBlockReply)
+        : undefined;
+      const onBlockReplyFlush = params.onBlockReplyFlush
+        ? bindOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, params.onBlockReplyFlush)
+        : undefined;
 
       const subscription = subscribeEmbeddedPiSession(
         buildEmbeddedSubscriptionParams({
@@ -3144,8 +3227,8 @@ export async function runEmbeddedAttempt(
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
           onReasoningEnd: params.onReasoningEnd,
-          onBlockReply: params.onBlockReply,
-          onBlockReplyFlush: params.onBlockReplyFlush,
+          onBlockReply,
+          onBlockReplyFlush,
           blockReplyBreak: params.blockReplyBreak,
           blockReplyChunking: params.blockReplyChunking,
           onPartialReply: params.onPartialReply,
@@ -3776,6 +3859,7 @@ export async function runEmbeddedAttempt(
               waitForSessionEvents: (sessionToDrain) =>
                 sessionLockController.waitForSessionEvents(sessionToDrain),
               releaseForPrompt: () => sessionLockController.releaseForPrompt(),
+              reacquireAfterPrompt: () => sessionLockController.reacquireAfterPrompt(),
             });
           }
 
@@ -4130,8 +4214,8 @@ export async function runEmbeddedAttempt(
           // user receives the assistant response immediately.  Without this,
           // coalesced/buffered blocks stay in the pipeline until compaction
           // finishes — which can take minutes on large contexts (#35074).
-          if (params.onBlockReplyFlush) {
-            await params.onBlockReplyFlush();
+          if (onBlockReplyFlush) {
+            await onBlockReplyFlush();
           }
 
           // Skip compaction wait when yield aborted the run — the signal is
@@ -4816,8 +4900,17 @@ export async function runEmbeddedAttempt(
       } catch (err) {
         cleanupError = err;
       }
+      const synthesizedCleanupTakeoverError =
+        !cleanupError && promptError && sessionLockController.hasSessionTakeover()
+          ? new EmbeddedAttemptSessionTakeoverError(params.sessionFile)
+          : undefined;
+      const cleanupFailure = cleanupError ?? synthesizedCleanupTakeoverError;
+      const shouldPreservePromptError = shouldPreservePromptErrorAfterCleanupError({
+        promptError,
+        cleanupError: cleanupFailure,
+      });
       emitDiagnosticRunCompleted?.(
-        cleanupError
+        cleanupFailure
           ? "error"
           : beforeAgentRunBlocked
             ? "blocked"
@@ -4826,16 +4919,37 @@ export async function runEmbeddedAttempt(
               : aborted || timedOut || idleTimedOut || timedOutDuringCompaction
                 ? "aborted"
                 : "completed",
-        cleanupError ?? promptError,
+        shouldPreservePromptError ? promptError : (cleanupFailure ?? promptError),
         beforeAgentRunBlocked
           ? { blockedBy: beforeAgentRunBlockedBy ?? "before_agent_run" }
           : undefined,
       );
-      if (cleanupError) {
-        await Promise.reject(cleanupError);
+      if (cleanupFailure) {
+        if (shouldPreservePromptError) {
+          log.warn(
+            `embedded attempt cleanup detected session takeover after prompt failure; preserving prompt error: ` +
+              `runId=${params.runId} sessionId=${params.sessionId} ` +
+              `promptError=${formatErrorMessage(promptError)} cleanupError=${formatErrorMessage(cleanupFailure)}`,
+          );
+          await Promise.reject(
+            new EmbeddedAttemptPromptErrorWithCleanupTakeoverError({
+              promptError,
+              cleanupError: cleanupFailure as EmbeddedAttemptSessionTakeoverError,
+            }),
+          );
+        } else {
+          await Promise.reject(cleanupFailure);
+        }
       }
     }
   } finally {
+    try {
+      await releaseRetainedSessionLock?.();
+    } catch (releaseErr) {
+      log.error(
+        `failed to release retained session lock on attempt teardown: runId=${params.runId} ${String(releaseErr)}`,
+      );
+    }
     emitDiagnosticRunCompleted?.(
       aborted ? "aborted" : "error",
       promptError ?? new Error("run exited before diagnostic completion"),

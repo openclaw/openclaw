@@ -37,6 +37,7 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
+  __testing as attemptTesting,
 } from "./attempt.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
@@ -127,6 +128,18 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
     expect(context.jobId).toBe("job-1");
     expect(context.memoryFlushWritePath).toBe("memory/log.md");
     expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
+  });
+});
+
+describe("resolveEmbeddedAttemptSessionWriteLockOptions", () => {
+  it("bounds post-prompt session lock max hold to compaction timeout instead of run timeout", () => {
+    const options = attemptTesting.resolveEmbeddedAttemptSessionWriteLockOptions({
+      config: {},
+      compactionTimeoutMs: 600_000,
+      env: {},
+    });
+
+    expect(options.maxHoldMs).toBe(720_000);
   });
 });
 

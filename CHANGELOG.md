@@ -2,6 +2,15 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.5.18-boon.1
+
+Fork-only build atop upstream `v2026.5.18` (getboon/openclaw `boon` branch). Targets the recurring `EmbeddedAttemptSessionTakeoverError → SIGABRT` crash class on fleet Mac Minis.
+
+- Backports 9 merged upstream session-lock race fixes that landed after 5.18: #83550, #84250, #84949, #85764, #84321, #86427, #86455, #87028, #86783.
+- Carries unmerged upstream PR #86584 (gate owned-write publish on a pre-append fingerprint; fixes #86572) plus the intermediate owned-session-transcript-write wiring it depends on.
+- Fork hardening on top of #86584 (from internal codex review): the benign session-fence advance now fails closed unless the fenced prefix is byte-identical to the trusted snapshot (prevents a prefix-rewrite + benign-append from masking a real takeover); and a reacquire takeover error no longer masks the original provider error.
+- Does NOT carry #87159 (embedded session file ownership race) — high backport risk; revisit if it lands upstream.
+
 ## 2026.5.18
 
 ### Changes

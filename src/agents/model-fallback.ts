@@ -19,6 +19,7 @@ import {
   coerceToFailoverError,
   describeFailoverError,
   isFailoverError,
+  isNonProviderRuntimeCoordinationError,
   isTimeoutError,
 } from "./failover-error.js";
 import {
@@ -246,6 +247,9 @@ async function runFallbackCandidate<T>(params: {
     };
   } catch (err) {
     if (isCommandLaneTaskTimeoutError(err)) {
+      throw err;
+    }
+    if (isNonProviderRuntimeCoordinationError(err)) {
       throw err;
     }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
@@ -1197,6 +1201,14 @@ export async function runWithModelFallback<T>(
     }
     const err = attemptRun.error;
     {
+      // Local runtime coordination errors (session write-lock timeout, embedded
+      // attempt session takeover) are not provider/model failures. Aborting
+      // here prevents the fallback chain from consuming candidates retrying
+      // the same local condition and surfacing a misleading "All models
+      // failed" summary. See #83510.
+      if (isNonProviderRuntimeCoordinationError(err)) {
+        throw err;
+      }
       if (transientProbeProviderForAttempt) {
         const probeFailureReason = describeFailoverError(err).reason;
         if (!shouldPreserveTransientCooldownProbeSlot(probeFailureReason)) {
