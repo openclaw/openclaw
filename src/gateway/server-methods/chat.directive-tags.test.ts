@@ -2371,6 +2371,46 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(nodeSend?.[2].sessionKey).toBe("agent:main:canon");
   });
 
+  it("chat.inject scopes selected-agent global sessions before appending", async () => {
+    createTranscriptFixture("openclaw-chat-inject-selected-global-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await chatHandlers["chat.inject"]({
+      params: {
+        sessionKey: "main",
+        agentId: "work",
+        message: "hello selected global",
+      },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const response = lastRespondCall(respond);
+    expect(response?.[0]).toBe(true);
+    expect(mockState.loadSessionEntryCalls[0]).toEqual({
+      rawKey: "main",
+      opts: { agentId: "work" },
+    });
+    const broadcastPayload = lastBroadcastPayload(context);
+    expect(broadcastPayload).toMatchObject({
+      sessionKey: "global",
+      agentId: "work",
+      state: "final",
+    });
+    const nodeSend = lastNodeSendCall(context);
+    expect(nodeSend?.[0]).toBe("agent:work:global");
+    expect(nodeSend?.[2]).toMatchObject({ sessionKey: "global", agentId: "work" });
+  });
+
   it("chat.send non-streaming final strips external untrusted wrapper metadata from final payload text", async () => {
     createTranscriptFixture("openclaw-chat-send-untrusted-meta-");
     mockState.finalText = `hello\n\n${UNTRUSTED_CONTEXT_SUFFIX}`;

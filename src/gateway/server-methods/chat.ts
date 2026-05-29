@@ -4045,18 +4045,44 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const p = params as {
       sessionKey: string;
+      agentId?: string;
       message: string;
       label?: string;
     };
 
     // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
-    const { cfg, storePath, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const requestedAgentId = resolveRequestedChatAgentId({
+      cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
+      requestedSessionKey: rawSessionKey,
+      agentId: p.agentId,
+    });
+    const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
+    const {
+      cfg,
+      storePath,
+      entry,
+      canonicalKey: sessionKey,
+    } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+    const selectedAgent = validateChatSelectedAgent({
+      cfg,
+      requestedSessionKey: rawSessionKey,
+      agentId: requestedAgentId,
+    });
+    if (!selectedAgent.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
+      return;
+    }
     const sessionId = entry?.sessionId;
     if (!sessionId || !storePath) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
       return;
     }
+    const agentId = resolveSessionAgentId({
+      sessionKey,
+      config: cfg,
+      agentId: selectedAgent.agentId,
+    });
 
     const appended = await appendAssistantTranscriptMessage({
       sessionKey,
@@ -4065,7 +4091,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
-      agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+      agentId,
       createIfMissing: true,
       cfg,
     });
@@ -4088,12 +4114,19 @@ export const chatHandlers: GatewayRequestHandlers = {
     const chatPayload = {
       runId: `inject-${appended.messageId}`,
       sessionKey,
+      ...(sessionKey === "global" && agentId ? { agentId } : {}),
       seq: 0,
       state: "final" as const,
       message,
     };
     context.broadcast("chat", chatPayload);
-    context.nodeSendToSession(sessionKey, "chat", chatPayload);
+    sendGlobalAwareNodeChatPayload({
+      context,
+      sessionKey,
+      agentId,
+      event: "chat",
+      payload: chatPayload,
+    });
 
     respond(true, { ok: true, messageId: appended.messageId });
   },

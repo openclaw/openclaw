@@ -67,6 +67,7 @@ export const ChatAbortParamsSchema = Type.Object(
 export const ChatInjectParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
     message: NonEmptyString,
     label: Type.Optional(Type.String({ maxLength: 100 })),
   },
