@@ -129,6 +129,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Polling Stall Threshold (ms)",
     help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000.",
   },
+  spooledUpdateHandlerTimeoutMs: {
+    label: "Telegram Spooled Update Handler Timeout (ms)",
+    help: "Maximum milliseconds a claimed isolated-ingress spool update may keep a Telegram lane active before OpenClaw fails it and lets later updates drain. Default: 1500000.",
+  },
   silentErrorReplies: {
     label: "Telegram Silent Error Replies",
     help: "When true, Telegram bot replies marked as errors are sent silently (no notification sound). Default: false.",

@@ -290,6 +290,15 @@ export const TelegramAccountSchemaBase = z
         "Buffer window in milliseconds for Telegram media groups/albums before dispatching them as one inbound message. Default: 500.",
       ),
     pollingStallThresholdMs: z.number().int().min(30_000).max(600_000).optional(),
+    spooledUpdateHandlerTimeoutMs: z
+      .number()
+      .int()
+      .min(30_000)
+      .max(3_600_000)
+      .optional()
+      .describe(
+        "Maximum milliseconds a claimed isolated-ingress spool update may keep a Telegram lane active before OpenClaw fails it and lets later updates drain. Default: 1500000.",
+      ),
     retry: RetryConfigSchema,
     network: z
       .object({

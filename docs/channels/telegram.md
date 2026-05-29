@@ -297,6 +297,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 - Multi-account startup bounds concurrent Telegram `getMe` probes so large bot fleets do not fan out every account probe at once.
 - Long polling is guarded inside each gateway process so only one active poller can use a bot token at a time. If you still see `getUpdates` 409 conflicts, another OpenClaw gateway, script, or external poller is likely using the same token.
 - Long-polling watchdog restarts trigger after 120 seconds without completed `getUpdates` liveness by default. Increase `channels.telegram.pollingStallThresholdMs` only if your deployment still sees false polling-stall restarts during long-running work. The value is in milliseconds and is allowed from `30000` to `600000`; per-account overrides are supported.
+- Isolated polling fails a claimed spooled update after 25 minutes by default so a wedged turn cannot block later same-chat messages indefinitely. Set `channels.telegram.spooledUpdateHandlerTimeoutMs` to a lower value, from `30000` to `3600000`, if your deployment prefers faster recovery over allowing very long Telegram-triggered tasks.
 - Telegram Bot API has no read-receipt support (`sendReadReceipts` does not apply).
 
 <Note>
@@ -865,6 +866,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `channels.telegram.mediaGroupFlushMs` (default 500) controls how long Telegram albums/media groups are buffered before OpenClaw dispatches them as one inbound message. Increase it if album parts arrive late; decrease it to reduce album reply latency.
     - `channels.telegram.timeoutSeconds` overrides Telegram API client timeout (if unset, grammY default applies). Bot clients clamp configured values below the 60-second outbound text/typing request guard so grammY does not abort visible reply delivery before OpenClaw's transport guard and fallback can run. Long polling still uses a 45-second `getUpdates` request guard so idle polls are not abandoned indefinitely.
     - `channels.telegram.pollingStallThresholdMs` defaults to `120000`; tune between `30000` and `600000` only for false-positive polling-stall restarts.
+    - `channels.telegram.spooledUpdateHandlerTimeoutMs` defaults to `1500000`; tune between `30000` and `3600000` to control how long one isolated-ingress Telegram update can keep a lane claimed before OpenClaw fails it and drains later updates.
     - group context history uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables.
     - reply/quote/forward supplemental context is normalized into one selected conversation context window when the gateway has observed the parent messages; the observed-message cache is persisted beside the session store. Telegram only includes one shallow `reply_to_message` in updates, so chains older than the cache are limited to Telegram's current update payload.
     - Telegram allowlists primarily gate who can trigger the agent, not a full supplemental-context redaction boundary.
@@ -1009,6 +1011,7 @@ Per-account, per-group, and per-topic overrides are supported (same inheritance 
     - If logs include `Polling stall detected`, OpenClaw restarts polling and rebuilds the Telegram transport after 120 seconds without completed long-poll liveness by default.
     - `openclaw channels status --probe` and `openclaw doctor` warn when a running polling account has not completed `getUpdates` after startup grace, when a running webhook account has not completed `setWebhook` after startup grace, or when the last successful polling transport activity is stale.
     - Increase `channels.telegram.pollingStallThresholdMs` only when long-running `getUpdates` calls are healthy but your host still reports false polling-stall restarts. Persistent stalls usually point to proxy, DNS, IPv6, or TLS egress issues between the host and `api.telegram.org`.
+    - Decrease `channels.telegram.spooledUpdateHandlerTimeoutMs` when Telegram updates are entering the isolated ingress spool but one `.processing` file keeps the same DM/chat lane blocked longer than your operational turn budget.
     - Telegram also honors process proxy env for Bot API transport, including `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and their lowercase variants. `NO_PROXY` / `no_proxy` can still bypass `api.telegram.org`.
     - If the OpenClaw managed proxy is configured through `OPENCLAW_PROXY_URL` for a service environment and no standard proxy env is present, Telegram uses that URL for Bot API transport too.
     - On VPS hosts with unstable direct egress/TLS, route Telegram API calls through `channels.telegram.proxy`:

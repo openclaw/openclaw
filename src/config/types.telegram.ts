@@ -171,6 +171,8 @@ export type TelegramAccountConfig = {
   mediaGroupFlushMs?: number;
   /** Telegram polling watchdog threshold in milliseconds. Default: 120000. */
   pollingStallThresholdMs?: number;
+  /** Max milliseconds a spooled inbound update may keep a Telegram lane active before it is failed and later updates can drain. Default: 1500000. */
+  spooledUpdateHandlerTimeoutMs?: number;
   /** Retry policy for outbound Telegram API calls. */
   retry?: OutboundRetryConfig;
   /** Network transport overrides for Telegram. */
