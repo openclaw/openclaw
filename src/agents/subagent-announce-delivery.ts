@@ -1105,6 +1105,17 @@ async function sendSubagentAnnounceDirectly(params: {
         sourceTool: params.sourceTool,
       });
     };
+    const tryGeneratedMediaPrimaryDirectDelivery = async () => {
+      return await deliverGeneratedMediaCompletionDirect({
+        cfg,
+        requesterSessionKey: canonicalRequesterSessionKey,
+        directIdempotencyKey: params.directIdempotencyKey,
+        deliveryTarget,
+        mediaUrls: expectedMediaUrls,
+        internalEvents: params.internalEvents,
+        sourceTool: params.sourceTool,
+      });
+    };
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
       : undefined;
@@ -1119,6 +1130,12 @@ async function sendSubagentAnnounceDirectly(params: {
         directOrigin?.channel,
       sessionEntry: requesterEntry,
     });
+    if (agentMediatedCompletion && expectedMediaUrls.length > 0) {
+      const generatedMediaDelivery = await tryGeneratedMediaPrimaryDirectDelivery();
+      if (generatedMediaDelivery?.delivered) {
+        return generatedMediaDelivery;
+      }
+    }
     if (
       params.expectsCompletionMessage &&
       requesterActivity.sessionId &&
