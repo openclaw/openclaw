@@ -296,6 +296,13 @@ export function createSubagentRunManager(params: {
         scheduleWaitRetry(entry, "subagent wait interrupted; scheduling recovery", wait.error);
         return;
       }
+      const observedStartedAt =
+        typeof wait.startedAt === "number" && Number.isFinite(wait.startedAt)
+          ? wait.startedAt
+          : params.resolveSubagentSessionStartedAt({
+              childSessionKey: entry.childSessionKey,
+              notBeforeMs: entry.startedAt ?? entry.createdAt,
+            });
       const completeAsRunTimeout = async (endedAt?: number, startedAt?: number) => {
         if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
           entry.startedAt = startedAt;
@@ -326,13 +333,6 @@ export function createSubagentRunManager(params: {
           typeof wait.stopReason === "string" ||
           typeof wait.livenessState === "string";
         const now = Date.now();
-        const observedStartedAt =
-          typeof wait.startedAt === "number" && Number.isFinite(wait.startedAt)
-            ? wait.startedAt
-            : params.resolveSubagentSessionStartedAt({
-                childSessionKey: entry.childSessionKey,
-                notBeforeMs: entry.startedAt ?? entry.createdAt,
-              });
         if (observedStartedAt !== undefined && entry.startedAt !== observedStartedAt) {
           entry.startedAt = observedStartedAt;
           if (typeof entry.sessionStartedAt !== "number") {
@@ -380,14 +380,14 @@ export function createSubagentRunManager(params: {
             typeof wait.endedAt === "number" ? wait.endedAt : hardRunTimeoutEndedAt;
           const timeoutAfterDeadline = resolveCompletionAfterHardRunDeadline({
             entry,
-            observedStartedAt: wait.startedAt,
+            observedStartedAt,
             observedEndedAt: timeoutEndedAt,
             now,
           });
           if (timeoutAfterDeadline !== undefined) {
             timeoutEndedAt = timeoutAfterDeadline;
           }
-          await completeAsRunTimeout(timeoutEndedAt, wait.startedAt);
+          await completeAsRunTimeout(timeoutEndedAt, observedStartedAt);
           return;
         }
         scheduleWaitRetry(
@@ -398,19 +398,19 @@ export function createSubagentRunManager(params: {
       }
       const completionAfterDeadline = resolveCompletionAfterHardRunDeadline({
         entry,
-        observedStartedAt: wait.startedAt,
+        observedStartedAt,
         observedEndedAt: wait.endedAt,
         now: Date.now(),
       });
       if (completionAfterDeadline !== undefined) {
-        await completeAsRunTimeout(completionAfterDeadline, wait.startedAt);
+        await completeAsRunTimeout(completionAfterDeadline, observedStartedAt);
         return;
       }
       let mutated = false;
-      if (typeof wait.startedAt === "number") {
-        entry.startedAt = wait.startedAt;
+      if (typeof observedStartedAt === "number") {
+        entry.startedAt = observedStartedAt;
         if (typeof entry.sessionStartedAt !== "number") {
-          entry.sessionStartedAt = wait.startedAt;
+          entry.sessionStartedAt = observedStartedAt;
         }
         mutated = true;
       }
@@ -453,7 +453,7 @@ export function createSubagentRunManager(params: {
         sendFarewell: true,
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,
-        startedAt: wait.startedAt,
+        startedAt: observedStartedAt,
       };
       await params.completeSubagentRun(completionForRetry);
     } catch (error) {

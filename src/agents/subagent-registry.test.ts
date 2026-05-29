@@ -1296,6 +1296,59 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
+  it("uses session-store start time for successful agent.wait results without a start", async () => {
+    const createdAt = Date.parse("2026-03-24T11:59:00Z");
+    const sessionStartedAt = createdAt + 10_000;
+    vi.setSystemTime(createdAt);
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        vi.setSystemTime(createdAt + 65_000);
+        return {
+          status: "ok",
+          endedAt: createdAt + 65_000,
+        };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        status: "done",
+        startedAt: sessionStartedAt,
+        updatedAt: createdAt + 65_000,
+        endedAt: createdAt + 65_000,
+      },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-ok-session-store-start",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "respect restored success start",
+      cleanup: "keep",
+      runTimeoutSeconds: 60,
+    });
+
+    await waitForFast(() => {
+      const completedRun = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-ok-session-store-start");
+      expect(completedRun?.endedAt).toBe(createdAt + 65_000);
+      expectRecordFields(
+        completedRun?.outcome,
+        {
+          status: "ok",
+          startedAt: sessionStartedAt,
+          endedAt: createdAt + 65_000,
+          elapsedMs: 55_000,
+        },
+        "restored wait success uses session store start",
+      );
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
   it("does not terminally time out plain agent.wait timeouts before the observed run deadline", async () => {
     const createdAt = Date.parse("2026-03-24T11:59:00Z");
     const observedStartedAt = createdAt + 10_000;
