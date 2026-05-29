@@ -172,6 +172,28 @@ describe("trajectory runtime", () => {
     expect(raw).toContain("new-3");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "preserves existing trajectory directory permissions",
+    async () => {
+      const tmpDir = makeTempDir();
+      fs.chmodSync(tmpDir, 0o755);
+      const sessionFile = path.join(tmpDir, "session.jsonl");
+      const recorder = createTrajectoryRuntimeRecorder({
+        sessionId: "session-1",
+        sessionFile,
+        maxRuntimeFileBytes: 1_600,
+      });
+
+      const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+      runtimeRecorder.recordEvent("prompt.submitted", {
+        prompt: "hello",
+      });
+      await runtimeRecorder.flush();
+
+      expect(fs.statSync(tmpDir).mode & 0o777).toBe(0o755);
+    },
+  );
+
   it("describes queued writer state for cleanup timeout logs", () => {
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",

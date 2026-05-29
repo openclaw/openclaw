@@ -325,6 +325,7 @@ function createTrajectoryWindowWriter(
           activeOperation = "file-replace";
           await writeSiblingTempFile({
             dir,
+            chmodDir: false,
             mode: 0o600,
             tempPrefix: ".openclaw-trajectory-",
             writeTemp: async (tempPath) => {
