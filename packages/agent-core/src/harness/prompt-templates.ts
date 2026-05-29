@@ -287,19 +287,38 @@ export function parseCommandArgs(argsString: string): string[] {
   return args;
 }
 
+function parseSafeNonNegativeInteger(raw: string): number | undefined {
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 /** Substitute prompt template placeholders (`$1`, `$@`, `$ARGUMENTS`, `${@:N}`, `${@:N:L}`) with command arguments. */
 export function substituteArgs(content: string, args: string[]): string {
   let result = content;
-  result = result.replace(/\$(\d+)/g, (_, num: string) => args[Number.parseInt(num, 10) - 1] ?? "");
+  result = result.replace(/\$(\d+)/g, (_, num: string) => {
+    const parsed = parseSafeNonNegativeInteger(num);
+    if (parsed === undefined || parsed <= 0) {
+      return "";
+    }
+    return args[parsed - 1] ?? "";
+  });
   result = result.replace(
     /\$\{@:(\d+)(?::(\d+))?\}/g,
     (_, startStr: string, lengthStr?: string) => {
-      let start = Number.parseInt(startStr, 10) - 1;
+      const parsedStart = parseSafeNonNegativeInteger(startStr);
+      if (parsedStart === undefined) {
+        return "";
+      }
+      let start = parsedStart - 1;
       if (start < 0) {
         start = 0;
       }
       if (lengthStr) {
-        return args.slice(start, start + Number.parseInt(lengthStr, 10)).join(" ");
+        const length = parseSafeNonNegativeInteger(lengthStr);
+        if (length === undefined) {
+          return "";
+        }
+        return args.slice(start, start + length).join(" ");
       }
       return args.slice(start).join(" ");
     },
