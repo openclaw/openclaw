@@ -1506,6 +1506,45 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("keeps auth-boundary invalidation ahead of orphaned transcript checks", async () => {
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      setClaudeCliBackendForPrepareTest();
+      const transcriptCheck = vi.fn(async () => true);
+      const orphanCheck = vi.fn(async () => true);
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "follow-up",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-orphan-auth-boundary",
+        cliSessionBinding: {
+          sessionId: "orphaned-claude-sid",
+          authProfileId: "anthropic:old-profile",
+          cwdHash: hashCliSessionText(dir),
+        },
+        cliSessionId: "orphaned-claude-sid",
+        config: createCliBackendConfig(),
+      });
+
+      expect(transcriptCheck).not.toHaveBeenCalled();
+      expect(orphanCheck).not.toHaveBeenCalled();
+      expect(context.reusableCliSession).toEqual({ invalidatedReason: "auth-profile" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the claude-cli sessionId when the on-disk transcript is present", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

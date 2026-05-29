@@ -370,15 +370,22 @@ export async function prepareCliRunContext(
     bundleMcpEnabled && mcpLoopbackRuntime
       ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
       : undefined;
-  // Pre-flight: if a saved Claude CLI sessionId points at a transcript that no
-  // longer exists on disk (e.g. update.run aborted mid-swap, Claude CLI was
-  // reinstalled, or the projects tree was manually pruned), `claude --resume`
-  // hangs or fails outside the cli-runner session_expired path. The persisted
-  // binding then never gets refreshed, causing every subsequent turn to retry
-  // the same dead sessionId. Drop the binding here so this turn starts fresh
-  // and the post-run flow writes the new sessionId back via setCliSessionBinding.
-  const candidateClaudeCliSessionId =
-    params.cliSessionBinding?.sessionId?.trim() || params.cliSessionId?.trim() || undefined;
+  const reusableCliSessionCandidate: CliReusableSession = params.cliSessionBinding
+    ? resolveCliSessionReuse({
+        binding: params.cliSessionBinding,
+        authProfileId: effectiveAuthProfileId,
+        authEpoch,
+        authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+        extraSystemPromptHash,
+        promptToolNamesHash,
+        cwdHash,
+        mcpConfigHash: preparedBackendFinal.mcpConfigHash,
+        mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+      })
+    : params.cliSessionId
+      ? { sessionId: params.cliSessionId }
+      : {};
+  const candidateClaudeCliSessionId = reusableCliSessionCandidate.sessionId?.trim() || undefined;
   const hasClaudeCliCandidate =
     candidateClaudeCliSessionId !== undefined && isClaudeCliProvider(params.provider);
   const claudeCliTranscriptMissing =
@@ -402,21 +409,7 @@ export async function prepareCliRunContext(
         : undefined;
   const reusableCliSession: CliReusableSession = claudeCliInvalidatedReason
     ? { invalidatedReason: claudeCliInvalidatedReason }
-    : params.cliSessionBinding
-      ? resolveCliSessionReuse({
-          binding: params.cliSessionBinding,
-          authProfileId: effectiveAuthProfileId,
-          authEpoch,
-          authEpochVersion: CLI_AUTH_EPOCH_VERSION,
-          extraSystemPromptHash,
-          promptToolNamesHash,
-          cwdHash,
-          mcpConfigHash: preparedBackendFinal.mcpConfigHash,
-          mcpResumeHash: preparedBackendFinal.mcpResumeHash,
-        })
-      : params.cliSessionId
-        ? { sessionId: params.cliSessionId }
-        : {};
+    : reusableCliSessionCandidate;
   if (reusableCliSession.invalidatedReason) {
     cliBackendLog.info(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
