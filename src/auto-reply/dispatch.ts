@@ -31,10 +31,7 @@ import {
   type ReplyDispatcherWithTypingOptions,
 } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
-import {
-  hasReplyPayloadSendingHooks,
-  runReplyPayloadSendingHook,
-} from "./reply/reply-payload-sending-hook.js";
+import { runReplyPayloadSendingHook } from "./reply/reply-payload-sending-hook.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
@@ -331,11 +328,7 @@ function buildMessageSendingBeforeDeliver(
 function buildReplyPayloadSendingBeforeDeliver(
   ctx: MsgContext | FinalizedMsgContext,
   opts?: { runId?: string },
-): ReplyDispatchBeforeDeliver | undefined {
-  if (!hasReplyPayloadSendingHooks()) {
-    return undefined;
-  }
-
+): ReplyDispatchBeforeDeliver {
   const finalized = finalizeInboundContext(ctx);
   const hookCtx = deriveInboundMessageHookContext(finalized);
 

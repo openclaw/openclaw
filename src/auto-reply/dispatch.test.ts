@@ -472,6 +472,29 @@ describe("withReplyDispatcher", () => {
     );
   });
 
+  it("installs reply_payload_sending hooks before lazy plugin availability is known", async () => {
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(() => false),
+      runMessageSending: vi.fn(async () => undefined),
+      runReplyPayloadSending: vi.fn(async () => undefined),
+    });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+    const dispatcher = {
+      ...createDispatcher([]),
+      appendBeforeDeliver: vi.fn(),
+    };
+
+    await dispatchInboundMessage({
+      ctx: buildTestCtx({ Surface: "discord", SessionKey: "agent:test:session" }),
+      cfg: {} as OpenClawConfig,
+      dispatcher,
+      replyOptions: { runId: "run-789" },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    expect(dispatcher.appendBeforeDeliver).toHaveBeenCalledTimes(1);
+  });
+
   it("reconciles queuedFinal and counts after dispatcher-side cancellation", async () => {
     const dispatcher = {
       sendToolResult: () => true,
