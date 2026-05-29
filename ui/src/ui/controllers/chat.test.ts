@@ -841,6 +841,65 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe("final");
   });
 
+  it("does not resurrect chatRunId from late delta after final cleared it (issue #88033)", () => {
+    // Simulate the full lifecycle: streaming → final (clears state) → late delta arrives.
+    // The late delta WILL adopt chatRunId (by design — cross-channel observation
+    // requires this), but the sessions.changed safety net (Bug 3 fix) must still
+    // be able to clear the resurrected runId when the session row is terminal.
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Here is my reply",
+      chatStreamStartedAt: 100,
+    });
+    // Step 1: Final event clears the run (normal terminal path)
+    const finalPayload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Complete reply" }],
+      },
+    };
+    expect(handleChatEvent(state, finalPayload)).toBe("final");
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    // Step 2: Late delta re-adopts chatRunId (allowed for cross-channel compat)
+    const lateDeltaPayload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "late" }] },
+    };
+    expect(handleChatEvent(state, lateDeltaPayload)).toBe("delta");
+    expect(state.chatRunId).toBe("run-1"); // re-adopted by design
+    expect(state.chatStream).toBe("late"); // stream text accumulated
+    // IMPORTANT: This resurrected state MUST be clearable by sessions.changed safety net.
+    // See sessions.test.ts for the complementary test that proves Bug 3 fix.
+  });
+
+  it.each(["final", "aborted", "error"] as const)(
+    "does not adopt runId from terminal events after chatRunId was cleared (%s)",
+    (terminalState) => {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: null,
+        chatStream: null,
+        chatStreamStartedAt: null,
+      });
+      const payload: ChatEventPayload = {
+        runId: "run-resurrect",
+        sessionKey: "main",
+        state: terminalState as ChatEventPayload["state"],
+      };
+      handleChatEvent(state, payload);
+      // Terminal events must not re-set chatRunId when it was previously cleared
+      expect(state.chatRunId).toBeNull();
+    },
+  );
+
   it("keeps assistant message when text field has real reply but content is NO_REPLY", () => {
     const state = createState({
       sessionKey: "main",

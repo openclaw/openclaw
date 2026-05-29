@@ -1300,7 +1300,12 @@ describe("applySessionsChangedEvent", () => {
     expect(requestUpdate).not.toHaveBeenCalled();
   });
 
-  it("does not clear a newer local run from a runless older terminal patch", () => {
+  it("clears stale chatRunId via sessions.changed without eventRunId when session is terminal (issue #88033)", () => {
+    // After fixing #88033, a sessions.changed event without runId/clientRunId may
+    // still clear a stale chatRunId when the applied session row is unambiguously
+    // terminal (hasActiveRun !== true, status is done/interrupted). Previously,
+    // Guard 2 in sessionPatchTargetsCurrentChatRun returned false when eventRunId
+    // was undefined, preventing this safety-net cleanup path entirely.
     const requestUpdate = vi.fn();
     const state: SessionsState & {
       sessionKey: string;
@@ -1327,7 +1332,7 @@ describe("applySessionsChangedEvent", () => {
         },
       }),
       sessionKey: "agent:super:main",
-      chatRunId: "run-new",
+      chatRunId: "stale-run-id",
       chatStream: "",
       chatStreamStartedAt: 20,
       requestUpdate,
@@ -1343,11 +1348,20 @@ describe("applySessionsChangedEvent", () => {
       ts: 12,
     });
 
-    expect(applied).toEqual({ applied: true, change: "updated" });
-    expect(state.chatRunId).toBe("run-new");
-    expect(state.chatStream).toBe("");
-    expect(state.chatStreamStartedAt).toBe(20);
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(applied).toEqual({
+      applied: true,
+      change: "updated",
+      clearedChatRun: true,
+      clearedChatRunStatus: {
+        phase: "done",
+        runId: "stale-run-id",
+        sessionKey: "agent:super:main",
+      },
+    });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    expect(requestUpdate).toHaveBeenCalled();
   });
 
   it("does not clear a newer local run from an older terminal websocket patch", () => {
@@ -1657,5 +1671,61 @@ describe("applySessionsChangedEvent", () => {
     expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:new");
     expect(state.sessionsResult?.sessions[0]?.kind).toBe("direct");
     expect(state.sessionsResult?.sessions[0]?.updatedAt).toBe(2);
+  });
+
+  it("clears stale chatRunId via sessions.changed without eventRunId when session is terminal (issue #88033)", () => {
+    // Regression: when sessions.changed carries no runId/clientRunId but the session
+    // row clearly shows hasActiveRun=false and status=done, the stale local chatRunId
+    // must still be cleared. Previously, Guard 2 in sessionPatchTargetsCurrentChatRun
+    // returned false when eventRunId === undefined && chatRunId existed, preventing cleanup.
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      chatRunStatus?: unknown;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 2,
+              hasActiveRun: false,
+              status: "done",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "stale-run-1",
+      chatStream: "",
+      chatStreamStartedAt: 1,
+      requestUpdate,
+    };
+
+    // Event with no runId or clientRunId — previously would skip clearance
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      status: "done",
+      endedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toMatchObject({
+      applied: true,
+      clearedChatRun: true,
+    });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
   });
 });

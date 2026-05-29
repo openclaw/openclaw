@@ -716,7 +716,17 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!sessionMatches && !activeRunMatches) {
     return null;
   }
-  if (!state.chatRunId && sessionMatches && typeof payload.runId === "string") {
+  // Adopt unowned runId for session-matched events on non-terminal states only.
+  // Terminal states (final/aborted/error) must never resurrect a cleared chatRunId.
+  // See https://github.com/openclaw/openclaw/issues/88033.
+  if (
+    !state.chatRunId &&
+    sessionMatches &&
+    typeof payload.runId === "string" &&
+    payload.state !== "final" &&
+    payload.state !== "aborted" &&
+    payload.state !== "error"
+  ) {
     state.chatRunId = payload.runId;
     state.chatStreamStartedAt ??= Date.now();
   }
@@ -724,6 +734,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   // Terminal events for the active client run carry runId; missing-runId events are unowned.
   // Final from another run (e.g. sub-agent announce): refresh history to show new message.
   // See https://github.com/openclaw/openclaw/issues/1909
+  // See https://github.com/openclaw/openclaw/issues/88033
   if (state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);

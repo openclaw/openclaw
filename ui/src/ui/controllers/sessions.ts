@@ -142,9 +142,11 @@ function sessionPatchTargetsCurrentChatRun(
   ) {
     return false;
   }
-  if (options.eventRunId === undefined && state.chatRunId) {
-    return false;
-  }
+  // When eventRunId is undefined (sessions.changed carries no runId field),
+  // allow the caller to decide based on the session row's hasActiveRun status.
+  // The caller already guards with `nextRow.hasActiveRun !== true`, so returning
+  // true here lets session-based reconciliation proceed as a safety net for
+  // stale chatRunId that was not cleared by the chat event stream.
   return true;
 }
 
