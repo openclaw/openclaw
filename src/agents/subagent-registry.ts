@@ -928,6 +928,7 @@ async function sweepSubagentRuns() {
             await completeSubagentRunWithRecovery(
               {
                 runId,
+                startedAt: completion.startedAt,
                 endedAt: completion.endedAt,
                 outcome: completion.outcome,
                 reason: completion.reason,

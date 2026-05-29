@@ -1731,6 +1731,59 @@ describe("subagent registry seam flow", () => {
     expect(run?.cleanupCompletedAt).toBeTypeOf("number");
   });
 
+  it("uses session-store start time when sweeping stale explicit-timeout runs", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+    const createdAt = Date.parse("2026-03-24T11:59:00Z");
+    const sessionStartedAt = createdAt + 10_000;
+    const sessionEndedAt = createdAt + 65_000;
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: sessionEndedAt,
+        status: "done",
+        startedAt: sessionStartedAt,
+        endedAt: sessionEndedAt,
+      },
+    });
+
+    vi.setSystemTime(createdAt);
+    mod.registerSubagentRun({
+      runId: "run-sweep-session-start",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "sweep should respect session store start",
+      cleanup: "keep",
+      runTimeoutSeconds: 60,
+    });
+
+    vi.setSystemTime(createdAt + 120_000);
+    await mod.testing.sweepOnceForTests();
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-sweep-session-start");
+      expect(run?.endedAt).toBe(sessionEndedAt);
+      expectRecordFields(
+        run?.outcome,
+        {
+          status: "ok",
+          startedAt: sessionStartedAt,
+          endedAt: sessionEndedAt,
+          elapsedMs: 55_000,
+        },
+        "swept session store observed start outcome",
+      );
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
   it("requeues orphan recovery instead of keeping restart-aborted stale runs stuck as running", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
