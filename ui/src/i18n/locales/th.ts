@@ -227,6 +227,8 @@ export const th: TranslationMap = {
     statusTimeout: "หมดเวลา",
     model: "Model",
     provider: "Provider",
+    goal: "Goal",
+    goalNote: "Goal note",
     runtime: "รันไทม์",
     surface: "พื้นผิว",
     subject: "หัวข้อ",

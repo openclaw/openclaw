@@ -230,6 +230,8 @@ export const pl: TranslationMap = {
     statusTimeout: "Upłynął limit czasu",
     model: "Model",
     provider: "Dostawca",
+    goal: "Goal",
+    goalNote: "Goal note",
     runtime: "Środowisko uruchomieniowe",
     surface: "Powierzchnia",
     subject: "Temat",

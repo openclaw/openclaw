@@ -231,6 +231,8 @@ export const tr: TranslationMap = {
     statusTimeout: "Zaman aşımına uğradı",
     model: "Model",
     provider: "Sağlayıcı",
+    goal: "Goal",
+    goalNote: "Goal note",
     runtime: "Çalışma zamanı",
     surface: "Yüzey",
     subject: "Konu",

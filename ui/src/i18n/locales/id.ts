@@ -229,6 +229,8 @@ export const id: TranslationMap = {
     statusTimeout: "Waktu habis",
     model: "Model",
     provider: "Penyedia",
+    goal: "Goal",
+    goalNote: "Goal note",
     runtime: "Runtime",
     surface: "Permukaan",
     subject: "Subjek",

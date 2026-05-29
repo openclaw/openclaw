@@ -227,6 +227,8 @@ export const zh_CN: TranslationMap = {
     statusTimeout: "已超时",
     model: "模型",
     provider: "提供商",
+    goal: "Goal",
+    goalNote: "Goal note",
     runtime: "运行时",
     surface: "界面",
     subject: "主题",

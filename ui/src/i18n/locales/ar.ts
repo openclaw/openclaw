@@ -228,6 +228,8 @@ export const ar: TranslationMap = {
     statusTimeout: "انتهت المهلة",
     model: "النموذج",
     provider: "المزود",
+    goal: "Goal",
+    goalNote: "Goal note",
     runtime: "وقت التشغيل",
     surface: "السطح",
     subject: "الموضوع",
