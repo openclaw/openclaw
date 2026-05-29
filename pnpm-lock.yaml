@@ -513,6 +513,9 @@ importers:
       '@zeroaltitude/openclaw-claude-bridge':
         specifier: 0.2.8
         version: 0.2.8(@anthropic-ai/sdk@0.98.0(zod@4.4.3))(zod@4.4.3)
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
