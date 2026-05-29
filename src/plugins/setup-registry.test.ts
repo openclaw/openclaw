@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -227,17 +228,17 @@ describe("setup-registry module loader", () => {
       plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
       diagnostics: [],
     });
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const restoreVersions = forceNodeRuntimeVersionsForTest();
 
     try {
-      resolvePluginSetupRegistry({
-        workspaceDir: pluginRoot,
-        env: {},
+      withMockedWindowsPlatform(() => {
+        resolvePluginSetupRegistry({
+          workspaceDir: pluginRoot,
+          env: {},
+        });
       });
     } finally {
       restoreVersions();
-      platformSpy.mockRestore();
     }
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
@@ -262,6 +263,32 @@ describe("setup-registry module loader", () => {
 
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
     expect(firstRecordArg(mocks.loadPluginManifestRegistry).pluginIds).toEqual(["test-plugin"]);
+  });
+
+  it("uses built setup artifacts for bundled source records when available", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = path.join(packageRoot, "extensions", "slack");
+    const sourceSetup = path.join(pluginRoot, "setup-entry.ts");
+    const builtSetup = path.join(packageRoot, "dist", "extensions", "slack", "setup-entry.js");
+    fs.mkdirSync(path.dirname(sourceSetup), { recursive: true });
+    fs.mkdirSync(path.dirname(builtSetup), { recursive: true });
+    fs.writeFileSync(sourceSetup, "export default {};\n", "utf-8");
+    fs.writeFileSync(builtSetup, "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "slack",
+          origin: "bundled",
+          rootDir: pluginRoot,
+          setupSource: sourceSetup,
+        },
+      ],
+      diagnostics: [],
+    });
+
+    resolvePluginSetupRegistry({ env: {} });
+
+    expect(mockArg(mocks.createJiti, 0, 0)).toBe(builtSetup);
   });
 
   it("skips setup-api loading when config has no relevant migration triggers", () => {
@@ -797,17 +824,20 @@ describe("setup-registry module loader", () => {
       ],
       diagnostics: [],
     });
+    const registerSetup = vi.fn(
+      (api: {
+        registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+        registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
+      }) => {
+        api.registerProvider({ id: "openai", label: "OpenAI", auth: [] });
+        api.registerProvider({ id: "anthropic", label: "Anthropic", auth: [] });
+        api.registerCliBackend({ id: "codex-cli", config: { command: "codex" } });
+        api.registerCliBackend({ id: "claude-cli", config: { command: "claude" } });
+      },
+    );
     const loadSetupModule = vi.fn(() => ({
       default: {
-        register(api: {
-          registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
-          registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
-        }) {
-          api.registerProvider({ id: "openai", label: "OpenAI", auth: [] });
-          api.registerProvider({ id: "anthropic", label: "Anthropic", auth: [] });
-          api.registerCliBackend({ id: "codex-cli", config: { command: "codex" } });
-          api.registerCliBackend({ id: "claude-cli", config: { command: "claude" } });
-        },
+        register: registerSetup,
       },
     }));
     mocks.createJiti.mockImplementation(() => loadSetupModule);
@@ -834,6 +864,7 @@ describe("setup-registry module loader", () => {
       env: {},
       pluginIds: ["anthropic"],
     });
-    expect(loadSetupModule).toHaveBeenCalledTimes(7);
+    expect(loadSetupModule).toHaveBeenCalledTimes(1);
+    expect(registerSetup).toHaveBeenCalledTimes(7);
   });
 });

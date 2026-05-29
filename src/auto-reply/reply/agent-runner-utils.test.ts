@@ -71,6 +71,7 @@ describe("agent-runner-utils", () => {
     expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: run.agentId,
+      sessionKey: run.sessionKey,
       hasSessionModelOverride: true,
       modelOverrideSource: "user",
       hasAutoFallbackProvenance: false,
@@ -80,6 +81,8 @@ describe("agent-runner-utils", () => {
       provider: run.provider,
       model: run.model,
       agentDir: run.agentDir,
+      agentId: run.agentId,
+      sessionKey: run.sessionKey,
       fallbacksOverride: ["fallback-model"],
     });
   });
@@ -96,6 +99,7 @@ describe("agent-runner-utils", () => {
     expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: run.agentId,
+      sessionKey: run.sessionKey,
       hasSessionModelOverride: true,
       modelOverrideSource: undefined,
       hasAutoFallbackProvenance: true,
@@ -112,6 +116,7 @@ describe("agent-runner-utils", () => {
     expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: undefined,
+      sessionKey: run.sessionKey,
       hasSessionModelOverride: false,
       modelOverrideSource: undefined,
       hasAutoFallbackProvenance: false,
@@ -120,7 +125,7 @@ describe("agent-runner-utils", () => {
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
-    const run = makeRun({ enforceFinalTag: true });
+    const run = makeRun({ enforceFinalTag: true, cwd: "/tmp/task-repo" });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
@@ -138,6 +143,7 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.sessionFile).toBe(run.sessionFile);
     expect(resolved.workspaceDir).toBe(run.workspaceDir);
+    expect(resolved.cwd).toBe("/tmp/task-repo");
     expect(resolved.agentDir).toBe(run.agentDir);
     expect(resolved.config).toBe(run.config);
     expect(resolved.skillsSnapshot).toBe(run.skillsSnapshot);
@@ -178,6 +184,7 @@ describe("agent-runner-utils", () => {
     expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: run.agentId,
+      sessionKey: run.sessionKey,
       hasSessionModelOverride: true,
       modelOverrideSource: undefined,
       hasAutoFallbackProvenance: true,

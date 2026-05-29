@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { InboundTurnKind } from "../channels/turn/kind.js";
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -30,8 +31,9 @@ type McpRequestContext = {
   sessionKey: string;
   messageProvider: string | undefined;
   accountId: string | undefined;
-  inboundTurnKind: InboundTurnKind | undefined;
-  senderIsOwner: boolean;
+  inboundEventKind: InboundEventKind | undefined;
+  sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  senderIsOwner: boolean | undefined;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
@@ -39,9 +41,16 @@ function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | un
   return !trimmed || trimmed === "main" ? resolveMainSessionKey(cfg) : trimmed;
 }
 
-function normalizeMcpInboundTurnKind(value: string | undefined): InboundTurnKind | undefined {
+function normalizeMcpInboundEventKind(value: string | undefined): InboundEventKind | undefined {
   const trimmed = normalizeOptionalString(value);
   return trimmed === "room_event" || trimmed === "user_request" ? trimmed : undefined;
+}
+
+function normalizeMcpSourceReplyDeliveryMode(
+  value: string | undefined,
+): SourceReplyDeliveryMode | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
 }
 
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
@@ -180,7 +189,10 @@ export function resolveMcpRequestContext(
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
-    inboundTurnKind: normalizeMcpInboundTurnKind(getHeader(req, "x-openclaw-inbound-turn-kind")),
+    inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
+    sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(
+      getHeader(req, "x-openclaw-source-reply-delivery-mode"),
+    ),
     senderIsOwner: auth.senderIsOwner,
   };
 }

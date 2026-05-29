@@ -34,6 +34,11 @@ describe("restart-helper", () => {
         throw error;
       }
     });
+    await fs.rmdir(path.dirname(scriptPath)).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    });
   }
 
   async function makeTempDir(prefix: string) {
@@ -135,7 +140,61 @@ exit 0
       expect(content).toContain("systemctl --user restart 'openclaw-gateway.service'");
       // Script should self-cleanup
       expect(content).toContain('rm -f "$0"');
+      expect(content).toContain('rmdir "$script_dir" 2>/dev/null || true');
       await cleanupScript(scriptPath);
+    });
+
+    it("creates restart scripts in a private temp directory with exclusive creation", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      const timestamp = 1_727_201_234_567;
+      const oldCandidatePath = path.join(os.tmpdir(), `openclaw-restart-${timestamp}.sh`);
+      const victimDir = await makeTempDir("openclaw-restart-helper-victim-");
+      const victimPath = path.join(victimDir, "restart.sh");
+      await fs.rm(oldCandidatePath, { force: true });
+      await fs.writeFile(victimPath, "preexisting script\n", "utf-8");
+
+      let candidateIsSymlink = false;
+      try {
+        await fs.symlink(victimPath, oldCandidatePath);
+        candidateIsSymlink = true;
+      } catch {
+        await fs.writeFile(oldCandidatePath, "preexisting script\n", { flag: "wx" });
+      }
+
+      const dateSpy = vi.spyOn(Date, "now").mockReturnValue(timestamp);
+      const writeFileSpy = vi.spyOn(fs, "writeFile");
+
+      try {
+        const { scriptPath } = await prepareAndReadScript({
+          OPENCLAW_PROFILE: "default",
+        });
+        const scriptDir = path.dirname(scriptPath);
+        const relativeScriptDir = path.relative(os.tmpdir(), scriptDir);
+
+        expect(scriptPath).not.toBe(oldCandidatePath);
+        expect(scriptDir).not.toBe(os.tmpdir());
+        expect(relativeScriptDir).not.toBe("");
+        expect(relativeScriptDir.startsWith("..")).toBe(false);
+        expect(path.isAbsolute(relativeScriptDir)).toBe(false);
+        expect(path.basename(scriptDir)).toMatch(/^openclaw-restart-/);
+        expect(writeFileSpy).toHaveBeenLastCalledWith(
+          scriptPath,
+          expect.any(String),
+          expect.objectContaining({ flag: "wx", mode: 0o755 }),
+        );
+        await expect(fs.readFile(victimPath, "utf-8")).resolves.toBe("preexisting script\n");
+        if (!candidateIsSymlink) {
+          await expect(fs.readFile(oldCandidatePath, "utf-8")).resolves.toBe(
+            "preexisting script\n",
+          );
+        }
+        await cleanupScript(scriptPath);
+      } finally {
+        dateSpy.mockRestore();
+        writeFileSpy.mockRestore();
+        await fs.rm(oldCandidatePath, { force: true });
+        await fs.rm(victimDir, { recursive: true, force: true });
+      }
     });
 
     it("uses OPENCLAW_SYSTEMD_UNIT override for systemd scripts", async () => {
@@ -203,6 +262,7 @@ exit 1
       expect(content).toContain("launchctl bootstrap 'gui/501'");
       expect(content).toContain("Bootstrap loads RunAtLoad agents");
       expect(content).toContain('rm -f "$0"');
+      expect(content).toContain('rmdir "$script_dir" 2>/dev/null || true');
       await cleanupScript(scriptPath);
     });
 
@@ -379,6 +439,7 @@ exit 0
       expect(content).toContain("openclaw restart launched startup fallback");
       expectWindowsRestartWaitOrdering(content);
       expect(content).toContain('del "%~f0" >nul 2>&1');
+      expect(content).toContain('rmdir "%OPENCLAW_RESTART_SCRIPT_DIR%" >nul 2>&1');
       await cleanupScript(scriptPath);
     });
 
@@ -532,7 +593,7 @@ exit 0
     it("spawns the script as a detached process on Linux", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
       const scriptPath = "/tmp/fake-script.sh";
-      const mockChild = { unref: vi.fn() };
+      const mockChild = { on: vi.fn(), unref: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
       await runRestartScript(scriptPath);
@@ -542,13 +603,14 @@ exit 0
         stdio: "ignore",
         windowsHide: true,
       });
+      expect(mockChild.on).toHaveBeenCalledWith("error", expect.any(Function));
       expect(mockChild.unref).toHaveBeenCalledTimes(1);
     });
 
     it("uses cmd.exe on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const scriptPath = "C:\\Temp\\fake-script.bat";
-      const mockChild = { unref: vi.fn() };
+      const mockChild = { on: vi.fn(), unref: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
       await runRestartScript(scriptPath);
@@ -558,13 +620,14 @@ exit 0
         stdio: "ignore",
         windowsHide: true,
       });
+      expect(mockChild.on).toHaveBeenCalledWith("error", expect.any(Function));
       expect(mockChild.unref).toHaveBeenCalledTimes(1);
     });
 
     it("quotes cmd.exe /c paths with metacharacters on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const scriptPath = "C:\\Temp\\me&(ow)\\fake-script.bat";
-      const mockChild = { unref: vi.fn() };
+      const mockChild = { on: vi.fn(), unref: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
       await runRestartScript(scriptPath);
@@ -574,6 +637,34 @@ exit 0
         stdio: "ignore",
         windowsHide: true,
       });
+    });
+
+    it("does not throw when spawn fails synchronously", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      vi.mocked(spawn).mockImplementation(() => {
+        throw Object.assign(new Error("spawn /bin/sh ENOENT"), { code: "ENOENT" });
+      });
+
+      await expect(runRestartScript("/tmp/fake-script.sh")).resolves.toBeUndefined();
+    });
+
+    it("handles child process spawn errors after the detached handoff", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      let errorHandler: ((error: Error) => void) | undefined;
+      const mockChild = {
+        on: vi.fn((event: string, handler: (error: Error) => void) => {
+          if (event === "error") {
+            errorHandler = handler;
+          }
+          return mockChild;
+        }),
+        unref: vi.fn(),
+      };
+      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
+
+      await runRestartScript("/tmp/fake-script.sh");
+      expect(errorHandler).toBeDefined();
+      expect(() => errorHandler?.(new Error("spawn /bin/sh ENOENT"))).not.toThrow();
     });
   });
 });

@@ -78,6 +78,30 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
   };
 }
 
+function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
+  return {
+    run: vi.fn(async (rawParams: unknown) => {
+      const params = rawParams as {
+        raw: unknown;
+        adapter: {
+          ingest: (raw: unknown) => unknown;
+          resolveTurn: (...args: unknown[]) => unknown;
+        };
+      };
+      const input = await params.adapter.ingest(params.raw);
+      const turn = (await params.adapter.resolveTurn(
+        input,
+        {
+          canStartAgentTurn: true,
+          kind: "message",
+        },
+        {},
+      )) as { runDispatch: () => Promise<unknown> };
+      return { dispatchResult: await turn.runDispatch() };
+    }),
+  };
+}
+
 function makeRuntime(params: {
   onFinalize?: (ctx: Record<string, unknown>) => void;
   isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
@@ -123,27 +147,7 @@ function makeRuntime(params: {
         resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
-      turn: {
-        run: vi.fn(async (rawParams: unknown) => {
-          const params = rawParams as {
-            raw: unknown;
-            adapter: {
-              ingest: (raw: unknown) => unknown;
-              resolveTurn: (...args: unknown[]) => unknown;
-            };
-          };
-          const input = await params.adapter.ingest(params.raw);
-          const turn = (await params.adapter.resolveTurn(
-            input,
-            {
-              kind: "message",
-              canStartAgentTurn: true,
-            },
-            {},
-          )) as { runDispatch: () => Promise<unknown> };
-          return { dispatchResult: await turn.runDispatch() };
-        }),
-      },
+      inbound: makeInboundRuntime(),
       text: {
         chunkMarkdownText: (text: string) => [text],
       },
@@ -165,6 +169,47 @@ function makeRuntime(params: {
 describe("dispatchOutbound", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("keeps waiting past 300s when a slow provider timeout is configured", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 301_000));
+          await deliver({ text: "late answer" }, { kind: "block" });
+        },
+      });
+      let settled = false;
+
+      const dispatchPromise = dispatchOutbound(makeInbound(), {
+        runtime,
+        cfg: {
+          models: { providers: { ollama: { timeoutSeconds: 1800 } } },
+        },
+        account,
+      }).finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(300_000);
+
+      expect(settled).toBe(false);
+      expect(sendTextMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await dispatchPromise;
+
+      expect(sendTextMock).toHaveBeenCalledWith(
+        expect.anything(),
+        "late answer",
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it("marks voice-only inbound as audio without adding voice paths to MediaPaths", async () => {

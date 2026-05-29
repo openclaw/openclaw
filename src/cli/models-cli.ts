@@ -17,10 +17,7 @@ export function registerModelsCli(program: Command) {
     .description("Model discovery, scanning, and configuration")
     .option("--status-json", "Output JSON (alias for `models status --json`)", false)
     .option("--status-plain", "Plain output (alias for `models status --plain`)", false)
-    .option(
-      "--agent <id>",
-      "Agent id to inspect (overrides OPENCLAW_AGENT_DIR/PI_CODING_AGENT_DIR)",
-    )
+    .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
     .addHelpText(
       "after",
       () =>
@@ -66,10 +63,7 @@ export function registerModelsCli(program: Command) {
     .option("--probe-timeout <ms>", "Per-probe timeout in ms")
     .option("--probe-concurrency <n>", "Concurrent probes")
     .option("--probe-max-tokens <n>", "Probe max tokens (best-effort)")
-    .option(
-      "--agent <id>",
-      "Agent id to inspect (overrides OPENCLAW_AGENT_DIR/PI_CODING_AGENT_DIR)",
-    )
+    .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
     .action(async (opts, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command, opts);
@@ -332,15 +326,23 @@ export function registerModelsCli(program: Command) {
     .description("Run a provider plugin auth flow (OAuth/API key)")
     .option("--provider <id>", "Provider id registered by a plugin")
     .option("--method <id>", "Provider auth method id")
+    .option("--device-code", "Use the provider device-code auth method", false)
+    .option("--profile-id <id>", "Auth profile id override for single-profile login methods")
     .option("--set-default", "Apply the provider's default model recommendation", false)
     .action(async (opts, command) => {
+      if (opts.deviceCode && typeof opts.method === "string" && opts.method !== "device-code") {
+        throw new Error(
+          "--device-code cannot be combined with --method unless method is device-code.",
+        );
+      }
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command);
         const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
         await modelsAuthLoginCommand(
           {
             provider: opts.provider as string | undefined,
-            method: opts.method as string | undefined,
+            method: opts.deviceCode ? "device-code" : (opts.method as string | undefined),
+            profileId: opts.profileId as string | undefined,
             setDefault: Boolean(opts.setDefault),
             agent,
           },
@@ -387,6 +389,26 @@ export function registerModelsCli(program: Command) {
             provider: opts.provider as string | undefined,
             profileId: opts.profileId as string | undefined,
             expiresIn: opts.expiresIn as string | undefined,
+            agent,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
+    .command("paste-api-key")
+    .description("Paste an API key into auth-profiles.json and update config")
+    .requiredOption("--provider <name>", "Provider id (e.g. openai-codex)")
+    .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)")
+    .action(async (opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command);
+        const { modelsAuthPasteApiKeyCommand } = await import("../commands/models/auth.js");
+        await modelsAuthPasteApiKeyCommand(
+          {
+            provider: opts.provider as string | undefined,
+            profileId: opts.profileId as string | undefined,
             agent,
           },
           defaultRuntime,

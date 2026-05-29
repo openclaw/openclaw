@@ -207,13 +207,14 @@ export function clampWithDefault(
   return Math.min(Math.max(value, min), max);
 }
 
-export function readEnvInt(key: string) {
-  const raw = process.env[key];
-  if (!raw) {
+export function readEnvInt(key: string, legacyKey?: string) {
+  const raw = process.env[key] || (legacyKey ? process.env[legacyKey] : undefined);
+  const trimmed = raw?.trim();
+  if (!trimmed || !/^[+-]?\d+$/.test(trimmed)) {
     return undefined;
   }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 export function chunkString(input: string, limit = CHUNK_LIMIT) {

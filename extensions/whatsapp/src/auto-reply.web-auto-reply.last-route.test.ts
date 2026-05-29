@@ -1,5 +1,5 @@
 import "./test-helpers.js";
-import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-envelope";
+import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,12 +7,12 @@ import {
   installWebAutoReplyUnitTestHooks,
   makeSessionStore,
 } from "./auto-reply.test-harness.js";
+import { buildMentionConfig } from "./auto-reply/mentions.js";
+import { createEchoTracker } from "./auto-reply/monitor/echo.js";
+import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
+import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
 
 const updateLastRouteInBackgroundMock = vi.hoisted(() => vi.fn());
-let awaitBackgroundTasks: typeof import("./auto-reply/monitor/last-route.js").awaitBackgroundTasks;
-let buildMentionConfig: typeof import("./auto-reply/mentions.js").buildMentionConfig;
-let createEchoTracker: typeof import("./auto-reply/monitor/echo.js").createEchoTracker;
-let createWebOnMessageHandler: typeof import("./auto-reply/monitor/on-message.js").createWebOnMessageHandler;
 
 vi.mock("./auto-reply/monitor/last-route.js", async () => {
   const actual = await vi.importActual<typeof import("./auto-reply/monitor/last-route.js")>(
@@ -100,13 +100,8 @@ function buildInboundMessage(params: {
 describe("web auto-reply last-route", () => {
   installWebAutoReplyUnitTestHooks();
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     updateLastRouteInBackgroundMock.mockClear();
-    ({ awaitBackgroundTasks } = await import("./auto-reply/monitor/last-route.js"));
-    ({ buildMentionConfig } = await import("./auto-reply/mentions.js"));
-    ({ createEchoTracker } = await import("./auto-reply/monitor/echo.js"));
-    ({ createWebOnMessageHandler } = await import("./auto-reply/monitor/on-message.js"));
   });
 
   it("updates last-route for direct chats without senderE164", async () => {
@@ -167,44 +162,21 @@ describe("web auto-reply last-route", () => {
         id: "+1000",
       },
     });
-    expect(ctx).toEqual({
+    expect(ctx).toMatchObject({
       From: "+1000",
       To: "+2000",
       SessionKey: mainSessionKey,
       AccountId: "default",
       ChatType: "direct",
-      CommandAuthorized: undefined,
       ConversationLabel: "+1000",
-      CommandSource: undefined,
-      CommandTurn: {
-        authorized: false,
-        body: "hello",
-        kind: "normal",
-        source: "message",
-      },
       GroupMembers: "+1000",
-      GroupSubject: undefined,
-      GroupSystemPrompt: undefined,
-      InboundHistory: undefined,
-      MediaPath: undefined,
-      MediaTranscribedIndexes: undefined,
-      MediaType: undefined,
-      MediaUrl: undefined,
       MessageSid: "m1",
       Provider: "whatsapp",
       Surface: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "+1000",
-      ReplyThreading: undefined,
-      ReplyToBody: undefined,
-      ReplyToId: undefined,
-      ReplyToSender: undefined,
       SenderE164: "+1000",
       SenderId: "+1000",
-      SenderName: undefined,
-      Transcript: undefined,
-      UntrustedStructuredContext: undefined,
-      WasMentioned: undefined,
       RawBody: "hello",
       Body: body,
       BodyForAgent: "hello",

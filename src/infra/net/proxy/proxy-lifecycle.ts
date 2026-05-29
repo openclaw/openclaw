@@ -15,8 +15,8 @@ import {
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 
 export type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { logInfo, logWarn } from "../../../logger.js";
-import { isLoopbackIpAddress } from "../../../shared/net/ip.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
   getActiveManagedProxyLoopbackMode,
@@ -25,6 +25,11 @@ import {
   stopActiveManagedProxyRegistration,
   type ActiveManagedProxyRegistration,
 } from "./active-proxy-state.js";
+import {
+  loadManagedProxyTlsOptions,
+  loadManagedProxyTlsOptionsSync,
+  resolveManagedProxyCaFileForUrl,
+} from "./proxy-tls.js";
 
 export type ProxyHandle = {
   /** The operator-managed proxy URL injected into process.env. */
@@ -37,7 +42,11 @@ export type ProxyHandle = {
 
 const PROXY_ENV_KEYS = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"] as const;
 const NO_PROXY_ENV_KEYS = ["no_proxy", "NO_PROXY"] as const;
-const PROXY_ACTIVE_KEYS = ["OPENCLAW_PROXY_ACTIVE", "OPENCLAW_PROXY_LOOPBACK_MODE"] as const;
+const PROXY_ACTIVE_KEYS = [
+  "OPENCLAW_PROXY_ACTIVE",
+  "OPENCLAW_PROXY_LOOPBACK_MODE",
+  "OPENCLAW_PROXY_CA_FILE",
+] as const;
 const ALL_PROXY_ENV_KEYS = [...PROXY_ENV_KEYS, ...NO_PROXY_ENV_KEYS, ...PROXY_ACTIVE_KEYS] as const;
 type ProxyEnvKey = (typeof ALL_PROXY_ENV_KEYS)[number];
 type ProxyEnvSnapshot = Record<ProxyEnvKey, string | undefined>;
@@ -64,21 +73,35 @@ function captureProxyEnv(): ProxyEnvSnapshot {
     NO_PROXY: process.env["NO_PROXY"],
     OPENCLAW_PROXY_ACTIVE: process.env["OPENCLAW_PROXY_ACTIVE"],
     OPENCLAW_PROXY_LOOPBACK_MODE: process.env["OPENCLAW_PROXY_LOOPBACK_MODE"],
+    OPENCLAW_PROXY_CA_FILE: process.env["OPENCLAW_PROXY_CA_FILE"],
   };
 }
 
-function injectProxyEnv(proxyUrl: string, loopbackMode: ProxyLoopbackMode): ProxyEnvSnapshot {
+function injectProxyEnv(
+  proxyUrl: string,
+  loopbackMode: ProxyLoopbackMode,
+  proxyCaFile: string | undefined,
+): ProxyEnvSnapshot {
   const snapshot = captureProxyEnv();
-  applyProxyEnv(proxyUrl, loopbackMode);
+  applyProxyEnv(proxyUrl, loopbackMode, proxyCaFile);
   return snapshot;
 }
 
-function applyProxyEnv(proxyUrl: string, loopbackMode: ProxyLoopbackMode): void {
+function applyProxyEnv(
+  proxyUrl: string,
+  loopbackMode: ProxyLoopbackMode,
+  proxyCaFile: string | undefined,
+): void {
   for (const key of PROXY_ENV_KEYS) {
     process.env[key] = proxyUrl;
   }
   process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
   process.env["OPENCLAW_PROXY_LOOPBACK_MODE"] = loopbackMode;
+  if (proxyCaFile) {
+    process.env["OPENCLAW_PROXY_CA_FILE"] = proxyCaFile;
+  } else {
+    delete process.env["OPENCLAW_PROXY_CA_FILE"];
+  }
   for (const key of NO_PROXY_ENV_KEYS) {
     process.env[key] = "";
   }
@@ -129,7 +152,7 @@ function stopActiveProxyRegistration(registration: ActiveManagedProxyRegistratio
 function isSupportedProxyUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === "http:";
+    return url.protocol === "http:" || url.protocol === "https:";
   } catch {
     return false;
   }
@@ -140,13 +163,13 @@ function resolveProxyUrl(config: ProxyConfig | undefined): string {
   if (!candidate) {
     throw new Error(
       "proxy: enabled but no HTTP proxy URL is configured; set proxy.proxyUrl " +
-        "or OPENCLAW_PROXY_URL to an http:// forward proxy.",
+        "or OPENCLAW_PROXY_URL to an http:// or https:// forward proxy.",
     );
   }
   if (!isSupportedProxyUrl(candidate)) {
     throw new Error(
       "proxy: enabled but proxy URL is invalid; set proxy.proxyUrl " +
-        "or OPENCLAW_PROXY_URL to an http:// forward proxy.",
+        "or OPENCLAW_PROXY_URL to an http:// or https:// forward proxy.",
     );
   }
   return candidate;
@@ -169,9 +192,15 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
   if (!proxyUrl || !isSupportedProxyUrl(proxyUrl)) {
     return;
   }
+  const proxyCaFile = resolveManagedProxyCaFileForUrl({
+    proxyUrl,
+    caFileOverride: process.env["OPENCLAW_PROXY_CA_FILE"],
+  });
+  const proxyTls = loadManagedProxyTlsOptionsSync(proxyCaFile);
   proxylineHandle = installGlobalProxy({
     mode: "managed",
     proxyUrl,
+    ...(proxyTls ? { proxyTls } : {}),
     ifActive: "reuse-compatible",
     undici: MANAGED_PROXY_UNDICI_OPTIONS,
   });
@@ -185,9 +214,14 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
 
   const proxyUrl = resolveProxyUrl(config);
   const loopbackMode = config.loopbackMode ?? "gateway-only";
+  const proxyCaFile = resolveManagedProxyCaFileForUrl({ proxyUrl, config });
+  const proxyTls = await loadManagedProxyTlsOptions(proxyCaFile);
   const activeProxyUrl = getActiveManagedProxyUrl();
   if (activeProxyUrl) {
-    const registration = registerActiveManagedProxyUrl(new URL(proxyUrl), loopbackMode);
+    const registration = registerActiveManagedProxyUrl(new URL(proxyUrl), {
+      loopbackMode,
+      proxyTls,
+    });
     const handle: ProxyHandle = {
       proxyUrl,
       stop: async () => {
@@ -204,16 +238,23 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   let registration: ActiveManagedProxyRegistration | null = null;
 
   try {
-    injectProxyEnv(proxyUrl, loopbackMode);
+    injectProxyEnv(proxyUrl, loopbackMode, proxyCaFile);
     proxylineHandle = installGlobalProxy({
       mode: "managed",
       proxyUrl,
+      ...(proxyTls ? { proxyTls } : {}),
       ifActive: "replace",
       undici: MANAGED_PROXY_UNDICI_OPTIONS,
     });
     forceResetGlobalDispatcher({ preserveProxylineManaged: true });
-    registration = registerActiveManagedProxyUrl(new URL(proxyUrl), loopbackMode);
+    registration = registerActiveManagedProxyUrl(new URL(proxyUrl), {
+      loopbackMode,
+      proxyTls,
+    });
   } catch (err) {
+    if (registration) {
+      stopActiveManagedProxyRegistration(registration);
+    }
     restoreAfterFailedProxyActivation(lifecycleBaseEnvSnapshot);
     throw new Error(`proxy: failed to activate external proxy routing: ${String(err)}`, {
       cause: err,
@@ -293,4 +334,45 @@ export function registerManagedProxyGatewayLoopbackBypass(url: string): (() => v
 function isGatewayControlPlaneLoopbackHost(hostname: string): boolean {
   const normalizedHost = hostname.trim().toLowerCase().replace(/\.+$/, "");
   return normalizedHost === "localhost" || isLoopbackIpAddress(hostname);
+}
+
+/**
+ * Carve out the operator-managed external proxy for the Browser plugin's
+ * loopback CDP probe to a Chromium instance OpenClaw spawned itself.
+ *
+ * The managed proxy installs a process-wide undici dispatcher that would
+ * otherwise route `http://127.0.0.1:<cdpPort>/json/version` and the
+ * `ws://127.0.0.1:<cdpPort>/devtools/...` upgrade through the external
+ * forward proxy, which returns 502 because nothing on the proxy listens for
+ * the loopback CDP port. The bypass restores direct loopback delivery for
+ * the duration the caller holds the returned `unregister` callback.
+ *
+ * Loopback-gated by structure: non-loopback authorities (e.g. an `attachOnly`
+ * profile pointing at a remote CDP service like Browserless/Browserbase) are
+ * not bypassed and continue to traverse the external proxy as configured.
+ *
+ * Honors `proxy.loopbackMode`:
+ * - `gateway-only` (default): register the bypass.
+ * - `proxy`: do not bypass — operator opted into proxy-everything routing.
+ * - `block`: throw — operator forbids loopback IPC under managed proxy.
+ *
+ * Note: A loopback `attachOnly` profile whose `cdpUrl` is e.g.
+ * `http://127.0.0.1:<port>` would also satisfy this gate. This mirrors the
+ * structural semantics of `registerManagedProxyGatewayLoopbackBypass` —
+ * loopback IPC on this host is assumed to be operator-trusted.
+ */
+export function registerManagedProxyBrowserCdpBypass(url: string): (() => void) | undefined {
+  const authority = getGatewayControlPlaneBypassAuthority(url);
+  if (!authority) {
+    return undefined;
+  }
+  const loopbackMode = getActiveManagedProxyLoopbackMode();
+  if (loopbackMode === "block") {
+    throw new Error("proxy: Browser loopback CDP connections are blocked by proxy.loopbackMode");
+  }
+  if (loopbackMode === "proxy") {
+    return undefined;
+  }
+
+  return proxylineHandle?.registerBypass({ url });
 }

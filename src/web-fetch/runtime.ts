@@ -51,7 +51,11 @@ function resolveFetchConfig(config: OpenClawConfig | undefined): WebFetchConfig 
 function hasEntryCredential(
   provider: Pick<
     PluginWebFetchProviderEntry,
-    "envVars" | "getConfiguredCredentialValue" | "getCredentialValue" | "requiresCredential"
+    | "envVars"
+    | "getConfiguredCredentialFallback"
+    | "getConfiguredCredentialValue"
+    | "getCredentialValue"
+    | "requiresCredential"
   >,
   config: OpenClawConfig | undefined,
   fetch: WebFetchConfig | undefined,
@@ -63,6 +67,8 @@ function hasEntryCredential(
     resolveRawValue: ({ provider: currentProvider, config: currentConfig, toolConfig }) =>
       currentProvider.getConfiguredCredentialValue?.(currentConfig) ??
       currentProvider.getCredentialValue(toolConfig),
+    resolveFallbackRawValue: ({ provider: currentProvider, config: currentConfig }) =>
+      currentProvider.getConfiguredCredentialFallback?.(currentConfig)?.value,
     resolveEnvValue: ({ provider: currentProvider }) =>
       readWebProviderEnvValue(currentProvider.envVars),
   });
@@ -71,7 +77,11 @@ function hasEntryCredential(
 export function isWebFetchProviderConfigured(params: {
   provider: Pick<
     PluginWebFetchProviderEntry,
-    "envVars" | "getConfiguredCredentialValue" | "getCredentialValue" | "requiresCredential"
+    | "envVars"
+    | "getConfiguredCredentialFallback"
+    | "getConfiguredCredentialValue"
+    | "getCredentialValue"
+    | "requiresCredential"
   >;
   config?: OpenClawConfig;
 }): boolean {
@@ -83,7 +93,6 @@ export function listWebFetchProviders(params?: {
 }): PluginWebFetchProviderEntry[] {
   return resolvePluginWebFetchProviders({
     config: params?.config,
-    bundledAllowlistCompat: true,
   });
 }
 
@@ -92,7 +101,6 @@ export function listConfiguredWebFetchProviders(params?: {
 }): PluginWebFetchProviderEntry[] {
   return resolvePluginWebFetchProviders({
     config: params?.config,
-    bundledAllowlistCompat: true,
   });
 }
 
@@ -105,7 +113,6 @@ export function resolveWebFetchProviderId(params: {
     params.providers ??
       resolvePluginWebFetchProviders({
         config: params.config,
-        bundledAllowlistCompat: true,
       }),
   );
   const raw =
@@ -164,17 +171,14 @@ export function resolveWebFetchDefinition(
     options?.sandboxed
       ? resolvePluginWebFetchProviders({
           config: options?.config,
-          bundledAllowlistCompat: true,
           origin: "bundled",
         })
       : options?.preferRuntimeProviders
         ? resolveRuntimeWebFetchProviders({
             config: options?.config,
-            bundledAllowlistCompat: true,
           })
         : resolvePluginWebFetchProviders({
             config: options?.config,
-            bundledAllowlistCompat: true,
           }),
   );
   return resolveWebProviderDefinition({

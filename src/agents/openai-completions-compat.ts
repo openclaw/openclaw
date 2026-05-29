@@ -1,4 +1,4 @@
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model } from "../llm/types.js";
 import type { ProviderEndpointClass, ProviderRequestCapabilities } from "./provider-attribution.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 
@@ -17,10 +17,11 @@ type OpenAICompletionsCompatDefaults = {
   supportsReasoningEffort: boolean;
   supportsUsageInStreaming: boolean;
   maxTokensField: "max_completion_tokens" | "max_tokens";
-  thinkingFormat: "openai" | "openrouter" | "deepseek" | "zai";
+  thinkingFormat: "openai" | "openrouter" | "deepseek" | "together" | "zai";
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
   requiresReasoningContentOnAssistantMessages: boolean;
+  requiresNonEmptyUserOrAssistantMessage: boolean;
 };
 
 type DetectedOpenAICompletionsCompat = {
@@ -51,12 +52,19 @@ export function resolveOpenAICompletionsCompatDefaults(
     knownProviderFamily === "modelstudio" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native";
+  const isModelStudioLike =
+    knownProviderFamily === "modelstudio" ||
+    endpointClass === "modelstudio-native" ||
+    (isDefaultRoute && isDefaultRouteProvider(provider, "dashscope", "modelstudio", "qwen"));
   const isZai =
     endpointClass === "zai-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "zai"));
   const isDeepSeek =
     endpointClass === "deepseek-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "deepseek"));
+  const isTogether =
+    knownProviderFamily === "together" ||
+    (isDefaultRoute && isDefaultRouteProvider(input.provider, "together"));
   const isXiaomi =
     endpointClass === "xiaomi-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "xiaomi"));
@@ -77,6 +85,7 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
+    isTogether ||
     (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
   return {
     supportsStore:
@@ -84,25 +93,31 @@ export function resolveOpenAICompletionsCompatDefaults(
     supportsDeveloperRole: !isNonStandard && !isMoonshotLike && !usesConfiguredNonOpenAIEndpoint,
     supportsReasoningEffort:
       !isZai &&
+      !isTogether &&
       knownProviderFamily !== "mistral" &&
       endpointClass !== "xai-native" &&
       !usesExplicitProxyLikeEndpoint,
     supportsUsageInStreaming:
       supportsOpenAICompletionsStreamingUsageCompat ||
       (!isNonStandard &&
-        (isLocalEndpoint || !usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
+        (isLocalEndpoint ||
+          !usesConfiguredNonOpenAIEndpoint ||
+          supportsNativeStreamingUsageCompat)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
     thinkingFormat:
       isDeepSeek || isXiaomi
         ? "deepseek"
         : isZai
           ? "zai"
-          : isOpenRouterLike
-            ? "openrouter"
-            : "openai",
+          : isTogether
+            ? "together"
+            : isOpenRouterLike
+              ? "openrouter"
+              : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
     requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
+    requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
   };
 }
 

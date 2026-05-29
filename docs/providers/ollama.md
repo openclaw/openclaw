@@ -260,6 +260,25 @@ OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OLLAMA=1 OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=0 \
   pnpm test:live -- extensions/ollama/ollama.live.test.ts
 ```
 
+For Ollama Cloud API-key smoke tests, point the live test at `https://ollama.com`
+and choose a hosted model from the current catalog:
+
+```bash
+export OLLAMA_API_KEY='<your-ollama-cloud-api-key>'
+
+OPENCLAW_LIVE_TEST=1 \
+OPENCLAW_LIVE_OLLAMA=1 \
+OPENCLAW_LIVE_OLLAMA_BASE_URL=https://ollama.com \
+OPENCLAW_LIVE_OLLAMA_MODEL=glm-5.1:cloud \
+OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=1 \
+pnpm test:live -- extensions/ollama/ollama.live.test.ts
+```
+
+The cloud smoke runs text, native stream, and web search. It skips embeddings by
+default for `https://ollama.com` because Ollama Cloud API keys may not authorize
+`/api/embed`. Set `OPENCLAW_LIVE_OLLAMA_EMBEDDINGS=1` when you explicitly want
+the live test to fail if the configured cloud key cannot use the embed endpoint.
+
 To add a new model, simply pull it with Ollama:
 
 ```bash
@@ -627,12 +646,15 @@ Use these as starting points and replace model IDs with the exact names from `ol
     ```json5
     {
       agents: {
-        defaults: {
-          experimental: {
-            localModelLean: true,
+        list: [
+          {
+            id: "local",
+            experimental: {
+              localModelLean: true,
+            },
+            model: { primary: "ollama/gemma4" },
           },
-          model: { primary: "ollama/gemma4" },
-        },
+        ],
       },
       models: {
         providers: {
@@ -912,6 +934,19 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     [memory search](/concepts/memory). It uses the configured Ollama base URL
     and API key, calls Ollama's current `/api/embed` endpoint, and batches
     multiple memory chunks into one `input` request when possible.
+
+    When `proxy.enabled=true`, Ollama memory embedding requests to the exact
+    host-local loopback origin derived from the configured `baseUrl` use
+    OpenClaw's guarded direct path instead of the managed forward proxy. The
+    configured hostname must itself be `localhost` or a loopback IP literal;
+    DNS names that merely resolve to loopback still use the managed proxy path.
+    LAN, tailnet, private-network, and public Ollama hosts also stay on the
+    managed proxy path. Redirects to another host or port do not inherit trust.
+    Operators can still set the global `proxy.loopbackMode: "proxy"` setting to
+    send loopback traffic through the proxy, or `proxy.loopbackMode: "block"`
+    to deny loopback connections before opening a connection; see
+    [Managed proxy](/security/network-proxy#gateway-loopback-mode) for the
+    process-wide effect of this setting.
 
     | Property      | Value               |
     | ------------- | ------------------- |

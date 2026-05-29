@@ -20,10 +20,14 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { runFfmpeg } from "../media/ffmpeg-exec.js";
+import { runFfmpeg } from "../media/media-services.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+} from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
@@ -32,8 +36,10 @@ import {
 } from "./defaults.constants.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
+import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import { extractGeminiResponse } from "./output-extract.js";
+import { normalizeMediaExecutionProviderId } from "./provider-id.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
 import type {
@@ -63,8 +69,7 @@ function resolveLiteralProviderApiKey(params: {
   cfg: OpenClawConfig;
   providerId: string;
 }): string | null {
-  const value = params.cfg.models?.providers?.[params.providerId]?.apiKey;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return normalizeNullableString(params.cfg.models?.providers?.[params.providerId]?.apiKey);
 }
 
 function sanitizeProviderHeaders(
@@ -95,15 +100,16 @@ function trimOutput(text: string, maxChars?: number): string {
   return trimmed.slice(0, maxChars).trim();
 }
 
-function extractSherpaOnnxText(raw: string): string | null {
-  const tryParse = (value: string): string | null => {
+function extractSherpaOnnxText(raw: string): { matched: boolean; text: string } {
+  const noMatch = { matched: false, text: "" };
+  const tryParse = (value: string): { matched: boolean; text: string } => {
     const trimmed = value.trim();
     if (!trimmed) {
-      return null;
+      return noMatch;
     }
     const head = trimmed[0];
     if (head !== "{" && head !== '"') {
-      return null;
+      return noMatch;
     }
     try {
       const parsed = JSON.parse(trimmed) as unknown;
@@ -112,34 +118,36 @@ function extractSherpaOnnxText(raw: string): string | null {
       }
       if (parsed && typeof parsed === "object") {
         const text = (parsed as { text?: unknown }).text;
-        if (typeof text === "string" && text.trim()) {
-          return text.trim();
+        if (typeof text === "string") {
+          return { matched: true, text: text.trim() };
         }
       }
     } catch {}
-    return null;
+    return noMatch;
   };
 
   const direct = tryParse(raw);
-  if (direct) {
+  if (direct.matched) {
     return direct;
   }
 
-  const lines = raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(raw.split("\n"));
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const parsed = tryParse(lines[i] ?? "");
-    if (parsed) {
+    if (parsed.matched) {
       return parsed;
     }
   }
-  return null;
+  return noMatch;
 }
 
 function commandBase(command: string): string {
   return path.parse(command).name;
+}
+
+function isAntigravityCliCommand(command: string): boolean {
+  const commandId = commandBase(command);
+  return commandId === "agy" || commandId === "antigravity";
 }
 
 function findArgValue(args: string[], keys: string[]): string | undefined {
@@ -229,8 +237,8 @@ async function resolveCliOutput(params: {
 
   if (commandId === "sherpa-onnx-offline") {
     const response = extractSherpaOnnxText(params.stdout);
-    if (response) {
-      return response;
+    if (response.matched) {
+      return response.text;
     }
   }
 
@@ -412,8 +420,8 @@ function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefin
     _requestLanguageOverride?: string;
   };
   return {
-    prompt: overrides._requestPromptOverride,
-    language: overrides._requestLanguageOverride,
+    prompt: overrides["_requestPromptOverride"],
+    language: overrides["_requestLanguageOverride"],
   };
 }
 
@@ -422,6 +430,7 @@ async function resolveProviderExecutionAuth(params: {
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
   agentDir?: string;
+  workspaceDir?: string;
 }) {
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
@@ -443,6 +452,7 @@ async function resolveProviderExecutionAuth(params: {
     profileId: params.entry.profile,
     preferredProfile: params.entry.preferredProfile,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
   });
   return {
     apiKeys: collectProviderApiKeysForExecution({
@@ -459,12 +469,14 @@ async function resolveProviderExecutionContext(params: {
   entry: MediaUnderstandingModelConfig;
   config?: MediaUnderstandingConfig;
   agentDir?: string;
+  workspaceDir?: string;
 }) {
   const { apiKeys, providerConfig } = await resolveProviderExecutionAuth({
     providerId: params.providerId,
     cfg: params.cfg,
     entry: params.entry,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
   });
   const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
   const mergedHeaders = {
@@ -552,6 +564,7 @@ export async function runProviderEntry(params: {
   attachmentIndex: number;
   cache: MediaAttachmentCache;
   agentDir?: string;
+  workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   config?: MediaUnderstandingConfig;
 }): Promise<MediaUnderstandingOutput | null> {
@@ -561,6 +574,7 @@ export async function runProviderEntry(params: {
     throw new Error(`Provider entry missing provider for ${capability}`);
   }
   const providerId = normalizeMediaProviderId(providerIdRaw);
+  const requestProviderId = normalizeMediaExecutionProviderId(providerIdRaw);
   const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
     entry,
@@ -581,19 +595,26 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
-    const requestOverrides = resolveMediaRequestOverrides(params.config);
-    const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
-    const imageInput = {
+    const normalizedMedia = await normalizeImageDescriptionInput({
       buffer: media.buffer,
       fileName: media.fileName,
       mime: media.mime,
+      maxBytes,
+    });
+    const requestOverrides = resolveMediaRequestOverrides(params.config);
+    const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
+    const imageInput = {
+      buffer: normalizedMedia.buffer,
+      fileName: media.fileName,
+      mime: normalizedMedia.mime,
       model: modelId,
-      provider: providerId,
+      provider: requestProviderId,
       prompt: requestOverrides.prompt ?? prompt,
       timeoutMs,
       profile: entry.profile,
       preferredProfile: entry.preferredProfile,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       cfg: params.cfg,
     };
     const describeImage = provider?.describeImage ?? describeImageWithModel;
@@ -602,7 +623,7 @@ export async function runProviderEntry(params: {
       kind: "image.description",
       attachmentIndex: params.attachmentIndex,
       text: trimOutput(result.text, maxChars),
-      provider: providerId,
+      provider: requestProviderId,
       model: result.model ?? modelId,
     };
   }
@@ -634,6 +655,7 @@ export async function runProviderEntry(params: {
       entry,
       config: params.config,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
     });
     const providerQuery = resolveProviderQuery({
       providerId,
@@ -646,6 +668,7 @@ export async function runProviderEntry(params: {
         cfg,
         providerId,
         capability: "audio",
+        workspaceDir: params.workspaceDir,
       }) ||
       entry.model;
     const result = await executeWithApiKeyRotation({
@@ -705,6 +728,7 @@ export async function runProviderEntry(params: {
     entry,
     config: params.config,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
   });
   const result = await executeWithApiKeyRotation({
     provider: providerId,
@@ -796,6 +820,7 @@ export async function runCliEntry(params: {
     const { stdout } = await runExec(argv[0], argv.slice(1), {
       timeoutMs,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+      cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
     });
     const resolved = await resolveCliOutput({
       command,

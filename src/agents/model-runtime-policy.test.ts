@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
+
+const ORIGINAL_BUILD_PRIVATE_QA = process.env.OPENCLAW_BUILD_PRIVATE_QA;
+const ORIGINAL_QA_FORCE_RUNTIME = process.env.OPENCLAW_QA_FORCE_RUNTIME;
 
 const createModelConfig = (agentRuntimeId: string): ModelDefinitionConfig => ({
   id: "qwen-local",
@@ -19,13 +22,91 @@ const createModelConfig = (agentRuntimeId: string): ModelDefinitionConfig => ({
   agentRuntime: { id: agentRuntimeId },
 });
 
+function restoreEnv(
+  name: "OPENCLAW_BUILD_PRIVATE_QA" | "OPENCLAW_QA_FORCE_RUNTIME",
+  value: string | undefined,
+): void {
+  if (value == null) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+}
+
+function makeProviderRuntimeConfig(runtime: string): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.example/v1",
+          agentRuntime: { id: runtime },
+          models: [],
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+afterEach(() => {
+  restoreEnv("OPENCLAW_BUILD_PRIVATE_QA", ORIGINAL_BUILD_PRIVATE_QA);
+  restoreEnv("OPENCLAW_QA_FORCE_RUNTIME", ORIGINAL_QA_FORCE_RUNTIME);
+});
+
 describe("resolveModelRuntimePolicy", () => {
+  it("ignores the QA force-runtime override when the private QA gate is unset", () => {
+    delete process.env.OPENCLAW_BUILD_PRIVATE_QA;
+    process.env.OPENCLAW_QA_FORCE_RUNTIME = "openclaw";
+
+    expect(
+      resolveModelRuntimePolicy({
+        config: makeProviderRuntimeConfig("codex"),
+        provider: "openai",
+        modelId: "gpt-5.5",
+      }),
+    ).toEqual({
+      policy: { id: "codex" },
+      source: "provider",
+    });
+  });
+
+  it("respects the QA force-runtime override when the private QA gate is set", () => {
+    process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
+    process.env.OPENCLAW_QA_FORCE_RUNTIME = "openclaw";
+
+    expect(
+      resolveModelRuntimePolicy({
+        config: makeProviderRuntimeConfig("codex"),
+        provider: "openai",
+        modelId: "gpt-5.5",
+      }),
+    ).toEqual({
+      policy: { id: "openclaw" },
+      source: "model",
+    });
+  });
+
+  it("ignores invalid QA force-runtime values even when the private QA gate is set", () => {
+    process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
+    process.env.OPENCLAW_QA_FORCE_RUNTIME = "bogus";
+
+    expect(
+      resolveModelRuntimePolicy({
+        config: makeProviderRuntimeConfig("codex"),
+        provider: "openai",
+        modelId: "gpt-5.5",
+      }),
+    ).toEqual({
+      policy: { id: "codex" },
+      source: "provider",
+    });
+  });
+
   it("honors provider wildcard agent model runtime policy entries", () => {
     const config = {
       agents: {
         defaults: {
           models: {
-            "vllm/*": { agentRuntime: { id: "pi" } },
+            "vllm/*": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -38,8 +119,9 @@ describe("resolveModelRuntimePolicy", () => {
         modelId: "qwen-local",
       }),
     ).toEqual({
-      policy: { id: "pi" },
+      policy: { id: "openclaw" },
       source: "model",
+      matchedProvider: "vllm",
     });
   });
 
@@ -48,7 +130,7 @@ describe("resolveModelRuntimePolicy", () => {
       agents: {
         defaults: {
           models: {
-            "vllm/*": { agentRuntime: { id: "pi" } },
+            "vllm/*": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -60,8 +142,9 @@ describe("resolveModelRuntimePolicy", () => {
         provider: "vllm",
       }),
     ).toEqual({
-      policy: { id: "pi" },
+      policy: { id: "openclaw" },
       source: "model",
+      matchedProvider: "vllm",
     });
   });
 
@@ -70,7 +153,7 @@ describe("resolveModelRuntimePolicy", () => {
       agents: {
         defaults: {
           models: {
-            "vllm/*": { agentRuntime: { id: "pi" } },
+            "vllm/*": { agentRuntime: { id: "openclaw" } },
             "vllm/qwen-local": { agentRuntime: { id: "codex" } },
           },
         },
@@ -86,6 +169,7 @@ describe("resolveModelRuntimePolicy", () => {
     ).toEqual({
       policy: { id: "codex" },
       source: "model",
+      matchedProvider: "vllm",
     });
   });
 
@@ -94,7 +178,7 @@ describe("resolveModelRuntimePolicy", () => {
       agents: {
         defaults: {
           models: {
-            "vllm/*": { agentRuntime: { id: "pi" } },
+            "vllm/*": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -125,7 +209,7 @@ describe("resolveModelRuntimePolicy", () => {
       agents: {
         defaults: {
           models: {
-            "vllm/*": { agentRuntime: { id: "pi" } },
+            "vllm/*": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -147,8 +231,132 @@ describe("resolveModelRuntimePolicy", () => {
         modelId: "qwen-local",
       }),
     ).toEqual({
-      policy: { id: "pi" },
+      policy: { id: "openclaw" },
       source: "model",
+      matchedProvider: "vllm",
     });
+  });
+
+  it("matches a provider-prefixed agent model entry when the caller provider is empty", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-7[1m]": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({
+        config,
+        provider: "",
+        modelId: "claude-opus-4-7[1m]",
+      }),
+    ).toEqual({
+      policy: { id: "claude-cli" },
+      source: "model",
+      matchedProvider: "anthropic",
+    });
+  });
+
+  it("still rejects provider-prefixed entries whose provider disagrees with a non-empty caller provider", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/claude-opus-4-7[1m]": { agentRuntime: { id: "openrouter-stream" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({
+        config,
+        provider: "anthropic",
+        modelId: "claude-opus-4-7[1m]",
+      }),
+    ).toEqual({});
+  });
+
+  it("matches a provider wildcard agent model entry when the caller provider is empty", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({
+        config,
+        provider: "",
+        modelId: "claude-opus-4-7[1m]",
+      }),
+    ).toEqual({
+      policy: { id: "claude-cli" },
+      source: "model",
+      matchedProvider: "anthropic",
+    });
+  });
+
+  it("prefers an agent-specific model entry over a conflicting defaults entry when the caller provider is empty", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/foo-1": { agentRuntime: { id: "codex" } },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            models: {
+              "anthropic/foo-1": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({
+        config,
+        provider: "",
+        modelId: "foo-1",
+        agentId: "main",
+      }),
+    ).toEqual({
+      policy: { id: "claude-cli" },
+      source: "model",
+      matchedProvider: "anthropic",
+    });
+  });
+
+  it("fails closed for duplicate provider-prefixed bare-model policies", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/foo-1": { agentRuntime: { id: "codex" } },
+            "anthropic/foo-1": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({
+        config,
+        provider: "",
+        modelId: "foo-1",
+      }),
+    ).toEqual({});
   });
 });

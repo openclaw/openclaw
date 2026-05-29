@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -7,6 +6,7 @@ import {
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 
 function expectNoPrefixMatches(values: string[], prefix: string) {
   expect(values.filter((value) => value.startsWith(prefix))).toEqual([]);
@@ -52,8 +52,6 @@ describe("bundled plugin build entries", () => {
         "extensions/image-generation-core/runtime-api.ts",
       "extensions/media-understanding-core/runtime-api":
         "extensions/media-understanding-core/runtime-api.ts",
-      "extensions/speech-core/api": "extensions/speech-core/api.ts",
-      "extensions/speech-core/runtime-api": "extensions/speech-core/runtime-api.ts",
     };
 
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
@@ -69,52 +67,67 @@ describe("bundled plugin build entries", () => {
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
+  it("filters bundled plugin build entries for bounded script lanes", () => {
+    const entries = listBundledPluginBuildEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "active-memory,acpx",
+      },
+    });
+    const entryKeys = Object.keys(entries);
+
+    expect(entryKeys).toEqual(expect.arrayContaining(["extensions/acpx/index"]));
+    expect(entryKeys.every((entry) => /^extensions\/(?:acpx|active-memory)\//u.test(entry))).toBe(
+      true,
+    );
+  });
+
+  it("rejects unknown bounded bundled plugin build ids", () => {
+    expect(() =>
+      listBundledPluginBuildEntries({
+        env: {
+          ...process.env,
+          OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "missing-plugin",
+        },
+      }),
+    ).toThrow(
+      "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS references unknown bundled plugin id(s): missing-plugin",
+    );
+  });
+
   it("keeps the Telegram ingress worker out of bundled plugin public-surface entries", () => {
     const entries = listBundledPluginBuildEntries();
 
     expect(entries["extensions/telegram/telegram-ingress-worker.runtime"]).toBeUndefined();
   });
 
+  it("keeps top-level bundled plugin test helpers out of public-surface entries", () => {
+    const entries = listBundledPluginBuildEntries();
+
+    expect(entries["extensions/browser/test-support"]).toBeUndefined();
+    expect(entries["extensions/comfy/test-helpers"]).toBeUndefined();
+    expect(entries["extensions/minimax/provider-http.test-helpers"]).toBeUndefined();
+  });
+
   it("discovers repo plugin build entries without directory scans", () => {
-    const output = execFileSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        `
-          import fs from "node:fs";
-          import { syncBuiltinESMExports } from "node:module";
-          const counts = { readdirSync: 0 };
-          const originalReaddirSync = fs.readdirSync;
-          fs.readdirSync = (...args) => {
-            counts.readdirSync += 1;
-            return originalReaddirSync(...args);
-          };
-          syncBuiltinESMExports();
-          const build = await import("./scripts/lib/bundled-plugin-build-entries.mjs");
-          const entries = build.listBundledPluginBuildEntries();
-          const artifacts = build.listBundledPluginPackArtifacts();
-          console.log(JSON.stringify({
-            artifacts: artifacts.length,
-            counts,
-            entries: Object.keys(entries).length,
-          }));
-        `,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-    const payload = JSON.parse(output) as {
+    const payload = expectNoNodeFsScans<{
       artifacts: number;
-      counts: { readdirSync: number };
       entries: number;
-    };
+    }>(
+      `
+        const build = await import("./scripts/lib/bundled-plugin-build-entries.mjs");
+        const entries = build.listBundledPluginBuildEntries();
+        const artifacts = build.listBundledPluginPackArtifacts();
+        return {
+          artifacts: artifacts.length,
+          entries: Object.keys(entries).length,
+        };
+      `,
+      { counters: ["readdirSync"] },
+    );
 
     expect(payload.entries).toBeGreaterThan(0);
     expect(payload.artifacts).toBeGreaterThan(0);
-    expect(payload.counts.readdirSync).toBe(0);
   });
 
   it("packs runtime core support packages without requiring plugin manifests", () => {
@@ -127,8 +140,6 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).not.toContain(
       "dist/extensions/media-understanding-core/openclaw.plugin.json",
     );
-    expect(artifacts).toContain("dist/extensions/speech-core/runtime-api.js");
-    expect(artifacts).not.toContain("dist/extensions/speech-core/openclaw.plugin.json");
   });
 
   it("packs the Matrix packaged runtime shim", () => {

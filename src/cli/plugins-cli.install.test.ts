@@ -255,7 +255,8 @@ function primeHookPackNpmFallback() {
     ...createHookPackInstallResult("/tmp/hooks/demo-hooks"),
     npmResolution: {
       name: "@acme/demo-hooks",
-      spec: "@acme/demo-hooks@1.2.3",
+      version: "1.2.3",
+      resolvedSpec: "@acme/demo-hooks@1.2.3",
       integrity: "sha256-demo",
     },
   });
@@ -302,6 +303,7 @@ type MockWithCalls = {
 };
 
 type PluginInstallCall = {
+  allowSourceTypeScriptEntries?: boolean;
   archivePath?: string;
   dangerouslyForceUnsafeInstall?: boolean;
   dryRun?: boolean;
@@ -931,6 +933,36 @@ describe("plugins cli install", () => {
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
   });
 
+  it("stores npm resolution metadata without changing the active plugin install selector", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("demo");
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: cliInstallPath("demo"),
+      version: "1.2.3",
+      npmResolution: {
+        name: "demo",
+        version: "1.2.3",
+        resolvedSpec: "demo@1.2.3",
+        integrity: "sha512-demo",
+      },
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "demo"]);
+
+    const record = persistedInstallRecord("demo");
+    expect(record.spec).toBe("demo");
+    expect(record.resolvedSpec).toBe("demo@1.2.3");
+    expect(record.integrity).toBe("sha512-demo");
+  });
+
   it("passes bare npm selectors through npm without ClawHub lookup", async () => {
     const cfg = createEmptyPluginConfig();
     const enabledCfg = createEnabledPluginConfig("demo");
@@ -1053,6 +1085,7 @@ describe("plugins cli install", () => {
     const enabledCfg = createEnabledPluginConfig("discord");
 
     loadConfig.mockReturnValue(cfg);
+    findBundledPluginSourceMock.mockReturnValue(undefined);
     installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("discord"));
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
     recordPluginInstall.mockReturnValue(enabledCfg);
@@ -1069,11 +1102,62 @@ describe("plugins cli install", () => {
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
   });
 
+  it("uses bundled OpenClaw package specs instead of pinning stale managed npm overrides", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("discord");
+    const bundledPath = "/app/dist/extensions/discord";
+
+    loadConfig.mockReturnValue(cfg);
+    findBundledPluginSourceMock.mockImplementation((params: unknown) => {
+      const { lookup } = params as {
+        lookup: { kind: "pluginId" | "npmSpec"; value: string };
+      };
+      return lookup.kind === "npmSpec" && lookup.value === "@openclaw/discord"
+        ? {
+            pluginId: "discord",
+            localPath: bundledPath,
+            npmSpec: "@openclaw/discord",
+            version: "2026.5.24-beta.2",
+          }
+        : undefined;
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand([
+      "plugins",
+      "install",
+      "@openclaw/discord@2026.5.20",
+      "--pin",
+      "--force",
+    ]);
+
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(findBundledPluginSourceMock).toHaveBeenCalledWith({
+      lookup: { kind: "npmSpec", value: "@openclaw/discord@2026.5.20" },
+    });
+    expect(findBundledPluginSourceMock).toHaveBeenCalledWith({
+      lookup: { kind: "npmSpec", value: "@openclaw/discord" },
+    });
+    const record = persistedInstallRecord("discord");
+    expect(record.source).toBe("path");
+    expect(record.spec).toBe("@openclaw/discord@2026.5.20");
+    expect(record.sourcePath).toBe(bundledPath);
+    expect(record.installPath).toBe(bundledPath);
+    expect(runtimeLogsContain("ships with the current OpenClaw build")).toBe(true);
+    expect(runtimeLogsContain("npm:@openclaw/discord@2026.5.20")).toBe(true);
+  });
+
   it("marks catalog npm package installs with alternate selectors as trusted", async () => {
     const cfg = createEmptyPluginConfig();
     const enabledCfg = createEnabledPluginConfig("wecom-openclaw-plugin");
 
     loadConfig.mockReturnValue(cfg);
+    findBundledPluginSourceMock.mockReturnValue(undefined);
     installPluginFromNpmSpec.mockResolvedValue(
       createNpmPluginInstallResult("wecom-openclaw-plugin"),
     );
@@ -1321,6 +1405,7 @@ describe("plugins cli install", () => {
 
     expect(pathInstallCall().path).toBe(tmpRoot);
     expect(pathInstallCall().dryRun).toBe(true);
+    expect(pathInstallCall().allowSourceTypeScriptEntries).toBe(true);
     expect(pathInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
   });
 
@@ -1536,6 +1621,7 @@ describe("plugins cli install", () => {
 
     expect(pathInstallCall().path).toBe(localPluginDir);
     expect(pathInstallCall().dryRun).toBe(true);
+    expect(pathInstallCall().allowSourceTypeScriptEntries).toBe(true);
     expect(pathInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
     expect(typeof pathInstallCall().logger?.info).toBe("function");
     expect(typeof pathInstallCall().logger?.warn).toBe("function");
@@ -1771,7 +1857,8 @@ describe("plugins cli install", () => {
       version: "1.2.3",
       npmResolution: {
         name: "@acme/demo-hooks",
-        spec: "@acme/demo-hooks@1.2.3",
+        version: "1.2.3",
+        resolvedSpec: "@acme/demo-hooks@1.2.3",
         integrity: "sha256-demo",
       },
     });
@@ -1810,8 +1897,13 @@ describe("plugins cli install", () => {
     await runPluginsCommand(["plugins", "install", "@acme/demo-hooks"]);
 
     expect(hookNpmInstallCall().spec).toBe("@acme/demo-hooks");
-    expect(recordHookInstallCall().hookId).toBe("demo-hooks");
-    expect(recordHookInstallCall().hooks).toEqual(["command-audit"]);
+    const record = recordHookInstallCall();
+    expect(record.hookId).toBe("demo-hooks");
+    expect(record.spec).toBe("@acme/demo-hooks");
+    expect(record.resolvedVersion).toBe("1.2.3");
+    expect(record.resolvedSpec).toBe("@acme/demo-hooks@1.2.3");
+    expect(record.integrity).toBe("sha256-demo");
+    expect(record.hooks).toEqual(["command-audit"]);
     expect(writeConfigFile).toHaveBeenCalledWith(installedCfg);
     expect(runtimeLogsContain("Installed hook pack: demo-hooks")).toBe(true);
   });

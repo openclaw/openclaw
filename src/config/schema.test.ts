@@ -1,9 +1,10 @@
+import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
 import { beforeAll, describe, expect, it } from "vitest";
-import { SENSITIVE_URL_HINT_TAG } from "../shared/net/redact-sensitive-url.js";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
+import { DiscordConfigSchema, TelegramConfigSchema } from "./zod-schema.providers-core.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -115,6 +116,9 @@ describe("config schema", () => {
     expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
     expect(res.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
+    expect(res.uiHints["proxy.tls.caFile"]?.tags).toEqual(
+      expect.arrayContaining(["security", "network", "storage"]),
+    );
     expect(res.version).toBeTypeOf("string");
     expect(res.version.trim().length).toBeGreaterThan(0);
     expect(res.generatedAt).toBeTypeOf("string");
@@ -222,14 +226,33 @@ describe("config schema", () => {
     const channelSchema = channelsProps?.matrix as Record<string, unknown> | undefined;
     const channelProps = channelSchema?.properties as Record<string, unknown> | undefined;
     expect(channelProps).toHaveProperty("accessToken");
+    const progressPropsFor = (channelId: string) => {
+      const channel = channelsProps?.[channelId] as Record<string, unknown> | undefined;
+      const properties = channel?.properties as Record<string, unknown> | undefined;
+      const streaming = properties?.streaming as Record<string, unknown> | undefined;
+      const streamingProperties = streaming?.properties as Record<string, unknown> | undefined;
+      const progress = streamingProperties?.progress as Record<string, unknown> | undefined;
+      return progress?.properties as Record<string, unknown> | undefined;
+    };
+    expect(progressPropsFor("slack")).toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("discord")).not.toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("telegram")).not.toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("discord")).toHaveProperty("commentary");
+    expect(progressPropsFor("telegram")).not.toHaveProperty("commentary");
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
     expect(res.uiHints["channels.matrix.streaming.progress.label"]?.label).toBe(
       "Matrix Progress Label",
     );
+    expect(res.uiHints["channels.slack.streaming.progress.nativeTaskCards"]?.label).toBe(
+      "Slack Native Progress Task Cards",
+    );
+    expect(res.uiHints["channels.discord.streaming.progress.nativeTaskCards"]).toBeUndefined();
+    expect(res.uiHints["channels.telegram.streaming.progress.nativeTaskCards"]).toBeUndefined();
     expect(res.uiHints["channels.discord.streaming.progress.toolProgress"]?.label).toBe(
       "Discord Progress Tool Lines",
     );
+    expect(res.uiHints["channels.telegram.streaming.progress.commentary"]).toBeUndefined();
     expect(res.uiHints["channels.mattermost.streaming.progress.label"]?.label).toBe(
       "Mattermost Progress Label",
     );
@@ -338,6 +361,13 @@ describe("config schema", () => {
     expect(tags).toContain("auth");
   });
 
+  it("classifies managed proxy CA files as security-relevant config", () => {
+    const tags = deriveTagsForPath("proxy.tls.caFile");
+    expect(tags).toContain("security");
+    expect(tags).toContain("network");
+    expect(tags).toContain("storage");
+  });
+
   it("derives tools/performance tags for web fetch timeout paths", () => {
     const tags = deriveTagsForPath("tools.web.fetch.timeoutSeconds");
     expect(tags).toContain("tools");
@@ -370,6 +400,72 @@ describe("config schema", () => {
       maxAgeMs: 60_000,
       timeoutSeconds: 15,
     });
+  });
+
+  it("keeps top-level subagent tools schema limited to tool policy", () => {
+    expect(
+      ToolsSchema.safeParse({
+        subagents: { model: { primary: "openai/gpt-5.5" } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts progress commentary only for Discord streaming config", () => {
+    expect(
+      DiscordConfigSchema.safeParse({
+        streaming: {
+          mode: "progress",
+          progress: { commentary: true },
+        },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      TelegramConfigSchema.safeParse({
+        streaming: {
+          mode: "progress",
+          progress: { commentary: true },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps per-agent model overrides limited to model selection", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            model: {
+              primary: "openai/gpt-5.5",
+              timeoutMs: 30_000,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects per-agent subagent model timeout config", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              model: {
+                primary: "openai/gpt-5.5",
+                timeoutMs: 30_000,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
   });
 
   it("accepts exec command highlighting config in global and agent scopes", () => {
@@ -636,17 +732,80 @@ describe("config schema", () => {
     expect(schema?.properties).toBeUndefined();
   });
 
+  it("looks up root config schema children without returning the full schema tree", () => {
+    const lookup = lookupConfigSchema(baseSchema, ".");
+    expect(lookup?.path).toBe(".");
+    expect(lookup?.children.map((child) => child.key)).toContain("gateway");
+    expect(lookup?.children.find((child) => child.key === "gateway")?.path).toBe("gateway");
+    const schema = lookup?.schema as { properties?: unknown } | undefined;
+    expect(schema?.properties).toBeUndefined();
+  });
+
+  it("lists Matrix in messages.queue.byChannel schema lookup", () => {
+    const lookup = lookupConfigSchema(baseSchema, "messages.queue.byChannel");
+    expect(lookup?.path).toBe("messages.queue.byChannel");
+    expect(lookup?.children.map((child) => child.key)).toEqual(expect.arrayContaining(["matrix"]));
+    expect(lookup?.schema).toMatchObject({ additionalProperties: false });
+  });
+
+  it("includes reload metadata when a resolver is provided", () => {
+    const lookup = lookupConfigSchema(baseSchema, "gateway", (path) => {
+      if (path === "gateway.channelHealthCheckMinutes") {
+        return { kind: "hot" };
+      }
+      if (path.startsWith("gateway")) {
+        return { kind: "restart" };
+      }
+      return { kind: "none" };
+    });
+
+    expect(lookup?.reloadKind).toBe("restart");
+    expect(
+      lookup?.children.find((child) => child.path === "gateway.handshakeTimeoutMs")?.reloadKind,
+    ).toBe("restart");
+    expect(
+      lookup?.children.find((child) => child.path === "gateway.channelHealthCheckMinutes")
+        ?.reloadKind,
+    ).toBe("hot");
+  });
+
   it("returns a shallow lookup schema without nested composition keywords", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.list.0.runtime");
     expect(lookup?.path).toBe("agents.list.0.runtime");
     expect(lookup?.hintPath).toBe("agents.list[].runtime");
-    // The shallow lookup schema carries field docs, but should not expose
-    // nested composition keywords (allOf, oneOf, etc.).
     expect(lookup?.schema).not.toHaveProperty("allOf");
     expect(lookup?.schema).not.toHaveProperty("oneOf");
-    expect(lookup?.schema).not.toHaveProperty("anyOf");
+    const schema = lookup?.schema as { anyOf?: Array<{ properties?: Record<string, unknown> }> };
+    expect(schema.anyOf?.some((variant) => variant.properties?.type)).toBe(true);
     expect(lookup?.schema).toHaveProperty("title", "Agent Runtime");
     expect(lookup?.schema).toHaveProperty("description");
+  });
+
+  it("keeps scoped collection item schemas for form editing", () => {
+    const lookup = lookupConfigSchema(baseSchema, "agents.list");
+    expect(lookup?.schema).toHaveProperty("items");
+    const schema = lookup?.schema as
+      | {
+          items?: {
+            properties?: Record<
+              string,
+              { anyOf?: Array<{ properties?: Record<string, unknown> }> }
+            >;
+          };
+        }
+      | undefined;
+    expect(schema?.items?.properties).toHaveProperty("runtime");
+    const runtimeVariants = schema?.items?.properties?.runtime?.anyOf ?? [];
+    expect(runtimeVariants.length).toBeGreaterThan(0);
+    expect(runtimeVariants.some((variant) => variant.properties?.type)).toBe(true);
+  });
+
+  it("keeps scoped map properties for form editing", () => {
+    const lookup = lookupConfigSchema(baseSchema, "env");
+    expect(lookup?.children.map((child) => child.key)).toEqual(["shellEnv", "vars", "*"]);
+    const schema = lookup?.schema as { properties?: Record<string, unknown> } | undefined;
+    expect(schema?.properties).toHaveProperty("shellEnv");
+    expect(schema?.properties).toHaveProperty("vars");
   });
 
   it("matches wildcard ui hints for concrete lookup paths", () => {
@@ -691,6 +850,25 @@ describe("config schema", () => {
     expect(lookup?.path).toBe("pair.1");
     expect(lookup?.schema?.type).toBe("number");
     expect((lookup?.schema as { items?: unknown } | undefined)?.items).toBeUndefined();
+  });
+
+  it("rejects impractical numeric tuple lookup indexes", () => {
+    const tupleSchema = {
+      schema: {
+        type: "object",
+        properties: {
+          pair: {
+            type: "array",
+            items: [{ type: "string" }, { type: "number" }],
+          },
+        },
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "test",
+    } as unknown as Parameters<typeof lookupConfigSchema>[0];
+
+    expect(lookupConfigSchema(tupleSchema, "pair.4294967294")).toBeNull();
   });
 
   it("rejects prototype-chain lookup segments", () => {

@@ -112,6 +112,55 @@ function serviceLane(name, command, options = {}) {
   });
 }
 
+function createPackageUpdateMaintenanceLanes() {
+  return [
+    npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
+      stateScenario: "empty",
+      weight: 3,
+    }),
+    npmLane(
+      "update-channel-switch",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
+      {
+        stateScenario: "update-stable",
+        timeoutMs: 30 * 60 * 1000,
+        weight: 3,
+      },
+    ),
+    npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
+      retryPatterns: LIVE_RETRY_PATTERNS,
+      retries: 1,
+      stateScenario: "empty",
+      timeoutMs: 10 * 60 * 1000,
+      weight: 2,
+    }),
+    npmLane("upgrade-survivor", upgradeSurvivorCommand, {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 3,
+    }),
+    npmLane(
+      "published-upgrade-survivor",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-upgrade-survivor",
+      {
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 25 * 60 * 1000,
+        weight: 3,
+      },
+    ),
+    npmLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      weight: 3,
+    }),
+    npmLane("update-restart-auth", updateRestartAuthCommand, {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      weight: 3,
+    }),
+  ];
+}
+
 const bundledPluginInstallUninstallLanes = Array.from(
   { length: BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS },
   (_, index) =>
@@ -155,6 +204,35 @@ function liveOpenAiChatToolsLane() {
       stateScenario: "empty",
       timeoutMs: 10 * 60 * 1000,
       weight: 2,
+    },
+  );
+}
+
+function liveCodexNpmPluginLane() {
+  return liveLane(
+    "live-codex-npm-plugin",
+    liveDockerScriptCommand("e2e/codex-npm-plugin-live-docker.sh"),
+    {
+      cacheKey: "codex-npm-plugin",
+      e2eImageKind: "bare",
+      provider: "openai",
+      resources: ["npm"],
+      stateScenario: "empty",
+      timeoutMs: 30 * 60 * 1000,
+      weight: 3,
+    },
+  );
+}
+
+function kitchenSinkRpcLane() {
+  return serviceLane(
+    "kitchen-sink-rpc",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-rpc",
+    {
+      resources: ["npm"],
+      stateScenario: "empty",
+      timeoutMs: 15 * 60 * 1000,
+      weight: 3,
     },
   );
 }
@@ -223,6 +301,15 @@ export const mainLanes = [
     stateScenario: "empty",
     weight: 3,
   }),
+  serviceLane(
+    "codex-media-path",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-media-path",
+    {
+      resources: ["npm"],
+      stateScenario: "empty",
+      weight: 3,
+    },
+  ),
   npmLane(
     "npm-onboard-channel-agent",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
@@ -299,9 +386,13 @@ export const mainLanes = [
     stateScenario: "empty",
     weight: 3,
   }),
-  lane("pi-bundle-mcp-tools", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:pi-bundle-mcp-tools", {
-    stateScenario: "empty",
-  }),
+  lane(
+    "agent-bundle-mcp-tools",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:agent-bundle-mcp-tools",
+    {
+      stateScenario: "empty",
+    },
+  ),
   lane("crestodian-rescue", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-rescue", {
     stateScenario: "empty",
   }),
@@ -313,50 +404,7 @@ export const mainLanes = [
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cron-mcp-cleanup",
     { resources: ["npm"], stateScenario: "empty", weight: 3 },
   ),
-  npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
-    stateScenario: "empty",
-    weight: 3,
-  }),
-  npmLane(
-    "update-channel-switch",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
-    {
-      stateScenario: "update-stable",
-      timeoutMs: 30 * 60 * 1000,
-      weight: 3,
-    },
-  ),
-  npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
-    retryPatterns: LIVE_RETRY_PATTERNS,
-    retries: 1,
-    stateScenario: "empty",
-    timeoutMs: 10 * 60 * 1000,
-    weight: 2,
-  }),
-  npmLane("upgrade-survivor", upgradeSurvivorCommand, {
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 20 * 60 * 1000,
-    weight: 3,
-  }),
-  npmLane(
-    "published-upgrade-survivor",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-upgrade-survivor",
-    {
-      stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
-      weight: 3,
-    },
-  ),
-  npmLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, {
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 25 * 60 * 1000,
-    weight: 3,
-  }),
-  npmLane("update-restart-auth", updateRestartAuthCommand, {
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 25 * 60 * 1000,
-    weight: 3,
-  }),
+  ...createPackageUpdateMaintenanceLanes(),
   npmLane("update-migration", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-migration", {
     stateScenario: "upgrade-survivor",
     timeoutMs: 30 * 60 * 1000,
@@ -372,6 +420,7 @@ export const mainLanes = [
     stateScenario: "empty",
     weight: 3,
   }),
+  kitchenSinkRpcLane(),
   ...bundledPluginInstallUninstallLanes,
   lane(
     "plugins-offline",
@@ -417,6 +466,15 @@ export const mainLanes = [
     "session-runtime-context",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
   ),
+  lane(
+    "plugin-binding-command-escape",
+    "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:plugin-binding-command-escape",
+    {
+      e2eImageKind: false,
+      resources: ["npm"],
+      stateScenario: "empty",
+    },
+  ),
   lane("commitments-safety", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:commitments-safety", {
     stateScenario: "empty",
   }),
@@ -431,11 +489,25 @@ export const tailLanes = [
   ),
   liveLane("live-codex-harness", liveDockerScriptCommand("test-live-codex-harness-docker.sh"), {
     cacheKey: "codex-harness",
-    provider: "openai",
+    provider: "codex-cli",
     resources: ["npm"],
     timeoutMs: LIVE_ACP_TIMEOUT_MS,
     weight: 3,
   }),
+  liveLane(
+    "live-codex-media-path",
+    liveDockerScriptCommand(
+      "test-live-codex-harness-docker.sh",
+      "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key OPENCLAW_LIVE_CODEX_HARNESS_CHAT_IMAGE_PROBE=1 OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0",
+    ),
+    {
+      cacheKey: "codex-harness",
+      provider: "openai",
+      resources: ["npm"],
+      timeoutMs: LIVE_ACP_TIMEOUT_MS,
+      weight: 3,
+    },
+  ),
   liveLane(
     "live-subagent-announce",
     liveDockerScriptCommand("test-live-subagent-announce-docker.sh"),
@@ -455,25 +527,13 @@ export const tailLanes = [
     ),
     {
       cacheKey: "codex-harness",
-      provider: "openai",
+      provider: "codex-cli",
       resources: ["npm"],
       timeoutMs: LIVE_ACP_TIMEOUT_MS,
       weight: 3,
     },
   ),
-  liveLane(
-    "live-codex-npm-plugin",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-npm-plugin",
-    {
-      cacheKey: "codex-npm-plugin",
-      e2eImageKind: "bare",
-      provider: "openai",
-      resources: ["npm"],
-      stateScenario: "empty",
-      timeoutMs: 30 * 60 * 1000,
-      weight: 3,
-    },
-  ),
+  liveCodexNpmPluginLane(),
   livePluginToolLane(),
   liveLane(
     "live-acp-bind-claude",
@@ -491,8 +551,8 @@ export const tailLanes = [
     liveDockerScriptCommand("test-live-acp-bind-docker.sh", "OPENCLAW_LIVE_ACP_BIND_AGENT=codex"),
     {
       cacheKey: "acp-bind-codex",
-      provider: "openai",
-      resources: ["npm"],
+      provider: "codex-cli",
+      resources: ["live:openai", "npm"],
       timeoutMs: LIVE_ACP_TIMEOUT_MS,
       weight: 3,
     },
@@ -554,6 +614,7 @@ const releasePathPluginRuntimeLanes = [
       weight: 3,
     },
   ),
+  kitchenSinkRpcLane(),
   serviceLane(
     "openai-web-search-minimal",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
@@ -580,6 +641,7 @@ const releasePathPluginRuntimeServiceLanes = [
       weight: 3,
     },
   ),
+  kitchenSinkRpcLane(),
   serviceLane(
     "openai-web-search-minimal",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
@@ -610,6 +672,7 @@ const releasePathPackageInstallOpenAiLanes = [
     },
   ),
   liveOpenAiChatToolsLane(),
+  liveCodexNpmPluginLane(),
   npmLane("codex-on-demand", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand", {
     resources: ["service"],
     stateScenario: "empty",
@@ -645,50 +708,7 @@ const releasePathPackageUpdateCoreLanes = [
     "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
     { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
-  npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
-    stateScenario: "empty",
-    weight: 3,
-  }),
-  npmLane(
-    "update-channel-switch",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
-    {
-      stateScenario: "update-stable",
-      timeoutMs: 30 * 60 * 1000,
-      weight: 3,
-    },
-  ),
-  npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
-    retryPatterns: LIVE_RETRY_PATTERNS,
-    retries: 1,
-    stateScenario: "empty",
-    timeoutMs: 10 * 60 * 1000,
-    weight: 2,
-  }),
-  npmLane("upgrade-survivor", upgradeSurvivorCommand, {
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 20 * 60 * 1000,
-    weight: 3,
-  }),
-  npmLane(
-    "published-upgrade-survivor",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-upgrade-survivor",
-    {
-      stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
-      weight: 3,
-    },
-  ),
-  npmLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, {
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 25 * 60 * 1000,
-    weight: 3,
-  }),
-  npmLane("update-restart-auth", updateRestartAuthCommand, {
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 25 * 60 * 1000,
-    weight: 3,
-  }),
+  ...createPackageUpdateMaintenanceLanes(),
 ];
 
 const primaryReleasePathChunks = {
@@ -706,12 +726,21 @@ const primaryReleasePathChunks = {
       "session-runtime-context",
       "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
     ),
+    lane(
+      "plugin-binding-command-escape",
+      "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:plugin-binding-command-escape",
+      {
+        e2eImageKind: false,
+        resources: ["npm"],
+        stateScenario: "empty",
+      },
+    ),
     lane("commitments-safety", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:commitments-safety", {
       stateScenario: "empty",
     }),
     lane(
-      "pi-bundle-mcp-tools",
-      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:pi-bundle-mcp-tools",
+      "agent-bundle-mcp-tools",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:agent-bundle-mcp-tools",
       { stateScenario: "empty" },
     ),
     serviceLane("mcp-channels", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:mcp-channels", {

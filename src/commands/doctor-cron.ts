@@ -3,7 +3,13 @@ import { promisify } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronStorePath, loadCronStore, saveCronStore } from "../cron/store.js";
+import {
+  loadCronQuarantineFile,
+  resolveCronQuarantinePath,
+  resolveCronStorePath,
+  loadCronStore,
+  saveCronStore,
+} from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import {
   normalizeOptionalLowercaseString,
@@ -287,37 +293,46 @@ function findLegacyWhatsAppHealthCrontabLines(crontab: unknown): string[] {
     .filter((line) => LEGACY_WHATSAPP_HEALTH_SCRIPT_RE.test(line));
 }
 
-export async function noteLegacyWhatsAppCrontabHealthCheck(
+export async function collectLegacyWhatsAppCrontabHealthWarning(
   params: {
     platform?: NodeJS.Platform;
     readCrontab?: CrontabReader;
   } = {},
-): Promise<void> {
+): Promise<string | null> {
   if ((params.platform ?? process.platform) !== "linux") {
-    return;
+    return null;
   }
 
   let crontab: unknown;
   try {
     crontab = (await (params.readCrontab ?? readUserCrontab)()).stdout;
   } catch {
-    return;
+    return null;
   }
 
   const legacyLines = findLegacyWhatsAppHealthCrontabLines(crontab);
   if (legacyLines.length === 0) {
-    return;
+    return null;
   }
 
-  note(
-    [
-      "Legacy WhatsApp crontab health check detected.",
-      "`~/.openclaw/bin/ensure-whatsapp.sh` is not maintained by current OpenClaw and can misreport `Gateway inactive` from cron when the systemd user bus environment is missing.",
-      `Remove the stale crontab entry with ${formatCliCommand("crontab -e")}; use ${formatCliCommand("openclaw channels status --probe")}, ${formatCliCommand("openclaw doctor")}, and ${formatCliCommand("openclaw gateway status")} for current health checks.`,
-      `Matched ${pluralize(legacyLines.length, "entry")}.`,
-    ].join("\n"),
-    "Cron",
-  );
+  return [
+    "Legacy WhatsApp crontab health check detected.",
+    "`~/.openclaw/bin/ensure-whatsapp.sh` is not maintained by current OpenClaw and can misreport `Gateway inactive` from cron when the systemd user bus environment is missing.",
+    `Remove the stale crontab entry with ${formatCliCommand("crontab -e")}; use ${formatCliCommand("openclaw channels status --probe")}, ${formatCliCommand("openclaw doctor")}, and ${formatCliCommand("openclaw gateway status")} for current health checks.`,
+    `Matched ${pluralize(legacyLines.length, "entry")}.`,
+  ].join("\n");
+}
+
+export async function noteLegacyWhatsAppCrontabHealthCheck(
+  params: {
+    platform?: NodeJS.Platform;
+    readCrontab?: CrontabReader;
+  } = {},
+): Promise<void> {
+  const warning = await collectLegacyWhatsAppCrontabHealthWarning(params);
+  if (warning) {
+    note(warning, "Cron");
+  }
 }
 
 export async function maybeRepairLegacyCronStore(params: {
@@ -326,7 +341,44 @@ export async function maybeRepairLegacyCronStore(params: {
   prompter: Pick<DoctorPrompter, "confirm">;
 }) {
   const storePath = resolveCronStorePath(params.cfg.cron?.store);
-  const store = await loadCronStore(storePath);
+  const quarantinePath = resolveCronQuarantinePath(storePath);
+  let store: Awaited<ReturnType<typeof loadCronStore>>;
+  try {
+    store = await loadCronStore(storePath);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    note(
+      [
+        `Unable to read cron job store at ${shortenHomePath(storePath)}.`,
+        `- ${reason}`,
+        `Fix the file's permissions or contents and re-run ${formatCliCommand("openclaw doctor")}; later health checks will continue.`,
+      ].join("\n"),
+      "Cron",
+    );
+    return;
+  }
+  try {
+    const quarantine = await loadCronQuarantineFile(quarantinePath);
+    if (quarantine.jobs.length > 0) {
+      note(
+        [
+          `Quarantined cron job rows found at ${shortenHomePath(quarantinePath)}.`,
+          `- ${pluralize(quarantine.jobs.length, "row")} was removed from the active cron store after runtime validation failed.`,
+          `- Review or repair the quarantined rows manually before copying any job back into ${shortenHomePath(storePath)}.`,
+        ].join("\n"),
+        "Cron",
+      );
+    }
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    note(
+      [
+        `Unable to read quarantined cron rows at ${shortenHomePath(quarantinePath)}.`,
+        `- ${reason}`,
+      ].join("\n"),
+      "Cron",
+    );
+  }
   const rawJobs = (store.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   if (rawJobs.length === 0) {
     return;

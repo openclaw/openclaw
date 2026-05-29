@@ -32,7 +32,7 @@ vi.mock("./models-config.runtime.js", () => ({
   ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
 }));
 
-vi.mock("./pi-model-discovery-runtime.js", () => ({
+vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorage: contextTestState.discoverAuthStorage,
   discoverModels: contextTestState.discoverModels,
 }));
@@ -201,44 +201,6 @@ describe("lookupContextTokens", () => {
     expect(secondLoadConfigMock).not.toHaveBeenCalled();
   });
 
-  it("only warms eagerly for real openclaw startup commands that need model metadata", async () => {
-    const { shouldEagerWarmContextWindowCache } = await importContextModule();
-
-    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "chat"])).toBe(true);
-    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "chat", "--help"])).toBe(false);
-    expect(
-      shouldEagerWarmContextWindowCache(["node", "openclaw", "matrix", "encryption", "help"]),
-    ).toBe(false);
-    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "help", "matrix"])).toBe(false);
-    expect(
-      shouldEagerWarmContextWindowCache(["node", "openclaw", "browser", "status", "--help"]),
-    ).toBe(false);
-    expect(
-      shouldEagerWarmContextWindowCache([
-        "node",
-        "openclaw",
-        "--profile",
-        "--",
-        "config",
-        "validate",
-      ]),
-    ).toBe(false);
-    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "logs", "--limit", "5"])).toBe(
-      false,
-    );
-    expect(
-      shouldEagerWarmContextWindowCache(["node", "openclaw", "memory", "search", "--json"]),
-    ).toBe(false);
-    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "message", "read"])).toBe(false);
-    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "status", "--json"])).toBe(false);
-    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "sessions", "--json"])).toBe(
-      false,
-    );
-    expect(
-      shouldEagerWarmContextWindowCache(["node", "scripts/test-built-plugin-singleton.mjs"]),
-    ).toBe(false);
-  });
-
   it("retries config loading after backoff when an initial load fails", async () => {
     vi.useFakeTimers();
     const loadConfigMock = vi
@@ -309,7 +271,10 @@ describe("lookupContextTokens", () => {
     expect(
       path.normalize(discoverAgentDir).endsWith(path.join(".openclaw", "agents", "main", "agent")),
     ).toBe(true);
-    expect(discoverCall[2]).toEqual({ normalizeModels: false });
+    expect(discoverCall[2]).toEqual({
+      normalizeModels: false,
+      workspaceDir: expect.any(String),
+    });
     expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);
   });
 
@@ -418,7 +383,7 @@ describe("lookupContextTokens", () => {
   it("resolveContextTokensForModel prefers exact provider key over alias-normalized match", async () => {
     // When both "bedrock" and "amazon-bedrock" exist as config keys (alias pattern),
     // resolveConfiguredProviderContextWindow must return the exact-key match first,
-    // not the first normalized hit — mirroring pi-embedded-runner/model.ts behaviour.
+    // not the first normalized hit — mirroring embedded-agent-runner/model.ts behaviour.
     mockDiscoveryDeps([]);
 
     const cfg = {
@@ -519,7 +484,7 @@ describe("lookupContextTokens", () => {
     expect(result).toBe(1_048_576);
   });
 
-  it("resolveContextTokensForModel normalizes explicit provider aliases before config lookup", async () => {
+  it("resolveContextTokensForModel does not match explicit provider id variants before config lookup", async () => {
     mockDiscoveryDeps([]);
 
     const cfg = createContextOverrideConfig("z.ai", "glm-5", 256_000);
@@ -530,6 +495,6 @@ describe("lookupContextTokens", () => {
       provider: "z-ai",
       model: "glm-5",
     });
-    expect(result).toBe(256_000);
+    expect(result).toBeUndefined();
   });
 });

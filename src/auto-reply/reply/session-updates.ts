@@ -39,7 +39,7 @@ export { drainFormattedSystemEvents } from "./session-system-events.js";
 const resolvedSkillsCache = new Map<string, SkillSnapshot["resolvedSkills"]>();
 const RESOLVED_SKILLS_CACHE_MAX = 10;
 
-export function __testing_resetResolvedSkillsCache(): void {
+export function resetResolvedSkillsCacheForTests(): void {
   resolvedSkillsCache.clear();
 }
 
@@ -204,8 +204,8 @@ function emitCompactionSessionLifecycleHooks(params: {
   }
 }
 
-function resolvePositiveTokenCount(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
+function resolveNonNegativeTokenCount(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
     : undefined;
 }
@@ -259,9 +259,9 @@ export async function ensureSkillSnapshot(params: {
       agentId: sessionAgentId,
     }),
   });
-  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const existingSnapshot = nextEntry?.skillsSnapshot;
   ensureSkillsWatcher({ workspaceDir, config: cfg });
+  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const shouldRefreshSnapshot =
     shouldRefreshSnapshotForVersion(existingSnapshot?.version, snapshotVersion) ||
     !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter);
@@ -411,7 +411,7 @@ export async function incrementCompactionCount(params: {
     updates.sessionFile = explicitNewSessionFile;
   }
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
-  const tokensAfterCompaction = resolvePositiveTokenCount(tokensAfter);
+  const tokensAfterCompaction = resolveNonNegativeTokenCount(tokensAfter);
   if (tokensAfterCompaction !== undefined) {
     updates.totalTokens = tokensAfterCompaction;
     updates.totalTokensFresh = true;
@@ -420,6 +420,8 @@ export async function incrementCompactionCount(params: {
     updates.outputTokens = undefined;
     updates.cacheRead = undefined;
     updates.cacheWrite = undefined;
+  } else if (incrementBy > 0) {
+    updates.totalTokensFresh = false;
   }
   sessionStore[sessionKey] = {
     ...entry,

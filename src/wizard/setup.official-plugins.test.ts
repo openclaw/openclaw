@@ -15,7 +15,7 @@ vi.mock("../commands/onboarding-plugin-install.js", () => ({
 }));
 
 import {
-  __testing,
+  testing,
   resolveOfficialPluginOnboardingInstallEntries,
   setupOfficialPluginInstalls,
 } from "./setup.official-plugins.js";
@@ -61,7 +61,7 @@ describe("resolveOfficialPluginOnboardingInstallEntries", () => {
 describe("formatInstallHint", () => {
   it("describes dual-source npm-default installs as npm first", () => {
     expect(
-      __testing.formatInstallHint({
+      testing.formatInstallHint({
         clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         npmSpec: "@openclaw/diagnostics-otel",
         defaultChoice: "npm",
@@ -71,7 +71,7 @@ describe("formatInstallHint", () => {
 
   it("keeps dual-source clawhub-default installs ClawHub first", () => {
     expect(
-      __testing.formatInstallHint({
+      testing.formatInstallHint({
         clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         npmSpec: "@openclaw/diagnostics-otel",
         defaultChoice: "clawhub",
@@ -126,6 +126,11 @@ describe("setupOfficialPluginInstalls", () => {
           value: "diagnostics-prometheus",
           label: "Diagnostics Prometheus",
           hint: "OpenClaw diagnostics Prometheus exporter",
+        },
+        {
+          value: "diffs-language-pack",
+          label: "Diff Viewer Language Pack",
+          hint: "OpenClaw diffs viewer syntax highlighting language pack",
         },
         {
           value: "diffs",

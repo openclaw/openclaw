@@ -35,7 +35,7 @@ describe("firecrawl tools", () => {
   let createFirecrawlWebFetchProvider: typeof import("./firecrawl-fetch-provider.js").createFirecrawlWebFetchProvider;
   let createFirecrawlSearchTool: typeof import("./firecrawl-search-tool.js").createFirecrawlSearchTool;
   let createFirecrawlScrapeTool: typeof import("./firecrawl-scrape-tool.js").createFirecrawlScrapeTool;
-  let firecrawlClientTesting: typeof import("./firecrawl-client.js").__testing;
+  let firecrawlClientTesting: typeof import("./firecrawl-client.js").testing;
   let runActualFirecrawlSearch: typeof import("./firecrawl-client.js").runFirecrawlSearch;
   let runActualFirecrawlScrape: typeof import("./firecrawl-client.js").runFirecrawlScrape;
   let ssrfMock: { mockRestore: () => void } | undefined;
@@ -47,7 +47,7 @@ describe("firecrawl tools", () => {
     ({ createFirecrawlSearchTool } = await import("./firecrawl-search-tool.js"));
     ({ createFirecrawlScrapeTool } = await import("./firecrawl-scrape-tool.js"));
     ({
-      __testing: firecrawlClientTesting,
+      testing: firecrawlClientTesting,
       runFirecrawlSearch: runActualFirecrawlSearch,
       runFirecrawlScrape: runActualFirecrawlScrape,
     } = await vi.importActual<typeof import("./firecrawl-client.js")>("./firecrawl-client.js"));
@@ -86,6 +86,24 @@ describe("firecrawl tools", () => {
 
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webSearch.apiKey");
+    expect(
+      provider.getConfiguredCredentialFallback?.({
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+                },
+              },
+            },
+          },
+        },
+      } as never),
+    ).toEqual({
+      path: "plugins.entries.firecrawl.config.webFetch.apiKey",
+      value: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+    });
     const pluginEntry = applied.plugins?.entries?.firecrawl;
     if (!pluginEntry) {
       throw new Error("expected Firecrawl plugin entry");
@@ -303,6 +321,33 @@ describe("firecrawl tools", () => {
     });
   });
 
+  it("normalizes generic firecrawl search count before dispatch", async () => {
+    const provider = createFirecrawlWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({
+      query: "openclaw docs",
+      count: "4",
+    });
+
+    expect(runFirecrawlSearch).toHaveBeenCalledWith({
+      cfg: { test: true },
+      query: "openclaw docs",
+      count: 4,
+    });
+    await expect(
+      tool.execute({
+        query: "openclaw docs",
+        count: "4.5",
+      }),
+    ).rejects.toThrow("count must be an integer from 1 to 10");
+  });
+
   it("keeps the compare-helper fetch facade owned by the Firecrawl extension", async () => {
     await fetchFirecrawlContent({
       url: "https://docs.openclaw.ai",
@@ -390,6 +435,34 @@ describe("firecrawl tools", () => {
     });
   });
 
+  it("normalizes generic firecrawl fetch maxChars before dispatch", async () => {
+    const provider = createFirecrawlWebFetchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({
+      url: "https://docs.openclaw.ai",
+      maxChars: "1500",
+    });
+
+    expect(runFirecrawlScrape).toHaveBeenCalledWith({
+      cfg: { test: true },
+      url: "https://docs.openclaw.ai",
+      extractMode: "markdown",
+      maxChars: 1500,
+    });
+    await expect(
+      tool.execute({
+        url: "https://docs.openclaw.ai",
+        maxChars: "1500.5",
+      }),
+    ).rejects.toThrow("maxChars must be a positive integer");
+  });
+
   it("normalizes optional search parameters before invoking Firecrawl", async () => {
     runFirecrawlSearch.mockImplementationOnce(async (params: Record<string, unknown>) => ({
       ok: true,
@@ -469,6 +542,54 @@ describe("firecrawl tools", () => {
       storeInCache: false,
       timeoutSeconds: 22,
     });
+  });
+
+  it("rejects malformed numeric Firecrawl search options before dispatch", async () => {
+    const searchTool = createFirecrawlSearchTool({
+      config: { env: "test" },
+    } as never);
+
+    await expect(
+      searchTool.execute("call-search", {
+        query: "web search",
+        count: 6.5,
+      }),
+    ).rejects.toThrow("count must be an integer from 1 to 10");
+    await expect(
+      searchTool.execute("call-search-timeout", {
+        query: "web search",
+        timeoutSeconds: Number.POSITIVE_INFINITY,
+      }),
+    ).rejects.toThrow("timeoutSeconds must be a positive integer");
+
+    expect(runFirecrawlSearch).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed numeric Firecrawl scrape options before dispatch", async () => {
+    const scrapeTool = createFirecrawlScrapeTool({
+      config: { env: "test" },
+    } as never);
+
+    await expect(
+      scrapeTool.execute("call-scrape-max-chars", {
+        url: "https://docs.openclaw.ai",
+        maxChars: 1500.5,
+      }),
+    ).rejects.toThrow("maxChars must be a positive integer");
+    await expect(
+      scrapeTool.execute("call-scrape-max-age", {
+        url: "https://docs.openclaw.ai",
+        maxAgeMs: -1,
+      }),
+    ).rejects.toThrow("maxAgeMs must be a non-negative integer");
+    await expect(
+      scrapeTool.execute("call-scrape-timeout", {
+        url: "https://docs.openclaw.ai",
+        timeoutSeconds: 22.5,
+      }),
+    ).rejects.toThrow("timeoutSeconds must be a positive integer");
+
+    expect(runFirecrawlScrape).not.toHaveBeenCalled();
   });
 
   it("passes text mode through and ignores invalid proxy values", async () => {
@@ -815,6 +936,9 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlScrapeTimeoutSeconds(cfg)).toBe(42);
     expect(resolveFirecrawlScrapeTimeoutSeconds(cfg, 19.8)).toBe(19);
     expect(resolveFirecrawlSearchTimeoutSeconds(9.7)).toBe(9);
+    expect(resolveFirecrawlScrapeTimeoutSeconds(cfg, 0.5)).toBe(1);
+    expect(resolveFirecrawlScrapeTimeoutSeconds(cfg, 0)).toBe(42);
+    expect(resolveFirecrawlSearchTimeoutSeconds(0.5)).toBe(1);
   });
 
   it("normalizes mixed search payload shapes into search items", () => {

@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   filterRecallEntriesWithinLookback,
   runDreamingSweepPhases,
   seedHistoricalDailyMemorySignals,
@@ -118,7 +118,7 @@ function requireFirstIngestionEntry(sessionIngestion: {
 function createHarness(
   config: OpenClawConfig,
   workspaceDir?: string,
-  subagent?: Parameters<typeof __testing.runPhaseIfTriggered>[0]["subagent"],
+  subagent?: Parameters<typeof testing.runPhaseIfTriggered>[0]["subagent"],
 ) {
   const logger = {
     info: vi.fn(),
@@ -154,7 +154,7 @@ function createHarness(
     ctx: { trigger?: string; workspaceDir?: string },
   ) => {
     const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg: resolvedConfig });
-    const lightResult = await __testing.runPhaseIfTriggered({
+    const lightResult = await testing.runPhaseIfTriggered({
       cleanedBody: event.cleanedBody,
       trigger: ctx.trigger,
       workspaceDir: ctx.workspaceDir,
@@ -162,14 +162,14 @@ function createHarness(
       logger,
       subagent,
       phase: "light",
-      eventText: __testing.constants.LIGHT_SLEEP_EVENT_TEXT,
+      eventText: testing.constants.LIGHT_SLEEP_EVENT_TEXT,
       config: light,
     });
     if (lightResult) {
       return lightResult;
     }
     const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg: resolvedConfig });
-    return await __testing.runPhaseIfTriggered({
+    return await testing.runPhaseIfTriggered({
       cleanedBody: event.cleanedBody,
       trigger: ctx.trigger,
       workspaceDir: ctx.workspaceDir,
@@ -177,7 +177,7 @@ function createHarness(
       logger,
       subagent,
       phase: "rem",
-      eventText: __testing.constants.REM_SLEEP_EVENT_TEXT,
+      eventText: testing.constants.REM_SLEEP_EVENT_TEXT,
       config: rem,
     });
   };
@@ -320,7 +320,7 @@ describe("memory-core dreaming phases", () => {
     };
     const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}-${nowMs}`;
+    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}`;
 
     await runDreamingSweepPhases({
       workspaceDir,
@@ -331,11 +331,12 @@ describe("memory-core dreaming phases", () => {
       nowMs,
     });
 
-    expect(subagent.deleteSession).toHaveBeenCalledOnce();
-    expect(subagent.deleteSession).toHaveBeenCalledWith({ sessionKey: expectedSessionKey });
+    expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
+    expect(subagent.deleteSession).toHaveBeenNthCalledWith(1, { sessionKey: expectedSessionKey });
+    expect(subagent.deleteSession).toHaveBeenNthCalledWith(2, { sessionKey: expectedSessionKey });
   });
 
-  it("skips session cleanup after request-scoped narrative fallback", async () => {
+  it("suppresses cleanup warnings during request-scoped narrative fallback", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await writeDailyNote(workspaceDir, [
       `# ${DREAMING_TEST_DAY}`,
@@ -403,8 +404,9 @@ describe("memory-core dreaming phases", () => {
     expect(logger.error).not.toHaveBeenCalled();
     expectIncludesSubstring(mockStringMessages(logger.info), "request-scoped");
     expectNotIncludesSubstring(mockStringMessages(logger.warn), "request-scoped");
+    expectNotIncludesSubstring(mockStringMessages(logger.warn), "narrative pre-cleanup");
     expectNotIncludesSubstring(mockStringMessages(logger.warn), "narrative session cleanup failed");
-    expect(subagent.deleteSession).not.toHaveBeenCalled();
+    expect(subagent.deleteSession).toHaveBeenCalledOnce();
   });
 
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {
@@ -1662,7 +1664,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("ignores chat scaffolding tags when building rem reflections", () => {
-    const preview = __testing.previewRemDreaming({
+    const preview = testing.previewRemDreaming({
       entries: [
         {
           key: "memory:1",
@@ -2592,13 +2594,13 @@ describe("memory-core dreaming phases", () => {
 
     await withDreamingTestClock(async () => {
       setDreamingTestTime();
-      await __testing.runPhaseIfTriggered({
-        cleanedBody: __testing.constants.REM_SLEEP_EVENT_TEXT,
+      await testing.runPhaseIfTriggered({
+        cleanedBody: testing.constants.REM_SLEEP_EVENT_TEXT,
         trigger: "heartbeat",
         workspaceDir,
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         phase: "rem",
-        eventText: __testing.constants.REM_SLEEP_EVENT_TEXT,
+        eventText: testing.constants.REM_SLEEP_EVENT_TEXT,
         config: {
           enabled: true,
           lookbackDays: 7,
@@ -2991,5 +2993,76 @@ describe("previewRemHarness", () => {
     expect(preview.rem.candidateTruths).toStrictEqual([]);
     expect(preview.rem.bodyLines).toStrictEqual([]);
     expect(preview.deep.candidates[0]?.snippet).toContain("Always check weather");
+  });
+});
+
+describe("dedupeEntries — CJK-aware snippet similarity (#80613)", () => {
+  // Reuse the same makeEntry helper shape used elsewhere in this file, but
+  // local here so we can vary `snippet` while keeping the rest stable.
+  function makeRecall(key: string, snippet: string): ShortTermRecallEntry {
+    return {
+      key,
+      path: "memory/2026-04-12.md",
+      startLine: 1,
+      endLine: 5,
+      source: "memory",
+      snippet,
+      recallCount: 1,
+      dailyCount: 0,
+      groundedCount: 0,
+      totalScore: 1,
+      maxScore: 1,
+      firstRecalledAt: "2026-04-12T08:00:00.000Z",
+      lastRecalledAt: "2026-04-12T08:00:00.000Z",
+      queryHashes: [],
+      recallDays: ["2026-04-12"],
+      conceptTags: [],
+    };
+  }
+
+  it("merges similar pure-CJK snippets at the same path (was missed by the ASCII-only tokenizer)", () => {
+    // Two close paraphrases of the same Chinese fact. The previous tokenizer
+    // produced empty sets for both, falling back to exact-string match and
+    // returning similarity 0, so both ended up as separate candidates.
+    const a = makeRecall("cjk-a", "教训：配置中实验开关字段是叫做规则");
+    const b = makeRecall("cjk-b", "教训：配置里实验开关的字段叫做规则");
+
+    const deduped = testing.dedupeEntries([a, b], 0.5);
+    expect(deduped).toHaveLength(1);
+    // First entry survives; recall counts merge in.
+    expect(deduped[0]?.key).toBe("cjk-a");
+  });
+
+  it("keeps distinct CJK snippets that only share ASCII tokens (was wrongly merged by the ASCII-only tokenizer)", () => {
+    // Both snippets have ASCII tokens {plan, exrule} but talk about wholly
+    // different facts in the CJK content. The previous tokenizer only saw
+    // those ASCII tokens, returned similarity 1.0, and silently dropped one
+    // of the two distinct memories. The CJK-aware tokenizer keeps them apart.
+    const a = makeRecall("mixed-a", "Plan 实验开关字段叫做 exRule");
+    const b = makeRecall("mixed-b", "Plan 整个产品体系彻底重构 exRule");
+
+    const deduped = testing.dedupeEntries([a, b], 0.7);
+    expect(deduped).toHaveLength(2);
+    expect(deduped.map((entry) => entry.key).toSorted()).toStrictEqual(["mixed-a", "mixed-b"]);
+  });
+
+  it("preserves the existing ASCII paraphrase dedupe behavior", () => {
+    // Sanity check: close English paraphrases at the same path still dedupe,
+    // so the fix does not regress the Latin-script behavior the prior tests
+    // relied on.
+    const a = makeRecall("en-a", "Plan config experiment toggle field is named exRule");
+    const b = makeRecall("en-b", "Plan configuration uses experiment toggle field named exRule");
+
+    const deduped = testing.dedupeEntries([a, b], 0.4);
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0]?.key).toBe("en-a");
+  });
+
+  it("keeps unrelated short snippets separate (does not over-collapse)", () => {
+    const a = makeRecall("short-a", "weather: sunny");
+    const b = makeRecall("short-b", "deploy: blocked");
+
+    const deduped = testing.dedupeEntries([a, b], 0.5);
+    expect(deduped).toHaveLength(2);
   });
 });

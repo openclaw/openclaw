@@ -219,6 +219,38 @@ describe("ensureGatewayReadyForOperation", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
+  it("can accept a reachable dashboard listener when the RPC needs device identity", async () => {
+    const status = createStatus({
+      service: {
+        label: "systemd user",
+        loaded: true,
+        loadedText: "enabled",
+        notLoadedText: "disabled",
+        command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
+        runtime: { status: "running" },
+      },
+      port: { port: 18789, status: "busy", listeners: [], hints: [] },
+      rpc: {
+        ok: false,
+        error: "device identity required",
+        url: "ws://127.0.0.1:18789",
+      },
+    });
+    const confirm = vi.fn();
+
+    const result = await ensureGatewayReadyForOperation({
+      runtime,
+      operation: "open the dashboard",
+      readyWhenReachable: true,
+      interactive: true,
+      deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
+    });
+
+    expect(result).toMatchObject({ ready: true, recovered: false });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("still treats a timeout on the target port as not ready", async () => {
     const status = createStatus({
       service: {

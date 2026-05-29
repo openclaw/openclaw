@@ -30,6 +30,10 @@ type ReloadRule = {
   actions?: ReloadAction[];
 };
 
+export type ConfigReloadMetadata = {
+  kind: ReloadRule["kind"];
+};
+
 type ReloadAction =
   | "reload-hooks"
   | "restart-gmail-watcher"
@@ -63,9 +67,10 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-health-monitor"],
   },
-  // Stuck-session thresholds are read by the diagnostics heartbeat loop.
+  // Diagnostics heartbeat reads these from current runtime config.
   { prefix: "diagnostics.stuckSessionWarnMs", kind: "none" },
   { prefix: "diagnostics.stuckSessionAbortMs", kind: "none" },
+  { prefix: "diagnostics.memoryPressureSnapshot", kind: "hot" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
   {
@@ -219,6 +224,13 @@ function matchRule(path: string): ReloadRule | null {
     }
   }
   return null;
+}
+
+export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {
+  if (isPluginInstallTimestampPath(path)) {
+    return { kind: "none" };
+  }
+  return { kind: matchRule(path)?.kind ?? "restart" };
 }
 
 function isPluginInstallTimestampPath(path: string): boolean {

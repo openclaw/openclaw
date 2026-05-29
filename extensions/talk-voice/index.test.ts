@@ -127,7 +127,7 @@ describe("talk-voice plugin", () => {
       { id: "voice-b", name: "Bert" },
     ]);
 
-    const result = await command.handler(createCommandContext("list 1"));
+    const result = await command.handler(createCommandContext("list +01"));
 
     expect(runtime.tts.listVoices).toHaveBeenCalledWith({
       provider: "elevenlabs",
@@ -152,6 +152,29 @@ describe("talk-voice plugin", () => {
         "  id: voice-a\n\n" +
         "(showing first 1)",
     });
+  });
+
+  it("does not coerce partial voice list limits", async () => {
+    const { command, runtime } = createHarness({
+      talk: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            apiKey: "sk-eleven",
+          },
+        },
+      },
+    });
+    vi.mocked(runtime.tts.listVoices).mockResolvedValue(
+      Array.from({ length: 13 }, (_, index) => ({
+        id: `voice-${index}`,
+        name: `Voice ${index}`,
+      })),
+    );
+
+    const result = await command.handler(createCommandContext("list 1x"));
+
+    expect(result.text).toContain("(showing first 12)");
   });
 
   it("surfaces richer provider voice metadata when available", async () => {

@@ -6,6 +6,7 @@ const SCENARIOS = new Set([
   "base",
   "feishu-channel",
   "bootstrap-persona",
+  "channel-post-core-restore",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
@@ -48,6 +49,21 @@ function resolveHomePath(value) {
 function isPathInside(parent, child) {
   const relative = path.relative(parent, child);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isPathInsideManagedNpmProjectPackageRoot(params) {
+  const relative = path.relative(path.join(params.stateDir, "npm", "projects"), params.installPath);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  const segments = relative.split(path.sep);
+  const packageSegments = params.packageName.split("/");
+  return (
+    segments.length === 2 + packageSegments.length &&
+    Boolean(segments[0]) &&
+    segments[1] === "node_modules" &&
+    packageSegments.every((segment, index) => segments[index + 2] === segment)
+  );
 }
 
 function write(file, contents) {
@@ -295,6 +311,15 @@ function assertConfigSurvived() {
     }
   }
 
+  if (getScenario() === "channel-post-core-restore") {
+    const whatsapp = config.channels?.whatsapp;
+    assert(whatsapp?.enabled === true, "post-core channel restore dropped WhatsApp");
+    assert(
+      whatsapp.groups?.["120363000000000000@g.us"]?.requireMention === true,
+      "post-core channel restore changed WhatsApp group config",
+    );
+  }
+
   if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
     const matrix = config.channels?.matrix;
     assert(matrix?.enabled === true, "matrix enabled flag changed");
@@ -389,9 +414,14 @@ function readInstalledPluginIndex() {
 function assertExternalPluginInstall(records, pluginId, packageName) {
   const record = records[pluginId];
   assert(record, `configured external ${pluginId} plugin install record missing`);
+  const installedFromNpm = record.source === "npm";
+  const installedFromOfficialClawHubNpmPack =
+    record.source === "clawhub" &&
+    record.clawhubChannel === "official" &&
+    record.artifactKind === "npm-pack";
   assert(
-    record.source === "npm",
-    `configured external ${pluginId} plugin must be installed from npm, got: ${record.source}`,
+    installedFromNpm || installedFromOfficialClawHubNpmPack,
+    `configured external ${pluginId} plugin must be installed from npm or official ClawHub npm-pack, got: ${record.source}`,
   );
   const installPath = resolveHomePath(record.installPath);
   assert(
@@ -411,14 +441,26 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
     packageJson.name === packageName,
     `configured external ${pluginId} package name changed: ${packageJson.name}`,
   );
-  const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
+  if (installedFromNpm) {
+    const stateDir = requireEnv("OPENCLAW_STATE_DIR");
+    assert(
+      isPathInsideManagedNpmProjectPackageRoot({ stateDir, installPath, packageName }),
+      `configured external ${pluginId} npm install path outside managed npm project root: ${installPath}`,
+    );
+    assert(
+      String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
+      `configured external ${pluginId} plugin npm spec changed`,
+    );
+    return;
+  }
   assert(
-    isPathInside(npmRoot, installPath),
-    `configured external ${pluginId} npm install path outside managed npm root: ${installPath}`,
+    record.clawhubPackage === packageName,
+    `configured external ${pluginId} ClawHub package changed: ${record.clawhubPackage}`,
   );
+  const extensionsRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "extensions");
   assert(
-    String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
-    `configured external ${pluginId} plugin npm spec changed`,
+    isPathInside(extensionsRoot, installPath),
+    `configured external ${pluginId} ClawHub install path outside managed extensions root: ${installPath}`,
   );
 }
 

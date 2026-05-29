@@ -11,9 +11,12 @@ import {
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
+import { isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
@@ -97,6 +100,9 @@ async function maybeApplyAcpTts(params: {
   skipTts?: boolean;
 }): Promise<ReplyPayload> {
   if (params.skipTts) {
+    return params.payload;
+  }
+  if (isReplyPayloadStatusNotice(params.payload)) {
     return params.payload;
   }
   const ttsStatus = resolveStatusTtsSnapshot({
@@ -187,6 +193,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
+  abortSignal?: AbortSignal;
+  runId?: string;
 }): AcpDispatchDeliveryCoordinator {
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
@@ -227,11 +235,23 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     toolMessageByCallId: new Map(),
   };
+  let hasPendingDirectBlockReplyDelivery = false;
+  const waitForPendingDirectBlockReplyDelivery = async () => {
+    if (!hasPendingDirectBlockReplyDelivery) {
+      return;
+    }
+    // ACP direct block replies should not block the common visible-reply path.
+    // Defer the idle wait until a later tool delivery would otherwise overtake
+    // that block reply in user-visible ordering.
+    hasPendingDirectBlockReplyDelivery = false;
+    await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
+  };
   const settleDirectVisibleText = async () => {
     if (state.settledDirectVisibleText || state.queuedDirectVisibleTextDeliveries === 0) {
       return;
     }
     state.settledDirectVisibleText = true;
+    hasPendingDirectBlockReplyDelivery = false;
     await params.dispatcher.waitForIdle();
     const failedCounts = params.dispatcher.getFailedCounts();
     const failedVisibleCount = failedCounts.block + failedCounts.final;
@@ -310,19 +330,22 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     let visiblePayload = payload;
     const rawBlockText = kind === "block" ? normalizeOptionalString(payload.text) : undefined;
     if (rawBlockText) {
+      const isStatusNotice = isReplyPayloadStatusNotice(payload);
       const joinsBufferedTtsDirective =
         state.cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
-      if (state.accumulatedBlockText.length > 0) {
-        state.accumulatedBlockText += "\n";
+      if (!isStatusNotice) {
+        if (state.accumulatedBlockText.length > 0) {
+          state.accumulatedBlockText += "\n";
+        }
+        state.accumulatedBlockText += rawBlockText;
+        if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
+          state.accumulatedBlockTtsText += "\n";
+        }
+        state.accumulatedBlockTtsText += rawBlockText;
+        state.blockCount += 1;
       }
-      state.accumulatedBlockText += rawBlockText;
-      if (state.accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
-        state.accumulatedBlockTtsText += "\n";
-      }
-      state.accumulatedBlockTtsText += rawBlockText;
-      state.blockCount += 1;
 
-      if (state.cleanBlockTtsDirectiveText && !payload.isCompactionNotice) {
+      if (state.cleanBlockTtsDirectiveText && !isStatusNotice) {
         const text = state.cleanBlockTtsDirectiveText.push(rawBlockText);
         visiblePayload = { ...payload, text: text.trim() ? text : undefined };
       }
@@ -333,7 +356,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         state.accumulatedVisibleBlockText += visiblePayload.text;
       }
     }
-    const rawFinalText = kind === "final" ? normalizeOptionalString(payload.text) : undefined;
+    const isStatusNotice = isReplyPayloadStatusNotice(payload);
+    const rawFinalText =
+      kind === "final" && !isStatusNotice ? normalizeOptionalString(payload.text) : undefined;
     if (rawFinalText) {
       if (state.accumulatedFinalText.length > 0) {
         state.accumulatedFinalText += "\n";
@@ -379,6 +404,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         routed: true,
       });
       const { routeReply } = await loadRouteReplyRuntime();
+      const threadId = resolveRoutedDeliveryThreadId({
+        ctx: params.ctx,
+        sessionKey: deliverySessionKey,
+      });
       const result = await routeReply({
         payload: ttsPayload,
         channel: params.originatingChannel,
@@ -392,9 +421,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         requesterSenderName: params.ctx.SenderName,
         requesterSenderUsername: params.ctx.SenderUsername,
         requesterSenderE164: params.ctx.SenderE164,
-        threadId: params.ctx.MessageThreadId,
+        threadId,
         cfg: params.cfg,
         mirror: false,
+        replyKind: kind,
+        runId: params.runId,
       });
       if (!result.ok) {
         if (tracksVisibleText) {
@@ -405,12 +436,21 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         );
         return false;
       }
+      if (result.suppressed) {
+        if (kind === "final") {
+          state.deliveredFinalReply = true;
+        }
+        if (tracksVisibleText) {
+          state.deliveredVisibleText = true;
+        }
+        return true;
+      }
       if (kind === "tool" && meta?.toolCallId && result.messageId) {
         state.toolMessageByCallId.set(meta.toolCallId, {
           channel: params.originatingChannel,
           accountId: resolvedAccountId,
           to: params.originatingTo,
-          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+          ...(threadId != null ? { threadId } : {}),
           messageId: result.messageId,
         });
       }
@@ -422,6 +462,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       }
       state.routedCounts[kind] += 1;
       return true;
+    }
+
+    if (kind === "tool") {
+      await waitForPendingDirectBlockReplyDelivery();
     }
 
     const tracksVisibleText = await shouldTreatDeliveredTextAsVisible({
@@ -444,6 +488,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       state.settledDirectVisibleText = false;
     } else if (!delivered && tracksVisibleText) {
       state.failedVisibleTextDelivery = true;
+    }
+    if (kind === "block" && delivered) {
+      hasPendingDirectBlockReplyDelivery = true;
     }
     return delivered;
   };

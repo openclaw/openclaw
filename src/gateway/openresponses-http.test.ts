@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { FailoverError } from "../agents/failover-error.js";
-import { createClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -33,10 +33,11 @@ let openResponsesTesting: {
     scope?: { authSubject: string; agentId: string; requestedSessionKey?: string },
   ): string | undefined;
   getResponseSessionIds(): string[];
+  resolveResponsesLimits(config: { maxUrlParts?: number } | undefined): { maxUrlParts: number };
 };
 
 beforeAll(async () => {
-  ({ __testing: openResponsesTesting } = await import("./openresponses-http.js"));
+  ({ testing: openResponsesTesting } = await import("./openresponses-http.js"));
   const started = await startGatewayServerWithRetries({
     port: await getFreePort(),
     opts: {
@@ -231,6 +232,14 @@ function buildResponsesUrlPolicyConfig(maxUrlParts: number) {
     },
   };
 }
+
+it("uses default URL part limits for non-finite OpenResponses config caps", () => {
+  const limits = openResponsesTesting.resolveResponsesLimits({
+    maxUrlParts: Number.POSITIVE_INFINITY,
+  });
+
+  expect(limits.maxUrlParts).toBe(8);
+});
 
 async function expectInvalidRequest(
   res: Response,
@@ -873,7 +882,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(agentCommand).toHaveBeenCalledTimes(1);
   });
 
-  it("treats write-scoped HTTP callers as non-owner and admin-scoped callers as owner", async () => {
+  it("accepts write-scoped and admin-scoped HTTP callers", async () => {
     const port = enabledPort;
 
     agentCommand.mockClear();
@@ -884,8 +893,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: "hi",
     });
     expect(writeScopeResponse.status).toBe(200);
-    const writeScopeOpts = firstAgentOpts() as { senderIsOwner?: boolean } | undefined;
-    expect(writeScopeOpts?.senderIsOwner).toBe(false);
     await ensureResponseConsumed(writeScopeResponse);
 
     agentCommand.mockClear();
@@ -897,8 +904,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
       { "x-openclaw-scopes": "operator.admin, operator.write" },
     );
     expect(adminScopeResponse.status).toBe(200);
-    const adminScopeOpts = firstAgentOpts() as { senderIsOwner?: boolean } | undefined;
-    expect(adminScopeOpts?.senderIsOwner).toBe(true);
     await ensureResponseConsumed(adminScopeResponse);
 
     agentCommand.mockClear();
@@ -916,13 +921,11 @@ describe("OpenResponses HTTP API (e2e)", () => {
       { "x-openclaw-scopes": "operator.admin, operator.write" },
     );
     expect(streamingResponse.status).toBe(200);
-    const streamingOpts = firstAgentOpts() as { senderIsOwner?: boolean } | undefined;
-    expect(streamingOpts?.senderIsOwner).toBe(true);
     const streamingEvents = parseSseEvents(await streamingResponse.text());
     expect(streamingEvents.map((event) => event.event)).toContain("response.completed");
   });
 
-  it("treats shared-secret bearer callers as owner operators", async () => {
+  it("accepts shared-secret bearer callers", async () => {
     const port = await getFreePort();
     const server = await startTokenServer(port);
     try {
@@ -943,8 +946,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
       });
 
       expect(res.status).toBe(200);
-      const firstCall = firstAgentOpts() as { senderIsOwner?: boolean } | undefined;
-      expect(firstCall?.senderIsOwner).toBe(true);
       await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "openresponses token auth owner test done" });

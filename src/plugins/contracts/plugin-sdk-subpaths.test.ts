@@ -1,6 +1,5 @@
-import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   BaseProbeResult as ContractBaseProbeResult,
@@ -16,14 +15,16 @@ import type {
   ChannelThreadingContext as ContractChannelThreadingContext,
   ChannelThreadingToolContext as ContractChannelThreadingToolContext,
 } from "openclaw/plugin-sdk/channel-contract";
+import * as commandAuthSdk from "openclaw/plugin-sdk/command-auth";
 import type {
   ChannelMessageActionContext as CoreChannelMessageActionContext,
   OpenClawPluginApi as CoreOpenClawPluginApi,
   PluginRuntime as CorePluginRuntime,
 } from "openclaw/plugin-sdk/core";
 import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
+import * as zalouserSdk from "openclaw/plugin-sdk/zalouser";
 import ts from "typescript";
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../../channels/plugins/types.js";
 import type {
   BaseProbeResult,
@@ -50,6 +51,8 @@ import * as coreDirectSdk from "../../plugin-sdk/core.js";
 import { publicPluginSdkSubpaths as pluginSdkSubpaths } from "../../plugin-sdk/entrypoints.js";
 import * as globalSingletonDirectSdk from "../../plugin-sdk/global-singleton.js";
 import * as providerEntryDirectSdk from "../../plugin-sdk/provider-entry.js";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import type { OpenClawPluginApi } from "../types.js";
 
@@ -327,28 +330,21 @@ function expectNamedExportParity(params: BrowserHelperExportParityContract) {
 }
 
 function listTrackedRepoTsFiles(dir: string): string[] | null {
-  const relativeDir = relative(REPO_ROOT, dir).split(/[\\/]+/u).join("/");
+  const relativeDir = toRepoRelativePath(REPO_ROOT, dir);
   if (!relativeDir || relativeDir.startsWith("..")) {
     return null;
   }
-  const result = spawnSync("git", ["ls-files", "--", relativeDir], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeDir });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
+  return files
     .filter(
       (line) =>
-        line.endsWith(".ts") &&
-        !line.includes("/dist/") &&
-        !line.includes("/node_modules/"),
+        line.endsWith(".ts") && !line.includes("/dist/") && !line.includes("/node_modules/"),
     )
     .map((line) => resolve(REPO_ROOT, ...line.split("/")))
+    .filter((filePath) => fs.existsSync(filePath))
     .toSorted();
 }
 
@@ -576,9 +572,16 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("approval-auth-runtime", [
       "createResolvedApproverActionAuthAdapter",
+      "isImplicitSameChatApprovalAuthorization",
+      "markImplicitSameChatApprovalAuthorization",
       "resolveApprovalApprovers",
     ]);
-    expectSourceMentions("reply-chunking", ["chunkText", "chunkTextWithMode"]);
+    expectSourceMentions("reply-chunking", [
+      "chunkText",
+      "chunkTextWithMode",
+      "isSilentReplyPayloadText",
+      "isSilentReplyText",
+    ]);
     expectSourceMentions("reply-history", [
       "buildInboundHistoryFromEntries",
       "buildInboundHistoryFromMap",
@@ -825,16 +828,15 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("lists repo source candidates from git without walking SDK boundary roots", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
     try {
-      repoTsFilesCache.clear();
-      const files = listRepoTsFiles(resolve(REPO_ROOT, "src"));
+      expectNoReaddirSyncDuring(() => {
+        repoTsFilesCache.clear();
+        const files = listRepoTsFiles(resolve(REPO_ROOT, "src"));
 
-      expect(files.length).toBeGreaterThan(0);
-      expect(files.every((file) => file.endsWith(".ts"))).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
+        expect(files.length).toBeGreaterThan(0);
+        expect(files.every((file) => file.endsWith(".ts"))).toBe(true);
+      });
     } finally {
-      readDir.mockRestore();
       repoTsFilesCache.clear();
     }
   });
@@ -867,7 +869,6 @@ describe("plugin-sdk subpath exports", () => {
       pattern:
         /\b(?:ComparableChannelTarget|resolveComparableTargetFor(?:Channel|LoadedChannel)|comparableChannelTargets(?:Match|ShareRoute))\b/u,
       exclude: [
-        "src/channels/plugins/target-parsing.ts",
         "src/channels/plugins/target-parsing-loaded.ts",
         "src/channels/plugins/target-parsing.test.ts",
         "src/plugins/compat/registry.ts",
@@ -1147,7 +1148,7 @@ describe("plugin-sdk subpath exports", () => {
       "attachChannelToResult",
       "buildChannelSendResult",
     ]);
-    expectSourceMentions("direct-dm", [
+    expectSourceMentions("channel-inbound", [
       "createDirectDmPreCryptoGuardPolicy",
       "createPreCryptoDirectDmAuthorizer",
       "dispatchInboundDirectDmWithRuntime",
@@ -1427,10 +1428,20 @@ describe("plugin-sdk subpath exports", () => {
     }
   });
 
-  it("keeps the Zalouser command-auth compatibility facade importable", async () => {
-    const zalouserSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/zalouser");
-    const commandAuthSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/command-auth");
+  it("keeps repeated silent-token semantics visible through the reply-chunking subpath", async () => {
+    const replyChunkingSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/reply-chunking",
+    );
 
+    expect(replyChunkingSdk.isSilentReplyText("NO_REPLY\n\nNO_REPLY")).toBe(true);
+    expect(replyChunkingSdk.isSilentReplyPayloadText("NO_REPLY\n\nNO_REPLY")).toBe(true);
+    expect(replyChunkingSdk.isSilentReplyText("HEARTBEAT_OK\nHEARTBEAT_OK", "HEARTBEAT_OK")).toBe(
+      true,
+    );
+    expect(replyChunkingSdk.isSilentReplyText("Visible update\n\nNO_REPLY")).toBe(false);
+  });
+
+  it("keeps the Zalouser command-auth compatibility facade importable", () => {
     expect(zalouserSdk.resolveSenderCommandAuthorization).toBe(
       commandAuthSdk.resolveSenderCommandAuthorization,
     );
