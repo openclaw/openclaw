@@ -121,6 +121,10 @@ const SUPPORTED_ASPECT_RATIOS = new Set([
   "9:16",
   "16:9",
   "21:9",
+  "4:1",
+  "1:4",
+  "8:1",
+  "1:8",
 ]);
 
 const log = createSubsystemLogger("agents/tools/image-generate");
@@ -160,7 +164,8 @@ const ImageGenerateToolSchema = Type.Object({
   ),
   aspectRatio: Type.Optional(
     Type.String({
-      description: "Aspect ratio: 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9.",
+      description:
+        "Aspect ratio: 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 4:1, 1:4, 8:1, 1:8.",
     }),
   ),
   resolution: Type.Optional(
@@ -286,7 +291,7 @@ function normalizeAspectRatio(raw: string | undefined): string | undefined {
     return normalized;
   }
   throw new ToolInputError(
-    "aspectRatio must be one of 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
+    "aspectRatio must be one of 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 4:1, 1:4, 8:1, or 1:8",
   );
 }
 

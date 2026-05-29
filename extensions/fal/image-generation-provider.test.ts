@@ -373,7 +373,7 @@ describe("fal image-generation provider", () => {
       model: "fal-ai/nano-banana-2",
       prompt: "ultrawide banana test",
       cfg: {},
-      aspectRatio: "21:9",
+      aspectRatio: "4:1",
       resolution: "2K",
     });
 
@@ -382,7 +382,7 @@ describe("fal image-generation provider", () => {
       url: "https://fal.run/fal-ai/nano-banana-2",
       body: {
         prompt: "ultrawide banana test",
-        aspect_ratio: "21:9",
+        aspect_ratio: "4:1",
         resolution: "2K",
         num_images: 1,
         output_format: "png",

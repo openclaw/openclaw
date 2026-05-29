@@ -57,6 +57,10 @@ const FAL_SUPPORTED_ASPECT_RATIOS = [
   "9:16",
   "16:9",
   "21:9",
+  "4:1",
+  "1:4",
+  "8:1",
+  "1:8",
 ] as const;
 const KREA_SUPPORTED_ASPECT_RATIOS = [
   "1:1",

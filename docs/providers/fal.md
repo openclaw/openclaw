@@ -57,7 +57,9 @@ The bundled `fal` image-generation provider defaults to
 <Warning>
 Flux image-to-image requests do **not** support `aspectRatio` overrides. GPT
 Image 2 and Nano Banana 2 edit requests use fal's `/edit` endpoint and accept
-aspect-ratio hints.
+aspect-ratio hints. Nano Banana 2 also accepts extra-native wide/tall ratios
+such as `4:1`, `1:4`, `8:1`, and `1:8`; Krea 2 validates its own smaller
+aspect-ratio subset.
 </Warning>
 
 Krea 2 models use fal's native Krea payload schema. OpenClaw sends
