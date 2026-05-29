@@ -945,11 +945,10 @@ enum ExecApprovalEvaluator {
         let shouldEvaluateDenylist = security == .denylist ||
             security == .allowlist ||
             usesDenylistFallback
-        let effectiveDenylist: [ExecDenylistEntry]
-        if usesDenylistFallback {
-            effectiveDenylist = approvals.denylist
+        let effectiveDenylist = if usesDenylistFallback {
+            approvals.denylist
         } else {
-            effectiveDenylist = ExecDenylistEvaluator.rules(
+            ExecDenylistEvaluator.rules(
                 for: security,
                 denylist: approvals.denylist)
         }
