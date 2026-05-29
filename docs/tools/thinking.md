@@ -105,7 +105,7 @@ title: "Thinking levels"
 - Levels: `on|off|stream`.
 - Directive-only message toggles whether thinking blocks are shown in replies.
 - When enabled, reasoning is sent as a **separate message** prefixed with `Thinking`.
-- `stream`: streams reasoning while the reply is generating when the active channel supports reasoning previews, then sends the final answer without reasoning.
+- `stream`: streams reasoning while the reply is generating when the active channel supports reasoning previews. Final reasoning visibility is channel-specific; use `/reasoning on` when reasoning must remain visible after the reply finishes.
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
 - Resolution order: inline directive, then session override, then per-agent default (`agents.list[].reasoningDefault`), then global default (`agents.defaults.reasoningDefault`), then fallback (`off`).
