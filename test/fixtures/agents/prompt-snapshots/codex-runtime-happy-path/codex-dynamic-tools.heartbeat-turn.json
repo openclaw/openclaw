@@ -997,6 +997,9 @@
           "minLength": 1,
           "type": "string"
         },
+        "content": {
+          "type": "string"
+        },
         "label": {
           "maxLength": 512,
           "minLength": 1,
@@ -1005,7 +1008,13 @@
         "message": {
           "type": "string"
         },
+        "SendMessage": {
+          "type": "string"
+        },
         "sessionKey": {
+          "type": "string"
+        },
+        "text": {
           "type": "string"
         },
         "timeoutSeconds": {
@@ -1013,7 +1022,6 @@
           "type": "integer"
         }
       },
-      "required": ["message"],
       "type": "object"
     },
     "name": "sessions_send",
