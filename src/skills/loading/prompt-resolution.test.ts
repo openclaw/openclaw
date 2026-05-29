@@ -13,7 +13,7 @@ describe("resolveSkillsPromptForRun", () => {
   });
   it("builds prompt from entries when snapshot is missing", () => {
     const entry: SkillEntry = {
-      skill: createFixtureSkill({
+      skill: createCanonicalFixtureSkill({
         name: "demo-skill",
         description: "Demo",
         filePath: "/app/skills/demo-skill/SKILL.md",
@@ -32,7 +32,7 @@ describe("resolveSkillsPromptForRun", () => {
 
   it("keeps legacy entries with disableModelInvocation hidden when exposure metadata is absent", () => {
     const hidden: SkillEntry = {
-      skill: createFixtureSkill({
+      skill: createCanonicalFixtureSkill({
         name: "hidden-skill",
         description: "Hidden",
         filePath: "/app/skills/hidden-skill/SKILL.md",
@@ -53,7 +53,7 @@ describe("resolveSkillsPromptForRun", () => {
 
   it("inherits agents.defaults.skills when rebuilding prompt for an agent", () => {
     const visible: SkillEntry = {
-      skill: createFixtureSkill({
+      skill: createCanonicalFixtureSkill({
         name: "github",
         description: "GitHub",
         filePath: "/app/skills/github/SKILL.md",
@@ -63,7 +63,7 @@ describe("resolveSkillsPromptForRun", () => {
       frontmatter: {},
     };
     const hidden: SkillEntry = {
-      skill: createFixtureSkill({
+      skill: createCanonicalFixtureSkill({
         name: "hidden-skill",
         description: "Hidden",
         filePath: "/app/skills/hidden-skill/SKILL.md",
@@ -93,7 +93,7 @@ describe("resolveSkillsPromptForRun", () => {
 
   it("uses agents.list[].skills as a full replacement for defaults", () => {
     const inheritedEntry: SkillEntry = {
-      skill: createFixtureSkill({
+      skill: createCanonicalFixtureSkill({
         name: "weather",
         description: "Weather",
         filePath: "/app/skills/weather/SKILL.md",
@@ -103,7 +103,7 @@ describe("resolveSkillsPromptForRun", () => {
       frontmatter: {},
     };
     const explicitEntry: SkillEntry = {
-      skill: createFixtureSkill({
+      skill: createCanonicalFixtureSkill({
         name: "docs-search",
         description: "Docs",
         filePath: "/app/skills/docs-search/SKILL.md",
@@ -131,14 +131,3 @@ describe("resolveSkillsPromptForRun", () => {
     expect(prompt).toContain("/app/skills/docs-search/SKILL.md");
   });
 });
-
-function createFixtureSkill(params: {
-  name: string;
-  description: string;
-  filePath: string;
-  baseDir: string;
-  source: string;
-  disableModelInvocation?: boolean;
-}): SkillEntry["skill"] {
-  return createCanonicalFixtureSkill(params);
-}

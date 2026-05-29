@@ -163,6 +163,7 @@ describe("resolveBuildAllStep", () => {
     const step = getBuildAllStep("build:plugin-sdk:dts");
 
     expect(step.cache?.inputs).toEqual(expect.arrayContaining(["packages/memory-host-sdk/src"]));
+    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["npm-shrinkwrap.json"]));
     expect(step.cache?.outputs).toEqual(expect.arrayContaining(["dist/plugin-sdk/packages"]));
   });
 });

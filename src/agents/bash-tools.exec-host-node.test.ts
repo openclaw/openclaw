@@ -16,6 +16,11 @@ type MockAllowlistResult = {
   segments: MockAllowlistSegment[];
   segmentAllowlistEntries: unknown[];
 };
+type MockExecApprovalAllowlistEntry = {
+  pattern: string;
+  source?: string;
+  commandText?: string;
+};
 
 const INLINE_EVAL_HIT = {
   executable: "python3",
@@ -55,7 +60,7 @@ const evaluateShellAllowlistMock = vi.hoisted(() =>
 );
 const resolveExecApprovalsFromFileMock = vi.hoisted(() =>
   vi.fn(() => ({
-    allowlist: [],
+    allowlist: [] as MockExecApprovalAllowlistEntry[],
     file: { version: 1, agents: {} },
     agent: {
       security: "full",

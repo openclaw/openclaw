@@ -597,6 +597,14 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Restore build-all step cache
+        uses: actions/cache@v5
+        with:
+          path: .artifacts/build-all-cache
+          key: ${{ runner.os }}-build-all-v3-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'packages/plugin-sdk/package.json', 'packages/memory-host-sdk/package.json', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/plugin-sdk/**', 'packages/memory-host-sdk/src/**', 'src/types/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'src/auto-reply/reply/export-html/**') }}
+          restore-keys: |
+            ${{ runner.os }}-build-all-v3-
+
       - name: Build dist
         env:
           NODE_OPTIONS: --max-old-space-size=8192
@@ -694,20 +702,6 @@ jobs:
             pids+=("$!")
           }
 
-          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
-            gateway_watch_log="${RUNNER_TEMP}/gateway-watch.log"
-            echo "starting gateway-watch: node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000"
-            if node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000 >"$gateway_watch_log" 2>&1; then
-              result="success"
-            else
-              result="failure"
-            fi
-            echo "::group::gateway-watch log"
-            cat "$gateway_watch_log"
-            echo "::endgroup::"
-            results["gateway-watch"]="$result"
-          fi
-
           if [ "$RUN_CHANNELS" = "true" ]; then
             start_check "channels" env \
               NODE_OPTIONS=--max-old-space-size=8192 \
@@ -720,6 +714,11 @@ jobs:
               NODE_OPTIONS=--max-old-space-size=8192 \
               OPENCLAW_VITEST_MAX_WORKERS=2 \
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
+          fi
+
+          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
+            start_check "gateway-watch" \
+              node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000
           fi
 
           for index in "${!pids[@]}"; do
