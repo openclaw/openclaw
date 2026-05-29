@@ -23,6 +23,7 @@ const INLINE_EVAL_HIT = {
   flag: "-c",
   argv: ["python3", "-c", "print(1)"],
 };
+const fakeSecretOutput = "OPENAI_API_KEY=sk-proj-redaction-canary-1234567890";
 
 const preparedPlan = vi.hoisted(() => ({
   argv: ["bun", "./script.ts"],
@@ -1153,6 +1154,50 @@ describe("executeNodeHostCommand", () => {
       "exec host=node requires a connected node (node-1 is currently disconnected)",
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["stdout", { stdout: `${fakeSecretOutput}\n`, stderr: "", error: "" }],
+    ["stderr", { stdout: "", stderr: `${fakeSecretOutput}\n`, error: "" }],
+    ["error", { stdout: "", stderr: "", error: `${fakeSecretOutput}\n` }],
+  ] as const)("redacts secret-shaped node %s before returning results", async (_field, payload) => {
+    callGatewayToolMock.mockImplementationOnce(
+      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
+        if (method === "node.invoke" && params?.command === "system.run") {
+          return {
+            payload: {
+              success: true,
+              stdout: payload.stdout,
+              stderr: payload.stderr,
+              error: payload.error,
+              exitCode: 0,
+              timedOut: false,
+            },
+          };
+        }
+        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
+      },
+    );
+
+    const result = await executeNodeHostCommand({
+      command: "echo fake-secret",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    const text = (result.content[0] as { text?: string }).text ?? "";
+    const details = result.details as { aggregated?: string };
+    expect(text).not.toContain(fakeSecretOutput);
+    expect(details.aggregated).not.toContain(fakeSecretOutput);
+    expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
+    expect(details.aggregated).toContain("OPENAI_API_KEY=sk-pro…7890");
   });
 
   it("returns a non-empty placeholder for silent node exec results", async () => {

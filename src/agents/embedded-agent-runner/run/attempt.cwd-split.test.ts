@@ -30,6 +30,7 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       attemptOverrides: {
         cwd: "/tmp/task-repo",
         disableTools: false,
+        toolsAllow: ["exec"],
       },
     });
 
@@ -46,10 +47,9 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     expect(toolsCall?.workspaceDir).toBe(bootstrapCall?.workspaceDir);
     expect(toolsCall?.spawnWorkspaceDir).toBe(bootstrapCall?.workspaceDir);
 
-    const resourceLoaderInit = hoisted.defaultResourceLoaderInitMock.mock.calls[0]?.[0] as
-      | { cwd?: string }
-      | undefined;
-    expect(resourceLoaderInit?.cwd).toBe("/tmp/task-repo");
+    expect(hoisted.defaultResourceLoaderInitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/tmp/task-repo" }),
+    );
   });
 
   it("rejects cwd overrides for sandboxed runs instead of silently ignoring them", async () => {

@@ -381,6 +381,113 @@ describe("renderExecUpdateText", () => {
   });
 });
 
+describe("runExecProcess live updates", () => {
+  it("redacts secret-shaped stdout in update text and details tail", async () => {
+    const fakeSecretOutput = "OPENAI_API_KEY=sk-proj-redaction-canary-1234567890";
+    const updates: Array<{ content: Array<{ type: string; text?: string }>; details: unknown }> =
+      [];
+
+    supervisorMock.spawn.mockImplementationOnce(
+      async (input: { onStdout?: (chunk: string) => void }) => ({
+        runId: "run-redact-live-update",
+        startedAtMs: Date.now(),
+        pid: 123,
+        stdin: undefined,
+        wait: async () => {
+          input.onStdout?.(`${fakeSecretOutput}\n`);
+          await new Promise((resolve) => setImmediate(resolve));
+          return {
+            reason: "exit" as const,
+            exitCode: 0,
+            exitSignal: null,
+            durationMs: 10,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            noOutputTimedOut: false,
+          };
+        },
+        cancel: vi.fn(),
+      }),
+    );
+
+    const run = await runExecProcess({
+      command: "printf secret",
+      workdir: "/tmp",
+      env: {},
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      notifyOnExitEmptySuccess: false,
+      timeoutSec: null,
+      onUpdate: (update) => updates.push(update),
+    });
+    await run.promise;
+
+    expect(updates.length).toBeGreaterThan(0);
+    const update = updates[0];
+    const text = (update.content[0] as { text?: string }).text ?? "";
+    const details = update.details as { tail?: string };
+    expect(text).not.toContain(fakeSecretOutput);
+    expect(details.tail).not.toContain(fakeSecretOutput);
+    expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
+    expect(details.tail).toContain("OPENAI_API_KEY=sk-pro…7890");
+  });
+
+  it("redacts secret-shaped warnings in update text", async () => {
+    const fakeSecretOutput = "OPENAI_API_KEY=sk-proj-redaction-canary-1234567890";
+    const updates: Array<{ content: Array<{ type: string; text?: string }>; details: unknown }> =
+      [];
+
+    supervisorMock.spawn.mockImplementationOnce(
+      async (input: { onStdout?: (chunk: string) => void }) => ({
+        runId: "run-redact-live-warning",
+        startedAtMs: Date.now(),
+        pid: 123,
+        stdin: undefined,
+        wait: async () => {
+          input.onStdout?.("ready\n");
+          await new Promise((resolve) => setImmediate(resolve));
+          return {
+            reason: "exit" as const,
+            exitCode: 0,
+            exitSignal: null,
+            durationMs: 10,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            noOutputTimedOut: false,
+          };
+        },
+        cancel: vi.fn(),
+      }),
+    );
+
+    const run = await runExecProcess({
+      command: "printf ready",
+      workdir: "/tmp",
+      env: {},
+      usePty: false,
+      warnings: [`Warning: ${fakeSecretOutput}`],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      notifyOnExitEmptySuccess: false,
+      timeoutSec: null,
+      onUpdate: (update) => updates.push(update),
+    });
+    await run.promise;
+
+    expect(updates.length).toBeGreaterThan(0);
+    const text = (updates[0].content[0] as { text?: string }).text ?? "";
+    expect(text).not.toContain(fakeSecretOutput);
+    expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
+    expect(text).toContain("ready");
+  });
+});
+
 describe("exec notifyOnExit suppression", () => {
   async function runBackgroundedExit(params: {
     reason: "manual-cancel" | "overall-timeout";

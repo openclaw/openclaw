@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as jsonFiles from "../infra/json-files.js";
+import type { Skill } from "../skills/loading/skill-contract.js";
+import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   getSerializedSessionStore,
@@ -41,6 +43,17 @@ function createSingleSessionStore(
   key = "session:1",
 ): Record<string, SessionEntry> {
   return { [key]: entry };
+}
+
+function createResolvedSkill(name: string): Skill {
+  const source = `# ${name}\n\ntransient`;
+  return createCanonicalFixtureSkill({
+    name,
+    description: `${name} skill description`,
+    filePath: `/skills/${name}/SKILL.md`,
+    baseDir: `/skills/${name}`,
+    source,
+  });
 }
 
 describe("Session Store Cache", () => {
@@ -740,7 +753,7 @@ describe("Session Store Cache", () => {
     await updateSessionStoreEntry({
       storePath,
       sessionKey: "session:1",
-      update: () => ({ displayName: "After", updatedAt: 123 }),
+      update: async () => ({ displayName: "After", updatedAt: 123 }),
       takeCacheOwnership: true,
     });
 
@@ -769,7 +782,7 @@ describe("Session Store Cache", () => {
     await updateSessionStoreEntry({
       storePath,
       sessionKey: "session:1",
-      update: () => ({ displayName: "After" }),
+      update: async () => ({ displayName: "After" }),
       takeCacheOwnership: true,
     });
 
@@ -788,12 +801,12 @@ describe("Session Store Cache", () => {
     await updateSessionStoreEntry({
       storePath,
       sessionKey: "session:1",
-      update: () => ({
+      update: async () => ({
         displayName: "After",
         skillsSnapshot: {
           prompt: "short prompt",
           skills: [{ name: "alpha" }],
-          resolvedSkills: [{ name: "alpha", body: "transient" }],
+          resolvedSkills: [createResolvedSkill("alpha")],
         } as SessionEntry["skillsSnapshot"],
       }),
       takeCacheOwnership: true,

@@ -138,6 +138,11 @@ describe("setupOfficialPluginInstalls", () => {
           hint: "OpenClaw diff viewer plugin",
         },
         {
+          value: "copilot",
+          label: "GitHub Copilot agent runtime",
+          hint: "OpenClaw GitHub Copilot agent runtime plugin",
+        },
+        {
           value: "google-meet",
           label: "Google Meet",
           hint: "OpenClaw Google Meet participant plugin",

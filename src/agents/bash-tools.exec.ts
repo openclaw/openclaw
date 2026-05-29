@@ -21,6 +21,7 @@ import {
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
+import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -81,22 +82,28 @@ function buildExecForegroundResult(params: {
   cwd?: string;
   warningText?: string;
 }): AgentToolResult<ExecToolDetails> {
-  const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
+  const warningText = params.warningText?.trim()
+    ? `${redactToolPayloadText(params.warningText).trimEnd()}\n\n`
+    : "";
+  const aggregated = redactToolPayloadText(params.outcome.aggregated);
   if (params.outcome.status === "failed") {
-    return failedTextResult(`${warningText}${params.outcome.reason}`, {
-      status: "failed",
-      exitCode: params.outcome.exitCode ?? null,
-      durationMs: params.outcome.durationMs,
-      aggregated: params.outcome.aggregated,
-      timedOut: params.outcome.timedOut,
-      cwd: params.cwd,
-    });
+    return failedTextResult(
+      `${warningText}${redactToolPayloadText(params.outcome.reason)}`,
+      redactSecrets({
+        status: "failed",
+        exitCode: params.outcome.exitCode ?? null,
+        durationMs: params.outcome.durationMs,
+        aggregated,
+        timedOut: params.outcome.timedOut,
+        cwd: params.cwd,
+      }),
+    );
   }
-  return textResult(`${warningText}${renderExecOutputText(params.outcome.aggregated)}`, {
+  return textResult(`${warningText}${renderExecOutputText(aggregated)}`, {
     status: "completed",
     exitCode: params.outcome.exitCode,
     durationMs: params.outcome.durationMs,
-    aggregated: params.outcome.aggregated,
+    aggregated,
     cwd: params.cwd,
   });
 }
@@ -990,6 +997,35 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   };
 }
 
+function buildExecRunningResult(params: {
+  warningText?: string;
+  sessionId: string;
+  pid?: number;
+  startedAt: number;
+  cwd?: string;
+  tail: string;
+}): AgentToolResult<ExecToolDetails> {
+  const warningText = params.warningText?.trim()
+    ? `${redactToolPayloadText(params.warningText).trimEnd()}\n\n`
+    : "";
+  return {
+    content: [
+      {
+        type: "text",
+        text: `${warningText}Command still running (session ${params.sessionId}, pid ${params.pid ?? "n/a"}). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
+      },
+    ],
+    details: redactSecrets({
+      status: "running",
+      sessionId: params.sessionId,
+      pid: params.pid,
+      startedAt: params.startedAt,
+      cwd: params.cwd,
+      tail: redactToolPayloadText(params.tail),
+    }),
+  };
+}
+
 async function validateScriptFileForShellBleed(params: {
   command: string;
   workdir: string;
@@ -1710,7 +1746,7 @@ export function createExecTool(
       const onAbortSignal = () => {
         // Immediately suppress onUpdate calls so that any late stdout/stderr
         // from the still-running process cannot push a rejected Promise into
-        // agent runtime's updateEvents after the agent run has ended (#62520).
+        // pi-agent-core's updateEvents after the agent run has ended (#62520).
         // Intentionally placed *before* the yielded/backgrounded guard: the
         // agent run is ending regardless, so no consumer exists for further
         // tool_execution_update events even for backgrounded sessions (which
@@ -1743,24 +1779,16 @@ export function createExecTool(
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
         const resolveRunning = () => {
           cleanupToolRunListeners();
-          resolve({
-            content: [
-              {
-                type: "text",
-                text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
-                  run.session.pid ?? "n/a"
-                }). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
-              },
-            ],
-            details: {
-              status: "running",
+          resolve(
+            buildExecRunningResult({
+              warningText: getWarningText(),
               sessionId: run.session.id,
               pid: run.session.pid ?? undefined,
               startedAt: run.startedAt,
               cwd: run.session.cwd,
               tail: run.session.tail,
-            },
-          });
+            }),
+          );
         };
 
         const onYieldNow = () => {
@@ -1816,6 +1844,8 @@ export function createExecTool(
 export const execTool = createExecTool();
 
 export const testing = {
+  buildExecForegroundResult,
+  buildExecRunningResult,
   parseOpenClawChannelsLoginShellCommand,
   validateScriptFileForShellBleed,
 };

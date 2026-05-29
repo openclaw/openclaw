@@ -1,5 +1,5 @@
 import type { ProcessSession } from "./bash-process-registry.js";
-import { deriveSessionName } from "./bash-tools.shared.js";
+import { deriveRedactedProcessSessionName } from "./bash-tools.process-redaction.js";
 import { encodeKeySequence, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
@@ -73,7 +73,7 @@ export async function handleProcessSendKeys(params: {
     details: {
       status: "running",
       sessionId: params.sessionId,
-      name: deriveSessionName(params.session.command),
+      name: deriveRedactedProcessSessionName(params.session.command),
     },
   };
 }
