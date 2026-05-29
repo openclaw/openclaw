@@ -339,6 +339,7 @@ export function createFollowupRunner(params: {
           threadId: queued.originatingThreadId,
           cfg: runtimeConfig,
           mirror: options.mirror,
+          replyKind: "final",
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";

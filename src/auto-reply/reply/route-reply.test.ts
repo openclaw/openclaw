@@ -36,7 +36,11 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => mocks.hookRunner,
 }));
 
-const { routeReply } = await import("./route-reply.js");
+const { routeReply: routeReplyRuntime } = await import("./route-reply.js");
+type RouteReplyParams = Parameters<typeof routeReplyRuntime>[0];
+const routeReply = (
+  params: Omit<RouteReplyParams, "replyKind"> & { replyKind?: RouteReplyParams["replyKind"] },
+) => routeReplyRuntime({ replyKind: "final", ...params });
 
 function compileSlackInteractiveRepliesForTest(
   payload: Parameters<NonNullable<ChannelMessagingAdapter["transformReplyPayload"]>>[0]["payload"],

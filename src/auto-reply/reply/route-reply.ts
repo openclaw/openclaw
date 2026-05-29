@@ -74,7 +74,7 @@ export type RouteReplyParams = {
   /** Group or channel identifier for correlation with received events */
   groupId?: string;
   /** Reply lane for reply_payload_sending hooks. */
-  replyKind?: ReplyDispatchKind;
+  replyKind: ReplyDispatchKind;
   /** Agent run id for hook context. */
   runId?: string;
 };
@@ -195,7 +195,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
 
   const hookedPayload = await runReplyPayloadSendingHook({
     payload: externalPayload,
-    kind: params.replyKind ?? "final",
+    kind: params.replyKind,
     channel: channelId,
     sessionKey: params.sessionKey,
     runId: params.runId,
