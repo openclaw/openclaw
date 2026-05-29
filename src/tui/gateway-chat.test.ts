@@ -534,7 +534,7 @@ describe("GatewayChatClient", () => {
     expect(
       (client as unknown as { client: { opts: { deviceIdentity?: unknown } } }).client.opts
         .deviceIdentity,
-    ).toBeUndefined();
+    ).toBeNull();
     expect(
       (client as unknown as { client: { opts: { preauthHandshakeTimeoutMs?: number } } }).client
         .opts.preauthHandshakeTimeoutMs,

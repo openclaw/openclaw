@@ -182,8 +182,22 @@ export function resolveGatewayClientConnectChallengeTimeoutMs(
 
 export class GatewayClient {
   #client: BaseGatewayClient;
+  readonly opts: Pick<GatewayClientOptions, "clientName" | "mode" | "preauthHandshakeTimeoutMs"> & {
+    deviceIdentity?: null | "configured";
+  };
 
   constructor(opts: GatewayClientOptions) {
+    this.opts = {
+      clientName: opts.clientName,
+      mode: opts.mode,
+      deviceIdentity:
+        opts.deviceIdentity === null
+          ? null
+          : opts.deviceIdentity === undefined
+            ? undefined
+            : "configured",
+      preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
+    };
     this.#client = new BaseGatewayClient({
       ...opts,
       clientVersion: opts.clientVersion ?? VERSION,
