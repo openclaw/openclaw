@@ -28,7 +28,11 @@ import type {
   SkillsInstallPreferences,
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
-import { buildSkillIndexEntries, type SkillIndexEntry } from "./skill-index.js";
+import {
+  buildSkillIndexEntries,
+  normalizeSkillIndexName,
+  type SkillIndexEntry,
+} from "./skill-index.js";
 
 export type SkillStatusConfigCheck = RequirementConfigCheck;
 
@@ -73,6 +77,57 @@ export type SkillStatusReport = {
   agentSkillFilter?: string[];
   skills: SkillStatusEntry[];
 };
+
+export function resolveSkillStatusEntry(
+  skills: readonly SkillStatusEntry[],
+  requestedName: string,
+): SkillStatusEntry | null {
+  const raw = requestedName.trim();
+  if (!raw) {
+    return null;
+  }
+
+  const lower = raw.toLowerCase();
+  const normalized = normalizeSkillIndexName(raw);
+  let caseInsensitiveMatch: SkillStatusEntry | null = null;
+  let caseInsensitiveMatches = 0;
+  let normalizedMatch: SkillStatusEntry | null = null;
+  let normalizedMatches = 0;
+
+  for (const skill of skills) {
+    if (skill.name === raw || skill.skillKey === raw) {
+      return skill;
+    }
+
+    const nameLower = skill.name.toLowerCase();
+    const keyLower = skill.skillKey.toLowerCase();
+    if (nameLower === lower || keyLower === lower) {
+      caseInsensitiveMatch = skill;
+      caseInsensitiveMatches += 1;
+      continue;
+    }
+
+    if (
+      normalized &&
+      (normalizeSkillIndexName(skill.name) === normalized ||
+        normalizeSkillIndexName(skill.skillKey) === normalized)
+    ) {
+      normalizedMatch = skill;
+      normalizedMatches += 1;
+    }
+  }
+
+  if (caseInsensitiveMatches > 1) {
+    return null;
+  }
+  if (caseInsensitiveMatches === 1) {
+    return caseInsensitiveMatch;
+  }
+  if (normalizedMatches === 1) {
+    return normalizedMatch;
+  }
+  return null;
+}
 
 function selectPreferredInstallSpec(
   install: SkillInstallSpec[],
