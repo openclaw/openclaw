@@ -9,7 +9,13 @@ import {
 import * as cliCoreApiModule from "../core-api.js";
 
 const mocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn(async () => ({ url: "https://example.test" })),
+  callBrowserRequest: vi.fn<
+    (
+      opts?: unknown,
+      req?: unknown,
+      extra?: { timeoutMs?: number },
+    ) => Promise<Record<string, unknown>>
+  >(async () => ({ url: "https://example.test" })),
 }));
 
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
