@@ -484,7 +484,7 @@ export async function noteSessionSnapshotHealth(params?: {
           });
 
           // Write prompt blob files
-          await ensureSessionStorePromptBlobsForPersistence({ storePath, promptBlobs });
+          await ensureSessionStorePromptBlobsForPersistence({ storePath, promptBlobs: promptBlobs.values() });
 
           // Atomic write to prevent partial writes or corruption
           const fixed = JSON.stringify(persisted, null, 2);
