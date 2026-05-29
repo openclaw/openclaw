@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { formatAssistantErrorText, isLikelyContextOverflowError } from "./errors.js";
+import {
+  classifyProviderRuntimeFailureKind,
+  formatAssistantErrorText,
+  isLikelyContextOverflowError,
+} from "./errors.js";
 
 const { toolPolicyAuditInfo } = vi.hoisted(() => ({
   toolPolicyAuditInfo: vi.fn(),
@@ -100,5 +104,20 @@ describe("isLikelyContextOverflowError", () => {
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
       ),
     ).toBe(true);
+  });
+});
+
+describe("classifyProviderRuntimeFailureKind replay-invalid", () => {
+  it("classifies Anthropic stale thinking-block signatures as replay_invalid", () => {
+    // Expired extended-thinking signatures must route to replay recovery
+    // (strip stale thinking blocks and retry), not a hard session failure.
+    expect(classifyProviderRuntimeFailureKind("Invalid signature in thinking block")).toBe(
+      "replay_invalid",
+    );
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "messages.3.content.0: Invalid signature in thinking block at index 0",
+      ),
+    ).toBe("replay_invalid");
   });
 });
