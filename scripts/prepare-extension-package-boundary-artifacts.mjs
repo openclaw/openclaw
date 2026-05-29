@@ -17,6 +17,7 @@ const PLUGIN_SDK_TYPE_INPUTS = [
   "src/auto-reply",
   "packages/llm-core/src",
   "packages/memory-host-sdk/src",
+  "packages/media-generation-core/src",
   "src/video-generation/dashscope-compatible.ts",
   "src/video-generation/types.ts",
   "src/types",
