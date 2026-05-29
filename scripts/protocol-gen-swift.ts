@@ -41,18 +41,6 @@ const STRICT_LITERAL_STRUCTS = new Set([
 ]);
 
 const DEFAULTED_OPTIONAL_INIT_PARAMS: Record<string, Set<string>> = {
-  SessionOperationEvent: new Set(["agentId"]),
-  SessionsCompactionBranchParams: new Set(["agentId"]),
-  SessionsCompactionGetParams: new Set(["agentId"]),
-  SessionsCompactionListParams: new Set(["agentId"]),
-  SessionsCompactionRestoreParams: new Set(["agentId"]),
-  SessionsCompactParams: new Set(["agentId"]),
-  SessionsDeleteParams: new Set(["agentId"]),
-  SessionsMessagesSubscribeParams: new Set(["agentId"]),
-  SessionsMessagesUnsubscribeParams: new Set(["agentId"]),
-  SessionsPatchParams: new Set(["agentId"]),
-  SessionsResetParams: new Set(["agentId"]),
-  SessionsSendParams: new Set(["agentId"]),
   SessionsAbortParams: new Set(["agentId"]),
   SessionOperationEvent: new Set(["agentId"]),
   SessionsUsageParams: new Set(["agentId", "agentScope"]),
@@ -223,7 +211,9 @@ function swiftInitializerParam(params: {
   if (params.required) {
     return `${params.name}: ${type}`;
   }
-  const defaultNil = DEFAULTED_OPTIONAL_INIT_PARAMS[params.structName]?.has(params.key) ?? false;
+  const defaultNil =
+    params.key === "agentId" ||
+    (DEFAULTED_OPTIONAL_INIT_PARAMS[params.structName]?.has(params.key) ?? false);
   return `${params.name}: ${type}?${defaultNil ? " = nil" : ""}`;
 }
 

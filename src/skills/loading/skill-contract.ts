@@ -1,13 +1,18 @@
 import type { SourceInfo } from "../../agents/sessions/source-info.js";
-import type { Skill as CanonicalSkill } from "./session.js";
 
 export type SourceScope = "user" | "project" | "temporary";
 export type SourceOrigin = "package" | "top-level";
 
-export type Skill = CanonicalSkill & {
+export interface Skill {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  sourceInfo: SourceInfo;
+  disableModelInvocation: boolean;
   // Preserve legacy source reads while keeping the canonical upstream shape.
-  source?: string;
-};
+  source: string;
+}
 
 export function createSyntheticSourceInfo(
   path: string,
